@@ -880,11 +880,9 @@ def render_leftover_diff_receipts(
     for item in receipts:
         path, start, end, reason, excerpt = leftover_receipt_range(item)
         excerpt = excerpt.replace("```", "")
-        leftover_range: tuple[Any, ...] | None
-        if start < end:
+        leftover_range = range_matches.get((path, start))
+        if leftover_range is None and start < end:
             leftover_range = leftover_receipt_range(item)
-        else:
-            leftover_range = range_matches.get((path, start))
         deferred_item = None
         for line in range(start, end + 1):
             deferred_item = matches.get((path, line))

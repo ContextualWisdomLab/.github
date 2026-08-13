@@ -4482,3 +4482,73 @@ def test_leftover_heading_prefixes_leftover_range_once_for_interior_leftovers(
     assert "- `scripts/ci/example.py:6` — cannot-provide" not in leftover_section
     assert "- `scripts/ci/example.py:12` — cannot-provide" in leftover_section
 
+
+def test_leftover_heading_prefers_widest_leftover_range_over_nested_range(tmp_path):
+    wide_excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    nested_excerpt = leftover_manual_edit_text(NA_DIFF_BODY)
+    leftover = parse_leftover_diff_receipts(
+        f"scripts/ci/example.py:5-6\tcannot-provide\t{encode_manual_edit_field(nested_excerpt)}\n"
+        f"scripts/ci/example.py:5-7\tcannot-provide\t{encode_manual_edit_field(wide_excerpt)}\n"
+        f"scripts/ci/example.py:12\tcannot-provide\t{encode_manual_edit_field(wide_excerpt)}\n"
+    )
+    rendered = render_leftover_diff_receipts(leftover)
+    joined = "\n".join(rendered)
+    assert joined.count("- `scripts/ci/example.py:5-7` — cannot-provide") == 1
+    assert "- `scripts/ci/example.py:5-6` — cannot-provide" not in joined
+    assert joined.index("- `scripts/ci/example.py:5-7` — cannot-provide") < joined.index(
+        nested_excerpt
+    )
+    assert nested_excerpt in joined
+    assert wide_excerpt in joined
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in joined
+
+    leftover_file = tmp_path / "leftover.txt"
+    leftover_file.write_text(
+        f"scripts/ci/example.py:5-6\tcannot-provide\t{encode_manual_edit_field(nested_excerpt)}\n"
+        f"scripts/ci/example.py:5-7\tcannot-provide\t{encode_manual_edit_field(wide_excerpt)}\n"
+        f"scripts/ci/example.py:12\tcannot-provide\t{encode_manual_edit_field(wide_excerpt)}\n",
+        encoding="utf-8",
+    )
+    control_path = tmp_path / "control.json"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 6},
+                {"path": "scripts/ci/example.py", "line": 12},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path = tmp_path / "body.md"
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.md"
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--leftover-diff-locations",
+                str(leftover_file),
+            ]
+        )
+        == 0
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = receipt.read_text(encoding="utf-8").split(leftover_heading, 1)[1]
+    assert leftover_section.count("- `scripts/ci/example.py:5-7` — cannot-provide") == 1
+    assert "- `scripts/ci/example.py:5-6` — cannot-provide" not in leftover_section
+    assert leftover_section.index(
+        "- `scripts/ci/example.py:5-7` — cannot-provide"
+    ) < leftover_section.index(nested_excerpt)
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in leftover_section
+    orphan_range = render_leftover_diff_receipts(
+        [("scripts/ci/example.py", 5, 7, "HTTP 422", "n")]
+    )
+    assert orphan_range[0] == "- `scripts/ci/example.py:5-7` — HTTP 422"
+

@@ -1674,6 +1674,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "leftover_range_matches" in helper
     assert "leftover_reason_bullet_duplicates_leftover_range" in helper
     assert "seen_leftover_ranges" in helper
+    assert "leftover_range = range_matches.get((path, start))" in helper
     assert "start <= leftover_line <= end" in helper
     assert "--applyable-locations" in helper
     assert "leftover_deferred_matches" in helper

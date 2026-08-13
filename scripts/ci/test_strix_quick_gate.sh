@@ -1510,6 +1510,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftovers = leftover_diff_fence_receipts(filtered)" "opencode hunk-filter write path omits applyable ranges that contain a leftover line"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_coverage_points" "opencode leftover path:start-end receipts cover interior leftover lines"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_range_matches" "opencode leftover heading prefixes one leftover start-end for interior leftovers"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_range = range_matches.get((path, start))" "opencode leftover heading prefers the widest leftover start-end"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--applyable-locations" "opencode overview CLI accepts applyable suggestion ranges"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--leftover-diff-locations" "opencode overview CLI accepts leftover diff-fence receipts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--deferred-locations" "opencode overview CLI accepts deferred leftover ranges"
