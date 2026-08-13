@@ -14,6 +14,8 @@ from scripts.ci.opencode_inline_comment_fallback import (
     github_error_is_unprocessable,
     github_publication_error_phrase,
     iter_single_comment_payloads,
+    render_single_comment_review,
+    single_comment_range_fields,
     main,
     parse_refused_locations,
     parse_refused_receipts,
@@ -24,7 +26,6 @@ from scripts.ci.opencode_inline_comment_fallback import (
     suggestion_comment_range,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
-    render_single_comment_review,
     single_comment_retry_limit,
     trusted_finding_locations,
     write_hunk_filtered_payload,
@@ -637,6 +638,40 @@ def test_iter_single_comment_payloads_keeps_only_safe_comments():
     assert iter_single_comment_payloads({"comments": []}) == []
     assert iter_single_comment_payloads({"comments": "bad"}) == []
     assert iter_single_comment_payloads({"commit_id": "", "comments": [{}]}) == []
+    assert single_comment_range_fields(
+        {"start_line": 5, "start_side": "RIGHT"}, 7, "RIGHT"
+    ) == {"start_line": 5, "start_side": "RIGHT"}
+    assert single_comment_range_fields({"start_line": 7}, 7, "RIGHT") == {}
+    assert single_comment_range_fields({"start_line": 8, "start_side": "RIGHT"}, 7, "RIGHT") == {}
+    assert single_comment_range_fields({"start_line": 0, "start_side": "RIGHT"}, 7, "RIGHT") == {}
+    assert single_comment_range_fields(
+        {"start_line": 5, "start_side": "NOPE"}, 7, "RIGHT"
+    ) == {"start_line": 5, "start_side": "RIGHT"}
+    ranged = {
+        "event": "REQUEST_CHANGES",
+        "body": "review body",
+        "commit_id": "b" * 40,
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "start_line": 5,
+                "start_side": "RIGHT",
+                "side": "RIGHT",
+                "body": "```suggestion\n    first\n    second\n```\n",
+            }
+        ],
+    }
+    ranged_singles = iter_single_comment_payloads(ranged)
+    assert ranged_singles[0]["start_line"] == 5
+    assert ranged_singles[0]["start_side"] == "RIGHT"
+    assert ranged_singles[0]["line"] == 7
+    rendered_range = render_single_comment_review(
+        ranged_singles[0], event="REQUEST_CHANGES", review_body="review body"
+    )
+    assert rendered_range["comments"][0]["start_line"] == 5
+    assert rendered_range["comments"][0]["start_side"] == "RIGHT"
+    assert rendered_range["comments"][0]["line"] == 7
 
 
 def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):

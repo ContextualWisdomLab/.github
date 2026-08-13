@@ -54,7 +54,9 @@ After that filter, surviving RIGHT-side comments convert their
 block so the author can apply the replacement in one click (GitHub,
 n.d.-c). Only `+` lines become the replacement; `n/a`, “cannot provide”,
 LEFT-side comments, and replacements that would break the fence stay as
-the original `` ```diff `` context. Suggested diffs still stay out of the
+the original `` ```diff `` context. After a batch 422, one-at-a-time
+retry keeps ``start_line``/``start_side`` so a multi-line suggestion
+still posts as one range (GitHub, n.d.-b). Suggested diffs still stay out of the
 PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
