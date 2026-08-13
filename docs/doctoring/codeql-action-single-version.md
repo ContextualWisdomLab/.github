@@ -9,6 +9,8 @@ the reviewed action.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Pin every `github/codeql-action/{init,analyze,upload-sarif}` use to
 `5595ccaf912efad79be6eef63a5619ff05969be3` (v4.37.6). Contract tests
 reject per-file and org-wide splits.
