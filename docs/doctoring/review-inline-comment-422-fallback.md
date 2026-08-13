@@ -20,7 +20,12 @@ pairs, and appends them to the fallback body as `` `path:line` `` list
 items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
-After a refused attach, the publisher rebuilds the fallback from the
+After a refused attach, the publisher first checks that the failure is
+HTTP 422 (not a bare `422` substring; CWE-1288), splits the batch
+`comments` array into at most 20 single-comment review payloads
+(`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`, default 20), and retries each
+with the same write helper. Comments past that cap are recorded as not
+retried. Remaining failures still rebuild the fallback from the
 `gh api` error file and writes durable receipts into the OpenCode
 overview comment (`<!-- opencode-review-overview -->`). Each receipt is
 `` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON

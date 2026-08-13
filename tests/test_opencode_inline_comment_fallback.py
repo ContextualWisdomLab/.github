@@ -5,11 +5,17 @@ import sys
 import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
+    DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
+    github_error_is_unprocessable,
     github_publication_error_phrase,
+    iter_single_comment_payloads,
     main,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
+    render_single_comment_review,
+    single_comment_retry_limit,
     trusted_finding_locations,
+    write_single_comment_payloads,
 )
 
 
@@ -88,6 +94,15 @@ def test_github_publication_error_phrase_prefers_json_error_messages():
             '{"errors":[{"message":"Line could not be resolved","code":"invalid"}]}'
         )
         == "GitHub HTTP 422: Line could not be resolved (invalid)"
+    )
+    assert (
+        github_publication_error_phrase(
+            '{"errors":['
+            '{"message":"Line could not be resolved","code":"   "},'
+            '{"message":"Line could not be resolved"}'
+            "]}"
+        )
+        == "GitHub HTTP 422: Line could not be resolved"
     )
 
 
@@ -328,3 +343,98 @@ def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatc
             "scripts/ci/opencode_inline_comment_fallback.py", run_name="__main__"
         )
     assert excinfo.value.code == 0
+
+
+def test_one_at_a_time_retry_caps_and_defers_leftover_comments(tmp_path):
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "event": "REQUEST_CHANGES",
+                "body": "review body",
+                "commit_id": "b" * 40,
+                "comments": [
+                    {
+                        "path": "scripts/ci/example.py",
+                        "line": 7,
+                        "side": "RIGHT",
+                        "body": "first",
+                    },
+                    {
+                        "path": "scripts/ci/other.py",
+                        "line": 12,
+                        "side": "LEFT",
+                        "body": "second",
+                    },
+                    {"path": "../escape.py", "line": 1, "body": "bad"},
+                    {"path": "scripts/ci/empty.py", "line": 3, "body": "  "},
+                    "not-an-object",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    singles = iter_single_comment_payloads(
+        json.loads(payload.read_text(encoding="utf-8"))
+    )
+    assert [(item["path"], item["line"], item["side"]) for item in singles] == [
+        ("scripts/ci/example.py", 7, "RIGHT"),
+        ("scripts/ci/other.py", 12, "LEFT"),
+    ]
+    rendered = render_single_comment_review(
+        singles[0], event="COMMENT", review_body=""
+    )
+    assert rendered["comments"][0]["line"] == 7
+    assert iter_single_comment_payloads({"comments": []}) == []
+    assert iter_single_comment_payloads({"comments": "bad"}) == []
+    assert iter_single_comment_payloads({"commit_id": "", "comments": [{}]}) == []
+    assert single_comment_retry_limit(None) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(True) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(0) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(-1) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(3) == 3
+    assert single_comment_retry_limit("7") == 7
+    assert single_comment_retry_limit("0") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit("nope") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    deferred = tmp_path / "deferred.txt"
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload),
+                "--output-dir",
+                str(tmp_path / "capped"),
+                "--retry-limit",
+                "1",
+                "--deferred-locations",
+                str(deferred),
+            ]
+        )
+        == 0
+    )
+    assert [path.name for path in sorted((tmp_path / "capped").glob("comment-*.json"))] == [
+        "comment-000.json"
+    ]
+    assert "scripts/ci/other.py:12" in deferred.read_text(encoding="utf-8")
+    assert (
+        write_single_comment_payloads(
+            json.loads(payload.read_text(encoding="utf-8")),
+            tmp_path / "direct",
+        )
+        == 2
+    )
+    assert main(["--split-payload", str(payload)]) == 2
+    error_path = tmp_path / "422.txt"
+    error_path.write_text("gh: HTTP 422: Unprocessable Entity\n", encoding="utf-8")
+    assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 0
+    error_path.write_text("Resource not accessible by integration\n", encoding="utf-8")
+    assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 1
+    assert main(["--is-unprocessable"]) == 2
+    assert main([]) == 2
+    assert github_error_is_unprocessable("gh: HTTP 422: Unprocessable Entity")
+    assert github_error_is_unprocessable(
+        '{"errors":[{"message":"Line could not be resolved"}]}'
+    )
+    assert not github_error_is_unprocessable(
+        "gh: HTTP 403 Forbidden sha=154a33d092422abc issue #422"
+    )

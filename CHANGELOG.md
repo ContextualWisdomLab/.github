@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- After a batch GitHub 422, retried OpenCode inline comments one at a time, capped at 20, and recorded leftover `path:line` rows past that cap so surviving hunks still attach instead of dropping the entire review thread or opening unbounded `gh api` writes.
 - Cited leftover GitHub JSON `errors[].code` next to `errors[].message` in 422 overview receipts so authors see both the refused reason and the leftover machine code (`invalid`, `custom`) that caused the attach to fail.
 - Omitted finding paths that contain backticks or HTML metacharacters (`<`, `>`, `&`) from 422 overview receipts so a hostile path cannot break out of the Markdown receipt fence. Digit-only line strings remain accepted.
 - Stored each refused OpenCode inline comment as a durable overview receipt that pairs the trusted `path:line` with the GitHub 422 error phrase from `gh api` stderr or JSON `errors[].message`. A `422` substring inside a SHA or issue number is no longer labeled as HTTP 422 (CWE-1288). Receipt phrases now escape backticks and HTML metacharacters before they are written into the overview body.
