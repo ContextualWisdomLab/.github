@@ -16,6 +16,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
+    sanitize_leftover_excerpt,
     parse_leftover_diff_receipts,
     render_leftover_diff_receipts,
     comment_on_changed_hunk,
@@ -2389,7 +2390,7 @@ def test_leftover_manual_edit_excerpt_is_distinct_non_applyable_block(tmp_path):
     assert leftover_manual_edit_text(SUGGESTED_DIFF_BODY) == "    new"
     assert leftover_manual_edit_text(
         "```diff\n+<script>alert(1)</script>\n```"
-    ) == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    ) == "scriptalert(1)/script"
     assert leftover_manual_edit_text(NA_DIFF_BODY) == "n/a"
     assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY).startswith(
         "Cannot provide"
@@ -2409,6 +2410,12 @@ def test_leftover_manual_edit_excerpt_is_distinct_non_applyable_block(tmp_path):
     assert decode_manual_edit_field(encoded) == "keep this\nlineend"
     assert encode_manual_edit_field(long_text).endswith("…")
     assert decode_manual_edit_field("") == ""
+    assert leftover_manual_edit_text(
+        "```diff\n<!-- opencode --><script>alert(1)</script>-->\n```"
+    ) == " opencode scriptalert(1)/script"
+    assert "-->" not in leftover_manual_edit_text("```diff\nclose --> comment\n```")
+    assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
+    assert encode_manual_edit_field("<!-- --> & <x>") == "   x"
     assert render_leftover_diff_receipts([("scripts/ci/a.py", 1, "LEFT")]) == [
         "- `scripts/ci/a.py:1` — LEFT"
     ]
