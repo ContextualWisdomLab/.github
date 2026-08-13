@@ -33,8 +33,9 @@ attached. Each refused row keeps the 422 phrase from that comment's own
 `gh api` stderr (JSON `errors[].message` such as
 `pull_request_review_thread.path is invalid`, or the first `HTTP 422`
 line). A later comment's different GitHub error does not overwrite an
-earlier one. URLs are stripped and each phrase is bounded to 240
-characters.
+earlier one. URLs are stripped, each phrase is bounded to 240
+characters, and `` ` ``, `` < ``, `` > ``, and `` & `` are escaped
+before the phrase is written into the overview body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.

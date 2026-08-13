@@ -116,6 +116,19 @@ def _collapse_error_text(text: str) -> str:
     return " ".join(without_urls.split())
 
 
+def escape_receipt_text(text: str) -> str:
+    """Escape HTML and Markdown metacharacters in a receipt phrase."""
+    escaped = text
+    for character, replacement in (
+        ("`", "\\u0060"),
+        ("<", "\\u003c"),
+        (">", "\\u003e"),
+        ("&", "\\u0026"),
+    ):
+        escaped = escaped.replace(character, replacement)
+    return escaped
+
+
 def github_publication_error_phrase(text: str) -> str:
     """Return a bounded GitHub 422 phrase from ``gh api`` stderr or JSON."""
     raw = text or ""
@@ -145,16 +158,20 @@ def github_publication_error_phrase(text: str) -> str:
             seen.add(message)
             messages.append(message)
     if messages:
-        return f"GitHub HTTP 422: {'; '.join(messages)}"[:ERROR_PHRASE_MAX_CHARS]
-    match = HTTP_422_LINE_RE.search(raw)
-    if match:
-        line = _collapse_error_text(match.group(1))
-        if line.casefold().startswith("github http 422"):
-            return line[:ERROR_PHRASE_MAX_CHARS]
-        return f"GitHub HTTP 422: {line}".rstrip(": ")[:ERROR_PHRASE_MAX_CHARS]
-    if "422" in raw:
-        return "GitHub HTTP 422"
-    return "GitHub review write failed"
+        phrase = f"GitHub HTTP 422: {'; '.join(messages)}"
+    else:
+        match = HTTP_422_LINE_RE.search(raw)
+        if match:
+            line = _collapse_error_text(match.group(1))
+            if line.casefold().startswith("github http 422"):
+                phrase = line
+            else:
+                phrase = f"GitHub HTTP 422: {line}".rstrip(": ")
+        elif "422" in raw:
+            phrase = "GitHub HTTP 422"
+        else:
+            phrase = "GitHub review write failed"
+    return escape_receipt_text(phrase[:ERROR_PHRASE_MAX_CHARS])
 
 
 def github_error_is_unprocessable(text: str) -> bool:
@@ -251,7 +268,7 @@ def render_inline_comment_receipts(
         if not phrase:
             phrase = error_phrase
         if phrase:
-            lines.append(f"- `{path}:{line}` — {phrase}")
+            lines.append(f"- `{path}:{line}` — {escape_receipt_text(phrase)}")
         else:
             lines.append(f"- `{path}:{line}`")
     return lines
@@ -308,7 +325,7 @@ def render_inline_comment_failure_suffix(
         )
         if error_phrase:
             lines.append("")
-            lines.append(f"- GitHub error: {error_phrase}")
+            lines.append(f"- GitHub error: {escape_receipt_text(error_phrase)}")
     lines.append("")
     return "\n".join(lines)
 
