@@ -1,5 +1,7 @@
 # Exact-artifact SBOM attestation
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 ## Trust boundary
 
 The organization-owned reusable workflow signs only an already sealed, same-run evidence artifact. The caller supplies immutable identifiers and digests, but the trusted workflow independently verifies them before minting an OIDC token or invoking `actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26`.
