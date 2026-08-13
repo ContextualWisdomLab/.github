@@ -57,8 +57,9 @@ LEFT-side comments, and replacements that would break the fence stay as
 the original `` ```diff `` context. When the suggested_diff removes more
 than one current-head line and every line from the finding through that
 span sits on the same hunk, the comment also sets `start_line`, `line`,
-and `start_side` so GitHub applies one multi-line suggestion range
-(GitHub, n.d.-b). A range that would leave the hunk stays single-line.
+`side`, and `start_side` so GitHub applies one multi-line suggestion range
+(GitHub, n.d.-b). A range that would leave the hunk stays single-line. A bare ``422``
+substring in a SHA or issue number is not treated as HTTP 422 (CWE-1288).
 Suggested diffs still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
@@ -88,6 +89,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 `path:line` in the fallback. Do not restore a location-free sentence.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-1288: Improper validation of syntactic correctness of
+input*. https://cwe.mitre.org/data/definitions/1288.html
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on

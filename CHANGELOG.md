@@ -13,7 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Set `start_line`/`line` on surviving multi-line OpenCode GitHub suggestions so a replacement that spans more than one current-head hunk line applies as one range.
+- Set `start_line`/`line`/`side`/`start_side` on surviving multi-line OpenCode GitHub suggestions so a replacement that spans more than one current-head hunk line applies as one range. A `422` substring in a SHA or issue number no longer starts one-at-a-time retry (CWE-1288).
 - Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click.
 - Dropped OpenCode inline comments that sit outside every current-head changed hunk before the GitHub POST so those comments become overview receipts instead of a 422 that wipes the batch.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and listed attached `path:line` beside refused receipts so the overview shows both outcomes, plus any locations left untried by the cap.
