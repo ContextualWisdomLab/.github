@@ -9,7 +9,8 @@ Semantic Versioning where the repository publishes a release.
 ### Added
 
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
-- Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
+- Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence. The decision record now cites CWE-346 so origin validation stays a single helper that cannot accept a non-HTTPS, non-`releases.astral.sh`, or nondefault-port final URL.
+- Recorded the org control-plane architecture, including the trusted-uv origin gate, so agents reconstruct the download trust boundary from the repo instead of private memory.
 
 ### Fixed
 
