@@ -29,11 +29,12 @@ failures still rebuild the fallback from the `gh api` error file and
 write durable receipts into the OpenCode overview comment
 (`<!-- opencode-review-overview -->`). On mixed success the receipt list
 contains only refused `path:line` rows, not the comments that already
-attached. Each receipt is
-`` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON
-`errors[].message` (for example `pull_request_review_thread.path is
-invalid`) and otherwise the first `HTTP 422` line. URLs are stripped and
-the phrase is bounded to 240 characters.
+attached. Each refused row keeps the 422 phrase from that comment's own
+`gh api` stderr (JSON `errors[].message` such as
+`pull_request_review_thread.path is invalid`, or the first `HTTP 422`
+line). A later comment's different GitHub error does not overwrite an
+earlier one. URLs are stripped and each phrase is bounded to 240
+characters.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -46,7 +47,8 @@ Suggested diffs stay out of the PR-level body.
   line fallback, empty-set sentence, CLI success with `--error-file`,
   fail-closed unreadable control or error input, batch-to-single comment
   splitting, `--is-unprocessable` classification, and mixed-success
-  receipts that omit attached path:line rows.
+  receipts that omit attached path:line rows, and per-comment 422
+  phrases recorded beside each refused location.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.

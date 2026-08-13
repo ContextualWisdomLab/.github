@@ -1482,6 +1482,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$workflow_file" "retry_inline_comments_one_at_a_time" "opencode retries inline comments one at a time after batch 422"
 	assert_file_contains "$workflow_file" "inline review one-at-a-time" "opencode one-at-a-time retries use the bounded review-write helper"
 	assert_file_contains "$workflow_file" '--refused-locations "$refused_locations_file"' "opencode mixed-success receipts pass only refused path:line rows"
+	assert_file_contains "$workflow_file" "--record-refusal" "opencode records per-comment 422 phrases on refused path:line rows"
 	assert_file_contains "$workflow_file" "publish_request_changes_from_control" "opencode review REQUEST_CHANGES path publishes findings from the control JSON"
 
 	if awk '/format_request_changes_body\(\)/,/build_request_changes_review_payload\(\)/ { print }' "$workflow_file" |

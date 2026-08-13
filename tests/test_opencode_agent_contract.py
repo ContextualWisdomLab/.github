@@ -1623,6 +1623,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "--is-unprocessable" in workflow
     assert "inline review one-at-a-time" in workflow
     assert '--refused-locations "$refused_locations_file"' in workflow
+    assert "--record-refusal" in workflow
     assert "accepted some inline comments" not in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step

@@ -10,6 +10,8 @@ from scripts.ci.opencode_inline_comment_fallback import (
     iter_single_comment_payloads,
     main,
     parse_refused_locations,
+    parse_refused_receipts,
+    record_refused_receipt,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
@@ -159,6 +161,13 @@ def test_mixed_success_receipts_list_only_refused_path_lines():
     )
     assert "scripts/ci/example.py:7`" not in body
     assert parse_refused_locations("") == []
+    assert parse_refused_receipts(
+        "scripts/ci/a.py:3\tGitHub HTTP 422: path is invalid\n"
+        "scripts/ci/b.py:9\tGitHub HTTP 422: Line could not be resolved\n"
+    ) == [
+        ("scripts/ci/a.py", 3, "GitHub HTTP 422: path is invalid"),
+        ("scripts/ci/b.py", 9, "GitHub HTTP 422: Line could not be resolved"),
+    ]
     all_attached = render_inline_comment_failure_body(
         "## Findings\n",
         control({"path": "scripts/ci/example.py", "line": 7}),
@@ -166,6 +175,174 @@ def test_mixed_success_receipts_list_only_refused_path_lines():
     )
     assert "were still refused" not in all_attached
     assert "did not accept the inline review comments" not in all_attached
+
+
+def test_mixed_success_receipts_keep_per_comment_422_phrases(tmp_path):
+    receipts = [
+        (
+            "scripts/ci/example.py",
+            7,
+            "GitHub HTTP 422: pull_request_review_thread.path is invalid",
+        ),
+        (
+            "scripts/ci/other.py",
+            12,
+            "GitHub HTTP 422: Line could not be resolved",
+        ),
+    ]
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/other.py", "line": 12},
+            {"path": "scripts/ci/ok.py", "line": 4},
+        ),
+        refused_receipts=receipts,
+    )
+    assert "accepted some inline comments" in body
+    assert (
+        "- `scripts/ci/example.py:7` — GitHub HTTP 422: "
+        "pull_request_review_thread.path is invalid"
+        in body
+    )
+    assert (
+        "- `scripts/ci/other.py:12` — GitHub HTTP 422: Line could not be resolved"
+        in body
+    )
+    assert "scripts/ci/ok.py:4" not in body
+    unmatched = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 7}),
+        refused_receipts=[("scripts/ci/missing.py", 1, "GitHub HTTP 422")],
+    )
+    assert "were still refused" not in unmatched
+
+    dest = tmp_path / "refused.txt"
+    record_refused_receipt(
+        dest,
+        "scripts/ci/example.py",
+        7,
+        '{"errors":[{"message":"pull_request_review_thread.path is invalid"}]}',
+    )
+    record_refused_receipt(
+        dest,
+        "scripts/ci/other.py",
+        12,
+        '{"errors":[{"message":"Line could not be resolved"}]}',
+    )
+    assert parse_refused_receipts(dest.read_text(encoding="utf-8")) == receipts
+
+    comment = tmp_path / "comment.json"
+    comment.write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {"path": "scripts/ci/example.py", "line": 7, "body": "x"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    error = tmp_path / "err.txt"
+    error.write_text(
+        '{"errors":[{"message":"pull_request_review_thread.path is invalid"}]}\n',
+        encoding="utf-8",
+    )
+    dest2 = tmp_path / "cli-refused.txt"
+    assert (
+        main(
+            [
+                "--record-refusal",
+                "--refused-locations",
+                str(dest2),
+                "--comment-file",
+                str(comment),
+                "--error-file",
+                str(error),
+            ]
+        )
+        == 0
+    )
+    assert "example.py:7\tGitHub HTTP 422: pull_request_review_thread.path is invalid" in dest2.read_text(
+        encoding="utf-8"
+    )
+    assert main(["--record-refusal"]) == 2
+    loc_only = tmp_path / "loc-only.txt"
+    loc_only.write_text("scripts/ci/example.py:7\n", encoding="utf-8")
+    control_only = tmp_path / "control-only.json"
+    body_only = tmp_path / "body-only.md"
+    out_only = tmp_path / "out-loc.md"
+    control_only.write_text(
+        json.dumps(control({"path": "scripts/ci/example.py", "line": 7})),
+        encoding="utf-8",
+    )
+    body_only.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_only),
+                "--body",
+                str(body_only),
+                "--output",
+                str(out_only),
+                "--refused-locations",
+                str(loc_only),
+            ]
+        )
+        == 0
+    )
+    assert "`scripts/ci/example.py:7`" in out_only.read_text(encoding="utf-8")
+    two_control = tmp_path / "two-control.json"
+    two_out = tmp_path / "two-out.md"
+    two_control.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 7},
+                {"path": "scripts/ci/other.py", "line": 12},
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "--control",
+                str(two_control),
+                "--body",
+                str(body_only),
+                "--output",
+                str(two_out),
+                "--refused-locations",
+                str(dest),
+            ]
+        )
+        == 0
+    )
+    two_text = two_out.read_text(encoding="utf-8")
+    assert "pull_request_review_thread.path is invalid" in two_text
+    assert "Line could not be resolved" in two_text
+    dest3 = tmp_path / "skip.txt"
+    record_refused_receipt(dest3, "../escape.py", 1, "HTTP 422")
+    assert dest3.read_text(encoding="utf-8") == "" if dest3.exists() else True
+    if dest3.exists():
+        assert dest3.read_text(encoding="utf-8") == ""
+    bad_comment = tmp_path / "bad-comment.json"
+    bad_comment.write_text("{}", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--record-refusal",
+                "--refused-locations",
+                str(dest2),
+                "--comment-file",
+                str(bad_comment),
+                "--error-file",
+                str(error),
+            ]
+        )
+        == 2
+    )
 
 
 def test_fallback_body_explains_missing_trusted_locations():

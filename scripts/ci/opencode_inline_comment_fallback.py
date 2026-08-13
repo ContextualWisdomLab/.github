@@ -64,15 +64,18 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
     return locations
 
 
-def parse_refused_locations(text: str) -> list[tuple[str, int]]:
-    """Parse ``path:line`` rows from one-at-a-time retry failures."""
-    locations: list[tuple[str, int]] = []
+def parse_refused_receipts(text: str) -> list[tuple[str, int, str]]:
+    """Parse ``path:line`` or ``path:line<TAB>phrase`` retry-failure rows."""
+    receipts: list[tuple[str, int, str]] = []
     seen: set[tuple[str, int]] = set()
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if not line or line.startswith("#") or ":" not in line:
+        if not line or line.startswith("#"):
             continue
-        path_text, _, line_text = line.rpartition(":")
+        loc_text, _sep, phrase = line.partition("\t")
+        if ":" not in loc_text:
+            continue
+        path_text, _, line_text = loc_text.rpartition(":")
         path = safe_finding_path(path_text)
         try:
             parsed_line = int(line_text)
@@ -85,8 +88,26 @@ def parse_refused_locations(text: str) -> list[tuple[str, int]]:
         if location in seen:
             continue
         seen.add(location)
-        locations.append(location)
-    return locations
+        receipts.append((path, line_number, phrase.strip()))
+    return receipts
+
+
+def parse_refused_locations(text: str) -> list[tuple[str, int]]:
+    """Parse ``path:line`` rows from one-at-a-time retry failures."""
+    return [(path, line) for path, line, _phrase in parse_refused_receipts(text)]
+
+
+def record_refused_receipt(
+    dest: Path, path: str, line: int, error_text: str
+) -> None:
+    """Append one refused ``path:line`` and its GitHub 422 phrase."""
+    safe_path = safe_finding_path(path)
+    safe_line = safe_finding_line(line)
+    if safe_path is None or safe_line is None:
+        return
+    phrase = github_publication_error_phrase(error_text)
+    with dest.open("a", encoding="utf-8") as handle:
+        handle.write(f"{safe_path}:{safe_line}\t{phrase}\n")
 
 
 def _collapse_error_text(text: str) -> str:
@@ -215,14 +236,25 @@ def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> 
 
 
 def render_inline_comment_receipts(
-    locations: list[tuple[str, int]], error_phrase: str
+    locations: list[tuple[str, int]],
+    error_phrase: str = "",
+    phrases: dict[tuple[str, int], str] | None = None,
 ) -> list[str]:
     """Return durable overview receipt lines for refused inline comments."""
     if not locations:
         return []
-    if error_phrase:
-        return [f"- `{path}:{line}` — {error_phrase}" for path, line in locations]
-    return [f"- `{path}:{line}`" for path, line in locations]
+    lines: list[str] = []
+    for path, line in locations:
+        phrase = ""
+        if phrases is not None:
+            phrase = phrases.get((path, line), "")
+        if not phrase:
+            phrase = error_phrase
+        if phrase:
+            lines.append(f"- `{path}:{line}` — {phrase}")
+        else:
+            lines.append(f"- `{path}:{line}`")
+    return lines
 
 
 def render_inline_comment_failure_suffix(
@@ -230,6 +262,7 @@ def render_inline_comment_failure_suffix(
     *,
     error_phrase: str = "",
     mixed_success: bool = False,
+    phrases: dict[tuple[str, int], str] | None = None,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     heading = (
@@ -254,7 +287,11 @@ def render_inline_comment_failure_suffix(
                 "trusted current-head finding locations:"
             )
         lines.append("")
-        lines.extend(render_inline_comment_receipts(locations, error_phrase))
+        lines.extend(
+            render_inline_comment_receipts(
+                locations, error_phrase, phrases=phrases
+            )
+        )
         lines.append("")
         lines.append(
             "OpenCode did not copy suggested diffs into this PR-level body. "
@@ -282,10 +319,27 @@ def render_inline_comment_failure_body(
     *,
     error_text: str = "",
     refused_locations: list[tuple[str, int]] | None = None,
+    refused_receipts: list[tuple[str, int, str]] | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
     error_phrase = github_publication_error_phrase(error_text) if error_text else ""
-    if refused_locations is None:
+    phrases: dict[tuple[str, int], str] | None = None
+    if refused_receipts is not None:
+        allowed = set(trusted_finding_locations(control))
+        locations = [
+            (path, line)
+            for path, line, _phrase in refused_receipts
+            if (path, line) in allowed
+        ]
+        phrases = {
+            (path, line): phrase
+            for path, line, phrase in refused_receipts
+            if phrase and (path, line) in allowed
+        }
+        mixed_success = True
+        if not locations:
+            return body.rstrip("\n") + "\n"
+    elif refused_locations is None:
         locations = trusted_finding_locations(control)
         mixed_success = False
     else:
@@ -298,6 +352,7 @@ def render_inline_comment_failure_body(
         locations,
         error_phrase=error_phrase,
         mixed_success=mixed_success,
+        phrases=phrases,
     )
 
 
@@ -323,8 +378,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--is-unprocessable", action="store_true")
     parser.add_argument("--refused-locations", type=Path)
+    parser.add_argument("--record-refusal", action="store_true")
+    parser.add_argument("--comment-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.record_refusal:
+            if (
+                args.refused_locations is None
+                or args.comment_file is None
+                or args.error_file is None
+            ):
+                raise ValueError(
+                    "--refused-locations, --comment-file, and --error-file "
+                    "are required with --record-refusal"
+                )
+            payload = load_control(args.comment_file)
+            comments = payload.get("comments")
+            if (
+                not isinstance(comments, list)
+                or not comments
+                or not isinstance(comments[0], dict)
+            ):
+                raise ValueError("comment file must contain comments[0]")
+            first = comments[0]
+            line = first.get("line")
+            record_refused_receipt(
+                args.refused_locations,
+                str(first.get("path") or ""),
+                line if isinstance(line, int) and not isinstance(line, bool) else 0,
+                args.error_file.read_text(encoding="utf-8"),
+            )
+            return 0
         if args.is_unprocessable:
             if args.error_file is None:
                 raise ValueError("--error-file is required with --is-unprocessable")
@@ -343,11 +427,18 @@ def main(argv: list[str] | None = None) -> int:
         error_text = (
             args.error_file.read_text(encoding="utf-8") if args.error_file else ""
         )
-        refused_locations = (
-            parse_refused_locations(args.refused_locations.read_text(encoding="utf-8"))
-            if args.refused_locations is not None
-            else None
-        )
+        refused_locations = None
+        refused_receipts = None
+        if args.refused_locations is not None:
+            parsed_receipts = parse_refused_receipts(
+                args.refused_locations.read_text(encoding="utf-8")
+            )
+            if any(phrase for _path, _line, phrase in parsed_receipts):
+                refused_receipts = parsed_receipts
+            else:
+                refused_locations = [
+                    (path, line) for path, line, _phrase in parsed_receipts
+                ]
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -357,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             control,
             error_text=error_text,
             refused_locations=refused_locations,
+            refused_receipts=refused_receipts,
         ),
         encoding="utf-8",
     )

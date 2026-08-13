@@ -5657,8 +5657,11 @@ jobs:
                 "$response_file"; then
                 attached=1
               else
-                jq -r '.comments[0] | "\(.path):\(.line)"' "$comment_file" \
-                  >>"$refused_locations_file" || true
+                python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
+                  --record-refusal \
+                  --refused-locations "$refused_locations_file" \
+                  --comment-file "$comment_file" \
+                  --error-file "$error_file" || true
                 if [ -s "$error_file" ]; then
                   cat "$error_file" >>"${refused_locations_file}.errors"
                 fi
