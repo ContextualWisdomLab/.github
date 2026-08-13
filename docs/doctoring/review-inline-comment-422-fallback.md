@@ -54,8 +54,12 @@ After that filter, surviving RIGHT-side comments convert their
 block so the author can apply the replacement in one click (GitHub,
 n.d.-c). Only `+` lines become the replacement; `n/a`, “cannot provide”,
 LEFT-side comments, and replacements that would break the fence stay as
-the original `` ```diff `` context. Suggested diffs still stay out of the
-PR-level body.
+the original `` ```diff `` context. When the suggested_diff removes more
+than one current-head line and every line from the finding through that
+span sits on the same hunk, the comment also sets `start_line`, `line`,
+and `start_side` so GitHub applies one multi-line suggestion range
+(GitHub, n.d.-b). A range that would leave the hunk stays single-line.
+Suggested diffs still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -71,7 +75,9 @@ with the same control object used to build the inline `comments` array.
   per-comment 422 phrases, the 20-comment one-at-a-time retry cap, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
-  conversion of surviving suggested diffs into GitHub suggestion blocks.
+  conversion of surviving suggested diffs into GitHub suggestion blocks,
+  and `start_line`/`line` ranges when a multi-line replacement sits on
+  one current-head hunk.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
