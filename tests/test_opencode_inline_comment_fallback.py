@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
+    DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     github_error_is_unprocessable,
     github_publication_error_phrase,
     iter_single_comment_payloads,
@@ -13,7 +14,9 @@ from scripts.ci.opencode_inline_comment_fallback import (
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
+    single_comment_retry_limit,
     trusted_finding_locations,
+    write_single_comment_payloads,
 )
 
 
@@ -517,6 +520,42 @@ def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):
         == 2
     )
     assert main(["--split-payload", str(payload)]) == 2
+    assert single_comment_retry_limit(None) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(True) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(0) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(-1) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(3) == 3
+    assert single_comment_retry_limit("7") == 7
+    assert single_comment_retry_limit("0") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit("nope") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    deferred = tmp_path / "deferred.txt"
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload),
+                "--output-dir",
+                str(tmp_path / "capped"),
+                "--retry-limit",
+                "1",
+                "--deferred-locations",
+                str(deferred),
+            ]
+        )
+        == 0
+    )
+    assert [path.name for path in sorted((tmp_path / "capped").glob("comment-*.json"))] == [
+        "comment-000.json"
+    ]
+    assert "scripts/ci/other.py:12" in deferred.read_text(encoding="utf-8")
+    assert (
+        write_single_comment_payloads(
+            json.loads(payload.read_text(encoding="utf-8")),
+            tmp_path / "direct",
+            limit=1,
+        )
+        == 1
+    )
     error_path = tmp_path / "422.txt"
     error_path.write_text("gh: HTTP 422: Unprocessable Entity\n", encoding="utf-8")
     assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 0

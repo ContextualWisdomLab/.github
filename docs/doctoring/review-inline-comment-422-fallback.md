@@ -21,8 +21,11 @@ items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
 After a refused attach, the publisher first checks that the failure is
-HTTP 422, splits the batch `comments` array into single-comment review
-payloads, and retries each with the same write helper. The first success
+HTTP 422, splits the batch `comments` array into at most 20
+single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
+default 20), and retries each with the same write helper. Comments past
+that cap are recorded as not retried instead of opening unbounded `gh
+api` writes. The first success
 uses `REQUEST_CHANGES` plus the review body; later successes use
 `COMMENT`. Survivors therefore still appear on Files changed. Remaining
 failures still rebuild the fallback from the `gh api` error file and
@@ -47,8 +50,9 @@ Suggested diffs stay out of the PR-level body.
   the exact location list, GitHub JSON `errors[].message` phrases, HTTP 422
   line fallback, empty-set sentence, CLI success with `--error-file`,
   fail-closed unreadable control or error input, batch-to-single comment
-  splitting, `--is-unprocessable` classification, and mixed-success
-  receipts that omit attached path:line rows.
+  splitting, `--is-unprocessable` classification, mixed-success
+  receipts that omit attached path:line rows, the 20-comment one-at-a-time
+  retry cap, and leftover path:line rows that were not retried.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
