@@ -1531,6 +1531,18 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         "- `scripts/ci/ok.py:4`",
     ]
     assert applyable_suggestion_ranges({"comments": "bad"}) == []
+    assert applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "scripts/ci/removed.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": "```suggestion\nremoved = True\n```\n",
+                }
+            ]
+        }
+    ) == []
     payload = apply_github_suggestion_blocks(
         _batch_payload(
             {
@@ -2375,6 +2387,9 @@ def test_leftover_manual_edit_excerpt_is_distinct_non_applyable_block(tmp_path):
     assert leftover_manual_edit_text("no suggested-diff fence") == ""
     assert leftover_manual_edit_text("```diff\n\n```") == ""
     assert leftover_manual_edit_text(SUGGESTED_DIFF_BODY) == "    new"
+    assert leftover_manual_edit_text(
+        "```diff\n+<script>alert(1)</script>\n```"
+    ) == "&lt;script&gt;alert(1)&lt;/script&gt;"
     assert leftover_manual_edit_text(NA_DIFF_BODY) == "n/a"
     assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY).startswith(
         "Cannot provide"

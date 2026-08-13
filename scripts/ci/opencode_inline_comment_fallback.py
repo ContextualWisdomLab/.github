@@ -411,7 +411,11 @@ def applyable_suggestion_ranges(
         if not isinstance(comment, dict):
             continue
         body = comment.get("body")
-        if not isinstance(body, str) or "```suggestion" not in body:
+        if (
+            not isinstance(body, str)
+            or comment.get("side") == "LEFT"
+            or "```suggestion" not in body
+        ):
             continue
         path = safe_finding_path(comment.get("path"))
         end = safe_finding_line(comment.get("line"))
@@ -450,6 +454,7 @@ def leftover_manual_edit_text(body: object) -> str:
             excerpt = stripped
             break
     excerpt = excerpt.replace("```", "").replace("\r\n", "\n").strip("\n")
+    excerpt = excerpt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     if not excerpt.strip():
         return ""
     if len(excerpt) > MANUAL_EDIT_MAX_CHARS:

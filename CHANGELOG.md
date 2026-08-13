@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Escaped `<`, `>`, and `&` in leftover Manual-edit excerpts and omitted LEFT ```suggestion fences from applyable ranges so a leftover script tag cannot break the overview and GitHub cannot advertise a deleted-side apply.
 - Persisted leftover OpenCode `cannot-provide` and `LEFT` suggested-diff replacement text as a distinct overview “Manual edit (not a GitHub suggestion):” ```diff block so authors can copy the change by hand without treating it as an applyable `path:line` / `path:start-end` GitHub suggestion.
 - Distinguished applyable OpenCode GitHub suggestion ranges from leftover ```diff fences (`cannot-provide` or `LEFT`) in the overview receipts so authors can see which hunks are one-click applies and which still need a manual edit.
 - Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies.
