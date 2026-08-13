@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
 
 - Anchored remapped leftover OpenCode LEFT comments to the first RIGHT line of the same `@@` hunk when the original line is gone, so multi-hunk files do not attach the suggestion to an earlier hunk.
