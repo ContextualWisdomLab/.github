@@ -161,6 +161,13 @@ def test_rejects_file_target_before_pytest_module_pair():
     executed = ["python", "attacker.py", "-m", "pytest"]
     with pytest.raises(ValueError, match="not a safe direct pytest invocation"):
         sc.execute_command(pathlib.Path("."), executed)
+    assert sc.parse_safe_pytest_command("python3.12 -m pytest -q") == [
+        "python3.12",
+        "-m",
+        "pytest",
+        "-q",
+    ]
+    assert sc.parse_safe_pytest_command("python3.14 attacker.py -m pytest") is None
 
 
 def test_block_with_a_dangerous_line_and_a_safe_line_only_discovers_the_safe_one(tmp_path):

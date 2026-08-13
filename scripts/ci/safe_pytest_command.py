@@ -16,6 +16,7 @@ RUN_KEY_RE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<rest>.*)$")
 BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\s*(?:#.*)?$")
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
+PYTHON_VERSIONED_RE = re.compile(r"^python3\.\d+$")
 PYTHON_FLAG_TAKES_VALUE = frozenset({"-W", "-X", "--check-hash-based-pycs"})
 COVERAGE_RUN_FLAG_TAKES_VALUE = frozenset(
     {
@@ -123,7 +124,7 @@ def _is_pytest_argv(argv: Sequence[str]) -> bool:
     executable = _basename(argv[0])
     if executable in PYTEST_EXECUTABLES:
         return True
-    if executable in PYTHON_EXECUTABLES:
+    if executable in PYTHON_EXECUTABLES or PYTHON_VERSIONED_RE.fullmatch(executable):
         return _python_invokes_pytest(argv)
     if executable == "coverage":
         return _coverage_run_invokes_pytest(argv, 1)

@@ -12,7 +12,9 @@ reviewer never approved as the test runner.
 ## Decision
 
 The first execution target after recognized interpreter or `coverage run`
-flags must be `-m`/`--module pytest`. `python -m coverage run … -m pytest`
+flags must be `-m`/`--module pytest`. Versioned interpreters matching
+`python3.<digits>` (the CI pins `python3.12` / `python3.13` / `python3.14`)
+are the same runner class as `python3`. `python -m coverage run … -m pytest`
 remains allowed because the first `-m` is `coverage` and `run` then invokes
 pytest. File operands, `-c`, `--`, and earlier modules fail closed.
 
