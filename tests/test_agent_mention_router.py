@@ -461,6 +461,59 @@ def test_parse_event_still_ignores_plain_issues_without_pull_request_marker() ->
     assert load_module().parse_event(payload) is None
 
 
+def test_issue_comment_reaction_403_does_not_drop_a_queued_mention(
+    capsys,
+) -> None:
+    """Live run 31670687388 died after dispatch on a 403 eyes reaction."""
+
+    module = load_module()
+    request = module.parse_event(event("@cwl-noema-review"))
+    assert request is not None
+
+    class ReactionForbiddenClient(FakeClient):
+        """Raise the live GitHub App 403 only on the eyes reaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail reactions the same way the installation token failed."""
+
+            if any("reactions" in str(arg) for arg in args):
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    target = ReactionForbiddenClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert repository_dispatch_calls(central)
+    assert any(
+        args[0].endswith("/issues/17/comments") for args, _ in target.calls
+    )
+    assert "Could not add mention reaction" in capsys.readouterr().out
+    assert module.add_mention_reaction(target, request) is False
+
+
+def test_add_mention_reaction_only_targets_issue_comments() -> None:
+    """Review-comment and review IDs never use the issue-comment reaction API."""
+
+    module = load_module()
+    review_request = module.parse_event(review_comment_event())
+    assert review_request is not None
+    client = FakeClient()
+    assert module.add_mention_reaction(client, review_request) is False
+    assert client.calls == []
+    issue_request = module.parse_event(event("@cwl-noema-review"))
+    assert issue_request is not None
+    assert module.add_mention_reaction(client, issue_request) is True
+    assert client.calls[0][1] == {"content": "eyes"}
+
+
 def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
     """Review-comment and review IDs are not issue-comment reaction targets."""
 

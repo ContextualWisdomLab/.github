@@ -486,6 +486,37 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     )
 
 
+def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
+    """Add the optional eyes reaction on an issue comment.
+
+    GitHub App installation tokens and job ``GITHUB_TOKEN`` often receive
+    ``403 Resource not accessible by integration`` for issue-comment reactions
+    on pull requests. The reaction is user-experience only; dispatch has
+    already been queued, so a reaction failure must not look like a missed
+    mention.
+    """
+
+    if request.source_kind != SOURCE_KIND_ISSUE_COMMENT:
+        return False
+    try:
+        client.request(
+            [
+                f"repos/{request.repository}/issues/comments/"
+                f"{request.comment_id}/reactions",
+                "-X",
+                "POST",
+            ],
+            input_payload={"content": "eyes"},
+        )
+    except RuntimeError as exc:
+        print(
+            "::warning::Could not add mention reaction on "
+            f"comment {request.comment_id}: {exc}"
+        )
+        return False
+    return True
+
+
 def dispatch_request(
     request: MentionRequest,
     *,
