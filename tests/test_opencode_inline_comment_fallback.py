@@ -25,6 +25,10 @@ from scripts.ci.opencode_inline_comment_fallback import (
     trusted_finding_locations,
     write_hunk_filtered_payload,
     write_single_comment_payloads,
+    extract_suggestion_replacement,
+    render_github_suggestion_block,
+    apply_github_suggestion_blocks,
+    body_has_suggestion_fence,
 )
 
 
@@ -1293,3 +1297,96 @@ def test_cli_filters_payload_to_current_head_hunks(tmp_path):
         )
         == 2
     )
+
+
+SUGGESTED_DIFF_BODY = """\
+### HIGH replace old line
+
+- Location: `scripts/ci/example.py:7`
+- Problem: The old line is wrong.
+- Root cause: The review found the current-head hunk.
+- Fix: Replace the old line.
+- Regression test: Keep the hunk prefilter.
+
+#### Suggested diff
+```diff
+@@ -7 +7 @@
+-    old
++    new
+```
+"""
+
+
+def test_extract_suggestion_replacement_from_unified_and_plain_diffs():
+    assert (
+        extract_suggestion_replacement("@@ -7 +7 @@\n-    old\n+    new\n")
+        == "    new"
+    )
+    assert extract_suggestion_replacement(
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n keep\n-old\n+new1\n+new2\n"
+    ) == "new1\nnew2"
+    assert extract_suggestion_replacement("plain replacement") == "plain replacement"
+    assert extract_suggestion_replacement("Cannot provide diff - inaccessible") is None
+    assert extract_suggestion_replacement("n/a") is None
+    assert extract_suggestion_replacement("") is None
+    assert extract_suggestion_replacement("- only removed\n") is None
+    assert extract_suggestion_replacement("+has ``` fence") is None
+    assert extract_suggestion_replacement("plain ``` no") is None
+    assert render_github_suggestion_block("    new") == "```suggestion\n    new\n```"
+
+
+def test_apply_github_suggestion_blocks_on_surviving_right_comments():
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/removed.py",
+            "line": 11,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/plain.py",
+            "line": 4,
+            "side": "RIGHT",
+            "body": "no suggested diff here",
+        },
+        {
+            "path": "scripts/ci/done.py",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "already\n\n```suggestion\nkept\n```\n",
+        },
+        {
+            "path": "scripts/ci/mention.py",
+            "line": 3,
+            "side": "RIGHT",
+            "body": "Authors should use a ```suggestion fence.\n\n```diff\n+fixed\n```\n",
+        },
+        "not-an-object",
+    )
+    updated = apply_github_suggestion_blocks(payload)
+    bodies = [item["body"] for item in updated["comments"] if isinstance(item, dict)]
+    assert "```suggestion\n    new\n```" in bodies[0]
+    assert "```suggestion" not in bodies[1]
+    assert bodies[2] == "no suggested diff here"
+    assert bodies[3].count("```suggestion") == 1
+    assert "```suggestion\nfixed\n```" in bodies[4]
+    mention_only = "Authors should use a ```suggestion fence.\n"
+    assert not body_has_suggestion_fence(mention_only)
+    assert apply_github_suggestion_blocks({"comments": "bad"}) == {"comments": "bad"}
+    second_fence = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "RIGHT",
+                "body": "```diff\nn/a\n```\n\n```diff\n+fixed\n```\n",
+            }
+        )
+    )
+    assert "```suggestion\nfixed\n```" in second_fence["comments"][0]["body"]

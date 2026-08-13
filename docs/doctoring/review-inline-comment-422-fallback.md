@@ -53,7 +53,10 @@ Sadowski et al., 2018).
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
-Suggested diffs stay out of the PR-level body.
+Surviving comments convert a `` ```diff `` suggested replacement into a
+closed GitHub `` ```suggestion `` fence so authors can apply it on the
+current-head hunk in one click (GitHub, n.d.-c). A prose mention of the
+token is not a fence (CWE-1288). Suggested diffs stay out of the PR-level body.
 
 ## Verification contract
 
