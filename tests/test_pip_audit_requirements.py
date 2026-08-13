@@ -236,7 +236,7 @@ def test_run_audits_skips_compile_inputs_and_fails_manifest(
 def test_pylock_manifest_and_require_hashes_directive(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A pylock file and an explicit ``--require-hashes`` line are recognized."""
+    """A pylock file is recognized; ``--require-hashes`` without hashes is not."""
 
     module = load_module()
     nested = tmp_path / "svc"
@@ -244,17 +244,23 @@ def test_pylock_manifest_and_require_hashes_directive(
     (nested / "pylock.svc.toml").write_text("lock = true\n", encoding="utf-8")
     directed = tmp_path / "requirements-directed.txt"
     directed.write_text("--require-hashes\ndemo==1.0.0\n", encoding="utf-8")
+    hashed = tmp_path / "requirements-hashed.txt"
+    hashed.write_text(
+        "--require-hashes\ndemo==1.0.0 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
     comment_only = tmp_path / "requirements-comments.txt"
     comment_only.write_text("# only a comment\n", encoding="utf-8")
     odd = tmp_path / "requirements-odd"
     odd.write_text("demo==1.0.0\n", encoding="utf-8")
 
     assert module.should_audit_project_manifest(tmp_path) is True
-    assert module.is_hashed_lock(directed) is True
+    assert module.is_hashed_lock(directed) is False
+    assert "--disable-pip" not in (module.audit_command(directed) or [])
+    assert module.is_hashed_lock(hashed) is True
+    assert "--disable-pip" in (module.audit_command(hashed) or [])
     assert module.is_hashed_lock(comment_only) is False
     assert module.hashed_sibling(odd) is None
-    assert module.audit_command(directed) is not None
-    assert "--disable-pip" in module.audit_command(directed)
 
 
 def test_workflow_invokes_helper_and_strix_installs_without_resolving() -> None:

@@ -45,15 +45,15 @@ def is_override_file(path: pathlib.Path) -> bool:
 def is_hashed_lock(path: pathlib.Path) -> bool:
     """Return whether *path* actually contains pip hash-checking evidence.
 
-    A ``*-hashes.txt`` name alone is not enough: an empty or pin-only file
-    would otherwise be audited with ``--disable-pip`` and report a clean
-    empty set instead of a missing complete lock.
+    A ``*-hashes.txt`` name or a lone ``--require-hashes`` directive is not
+    enough: an empty, pin-only, or directive-only file would otherwise be
+    audited with ``--disable-pip`` and report a clean incomplete set.
     """
 
     lines = _requirement_lines(path)
     if not lines:
         return False
-    return any(line == "--require-hashes" or "--hash=" in line for line in lines)
+    return any("--hash=" in line for line in lines)
 
 
 def hashed_sibling(path: pathlib.Path) -> pathlib.Path | None:
