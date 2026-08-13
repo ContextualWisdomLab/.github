@@ -243,6 +243,18 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_outer_workflow_neutralizes_fail_closed_after_provider_infra(self) -> None:
+        """Recognize the exact fail-closed line required CI prints after NIM exit 2."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "Strix run failed for model 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' "
+                "after 4778s (exit code 2).\n"
+                "Strix scan failed after provider infrastructure or failure-signal output; "
+                "failing closed.\n"
+            )
+        )
+
     def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
