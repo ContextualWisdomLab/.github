@@ -136,5 +136,6 @@ repeatable compile command.
   apply here.
 
 Pending and dismissed reviews do not dispatch mention agents. The local
-mention job grants `reactions: write`. See `ARCHITECTURE.md` and
-`docs/doctoring/review-agent-mention-surfaces.md`.
+mention job grants `issues: write` and `pull-requests: write` for optional
+eyes reactions; `reactions: write` is not a `GITHUB_TOKEN` permission. See
+`ARCHITECTURE.md` and `docs/doctoring/review-agent-mention-surfaces.md`.

@@ -55,7 +55,6 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-      reactions: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}

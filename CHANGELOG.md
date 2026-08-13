@@ -44,11 +44,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Dropped the invalid `reactions: write` `GITHUB_TOKEN` permission from the local mention-router job. Optional eyes reactions use `issues: write` (issue comments) and `pull-requests: write` (review comments); a leftover 403 remains a warning after dispatch, not a missed mention.
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - GraphQL `addReaction` on a submitted review body treats the already-reacted error as success and refuses an empty or missing `data.addReaction` payload, so a second mention on the same review is not a missed dispatch and a blank 200 is not eyes.
 - Submitted review-body mention reactions reuse the webhook or sweep `node_id` when GitHub already provided it, so the router does not make an extra review GET before GraphQL `addReaction`.
 - `@cwl-noema-review` and `@opencode-agent` mentions in submitted review bodies now receive the optional eyes reaction through GraphQL `addReaction` on the review node. A 403 or GraphQL error is a warning after dispatch, not a missed mention.
 - `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments now receive the optional eyes reaction on `POST /pulls/comments/{id}/reactions`. A 403 there is still a warning, not a missed dispatch. Submitted review bodies still have no REST reaction endpoint.
-- The local mention-router job now declares `reactions: write` so the optional eyes reaction is an allowed GitHub App write instead of live `403 Resource not accessible by integration` (runs 31686563920, 31670687388). The reaction remains non-fatal if GitHub still refuses it.
 - Pending and dismissed pull-request reviews no longer dispatch `@cwl-noema-review` / `@opencode-agent` mentions; only submitted non-dismissed review bodies in the sweep lookback are requests.
 - Trusted `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments and submitted review bodies now reach the mention router and organization sweep, including mixed-case handles; the local workflow hydrates the live PR from `issue.number` or `pull_request.number` and no longer depends on a case-sensitive conversation-comment body filter.
 - A 403 on the optional eyes reaction after a successful agent dispatch no longer fails the mention job; the local router now has `pull-requests: write` so pull-request receipt comments can be posted. The decision record now cites CWE-755 so an exceptional reaction response cannot be treated as a missed dispatch.
