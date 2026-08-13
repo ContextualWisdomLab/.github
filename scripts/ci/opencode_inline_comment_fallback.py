@@ -70,7 +70,7 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
 def parse_refused_receipts(text: str) -> list[tuple[str, int, str]]:
     """Parse ``path:line`` or ``path:line<TAB>phrase`` retry-failure rows."""
     receipts: list[tuple[str, int, str]] = []
-    seen: set[tuple[str, int]] = set()
+    index_by_location: dict[tuple[str, int], int] = {}
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -88,10 +88,15 @@ def parse_refused_receipts(text: str) -> list[tuple[str, int, str]]:
         if path is None or line_number is None:
             continue
         location = (path, line_number)
-        if location in seen:
+        own_phrase = phrase.strip()
+        existing = index_by_location.get(location)
+        if existing is None:
+            index_by_location[location] = len(receipts)
+            receipts.append((path, line_number, own_phrase))
             continue
-        seen.add(location)
-        receipts.append((path, line_number, phrase.strip()))
+        # Keep this comment's own 422 phrase when a later retry rewrites
+        # the same path:line instead of dropping it as a duplicate row.
+        receipts[existing] = (path, line_number, own_phrase)
     return receipts
 
 

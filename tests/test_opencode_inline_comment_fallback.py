@@ -190,6 +190,16 @@ def test_mixed_success_receipts_list_only_refused_path_lines():
         ("scripts/ci/a.py", 3, "GitHub HTTP 422: path is invalid"),
         ("scripts/ci/b.py", 9, "GitHub HTTP 422: Line could not be resolved"),
     ]
+    assert parse_refused_receipts(
+        "scripts/ci/a.py:3\tGitHub HTTP 422: path is invalid\n"
+        "scripts/ci/a.py:3\tGitHub HTTP 422: Pull request review thread line is invalid\n"
+    ) == [
+        (
+            "scripts/ci/a.py",
+            3,
+            "GitHub HTTP 422: Pull request review thread line is invalid",
+        ),
+    ]
     all_attached = render_inline_comment_failure_body(
         "## Findings\n",
         control({"path": "scripts/ci/example.py", "line": 7}),

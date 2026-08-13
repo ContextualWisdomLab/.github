@@ -14,7 +14,7 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Treated only sealed GitHub HTTP 422 tokens (`HTTP 422`, `status code 422`, `Error code: 422`, `Unprocessable Entity`) as unprocessable review writes, so issue `#422` or a path containing `422` cannot trigger the inline-comment 422 fallback.
-- Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence. Receipt phrases now escape backticks and HTML metacharacters before they are written into the overview body.
+- Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence. A later retry of the same `path:line` keeps that comment's own phrase instead of dropping it as a duplicate row. Receipt phrases now escape backticks and HTML metacharacters before they are written into the overview body.
 - After a mixed one-at-a-time inline retry, listed only the refused `path:line` rows in the overview receipts so attached hunks are not reported as failed.
 - After a batch GitHub 422, retried OpenCode inline comments one at a time so comments on surviving hunks still attach instead of dropping the entire review thread.
 - Stored each refused OpenCode inline comment as a durable overview receipt that pairs the trusted `path:line` with the GitHub 422 error phrase from `gh api` stderr or JSON `errors[].message`.
