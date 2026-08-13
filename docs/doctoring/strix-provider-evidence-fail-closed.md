@@ -33,6 +33,38 @@ The wrapper must not treat that as a completed security review.
 This preserves the security boundary: infrastructure failure may delay a merge,
 but it cannot create an unaudited approval signal.
 
+## Active required-workflow boundary (2026-08-13)
+
+The exact-head `ContextualWisdomLab/.github#965` run at commit
+`5489c5106123f150a3bd77cfb3759de7de4219b1` exposed a second false-green path.
+Run `31681226640`, job `94386887113`, reported `success`, but its downloaded
+`strix-reports` artifact contained NVIDIA NIM `429`, GitHub Models `410`,
+`No Strix vulnerability report artifact was produced`, and no
+`evidence-binding.json`. The job step list also lacked the PR-head
+`Validate Strix report provenance` step.
+
+The cause is GitHub execution semantics: `pull_request_target` runs the
+workflow YAML from the trusted base/default branch. Its PR-head materialization
+is data-only input for the trusted smoke test; it does not execute the PR-head
+workflow wrapper. Therefore a workflow-changing PR cannot use its own
+pull-request run as proof that the new wrapper is active.
+
+The remediation is now explicit. The status publisher uses the distinct
+description `Default-branch repository_dispatch Strix structured evidence
+binding passed`, and the OpenCode approval path holds a workflow-changing PR
+until that exact same-head status exists. After the workflow PR is merged by the
+normal protected-branch process, a new default-branch `repository_dispatch`
+run must produce a matching `evidence-binding.json` before the result is called
+clean. The observed run above is inconclusive and must not be used as approval
+evidence.
+
+The failed-check evidence collector follows the same rule. A generic successful
+check-run or workflow-run is not sufficient to supersede a stale Strix failure;
+the collector accepts only a downloaded `strix-reports` artifact whose binding
+matches the current head and run ID, whose report exists, and whose SHA-256
+digest matches the binding. If that artifact cannot be downloaded or verified,
+the failed check remains active.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

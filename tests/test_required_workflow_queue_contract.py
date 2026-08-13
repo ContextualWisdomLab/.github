@@ -1098,6 +1098,25 @@ def test_strix_provider_outage_without_findings_fails_closed() -> None:
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
 
 
+def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None:
+    """Do not treat base-workflow false green as proof for workflow PRs."""
+    strix_workflow = workflow_text("strix.yml")
+    opencode_workflow = workflow_text("opencode-review-dispatch.yml")
+
+    assert "pull_request_target evaluates this workflow from the trusted base" in strix_workflow
+    assert "Materializing a PR-head workflow above is data-only self-test" in strix_workflow
+    assert (
+        "Default-branch repository_dispatch Strix structured evidence binding passed"
+        in strix_workflow
+    )
+    assert "self_modifying_strix_workflow_needs_structured_evidence" in opencode_workflow
+    assert "WAITING_FOR_POST_MERGE_STRIX_EVIDENCE" in opencode_workflow
+    assert (
+        "Default-branch repository_dispatch Strix structured evidence binding passed"
+        in opencode_workflow
+    )
+
+
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
     workflow = workflow_text("strix.yml")
     run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(

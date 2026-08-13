@@ -413,6 +413,13 @@ jobs:
           echo "::error::PR head ref did not resolve to expected commit $PR_HEAD_SHA after retries." >&2
           exit 1
 
+      # pull_request_target evaluates this workflow from the trusted base
+      # branch. Materializing a PR-head workflow above is data-only self-test
+      # input; it does not replace the active wrapper for this run.
+      # Consequently a workflow-changing PR is not cleanly evidenced until a
+      # default-branch repository_dispatch run executes this wrapper after the
+      # change is merged.
+
       - name: Self-test Strix required workflow contract
         timeout-minutes: 2
         working-directory: trusted-strix-source
@@ -1024,7 +1031,7 @@ jobs:
           case "$STRIX_RESULT" in
             success)
               state="success"
-              description="Default-branch repository_dispatch Strix evidence passed"
+              description="Default-branch repository_dispatch Strix structured evidence binding passed"
               ;;
             failure|cancelled|skipped)
               state="failure"
@@ -1174,7 +1181,7 @@ jobs:
           case "$STRIX_RESULT" in
             success)
               state="success"
-              description="Default-branch repository_dispatch Strix evidence passed"
+              description="Default-branch repository_dispatch Strix structured evidence binding passed"
               ;;
             failure|cancelled|skipped)
               state="failure"

@@ -42,6 +42,12 @@ flowchart TD
 CWE-754: a zero exit plus “failing closed” in the log is unusual and
 must not become a green security check.
 
+`pull_request_target` evaluates required workflow YAML from the trusted
+base/default branch. A PR-head workflow may be materialized for data-only
+self-test, but it is not the active wrapper. Workflow-changing PRs therefore
+need a post-merge default-branch Strix run with a structured evidence binding;
+the generic `strix` success context is insufficient.
+
 ## Control-plane data flow
 
 ```mermaid
