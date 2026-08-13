@@ -37,9 +37,10 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
         "contents: write",
         "issues: write",
         "pull-requests: write",
-        "reactions: write",
     ):
         assert f"      {permission}" in local
+    assert "reactions: write" not in local
+    assert "reactions:" not in local
     assert "ref: ${{ github.event.repository.default_branch }}" in local
     assert "TARGET_REPOSITORY_TOKEN: ${{ github.token }}" in local
     assert "conversation_comments" not in local
