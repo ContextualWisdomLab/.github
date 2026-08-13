@@ -40,6 +40,7 @@ def _simulate_linux_x86_64_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(materializer.sys, "platform", "linux")
     monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    materializer._install_trusted_uv.cache_clear()
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:

@@ -173,7 +173,15 @@ This prerequisite repair is intentionally test-only for production behavior. It
 changes neither the trusted uv download boundary nor the dependency closure
 accepted by the coverage sandbox.
 
+CWE-670 forbids a control-flow result that is always wrong for the current
+inputs (MITRE, 2026). The installer is process-cached, so the Linux x86_64
+simulation must clear that cache or a prior host-architecture miss would
+skip version verification even after the monkeypatch.
+
 ## References
+
+MITRE. (2026). *CWE-670: Always-incorrect control flow implementation*.
+https://cwe.mitre.org/data/definitions/670.html
 
 Python Software Foundation. (n.d.). *sys — System-specific parameters and functions*.
 Python 3 documentation. Retrieved August 13, 2026, from
