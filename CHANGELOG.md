@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
 - Omitted the duplicate leftover reason bullet when the leftover heading already prefixes a deferred range/origin for the same `path:line`, so authors see one deferred line then the Manual-edit excerpt.
 - Listed a deferred leftover ahead of its Manual-edit excerpt in the leftover heading when the same `path:line` is both deferred and leftover, so authors see the unposted fence first.
