@@ -36,9 +36,10 @@ issue-comment reaction endpoint and are non-fatal: live run
 `31670687388` queued `@cwl-noema-review` on
 ContextualWisdomLab/.github#954 and then failed the job with
 `403 Resource not accessible by integration` on the reaction POST, so no
-receipt was posted. Review-comment and review identifiers are not
-issue-comment IDs, so those surfaces acknowledge only with the existing
-receipt issue comment. The local job uses `pull-requests: write` so
+receipt was posted. Review-comment mentions use
+``POST /pulls/comments/{id}/reactions`` and treat the same 403 as a
+warning. Submitted review bodies have no REST reaction endpoint, so
+those surfaces acknowledge only with the existing receipt issue comment. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created, and
 `reactions: write` so the optional eyes reaction is an allowed GitHub
 App write. Live `route-local-agent-mention` run `31686563920` still
@@ -62,7 +63,8 @@ metric. Review agents remain `edit: deny`. The LLM key remains
 
 `tests/test_agent_mention_router.py` and `tests/test_agent_mention_sweep.py`
 drive `parse_event` and `build_requests_for_pull_request` with GitHub-shaped
-review-comment and submitted-review payloads, including mixed-case handles.
+review-comment and submitted-review payloads, including mixed-case handles,
+and pin ``POST /pulls/comments/{id}/reactions`` for review-comment mentions.
 `tests/test_agent_mention_workflow_contract.py` pins the new workflow triggers
 and the absence of the case-sensitive body `contains` filter.
 `tests/test_opencode_agent_contract.py` pins the per-file walk and
