@@ -841,6 +841,8 @@ jobs:
           # provider outages are therefore failures, not clean security scans.
           # Fallback and retry policy belongs in the trusted gate itself. This
           # wrapper must never convert an incomplete scan into success.
+          # The provider classifier retains the literal Nvidia_nimException
+          # marker for the trusted pre-merge smoke contract.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e
