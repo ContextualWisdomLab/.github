@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Dropped applyable overview `path:start-end` rows when a leftover cannot-provide or LEFT line sits inside that range, so authors see the Manual-edit instead of a one-click apply for the same span.
 - Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
 - Kept leftover Manual-edit excerpts on the overview CLI when `--leftover-diff-locations` sits inside a trusted `--deferred-locations` `path:start-end` even if that leftover line is not a trusted control finding.
 - Kept leftover Manual-edit excerpts that sit inside a trusted deferred multi-line `path:start-end` even when that exact leftover line is not itself a trusted finding, so authors still see the deferred range then the Manual-edit.

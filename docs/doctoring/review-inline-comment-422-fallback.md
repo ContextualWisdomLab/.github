@@ -122,7 +122,8 @@ with the same control object used to build the inline `comments` array.
   leftover Manual-edit excerpts kept when the leftover line sits inside
   a trusted deferred range even if that exact line is not a trusted
   finding, including the overview CLI with ``--leftover-diff-locations``
-  plus ``--deferred-locations``, and
+  plus ``--deferred-locations``, applyable ``path:start-end`` rows
+  omitted when a leftover line sits inside that range, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

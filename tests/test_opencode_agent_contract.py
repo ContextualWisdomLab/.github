@@ -1667,6 +1667,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "exclude_deferred_applyable" in helper
     assert "leftover_manual_edits_with_deferred" in helper
     assert "exclude_leftover_from_applyable" in helper
+    assert "start <= leftover_line <= end" in helper
     assert "leftover_deferred_matches" in helper
     assert "leftover_reason_bullet_duplicates_deferred" in helper
     assert "range(start, end + 1)" in helper

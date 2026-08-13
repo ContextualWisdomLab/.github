@@ -1169,7 +1169,10 @@ def exclude_leftover_from_applyable(
     kept: list[tuple[str, int, int, str | None, int | None]] = []
     for item in applyable:
         path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
-        if (path, start) in leftover_points or (path, end) in leftover_points:
+        if any(
+            leftover_path == path and start <= leftover_line <= end
+            for leftover_path, leftover_line in leftover_points
+        ):
             continue
         kept.append((path, start, end, origin_path, origin_line))
     return kept

@@ -4021,3 +4021,45 @@ def test_cli_overview_keeps_interior_leftover_not_in_control(tmp_path):
         assert "scripts/ci/example.py:5-7" not in applyable_section
         assert "```suggestion" not in applyable_section
 
+
+def test_exclude_leftover_from_applyable_drops_interior_leftover_ranges():
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover = [("scripts/ci/example.py", 6, "cannot-provide", excerpt)]
+    applyable = [
+        ("scripts/ci/example.py", 5, 7, None, None),
+        ("scripts/ci/ok.py", 4, 4, None, None),
+    ]
+    assert exclude_leftover_from_applyable(applyable, leftover) == [
+        ("scripts/ci/ok.py", 4, 4, None, None)
+    ]
+    assert exclude_leftover_from_applyable(applyable, []) == applyable
+    assert exclude_leftover_from_applyable(
+        [("scripts/ci/example.py", 8, 10, None, None)], leftover
+    ) == [("scripts/ci/example.py", 8, 10, None, None)]
+
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 6},
+            {"path": "scripts/ci/ok.py", "line": 4},
+        ),
+        applyable_locations=applyable,
+        leftover_locations=leftover,
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = body.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert excerpt in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" in leftover_section
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+        assert "- `scripts/ci/ok.py:4`" in applyable_section
+        assert excerpt not in applyable_section
+
