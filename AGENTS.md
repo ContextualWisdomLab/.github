@@ -6,4 +6,5 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 
 422 fallback receipts cite leftover `path:start-end` when a finding carries `start_line`.
 Leftover LEFT deleted-line ranges are labeled `path:start-end LEFT`.
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
 
