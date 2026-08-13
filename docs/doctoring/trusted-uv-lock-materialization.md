@@ -64,8 +64,11 @@ sets `UV_NO_ENV_FILE=1` and `UV_PYTHON_DOWNLOADS=never`, and passes only a fixed
 `PATH`. This preserves the exact reconstructed project metadata while excluding
 user-level and runner-level configuration state.
 
-Generic requirements discovery continues to accept a global
-`--require-hashes` directive because pip performs a later closure preflight.
+Generic requirements discovery no longer treats a lone
+`--require-hashes` directive as trust evidence. Every package line must be an
+exact SHA-256 pin or a two-token `-r`/`--requirement` include whose target is a
+normalized relative POSIX lock path with no `.` or `..` components, so a dotted
+include cannot enter the trusted build context (CWE-22; MITRE, 2026).
 Trusted `uv export` output uses a stricter rule: every logical line must begin
 with a normalized package name and exact `==` pin, and every following hash must
 be a complete `sha256` digest. Option lines, direct or local references, other
@@ -190,6 +193,9 @@ https://github.com/actions/checkout
 GitHub, Inc. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 5, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+
+MITRE. (2026). *CWE-22: Improper limitation of a pathname to a restricted
+directory ('Path Traversal')*. https://cwe.mitre.org/data/definitions/22.html
 
 Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
 (version 1.2)*. https://slsa.dev/spec/v1.2/
