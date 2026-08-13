@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Replaced both oversized 14-property OpenCode mention dispatches with one three-property versioned claim envelope, preserved invocation/ledger identities, and made the review-only scheduler reject malformed policy, closed PRs, or live head/base/target-branch drift; stale snapshot work can neither enter general queue/merge mutations nor cancel newer scheduler, OpenCode, or Strix runs, while the explicit legacy scheduler path remains intact. The decision record now cites GitHub concurrency and NIST SP 800-53 SC-23 so a stale claim cannot hijack a later review.
 - Recorded the org control-plane architecture, including the mention-dispatch envelope, so agents reconstruct the trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
