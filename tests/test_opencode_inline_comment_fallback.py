@@ -80,9 +80,15 @@ def test_github_publication_error_phrase_prefers_json_error_messages():
     )
 
     assert phrase.startswith("GitHub HTTP 422:")
-    assert "pull_request_review_thread.path is invalid" in phrase
+    assert "pull_request_review_thread.path is invalid (custom)" in phrase
     assert "Review comments is invalid" in phrase
     assert "https://api.github.com" not in phrase
+    assert (
+        github_publication_error_phrase(
+            '{"errors":[{"message":"Line could not be resolved","code":"invalid"}]}'
+        )
+        == "GitHub HTTP 422: Line could not be resolved (invalid)"
+    )
 
 
 def test_github_publication_error_phrase_falls_back_to_http_line():

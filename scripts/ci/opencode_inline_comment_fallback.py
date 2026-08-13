@@ -124,7 +124,14 @@ def github_publication_error_phrase(text: str) -> str:
             if not isinstance(item, dict) or not isinstance(item.get("message"), str):
                 continue
             message = _collapse_error_text(item["message"])
-            if not message or message in seen:
+            if not message:
+                continue
+            code = item.get("code")
+            if isinstance(code, str):
+                code_text = _collapse_error_text(code)
+                if code_text:
+                    message = f"{message} ({code_text})"
+            if message in seen:
                 continue
             seen.add(message)
             messages.append(message)

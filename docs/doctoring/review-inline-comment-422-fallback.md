@@ -25,7 +25,8 @@ After a refused attach, the publisher rebuilds the fallback from the
 overview comment (`<!-- opencode-review-overview -->`). Each receipt is
 `` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON
 `errors[].message` (for example `pull_request_review_thread.path is
-invalid`) and otherwise the first `HTTP 422` line. URLs are stripped and
+invalid`) plus leftover `errors[].code` when present, and otherwise
+the first `HTTP 422` line. URLs are stripped and
 the phrase is bounded to 240 characters. Backticks and HTML
 metacharacters are escaped before the phrase is written into the
 overview body.
