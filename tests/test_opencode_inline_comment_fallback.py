@@ -6,7 +6,9 @@ import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
+    apply_github_suggestion_blocks,
     comment_on_changed_hunk,
+    extract_suggestion_replacement,
     filter_payload_comments_to_hunks,
     github_error_is_unprocessable,
     github_publication_error_phrase,
@@ -17,6 +19,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     parse_unified_diff_hunk_lines,
     record_attached_receipt,
     record_refused_receipt,
+    render_github_suggestion_block,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
@@ -1236,3 +1239,129 @@ def test_cli_filters_payload_to_current_head_hunks(tmp_path):
         )
         == 2
     )
+
+
+SUGGESTED_DIFF_BODY = """\
+### HIGH replace old line
+
+- Location: `scripts/ci/example.py:7`
+- Problem: The old line is wrong.
+- Root cause: The review found the current-head hunk.
+- Fix: Replace the old line.
+- Regression test: Keep the hunk prefilter.
+
+#### Suggested diff
+```diff
+@@ -7 +7 @@
+-    old
++    new
+```
+"""
+
+
+def test_extract_suggestion_replacement_from_unified_and_plain_diffs():
+    assert (
+        extract_suggestion_replacement("@@ -7 +7 @@\n-    old\n+    new\n")
+        == "    new"
+    )
+    assert extract_suggestion_replacement(
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n keep\n-old\n+new1\n+new2\n"
+    ) == "new1\nnew2"
+    assert extract_suggestion_replacement("plain replacement") == "plain replacement"
+    assert extract_suggestion_replacement("Cannot provide diff - inaccessible") is None
+    assert extract_suggestion_replacement("n/a") is None
+    assert extract_suggestion_replacement("") is None
+    assert extract_suggestion_replacement("- only removed\n") is None
+    assert extract_suggestion_replacement("+has ``` fence") is None
+    assert extract_suggestion_replacement("plain ``` no") is None
+    assert render_github_suggestion_block("    new") == "```suggestion\n    new\n```"
+
+
+def test_apply_github_suggestion_blocks_on_surviving_right_comments():
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/removed.py",
+            "line": 11,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/plain.py",
+            "line": 4,
+            "side": "RIGHT",
+            "body": "no suggested diff here",
+        },
+        {
+            "path": "scripts/ci/done.py",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "already\n\n```suggestion\nkept\n```\n",
+        },
+        "not-an-object",
+    )
+    updated = apply_github_suggestion_blocks(payload)
+    bodies = [item["body"] if isinstance(item, dict) else item for item in updated["comments"]]
+    assert "```suggestion\n    new\n```" in bodies[0]
+    assert "```diff" in bodies[0]
+    assert "```suggestion" not in bodies[1]
+    assert bodies[2] == "no suggested diff here"
+    assert bodies[3].count("```suggestion") == 1
+    assert bodies[4] == "not-an-object"
+    unchanged = apply_github_suggestion_blocks({"event": "COMMENT", "comments": "bad"})
+    assert unchanged["comments"] == "bad"
+    second_fence = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "RIGHT",
+                "body": (
+                    "#### Suggested diff\n```diff\nCannot provide diff\n```\n\n"
+                    "#### Suggested diff\n```diff\n+fixed\n```\n"
+                ),
+            }
+        )
+    )
+    assert "```suggestion\nfixed\n```" in second_fence["comments"][0]["body"]
+
+
+def test_write_hunk_filtered_payload_adds_suggestion_on_surviving_hunk(tmp_path):
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 20,
+            "side": "RIGHT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+    )
+    output = tmp_path / "filtered.json"
+    skipped = tmp_path / "skipped.txt"
+    assert (
+        write_hunk_filtered_payload(
+            payload,
+            parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
+            output,
+            skipped_path=skipped,
+        )
+        == 1
+    )
+    filtered = json.loads(output.read_text(encoding="utf-8"))
+    assert filtered["comments"][0]["line"] == 7
+    assert "```suggestion\n    new\n```" in filtered["comments"][0]["body"]
+    assert skipped.read_text(encoding="utf-8") == "scripts/ci/example.py:20\n"
+    empty_hunks_out = tmp_path / "unfiltered.json"
+    assert write_hunk_filtered_payload(payload, {}, empty_hunks_out) == 2
+    unfiltered = json.loads(empty_hunks_out.read_text(encoding="utf-8"))
+    assert "```suggestion\n    new\n```" in unfiltered["comments"][0]["body"]

@@ -49,9 +49,16 @@ This matches the modern-review expectation that discussion belongs on the
 changed hunk rather than elsewhere in the file (Bacchelli & Bird, 2013;
 Sadowski et al., 2018).
 
+After that filter, surviving RIGHT-side comments convert their
+`` ```diff `` suggested-diff fence into a GitHub `` ```suggestion ``
+block so the author can apply the replacement in one click (GitHub,
+n.d.-c). Only `+` lines become the replacement; `n/a`, “cannot provide”,
+LEFT-side comments, and replacements that would break the fence stay as
+the original `` ```diff `` context. Suggested diffs still stay out of the
+PR-level body.
+
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
-Suggested diffs stay out of the PR-level body.
 
 ## Verification contract
 
@@ -63,7 +70,8 @@ Suggested diffs stay out of the PR-level body.
   receipts that list attached path:line beside refused path:line,
   per-comment 422 phrases, the 20-comment one-at-a-time retry cap, and
   leftover path:line rows that were not retried, unified-diff hunk
-  parsing, and the pre-POST filter that drops off-hunk comments.
+  parsing, the pre-POST filter that drops off-hunk comments, and
+  conversion of surviving suggested diffs into GitHub suggestion blocks.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
@@ -87,6 +95,10 @@ https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request
 GitHub. (n.d.-b). *Create a review comment for a pull request*. GitHub Docs.
 Retrieved August 13, 2026, from
 https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pull-request
+
+GitHub. (n.d.-c). *Commenting on a pull request*. GitHub Docs. Retrieved
+August 13, 2026, from
+https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/commenting-on-a-pull-request#suggesting-changes-to-a-file
 
 Sadowski, C., Söderberg, E., Church, L., Sipko, M., & Bacchelli, A. (2018).
 Modern code review: A case study at Google. In *Proceedings of the 40th

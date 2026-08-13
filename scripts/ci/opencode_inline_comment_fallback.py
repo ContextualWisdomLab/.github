@@ -17,6 +17,7 @@ HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
+DIFF_FENCE_RE = re.compile(r"```diff\r?\n(.*?)```", re.DOTALL)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -225,6 +226,77 @@ def filter_payload_comments_to_hunks(
     return filtered, skipped
 
 
+def extract_suggestion_replacement(diff_text: str) -> str | None:
+    """Return GitHub suggestion replacement lines from a unified suggested_diff."""
+    raw = (diff_text or "").replace("\r\n", "\n")
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    lowered = stripped.casefold()
+    if lowered.startswith("n/a") or lowered.startswith("cannot provide"):
+        return None
+    plus_lines: list[str] = []
+    saw_diff_marker = False
+    for line in raw.splitlines():
+        if line.startswith(("diff ", "index ", "---", "+++", "@@")):
+            saw_diff_marker = True
+            continue
+        if line.startswith("+"):
+            plus_lines.append(line[1:])
+            saw_diff_marker = True
+            continue
+        if line.startswith("-"):
+            saw_diff_marker = True
+    if plus_lines:
+        replacement = "\n".join(plus_lines)
+        if "```" in replacement:
+            return None
+        return replacement
+    if saw_diff_marker:
+        return None
+    if "```" in stripped:
+        return None
+    return stripped.strip("\n")
+
+
+def render_github_suggestion_block(replacement: str) -> str:
+    """Return one GitHub apply-suggestion fence for replacement lines."""
+    return f"```suggestion\n{replacement}\n```"
+
+
+def apply_github_suggestion_blocks(payload: dict[str, Any]) -> dict[str, Any]:
+    """Append GitHub suggestion fences to surviving RIGHT-side inline comments."""
+    comments = payload.get("comments")
+    if not isinstance(comments, list):
+        return payload
+    updated: list[Any] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            updated.append(comment)
+            continue
+        body = comment.get("body")
+        side = comment.get("side")
+        if not isinstance(body, str) or side == "LEFT" or "```suggestion" in body:
+            updated.append(comment)
+            continue
+        replacement: str | None = None
+        for match in DIFF_FENCE_RE.finditer(body):
+            replacement = extract_suggestion_replacement(match.group(1))
+            if replacement is not None:
+                break
+        if replacement is None:
+            updated.append(comment)
+            continue
+        new_comment = dict(comment)
+        new_comment["body"] = (
+            f"{body.rstrip()}\n\n{render_github_suggestion_block(replacement)}\n"
+        )
+        updated.append(new_comment)
+    rewritten = dict(payload)
+    rewritten["comments"] = updated
+    return rewritten
+
+
 def write_hunk_filtered_payload(
     payload: dict[str, Any],
     hunks: dict[str, dict[str, set[int]]],
@@ -233,6 +305,7 @@ def write_hunk_filtered_payload(
 ) -> int:
     """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
+    filtered = apply_github_suggestion_blocks(filtered)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
     if skipped_path is not None:

@@ -1489,6 +1489,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$workflow_file" '${OPENCODE_INLINE_COMMENT_RETRY_LIMIT:-20}' "opencode default one-at-a-time retry cap is 20"
 	assert_file_contains "$workflow_file" "--filter-hunks" "opencode drops off-hunk inline comments before GitHub POST"
 	assert_file_contains "$workflow_file" "prefilter_inline_comments_to_hunks" "opencode prefilters inline comments against current-head hunks"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" '```suggestion' "opencode surviving hunk comments become GitHub suggestion blocks"
 	assert_file_contains "$workflow_file" '--skipped-locations "$skipped_locations_file"' "opencode records off-hunk path:line rows that were not posted"
 	assert_file_contains "$workflow_file" "publish_request_changes_from_control" "opencode review REQUEST_CHANGES path publishes findings from the control JSON"
 

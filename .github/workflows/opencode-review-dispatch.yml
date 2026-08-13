@@ -5708,18 +5708,14 @@ jobs:
             hunks_diff_file="$(mktemp)"
             filtered_file="$(mktemp)"
             : >"$skipped_file"
-            if [ -z "${OPENCODE_SOURCE_WORKDIR:-}" ] || [ -z "${PR_BASE_SHA:-}" ] || [ -z "${PR_HEAD_SHA:-}" ]; then
-              rm -f "$hunks_diff_file" "$filtered_file"
-              return 0
-            fi
-            merge_base="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)"
-            if [ -z "$merge_base" ]; then
-              merge_base="$PR_BASE_SHA"
-            fi
-            if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff --unified=3 --find-renames --no-color --no-ext-diff \
-              "$merge_base" "$PR_HEAD_SHA" >"$hunks_diff_file"; then
-              rm -f "$hunks_diff_file" "$filtered_file"
-              return 0
+            : >"$hunks_diff_file"
+            if [ -n "${OPENCODE_SOURCE_WORKDIR:-}" ] && [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+              merge_base="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)"
+              if [ -z "$merge_base" ]; then
+                merge_base="$PR_BASE_SHA"
+              fi
+              git -C "$OPENCODE_SOURCE_WORKDIR" diff --unified=3 --find-renames --no-color --no-ext-diff \
+                "$merge_base" "$PR_HEAD_SHA" >"$hunks_diff_file" || : >"$hunks_diff_file"
             fi
             if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
               --filter-hunks \

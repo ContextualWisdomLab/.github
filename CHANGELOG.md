@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click.
 - Dropped OpenCode inline comments that sit outside every current-head changed hunk before the GitHub POST so those comments become overview receipts instead of a 422 that wipes the batch.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and listed attached `path:line` beside refused receipts so the overview shows both outcomes, plus any locations left untried by the cap.
 - Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence.

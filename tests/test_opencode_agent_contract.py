@@ -1634,6 +1634,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "prefilter_inline_comments_to_hunks" in workflow
     assert '--skipped-locations "$skipped_locations_file"' in workflow
     assert "--unified=3" in workflow
+    assert "```suggestion" in Path("scripts/ci/opencode_inline_comment_fallback.py").read_text(
+        encoding="utf-8"
+    )
+    assert "apply_github_suggestion_blocks" in Path(
+        "scripts/ci/opencode_inline_comment_fallback.py"
+    ).read_text(encoding="utf-8")
     assert "accepted some inline comments" not in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
