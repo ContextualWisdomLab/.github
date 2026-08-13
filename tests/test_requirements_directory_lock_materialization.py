@@ -84,8 +84,10 @@ def test_materializes_hash_pinned_requirements_directory_lock(
             False,
         ),
         (b"--index-url https://packages.example.invalid/simple\n", False),
-        (b"--requirement other.txt\n", True),
-        (b"-r ./locks/other.txt\n", True),
+        (b"--requirement requirements-other.txt\n", True),
+        (b"-r requirements/other.txt\n", True),
+        (b"--requirement other.txt\n", False),
+        (b"-r ./locks/other.txt\n", False),
     ),
 )
 def test_global_hash_directive_does_not_replace_per_requirement_trust(

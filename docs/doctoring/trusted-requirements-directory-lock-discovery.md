@@ -14,7 +14,9 @@ be either:
 
 - an exact package `==` requirement with one or more complete 64-hex SHA-256
   `--hash=` values; or
-- a two-token `-r` / `--requirement` include naming a bounded relative path.
+- a two-token `-r` / `--requirement` include naming a bounded relative
+  candidate lock path (`requirements*.txt`, `requirements.lock`, or a
+  direct `.txt` child of a `requirements/` directory).
 
 The include grammar rejects absolute paths, `..` traversal, URL/scheme syntax,
 query or fragment syntax, shell-home expansion, Windows-style separators,
