@@ -548,7 +548,17 @@ def parse_applyable_ranges(
 def applyable_suggestion_ranges(
     payload: dict[str, Any],
 ) -> list[tuple[str, int, int, str | None, int | None]]:
-    """Return applyable ranges plus leftover LEFT origins when a comment was remapped."""
+    """Return applyable ranges plus leftover LEFT origins when a comment was remapped.
+
+    A leftover cannot-provide or LEFT ``path:line`` inside a suggestion
+    range is not applyable. The write path and overview both consume this
+    list, so leftover interiors cannot appear as one-click applies.
+    """
+    leftover_points = {
+        (path, line)
+        for path, line, reason, _excerpt in leftover_diff_fence_receipts(payload)
+        if reason in LEFTOVER_DIFF_REASONS
+    }
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return []
@@ -572,6 +582,11 @@ def applyable_suggestion_ranges(
             continue
         if start > end:
             start, end = end, start
+        if any(
+            leftover_path == path and start <= leftover_line <= end
+            for leftover_path, leftover_line in leftover_points
+        ):
+            continue
         key = (path, start, end)
         if key in seen:
             continue

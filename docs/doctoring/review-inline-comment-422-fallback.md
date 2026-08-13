@@ -86,7 +86,11 @@ and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
-shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
+shipped as one-click GitHub suggestions (GitHub, n.d.-c).
+``applyable_suggestion_ranges`` drops a suggestion range when a leftover
+cannot-provide or LEFT ``path:line`` sits inside it, so ``applyable.txt``
+and the overview cannot list a one-click apply for the same span as a
+leftover Manual-edit. Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -126,7 +130,8 @@ with the same control object used to build the inline `comments` array.
   a trusted deferred range even if that exact line is not a trusted
   finding, including the overview CLI with ``--leftover-diff-locations``
   plus ``--deferred-locations``, applyable ``path:start-end`` rows
-  omitted when a leftover line sits inside that range, and
+  omitted when a leftover line sits inside that range, including when
+  ``applyable_suggestion_ranges`` itself drops leftover interiors, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

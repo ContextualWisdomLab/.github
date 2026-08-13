@@ -3719,7 +3719,7 @@ def test_leftover_interior_of_deferred_range_omits_reason_bullet(tmp_path):
         applyable_file.read_text(encoding="utf-8")
     )
     assert leftover_receipts[0][:3] == ("scripts/ci/example.py", 6, "cannot-provide")
-    assert applyable_receipts[0][:3] == ("scripts/ci/example.py", 5, 7)
+    assert applyable_receipts == []
     deferred_path = tmp_path / "deferred.txt"
     assert (
         write_single_comment_payloads(
@@ -4069,4 +4069,51 @@ def test_exclude_leftover_from_applyable_drops_interior_leftover_ranges():
         assert "scripts/ci/example.py:5-7" not in applyable_section
         assert "- `scripts/ci/ok.py:4`" in applyable_section
         assert excerpt not in applyable_section
+
+
+def test_applyable_suggestion_ranges_omit_range_containing_leftover_line(tmp_path):
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "start_line": 5,
+            "side": "RIGHT",
+            "body": "```suggestion\nfixed\n```\n",
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 6,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 11,
+            "side": "RIGHT",
+            "body": "```suggestion\nok\n```\n",
+        },
+    )
+    assert applyable_suggestion_ranges(payload) == [
+        ("scripts/ci/example.py", 11, 11, None, None)
+    ]
+    assert leftover_diff_fence_receipts(payload)[0][:3] == (
+        "scripts/ci/example.py",
+        6,
+        "cannot-provide",
+    )
+    applyable_file = tmp_path / "applyable.txt"
+    leftover_file = tmp_path / "leftover.txt"
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    write_hunk_filtered_payload(
+        payload,
+        hunks,
+        tmp_path / "filtered.json",
+        applyable_path=applyable_file,
+        leftover_path=leftover_file,
+    )
+    assert applyable_file.read_text(encoding="utf-8") == "scripts/ci/example.py:11\n"
+    assert leftover_file.read_text(encoding="utf-8").startswith(
+        "scripts/ci/example.py:6\tcannot-provide\t"
+    )
+    assert "scripts/ci/example.py:5-7" not in applyable_file.read_text(encoding="utf-8")
 
