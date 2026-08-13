@@ -9,6 +9,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     github_publication_error_phrase,
     iter_single_comment_payloads,
     main,
+    parse_refused_locations,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
@@ -133,6 +134,40 @@ def test_fallback_body_attaches_error_phrase_to_each_receipt():
     )
 
 
+def test_mixed_success_receipts_list_only_refused_path_lines():
+    refused = parse_refused_locations(
+        "scripts/ci/other.py:12\n# note\n../escape.py:1\n"
+        "scripts/ci/example.py:0\nbadline\nscripts/ci/other.py:12\n"
+        "scripts/ci/skip.py:x\n"
+    )
+    assert refused == [("scripts/ci/other.py", 12)]
+
+    body = render_inline_comment_failure_body(
+        "## Findings\nattached example.py:7\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/other.py", "line": 12},
+        ),
+        error_text='{"errors":[{"message":"Line could not be resolved"}]}',
+        refused_locations=refused,
+    )
+
+    assert "accepted some inline comments" in body
+    assert (
+        "- `scripts/ci/other.py:12` — GitHub HTTP 422: Line could not be resolved"
+        in body
+    )
+    assert "scripts/ci/example.py:7`" not in body
+    assert parse_refused_locations("") == []
+    all_attached = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 7}),
+        refused_locations=[],
+    )
+    assert "were still refused" not in all_attached
+    assert "did not accept the inline review comments" not in all_attached
+
+
 def test_fallback_body_explains_missing_trusted_locations():
     body = render_inline_comment_failure_body("overview\n", control())
 
@@ -200,6 +235,54 @@ def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatc
         "- `scripts/ci/example.py:7` — GitHub HTTP 422: "
         "pull_request_review_thread.path is invalid"
         in written
+    )
+    two_findings = tmp_path / "two.json"
+    two_findings.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 7},
+                {"path": "scripts/ci/other.py", "line": 12},
+            )
+        ),
+        encoding="utf-8",
+    )
+    refused_path = tmp_path / "refused.txt"
+    refused_path.write_text("scripts/ci/other.py:12\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(two_findings),
+                "--body",
+                str(body_path),
+                "--output",
+                str(output_path),
+                "--error-file",
+                str(error_path),
+                "--refused-locations",
+                str(refused_path),
+            ]
+        )
+        == 0
+    )
+    mixed = output_path.read_text(encoding="utf-8")
+    assert "accepted some inline comments" in mixed
+    assert "`scripts/ci/other.py:12`" in mixed
+    assert "`scripts/ci/example.py:7`" not in mixed
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(output_path),
+                "--refused-locations",
+                str(tmp_path / "missing-refused.txt"),
+            ]
+        )
+        == 2
     )
 
     assert (

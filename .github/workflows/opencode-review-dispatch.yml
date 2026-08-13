@@ -5624,11 +5624,12 @@ jobs:
           }
 
           retry_inline_comments_one_at_a_time() {
-            local batch_payload_file="$1" review_body="$2"
+            local batch_payload_file="$1" review_body="$2" refused_locations_file="$3"
             local split_dir comment_file wrapped_file error_file response_file
             local attached=0
             local found=0
 
+            : >"$refused_locations_file"
             split_dir="$(mktemp -d)"
             if ! python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
               --split-payload "$batch_payload_file" \
@@ -5655,6 +5656,12 @@ jobs:
                 "$error_file" \
                 "$response_file"; then
                 attached=1
+              else
+                jq -r '.comments[0] | "\(.path):\(.line)"' "$comment_file" \
+                  >>"$refused_locations_file" || true
+                if [ -s "$error_file" ]; then
+                  cat "$error_file" >>"${refused_locations_file}.errors"
+                fi
               fi
               rm -f "$wrapped_file" "$error_file" "$response_file"
               if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
@@ -5691,11 +5698,26 @@ jobs:
               if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" != "1" ] \
                 && python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
                   --is-unprocessable --error-file "$gh_error_file"; then
-                if retry_inline_comments_one_at_a_time "$review_payload_file" "$body"; then
-                  rm -f "$gh_error_file" "$review_response_file"
-                  update_review_overview "$event" "$body"
+                refused_locations_file="$(mktemp)"
+                if retry_inline_comments_one_at_a_time \
+                  "$review_payload_file" "$body" "$refused_locations_file"; then
+                  if [ -s "$refused_locations_file" ] && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
+                    mixed_error_file="$gh_error_file"
+                    if [ -s "${refused_locations_file}.errors" ]; then
+                      mixed_error_file="${refused_locations_file}.errors"
+                    fi
+                    build_inline_comment_failure_body \
+                      "$source_body_file" "$fallback_body_file" "$control_json" \
+                      "$mixed_error_file" "$refused_locations_file" || true
+                    update_review_overview "$event" "$(cat "$fallback_body_file")"
+                  else
+                    update_review_overview "$event" "$body"
+                  fi
+                  rm -f "$gh_error_file" "$review_response_file" \
+                    "$refused_locations_file" "${refused_locations_file}.errors"
                   return 0
                 fi
+                rm -f "$refused_locations_file" "${refused_locations_file}.errors"
               fi
               if [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                 build_inline_comment_failure_body \
@@ -5829,6 +5851,7 @@ jobs:
             local output_file="$2"
             local control_json="$3"
             local error_file="${4:-}"
+            local refused_locations_file="${5:-}"
             local -a fallback_args
 
             fallback_args=(
@@ -5839,6 +5862,9 @@ jobs:
             )
             if [ -n "$error_file" ]; then
               fallback_args+=(--error-file "$error_file")
+            fi
+            if [ -n "$refused_locations_file" ]; then
+              fallback_args+=(--refused-locations "$refused_locations_file")
             fi
             "${fallback_args[@]}"
           }

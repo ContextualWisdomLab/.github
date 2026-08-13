@@ -1622,6 +1622,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "retry_inline_comments_one_at_a_time" in workflow
     assert "--is-unprocessable" in workflow
     assert "inline review one-at-a-time" in workflow
+    assert '--refused-locations "$refused_locations_file"' in workflow
+    assert "accepted some inline comments" not in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow

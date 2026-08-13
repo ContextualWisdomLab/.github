@@ -64,6 +64,31 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
     return locations
 
 
+def parse_refused_locations(text: str) -> list[tuple[str, int]]:
+    """Parse ``path:line`` rows from one-at-a-time retry failures."""
+    locations: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        path_text, _, line_text = line.rpartition(":")
+        path = safe_finding_path(path_text)
+        try:
+            parsed_line = int(line_text)
+        except ValueError:
+            parsed_line = 0
+        line_number = safe_finding_line(parsed_line)
+        if path is None or line_number is None:
+            continue
+        location = (path, line_number)
+        if location in seen:
+            continue
+        seen.add(location)
+        locations.append(location)
+    return locations
+
+
 def _collapse_error_text(text: str) -> str:
     """Return one-line error text without URLs or extra whitespace."""
     without_urls = re.sub(r"https?://\S+", "", text)
@@ -204,11 +229,12 @@ def render_inline_comment_failure_suffix(
     locations: list[tuple[str, int]],
     *,
     error_phrase: str = "",
+    mixed_success: bool = False,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     heading = (
         "## Inline comment publication receipts"
-        if error_phrase
+        if error_phrase or mixed_success
         else "## Inline comment publishing failed"
     )
     lines = [
@@ -217,10 +243,16 @@ def render_inline_comment_failure_suffix(
         "",
     ]
     if locations:
-        lines.append(
-            "GitHub did not accept the inline review comments for these "
-            "trusted current-head finding locations:"
-        )
+        if mixed_success:
+            lines.append(
+                "GitHub accepted some inline comments. These trusted "
+                "current-head finding locations were still refused:"
+            )
+        else:
+            lines.append(
+                "GitHub did not accept the inline review comments for these "
+                "trusted current-head finding locations:"
+            )
         lines.append("")
         lines.extend(render_inline_comment_receipts(locations, error_phrase))
         lines.append("")
@@ -249,12 +281,23 @@ def render_inline_comment_failure_body(
     control: dict[str, Any],
     *,
     error_text: str = "",
+    refused_locations: list[tuple[str, int]] | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
     error_phrase = github_publication_error_phrase(error_text) if error_text else ""
+    if refused_locations is None:
+        locations = trusted_finding_locations(control)
+        mixed_success = False
+    else:
+        allowed = set(trusted_finding_locations(control))
+        locations = [item for item in refused_locations if item in allowed]
+        mixed_success = True
+        if not locations:
+            return body.rstrip("\n") + "\n"
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
-        trusted_finding_locations(control),
+        locations,
         error_phrase=error_phrase,
+        mixed_success=mixed_success,
     )
 
 
@@ -279,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split-payload", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--is-unprocessable", action="store_true")
+    parser.add_argument("--refused-locations", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.is_unprocessable:
@@ -299,11 +343,21 @@ def main(argv: list[str] | None = None) -> int:
         error_text = (
             args.error_file.read_text(encoding="utf-8") if args.error_file else ""
         )
+        refused_locations = (
+            parse_refused_locations(args.refused_locations.read_text(encoding="utf-8"))
+            if args.refused_locations is not None
+            else None
+        )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
     args.output.write_text(
-        render_inline_comment_failure_body(body, control, error_text=error_text),
+        render_inline_comment_failure_body(
+            body,
+            control,
+            error_text=error_text,
+            refused_locations=refused_locations,
+        ),
         encoding="utf-8",
     )
     return 0

@@ -27,7 +27,9 @@ uses `REQUEST_CHANGES` plus the review body; later successes use
 `COMMENT`. Survivors therefore still appear on Files changed. Remaining
 failures still rebuild the fallback from the `gh api` error file and
 write durable receipts into the OpenCode overview comment
-(`<!-- opencode-review-overview -->`). Each receipt is
+(`<!-- opencode-review-overview -->`). On mixed success the receipt list
+contains only refused `path:line` rows, not the comments that already
+attached. Each receipt is
 `` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON
 `errors[].message` (for example `pull_request_review_thread.path is
 invalid`) and otherwise the first `HTTP 422` line. URLs are stripped and
@@ -43,7 +45,8 @@ Suggested diffs stay out of the PR-level body.
   the exact location list, GitHub JSON `errors[].message` phrases, HTTP 422
   line fallback, empty-set sentence, CLI success with `--error-file`,
   fail-closed unreadable control or error input, batch-to-single comment
-  splitting, and `--is-unprocessable` classification.
+  splitting, `--is-unprocessable` classification, and mixed-success
+  receipts that omit attached path:line rows.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
