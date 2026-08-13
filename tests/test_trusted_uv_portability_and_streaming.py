@@ -102,7 +102,7 @@ def test_trusted_uv_download_rejects_oversize_across_short_reads(
         materializer._download_trusted_uv_archive()
 
 
-@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504, 522])
 def test_trusted_uv_download_retries_only_closed_http_status_set(
     monkeypatch: pytest.MonkeyPatch,
     status: int,
