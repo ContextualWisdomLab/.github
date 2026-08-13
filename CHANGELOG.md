@@ -14,6 +14,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Dropped the invalid `reactions: write` `GITHUB_TOKEN` permission from the local mention-router job. Optional eyes reactions use `issues: write` (issue comments) and `pull-requests: write` (review comments); a leftover 403 remains a warning after dispatch, not a missed mention.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Treated GraphQL already-reacted eyes on a submitted review body as success, and required `data.addReaction` before claiming the optional reaction landed. An empty or error GraphQL body is a warning after dispatch, not a missed mention.
 - Reused the webhook/sweep `review.node_id` for GraphQL `addReaction` so a submitted review-body mention does not spend an extra REST GET before the eyes reaction.

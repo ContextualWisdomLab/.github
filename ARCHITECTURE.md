@@ -44,9 +44,11 @@ flowchart TD
   Eyes -->|"no"| Receipt
 ```
 
-The local job grants `reactions: write` so the optional eyes reaction is
-an allowed write. CWE-755: a leftover 403 must not look like a missed
-dispatch. Review agents stay `edit: deny` and bind `NVIDIA_NIM_API_KEY`.
+The local job grants `issues: write` (issue-comment reactions) and
+`pull-requests: write` (review-comment reactions and receipts).
+`reactions: write` is not a `GITHUB_TOKEN` permission (GitHub, n.d.).
+CWE-755: a leftover 403 must not look like a missed dispatch. Review
+agents stay `edit: deny` and bind `NVIDIA_NIM_API_KEY`.
 
 ## Control-plane data flow
 
