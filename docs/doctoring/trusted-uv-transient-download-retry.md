@@ -10,11 +10,12 @@ OpenCode `REQUEST_CHANGES` on otherwise healthy heads
 
 ## Decision
 
-Retry only `OSError` (including `HTTPError` / `URLError`) a bounded three
-times with linear backoff. Trust-boundary violations (`RuntimeError` for
-redirect, host/port, or oversized payload) fail on the first attempt and are
-never retried. Each attempt still pins scheme, host, port, size, checksum,
-and archive member.
+Retry only transient `OSError` a bounded three times with linear backoff:
+HTTP 5xx, 429, and non-HTTP network errors. HTTP 4xx other than 429 fail
+on the first attempt (RFC 9110 client-side policy). Trust-boundary
+violations (`RuntimeError` for redirect, host/port, or oversized payload)
+are never retried. Each attempt still pins scheme, host, port, size,
+checksum, and archive member.
 
 This follows the HTTP retry discipline for transient server/network failures
 and does not retry client-side policy failures (Fielding et al., 2022,

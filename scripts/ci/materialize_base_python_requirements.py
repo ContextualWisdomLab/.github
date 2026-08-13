@@ -20,6 +20,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -212,6 +213,17 @@ def _fetch_trusted_uv_archive_once() -> bytes:
     return bytes(payload)
 
 
+def _trusted_uv_download_is_transient(exc: BaseException) -> bool:
+    """Return True when one failed fetch may be retried.
+
+    RFC 9110 treats 4xx as client-side policy failures except 429. 5xx
+    and non-HTTP ``OSError`` (timeout, reset) stay retryable.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(exc, OSError)
+
+
 def _download_trusted_uv_archive() -> bytes:
     """Download the fixed uv release archive through one HTTPS trust boundary.
 
@@ -234,6 +246,10 @@ def _download_trusted_uv_archive() -> bytes:
         try:
             return _fetch_trusted_uv_archive_once()
         except OSError as exc:
+            if not _trusted_uv_download_is_transient(exc):
+                raise RuntimeError(
+                    f"trusted uv archive download failed: {type(exc).__name__}"
+                ) from exc
             last_error = exc
             continue
     raise RuntimeError(

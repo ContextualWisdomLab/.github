@@ -643,6 +643,52 @@ def test_download_trusted_uv_archive_retries_httperror_then_succeeds(
     assert sleeps == [materializer.TRUSTED_UV_DOWNLOAD_RETRY_DELAY_SECONDS]
 
 
+def test_download_trusted_uv_archive_does_not_retry_http_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client 404 is a policy failure and must fail closed on the first try."""
+
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        raise urllib.error.HTTPError(
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            404,
+            "Not Found",
+            EmailMessage(),
+            io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
+    sleeps: list[float] = []
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._trusted_uv_download_is_transient(
+        urllib.error.HTTPError(
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            429,
+            "Too Many Requests",
+            EmailMessage(),
+            io.BytesIO(b""),
+        )
+    )
+    assert not materializer._trusted_uv_download_is_transient(
+        urllib.error.HTTPError(
+            materializer.TRUSTED_UV_ARCHIVE_URL,
+            404,
+            "Not Found",
+            EmailMessage(),
+            io.BytesIO(b""),
+        )
+    )
+    with pytest.raises(RuntimeError, match="HTTPError"):
+        materializer._download_trusted_uv_archive()
+    assert calls == 1
+    assert sleeps == []
+
+
 def test_verified_uv_binary_accepts_exact_archive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
