@@ -551,6 +551,21 @@ def test_build_requests_includes_review_comments_and_submitted_reviews() -> None
         "author_association": "OWNER",
         "user": {"login": "seonghobae", "type": "User"},
     }
+    dismissed_review = {
+        "id": 13,
+        "body": "@opencode-agent dismissed should not dispatch",
+        "state": "DISMISSED",
+        "submitted_at": "2026-08-05T11:45:00Z",
+        "author_association": "MEMBER",
+        "user": {"login": "maintainer", "type": "User"},
+    }
+    uncommented_without_submission = {
+        "id": 14,
+        "body": "@opencode-agent missing submitted_at",
+        "state": "COMMENTED",
+        "author_association": "MEMBER",
+        "user": {"login": "maintainer", "type": "User"},
+    }
     stale_review = {
         "id": 12,
         "body": "@cwl-noema-review stale review",
@@ -564,7 +579,14 @@ def test_build_requests_includes_review_comments_and_submitted_reviews() -> None
             comments_endpoint: [[]],
             review_comments_endpoint: [[ignored_review_comment, review_comment]],
             reviews_endpoint: [
-                [ignored_review, submitted_review, pending_review, stale_review]
+                [
+                    ignored_review,
+                    submitted_review,
+                    pending_review,
+                    dismissed_review,
+                    uncommented_without_submission,
+                    stale_review,
+                ]
             ],
             pull_endpoint: live_pull(),
         }

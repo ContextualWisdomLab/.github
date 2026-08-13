@@ -26,8 +26,8 @@ head SHA):
 
 1. Issue comments on a pull request (`issue.pull_request` present).
 2. Pull-request review comments (no `issue`; bind `pull_request.number`).
-3. Submitted review bodies (no `issue`; skip pending reviews and reviews
-   older than the sweep lookback).
+3. Submitted review bodies (no `issue`; skip pending and dismissed
+   reviews and reviews older than the sweep lookback).
 
 The workflow hydrates `PR_NUMBER` from `github.event.issue.number ||
 github.event.pull_request.number`. Body-handle filtering stays in the

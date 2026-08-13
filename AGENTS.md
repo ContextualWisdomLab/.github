@@ -7,3 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+Pending and dismissed reviews do not dispatch mention agents. See [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`docs/doctoring/review-agent-mention-surfaces.md`](docs/doctoring/review-agent-mention-surfaces.md).

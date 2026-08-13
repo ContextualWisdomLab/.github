@@ -183,6 +183,10 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
     if source_pair is None:
         return None
     source, source_kind = source_pair
+    if source_kind == SOURCE_KIND_REVIEW:
+        state = str(source.get("state") or "").casefold()
+        if state in {"pending", "dismissed"}:
+            return None
     issue = event.get("issue") or {}
     repository = event.get("repository") or {}
     pull_request = event.get("pull_request") or {}
