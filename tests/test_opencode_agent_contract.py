@@ -1670,6 +1670,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "leftover-safe applyable receipts" in helper
     assert "leftovers = leftover_diff_fence_receipts(filtered)" in helper
     assert "leftover_coverage_points" in helper
+    assert "strip_overlapping_leftover_suggestions" in helper
+    assert "SUGGESTION_FENCE_RE" in helper
     assert "leftover_receipt_range" in helper
     assert "leftover_range_matches" in helper
     assert "leftover_reason_bullet_duplicates_leftover_range" in helper

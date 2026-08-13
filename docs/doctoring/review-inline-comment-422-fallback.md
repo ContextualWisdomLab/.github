@@ -99,7 +99,11 @@ applyable rows. The leftover heading prefixes one leftover
 ``example.py:6`` next to leftover ``example.py:5-7`` shows the range
 once then the Manual-edit excerpts. Nested leftover ``example.py:5-6``
 inside leftover ``example.py:5-7`` also prefixes the widest leftover
-range once. Comments that
+range once. The posted review JSON strips a closed
+`` ```suggestion `` fence whose range overlaps leftover
+``path:start-end`` coverage, so leftover ``example.py:5-7`` cannot
+still offer a one-click apply on interior ``example.py:6``
+(CWE-1288). Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -146,7 +150,7 @@ with the same control object used to build the inline `comments` array.
   applyable range when leftover ``example.py:6`` sits inside
   ``example.py:5-7``, leftover ``path:start-end`` receipts that cover
   every interior leftover line so leftover ``example.py:5-7`` omits
-  applyable ``example.py:6``, leftover heading prefix of one leftover
+  applyable ``example.py:6``, posted review JSON that strips a closed `` ```suggestion `` fence whose range overlaps leftover ``path:start-end`` coverage, leftover heading prefix of one leftover
   ``path:start-end`` for leftover interiors of that range so leftover
   ``example.py:6`` next to leftover ``example.py:5-7`` does not repeat
   the leftover reason bullet, leftover heading prefix of the widest

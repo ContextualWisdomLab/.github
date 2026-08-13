@@ -23,6 +23,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     strip_left_origin_fields,
     leftover_coverage_points,
     leftover_receipt_range,
+    strip_overlapping_leftover_suggestions,
     leftover_range_matches,
     leftover_reason_bullet_duplicates_leftover_range,
     leftover_deferred_matches,
@@ -4558,4 +4559,104 @@ def test_leftover_heading_prefers_widest_leftover_range_over_nested_range(tmp_pa
         [("scripts/ci/example.py", 5, 7, "HTTP 422", "n")]
     )
     assert orphan_range[0] == "- `scripts/ci/example.py:5-7` — HTTP 422"
+
+
+def test_strip_leftover_range_interiors_from_posted_suggestion_fences(tmp_path):
+    leftover = parse_leftover_diff_receipts(
+        "scripts/ci/example.py:5-7\tcannot-provide\tn/a\n"
+    )
+    assert leftover_coverage_points(leftover) == {
+        ("scripts/ci/example.py", 5),
+        ("scripts/ci/example.py", 6),
+        ("scripts/ci/example.py", 7),
+    }
+    payload = {
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 6,
+                "side": "RIGHT",
+                "body": "Use a suggestion.\n\n```suggestion\nfixed\n```\n",
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 11,
+                "side": "RIGHT",
+                "body": "```suggestion\nok\n```\n",
+            },
+            {
+                "path": "scripts/ci/ok.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "Mentions ```suggestion in prose only.\n",
+            },
+            "not-an-object",
+        ]
+    }
+    stripped = strip_overlapping_leftover_suggestions(payload, leftover)
+    assert "```suggestion" not in stripped["comments"][0]["body"]
+    assert "```suggestion" in stripped["comments"][1]["body"]
+    assert stripped["comments"][2]["body"] == "Mentions ```suggestion in prose only.\n"
+    assert strip_overlapping_leftover_suggestions(payload, []) == payload
+    assert strip_overlapping_leftover_suggestions({"comments": None}, leftover) == {
+        "comments": None
+    }
+    inverted = {
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "start_line": 7,
+                "side": "RIGHT",
+                "body": "```suggestion\nfixed\n```\n",
+            },
+            {
+                "path": "../escape.py",
+                "line": 6,
+                "side": "RIGHT",
+                "body": "```suggestion\nnope\n```\n",
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 6,
+                "start_line": 0,
+                "side": "RIGHT",
+                "body": "```suggestion\nkept\n```\n",
+            },
+        ]
+    }
+    inverted_stripped = strip_overlapping_leftover_suggestions(inverted, leftover)
+    assert "```suggestion" not in inverted_stripped["comments"][0]["body"]
+    assert "```suggestion" in inverted_stripped["comments"][1]["body"]
+    assert "```suggestion" in inverted_stripped["comments"][2]["body"]
+
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    written = tmp_path / "filtered.json"
+    write_hunk_filtered_payload(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 6,
+                "side": "RIGHT",
+                "body": "```suggestion\nfixed\n```\n",
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "start_line": 5,
+                "side": "RIGHT",
+                "body": CANNOT_PROVIDE_DIFF_BODY,
+            },
+        ),
+        hunks,
+        written,
+    )
+    posted = json.loads(written.read_text(encoding="utf-8"))
+    suggestion_bodies = [
+        comment["body"]
+        for comment in posted["comments"]
+        if isinstance(comment, dict) and comment.get("line") == 6
+    ]
+    assert suggestion_bodies
+    assert all("```suggestion" not in body for body in suggestion_bodies)
 
