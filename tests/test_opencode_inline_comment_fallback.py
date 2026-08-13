@@ -24,6 +24,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     record_refused_receipt,
     parse_applyable_ranges,
     render_applyable_receipts,
+    sanitize_leftover_excerpt,
     render_github_suggestion_block,
     suggestion_comment_range,
     render_inline_comment_failure_body,
@@ -1567,6 +1568,11 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         "- `scripts/ci/example.py:5-7`",
         "- `scripts/ci/ok.py:4`",
     ]
+    assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
+    assert "-->" not in sanitize_leftover_excerpt("close --> comment")
+    assert render_applyable_receipts(
+        [("scripts/ci/a-->b.py", 5, 7)]
+    ) == ["- `scripts/ci/ab.py:5-7`"]
     assert applyable_suggestion_ranges({"comments": "bad"}) == []
     payload = apply_github_suggestion_blocks(
         _batch_payload(

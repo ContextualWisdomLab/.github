@@ -349,6 +349,27 @@ def apply_github_suggestion_blocks(
     return rewritten
 
 
+def sanitize_leftover_excerpt(text: str) -> str:
+    """Return applyable-receipt text that cannot break the overview HTML comment.
+
+    Applyable ``path:start-end`` rows live in
+    ``<!-- opencode-review-overview -->``. A leftover ``-->`` or HTML
+    metacharacter in that path would close the comment or inject markup
+    (CWE-116). Fence markers are also removed so a leftover cannot reopen
+    a GitHub suggestion block.
+    """
+    excerpt = (text or "").replace("\r\n", "\n").replace("\t", " ")
+    excerpt = (
+        excerpt.replace("```", "")
+        .replace("<!--", "")
+        .replace("-->", "")
+        .replace("<", "")
+        .replace(">", "")
+        .replace("&", "")
+    )
+    return excerpt.strip("\n")
+
+
 def format_applyable_range(path: str, start: int, end: int) -> str:
     """Return ``path:line`` or ``path:start-end`` for one applyable suggestion."""
     if start == end:
@@ -434,7 +455,10 @@ def applyable_suggestion_ranges(
 
 def render_applyable_receipts(ranges: list[tuple[str, int, int]]) -> list[str]:
     """Return overview receipt lines for applyable suggestion ranges."""
-    return [f"- `{format_applyable_range(path, start, end)}`" for path, start, end in ranges]
+    return [
+        f"- `{sanitize_leftover_excerpt(format_applyable_range(path, start, end))}`"
+        for path, start, end in ranges
+    ]
 
 
 def write_hunk_filtered_payload(

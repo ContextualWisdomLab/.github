@@ -61,7 +61,10 @@ and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
-shipped as one-click GitHub suggestions (GitHub, n.d.-c). LEFT-side
+shipped as one-click GitHub suggestions (GitHub, n.d.-c). Applyable
+receipt paths drop ``<!--``, ``-->``, and HTML metacharacters so a
+leftover delimiter cannot close ``<!-- opencode-review-overview -->``
+(CWE-116; MITRE, n.d.). LEFT-side
 comments, and ranges whose `start_side` is still LEFT, are omitted from
 that applyable list. Suggested diffs still
 stay out of the PR-level body. A bare ``422`` substring in a SHA or
@@ -84,7 +87,8 @@ with the same control object used to build the inline `comments` array.
   conversion of surviving suggested diffs into GitHub suggestion blocks,
   `start_line`/`line` ranges when a multi-line replacement sits on one
   current-head hunk, and overview receipts that list applyable
-  ``path:start-end`` suggestion ranges.
+  ``path:start-end`` suggestion ranges whose path cannot close
+  ``<!-- opencode-review-overview -->``.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
@@ -95,6 +99,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 `path:line` in the fallback. Do not restore a location-free sentence.
 
 ## References (APA 7th)
+
+MITRE. (n.d.). *CWE-116: Improper encoding or escaping of output*. Retrieved
+August 13, 2026, from https://cwe.mitre.org/data/definitions/116.html
 
 MITRE. (2026). *CWE-1288: Improper validation of syntactic correctness of
 input*. https://cwe.mitre.org/data/definitions/1288.html
