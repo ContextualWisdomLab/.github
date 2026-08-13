@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
+
+ERROR_PHRASE_MAX_CHARS = 240
+HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -60,11 +64,78 @@ def trusted_finding_locations(control: dict[str, Any]) -> list[tuple[str, int]]:
     return locations
 
 
-def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> str:
+def _collapse_error_text(text: str) -> str:
+    """Return one-line error text without URLs or extra whitespace."""
+    without_urls = re.sub(r"https?://\S+", "", text)
+    return " ".join(without_urls.split())
+
+
+def github_publication_error_phrase(text: str) -> str:
+    """Return a bounded GitHub 422 phrase from ``gh api`` stderr or JSON."""
+    raw = text or ""
+    messages: list[str] = []
+    seen: set[str] = set()
+    decoder = json.JSONDecoder()
+    index = 0
+    while index < len(raw):
+        start = raw.find("{", index)
+        if start < 0:
+            break
+        try:
+            value, consumed = decoder.raw_decode(raw[start:])
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        index = start + consumed
+        errors = value.get("errors")
+        if not isinstance(errors, list):
+            continue
+        for item in errors:
+            if not isinstance(item, dict) or not isinstance(item.get("message"), str):
+                continue
+            message = _collapse_error_text(item["message"])
+            if not message or message in seen:
+                continue
+            seen.add(message)
+            messages.append(message)
+    if messages:
+        return f"GitHub HTTP 422: {'; '.join(messages)}"[:ERROR_PHRASE_MAX_CHARS]
+    match = HTTP_422_LINE_RE.search(raw)
+    if match:
+        line = _collapse_error_text(match.group(1))
+        if line.casefold().startswith("github http 422"):
+            return line[:ERROR_PHRASE_MAX_CHARS]
+        return f"GitHub HTTP 422: {line}".rstrip(": ")[:ERROR_PHRASE_MAX_CHARS]
+    if "422" in raw:
+        return "GitHub HTTP 422"
+    return "GitHub review write failed"
+
+
+def render_inline_comment_receipts(
+    locations: list[tuple[str, int]], error_phrase: str
+) -> list[str]:
+    """Return durable overview receipt lines for refused inline comments."""
+    if not locations:
+        return []
+    if error_phrase:
+        return [f"- `{path}:{line}` — {error_phrase}" for path, line in locations]
+    return [f"- `{path}:{line}`" for path, line in locations]
+
+
+def render_inline_comment_failure_suffix(
+    locations: list[tuple[str, int]],
+    *,
+    error_phrase: str = "",
+) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
+    heading = (
+        "## Inline comment publication receipts"
+        if error_phrase
+        else "## Inline comment publishing failed"
+    )
     lines = [
         "",
-        "## Inline comment publishing failed",
+        heading,
         "",
     ]
     if locations:
@@ -73,7 +144,7 @@ def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> st
             "trusted current-head finding locations:"
         )
         lines.append("")
-        lines.extend(f"- `{path}:{line}`" for path, line in locations)
+        lines.extend(render_inline_comment_receipts(locations, error_phrase))
         lines.append("")
         lines.append(
             "OpenCode did not copy suggested diffs into this PR-level body. "
@@ -88,14 +159,24 @@ def render_inline_comment_failure_suffix(locations: list[tuple[str, int]]) -> st
             "workflow log and apply any remaining blockers from the review "
             "body manually."
         )
+        if error_phrase:
+            lines.append("")
+            lines.append(f"- GitHub error: {error_phrase}")
     lines.append("")
     return "\n".join(lines)
 
 
-def render_inline_comment_failure_body(body: str, control: dict[str, Any]) -> str:
+def render_inline_comment_failure_body(
+    body: str,
+    control: dict[str, Any],
+    *,
+    error_text: str = "",
+) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
+    error_phrase = github_publication_error_phrase(error_text) if error_text else ""
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
-        trusted_finding_locations(control)
+        trusted_finding_locations(control),
+        error_phrase=error_phrase,
     )
 
 
@@ -111,20 +192,25 @@ def load_control(path: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Write a REQUEST_CHANGES body plus the exact path:line 422 suffix."""
+    """Write a REQUEST_CHANGES body plus path:line receipts and optional 422 phrase."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control", required=True, type=Path)
     parser.add_argument("--body", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--error-file", type=Path)
     args = parser.parse_args(argv)
     try:
         control = load_control(args.control)
         body = args.body.read_text(encoding="utf-8")
+        error_text = (
+            args.error_file.read_text(encoding="utf-8") if args.error_file else ""
+        )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
     args.output.write_text(
-        render_inline_comment_failure_body(body, control), encoding="utf-8"
+        render_inline_comment_failure_body(body, control, error_text=error_text),
+        encoding="utf-8",
     )
     return 0
 

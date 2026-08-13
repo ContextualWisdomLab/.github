@@ -5625,6 +5625,8 @@ jobs:
 
           create_pull_review_with_payload() {
             local event="$1" body="$2" review_payload_file="$3" fallback_body_file="$4"
+            local source_body_file="${5:-}"
+            local control_json="${6:-}"
             local gh_error_file
             local rewritten_payload_file
             local review_response_file
@@ -5640,6 +5642,10 @@ jobs:
             emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
             if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
+              if [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
+                build_inline_comment_failure_body \
+                  "$source_body_file" "$fallback_body_file" "$control_json" "$gh_error_file" || true
+              fi
               rm -f "$gh_error_file" "$review_response_file"
               if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
                 printf '::error::OpenCode inline review publication stopped because PR head advanced beyond %s.\n' "$HEAD_SHA"
@@ -5767,11 +5773,19 @@ jobs:
             local body_file="$1"
             local output_file="$2"
             local control_json="$3"
+            local error_file="${4:-}"
+            local -a fallback_args
 
-            python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
-              --control "$control_json" \
-              --body "$body_file" \
+            fallback_args=(
+              python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py"
+              --control "$control_json"
+              --body "$body_file"
               --output "$output_file"
+            )
+            if [ -n "$error_file" ]; then
+              fallback_args+=(--error-file "$error_file")
+            fi
+            "${fallback_args[@]}"
           }
 
           publish_request_changes_from_control() {
@@ -5786,7 +5800,7 @@ jobs:
             format_request_changes_body "$control_json" "$body_file"
             build_request_changes_review_payload "$control_json" "$body_file" "$payload_file"
             build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"
-            create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file"
+            create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file" "$body_file" "$control_json"
             rm -f "$body_file" "$payload_file" "$fallback_body_file"
           }
 

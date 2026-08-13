@@ -20,6 +20,14 @@ pairs, and appends them to the fallback body as `` `path:line` `` list
 items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
+After a refused attach, the publisher rebuilds the fallback from the
+`gh api` error file and writes durable receipts into the OpenCode
+overview comment (`<!-- opencode-review-overview -->`). Each receipt is
+`` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON
+`errors[].message` (for example `pull_request_review_thread.path is
+invalid`) and otherwise the first `HTTP 422` line. URLs are stripped and
+the phrase is bounded to 240 characters.
+
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
 Suggested diffs stay out of the PR-level body.
@@ -27,8 +35,9 @@ Suggested diffs stay out of the PR-level body.
 ## Verification contract
 
 - `tests/test_opencode_inline_comment_fallback.py` pins safe-pair extraction,
-  the exact location list, the empty-set sentence, CLI success, and fail-closed
-  unreadable control input.
+  the exact location list, GitHub JSON `errors[].message` phrases, HTTP 422
+  line fallback, empty-set sentence, CLI success with `--error-file`, and
+  fail-closed unreadable control or error input.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.

@@ -5,8 +5,10 @@ import sys
 import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
+    github_publication_error_phrase,
     main,
     render_inline_comment_failure_body,
+    render_inline_comment_receipts,
     trusted_finding_locations,
 )
 
@@ -58,12 +60,88 @@ def test_fallback_body_cites_each_trusted_path_line():
     assert "did not copy suggested diffs into this PR-level body" in body
 
 
+def test_github_publication_error_phrase_prefers_json_error_messages():
+    phrase = github_publication_error_phrase(
+        "gh: HTTP 422: Unprocessable Entity "
+        "(https://api.github.com/repos/org/repo/pulls/1/reviews)\n"
+        '{"message":"Validation Failed","errors":['
+        '{"resource":"PullRequestReview","field":"comments","code":"custom",'
+        '"message":"pull_request_review_thread.path is invalid"},'
+        '{"message":"Review comments is invalid"}'
+        "]}\n"
+    )
+
+    assert phrase.startswith("GitHub HTTP 422:")
+    assert "pull_request_review_thread.path is invalid" in phrase
+    assert "Review comments is invalid" in phrase
+    assert "https://api.github.com" not in phrase
+
+
+def test_github_publication_error_phrase_falls_back_to_http_line():
+    assert (
+        github_publication_error_phrase(
+            "post failed\ngh: Validation Failed (HTTP 422)\n"
+        )
+        == "GitHub HTTP 422: Validation Failed (HTTP 422)"
+    )
+    assert (
+        github_publication_error_phrase("GitHub HTTP 422: already normalized\n")
+        == "GitHub HTTP 422: already normalized"
+    )
+    assert github_publication_error_phrase("status code 422 only") == "GitHub HTTP 422"
+    assert (
+        github_publication_error_phrase("https://api.github.example/HTTP 422")
+        == "GitHub HTTP 422: 422"
+    )
+    assert render_inline_comment_receipts([], "GitHub HTTP 422") == []
+    assert github_publication_error_phrase("") == "GitHub review write failed"
+    assert (
+        github_publication_error_phrase("secondary rate limit")
+        == "GitHub review write failed"
+    )
+    assert github_publication_error_phrase("{") == "GitHub review write failed"
+    assert (
+        github_publication_error_phrase('{"errors":"not-a-list","message":"x"}')
+        == "GitHub review write failed"
+    )
+    assert (
+        github_publication_error_phrase('{"errors":[{"code":"custom"}]}')
+        == "GitHub review write failed"
+    )
+    assert (
+        github_publication_error_phrase('{"errors":[1,{"message":""}]}')
+        == "GitHub review write failed"
+    )
+
+
+def test_fallback_body_attaches_error_phrase_to_each_receipt():
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 7}),
+        error_text=(
+            '{"errors":[{"message":"Line could not be resolved"}]}'
+        ),
+    )
+
+    assert "## Inline comment publication receipts" in body
+    assert (
+        "- `scripts/ci/example.py:7` — GitHub HTTP 422: Line could not be resolved"
+        in body
+    )
+
+
 def test_fallback_body_explains_missing_trusted_locations():
     body = render_inline_comment_failure_body("overview\n", control())
 
     assert "GitHub did not accept the inline review comments" in body
     assert "no trusted path:line findings" in body
     assert "- `" not in body
+    with_error = render_inline_comment_failure_body(
+        "overview\n",
+        control(),
+        error_text='{"errors":[{"message":"Review comments is invalid"}]}',
+    )
+    assert "GitHub error: GitHub HTTP 422: Review comments is invalid" in with_error
 
 
 def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatch):
@@ -93,6 +171,33 @@ def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatc
     )
     written = output_path.read_text(encoding="utf-8")
     assert "- `scripts/ci/example.py:7`" in written
+
+    error_path = tmp_path / "gh-error.txt"
+    error_path.write_text(
+        '{"errors":[{"message":"pull_request_review_thread.path is invalid"}]}\n',
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(output_path),
+                "--error-file",
+                str(error_path),
+            ]
+        )
+        == 0
+    )
+    written = output_path.read_text(encoding="utf-8")
+    assert (
+        "- `scripts/ci/example.py:7` — GitHub HTTP 422: "
+        "pull_request_review_thread.path is invalid"
+        in written
+    )
 
     assert (
         main(
@@ -146,6 +251,21 @@ def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatc
                 str(tmp_path / "missing-body.md"),
                 "--output",
                 str(output_path),
+            ]
+        )
+        == 2
+    )
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(output_path),
+                "--error-file",
+                str(tmp_path / "missing-error.txt"),
             ]
         )
         == 2

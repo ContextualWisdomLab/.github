@@ -1614,6 +1614,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"'
         in workflow
     )
+    assert (
+        'create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file" "$body_file" "$control_json"'
+        in workflow
+    )
+    assert 'fallback_args+=(--error-file "$error_file")' in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow
