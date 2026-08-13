@@ -6,6 +6,8 @@ import runpy
 import subprocess
 import sys
 import tarfile
+import urllib.error
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
@@ -596,6 +598,40 @@ def test_download_trusted_uv_archive_retries_transient_failure_then_succeeds(
         calls += 1
         if calls == 1:
             raise OSError("transient")
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
+    sleeps: list[float] = []
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == payload
+    assert calls == 2
+    assert sleeps == [materializer.TRUSTED_UV_DOWNLOAD_RETRY_DELAY_SECONDS]
+
+
+def test_download_trusted_uv_archive_retries_httperror_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production incident type, urllib HTTPError, is an OSError subclass.
+
+    CWE-755: treating HTTPError as a trust-boundary RuntimeError would skip
+    the bounded retry and fail a healthy origin on one 503.
+    """
+    payload = b"archive"
+    response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise urllib.error.HTTPError(
+                materializer.TRUSTED_UV_ARCHIVE_URL,
+                503,
+                "Service Unavailable",
+                EmailMessage(),
+                io.BytesIO(b""),
+            )
         return response
 
     monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)

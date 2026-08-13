@@ -18,9 +18,14 @@ and archive member.
 
 This follows the HTTP retry discipline for transient server/network failures
 and does not retry client-side policy failures (Fielding et al., 2022,
-§15.5).
+§15.5). CWE-755 forbids mishandling exceptional conditions (MITRE, 2026):
+`HTTPError` is an `OSError` subclass, so a lone 503 must enter the bounded
+retry; `RuntimeError` trust-boundary violations must not.
 
 ## References
+
+MITRE. (2026). *CWE-755: Improper handling of exceptional conditions*.
+https://cwe.mitre.org/data/definitions/755.html
 
 Fielding, R., Nottingham, M., & Reschke, J. (Eds.). (2022). *HTTP semantics*
 (RFC 9110). Internet Engineering Task Force.
