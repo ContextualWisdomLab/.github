@@ -57,6 +57,31 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
         assert len(refs) == 1, f"{filename} mixes CodeQL action refs: {sorted(refs)}"
 
 
+def test_codeql_pr_and_scheduled_workflows_share_one_action_sha() -> None:
+    """CWE-829: PR and scheduled CodeQL must execute one immutable action SHA.
+
+    A per-file pin can still split init/analyze on the PR workflow from
+    upload-sarif on the scheduled scan. Mixed SHAs would analyze or upload
+    with a different trusted action than the one Dependabot just reviewed.
+    """
+    shas: set[str] = set()
+    tags: set[str] = set()
+    for filename in ("codeql-pr.yml", "scheduled-security-scan.yml"):
+        workflow = (REPO_ROOT / ".github/workflows" / filename).read_text(
+            encoding="utf-8"
+        )
+        for sha, tag in re.findall(
+            r"github/codeql-action/(?:init|analyze|upload-sarif)@"
+            r"([0-9a-f]{40}) # (v\d+\.\d+\.\d+)",
+            workflow,
+        ):
+            shas.add(sha)
+            tags.add(tag)
+
+    assert shas == {"5595ccaf912efad79be6eef63a5619ff05969be3"}
+    assert tags == {"v4.37.6"}
+
+
 def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
     tmp_path: Path,
 ) -> None:
