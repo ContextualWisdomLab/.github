@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Rejected OpenCode `REQUEST_CHANGES` line `0` and `True` inside `finding_location_error` so a current-head path cannot be treated as anchored when the EOF probe would accept `0 > line_count` as false.
 - Rejected OpenCode `REQUEST_CHANGES` findings whose path is not an exact current-head changed file or whose line is past EOF, so GitHub can attach inline review comments instead of dropping unanchored blockers. The decision record now cites CWE-1288 so path and line must stay consistent with the trusted current-head artifact.
 - Recorded the org control-plane architecture, including the line-anchored finding gate, so agents reconstruct the inline-comment trust boundary from the repo instead of private memory.

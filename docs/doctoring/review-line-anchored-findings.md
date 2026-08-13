@@ -13,7 +13,7 @@ Unanchored blockers are also a weaker review artifact: modern code review is exp
 
 ## Decision
 
-`scripts/ci/opencode_review_normalize_output.py` now fail-closes each `REQUEST_CHANGES` finding through `finding_location_error()` before the review is published:
+`scripts/ci/opencode_review_normalize_output.py` now fail-closes each `REQUEST_CHANGES` finding through `finding_location_error()` before the review is published. Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
 - `path` must be a non-empty string.
 - `line` must be a positive integer. Line `0` and JSON/`bool` `true`
