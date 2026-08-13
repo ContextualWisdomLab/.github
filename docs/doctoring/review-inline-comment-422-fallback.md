@@ -86,7 +86,11 @@ and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
-shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
+shipped as one-click GitHub suggestions (GitHub, n.d.-c). ``write_hunk_filtered_payload``
+and ``--filter-hunks`` omit an applyable ``path:start-end`` from
+``--applyable-locations`` when a leftover cannot-provide or LEFT line
+sits inside that range, so ``applyable.txt`` cannot advertise a
+one-click apply for the same span as leftover ``example.py:6``. Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -125,7 +129,10 @@ with the same control object used to build the inline `comments` array.
   plus ``--deferred-locations``, applyable ``path:start-end`` rows
   omitted when a leftover line sits inside that range, including the
   overview CLI with ``--applyable-locations`` plus
-  ``--leftover-diff-locations``, and
+  ``--leftover-diff-locations``, the hunk-filter write path and
+  ``--filter-hunks`` ``applyable.txt`` that omit an overlapping
+  applyable range when leftover ``example.py:6`` sits inside
+  ``example.py:5-7``, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

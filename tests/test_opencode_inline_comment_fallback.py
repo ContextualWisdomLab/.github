@@ -3712,7 +3712,7 @@ def test_leftover_interior_of_deferred_range_omits_reason_bullet(tmp_path):
         applyable_file.read_text(encoding="utf-8")
     )
     assert leftover_receipts[0][:3] == ("scripts/ci/example.py", 6, "cannot-provide")
-    assert applyable_receipts[0][:3] == ("scripts/ci/example.py", 5, 7)
+    assert applyable_receipts == []
     deferred_path = tmp_path / "deferred.txt"
     assert (
         write_single_comment_payloads(
@@ -4123,4 +4123,103 @@ def test_cli_overview_omits_applyable_range_containing_leftover_line(tmp_path):
     assert "scripts/ci/example.py:5-7" not in applyable_section
     assert "- `scripts/ci/ok.py:4`" in applyable_section
     assert excerpt not in applyable_section
+
+
+def test_write_hunk_filtered_payload_omits_applyable_range_containing_interior_leftover(
+    tmp_path,
+):
+    hunks = parse_unified_diff_hunk_lines(
+        EXAMPLE_UNIFIED_DIFF
+        + "diff --git a/scripts/ci/ok.py b/scripts/ci/ok.py\n"
+        + "--- a/scripts/ci/ok.py\n+++ b/scripts/ci/ok.py\n"
+        + "@@ -4,1 +4,1 @@\n-    old\n+    new\n"
+    )
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 6,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 5,
+            "side": "RIGHT",
+            "body": MULTILINE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/ok.py",
+            "line": 4,
+            "side": "RIGHT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+    )
+    output = tmp_path / "filtered.json"
+    leftover_file = tmp_path / "leftover.txt"
+    applyable_file = tmp_path / "applyable.txt"
+    assert (
+        write_hunk_filtered_payload(
+            payload,
+            hunks,
+            output,
+            applyable_path=applyable_file,
+            leftover_path=leftover_file,
+        )
+        == 3
+    )
+    leftover_text = leftover_file.read_text(encoding="utf-8")
+    applyable_text = applyable_file.read_text(encoding="utf-8")
+    assert leftover_text.startswith("scripts/ci/example.py:6\tcannot-provide\t")
+    assert "scripts/ci/example.py:5-7" not in applyable_text
+    assert applyable_text == "scripts/ci/ok.py:4\n"
+
+    applyable_without_leftover_file = tmp_path / "applyable-no-leftover-file.txt"
+    assert (
+        write_hunk_filtered_payload(
+            payload,
+            hunks,
+            tmp_path / "filtered-no-leftover-file.json",
+            applyable_path=applyable_without_leftover_file,
+        )
+        == 3
+    )
+    assert applyable_without_leftover_file.read_text(encoding="utf-8") == (
+        "scripts/ci/ok.py:4\n"
+    )
+
+    payload_path = tmp_path / "batch.json"
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(
+        EXAMPLE_UNIFIED_DIFF
+        + "diff --git a/scripts/ci/ok.py b/scripts/ci/ok.py\n"
+        + "--- a/scripts/ci/ok.py\n+++ b/scripts/ci/ok.py\n"
+        + "@@ -4,1 +4,1 @@\n-    old\n+    new\n",
+        encoding="utf-8",
+    )
+    cli_applyable = tmp_path / "cli-applyable.txt"
+    cli_leftover = tmp_path / "cli-leftover.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload_path),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(tmp_path / "cli-filtered.json"),
+                "--applyable-locations",
+                str(cli_applyable),
+                "--leftover-diff-locations",
+                str(cli_leftover),
+            ]
+        )
+        == 0
+    )
+    assert cli_leftover.read_text(encoding="utf-8").startswith(
+        "scripts/ci/example.py:6\tcannot-provide\t"
+    )
+    assert "scripts/ci/example.py:5-7" not in cli_applyable.read_text(encoding="utf-8")
+    assert cli_applyable.read_text(encoding="utf-8") == "scripts/ci/ok.py:4\n"
 

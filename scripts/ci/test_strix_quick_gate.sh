@@ -1507,6 +1507,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "seen_deferred" "opencode leftover heading emits one deferred range prefix for multiple interior leftovers"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "allowed=allowed" "opencode leftover heading keeps Manual-edit excerpts inside a trusted deferred range"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "start <= leftover_line <= end" "opencode applyable overview omits ranges that contain a leftover line"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftovers = leftover_diff_fence_receipts(filtered)" "opencode hunk-filter write path omits applyable ranges that contain a leftover line"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--applyable-locations" "opencode overview CLI accepts applyable suggestion ranges"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--leftover-diff-locations" "opencode overview CLI accepts leftover diff-fence receipts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "--deferred-locations" "opencode overview CLI accepts deferred leftover ranges"

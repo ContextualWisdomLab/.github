@@ -814,10 +814,13 @@ def write_hunk_filtered_payload(
     applyable_path: Path | None = None,
     leftover_path: Path | None = None,
 ) -> int:
-    """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
+    """Write a hunk-filtered review payload and leftover-safe applyable receipts."""
     filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
     filtered = apply_github_suggestion_blocks(filtered, hunks)
-    applyable = applyable_suggestion_ranges(filtered)
+    leftovers = leftover_diff_fence_receipts(filtered)
+    applyable = exclude_leftover_from_applyable(
+        applyable_suggestion_ranges(filtered), leftovers
+    )
     filtered = strip_left_origin_fields(filtered)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
@@ -838,7 +841,7 @@ def write_hunk_filtered_payload(
         applyable_path.write_text("".join(applyable_rows), encoding="utf-8")
     if leftover_path is not None:
         leftover_rows: list[str] = []
-        for path, line, reason, excerpt in leftover_diff_fence_receipts(filtered):
+        for path, line, reason, excerpt in leftovers:
             encoded = encode_manual_edit_field(excerpt)
             if encoded:
                 leftover_rows.append(f"{path}:{line}\t{reason}\t{encoded}\n")
