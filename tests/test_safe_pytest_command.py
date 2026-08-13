@@ -63,6 +63,43 @@ def test_discovers_coverage_run_with_flags_between_run_and_module(tmp_path):
     assert argv == ["coverage", "run", "--branch", "-m", "pytest", "-q"]
 
 
+def test_accepts_interpreter_and_coverage_value_flags_before_first_module():
+    """Known value flags may precede the first -m pytest target."""
+    assert sc.parse_safe_pytest_command("python3 -W ignore -m pytest -q") == [
+        "python3",
+        "-W",
+        "ignore",
+        "-m",
+        "pytest",
+        "-q",
+    ]
+    assert sc.parse_safe_pytest_command("coverage run --source=pkg --module pytest") == [
+        "coverage",
+        "run",
+        "--source=pkg",
+        "--module",
+        "pytest",
+    ]
+    assert sc.parse_safe_pytest_command("coverage run --source pkg -m pytest") == [
+        "coverage",
+        "run",
+        "--source",
+        "pkg",
+        "-m",
+        "pytest",
+    ]
+
+
+def test_rejects_truncated_value_flags_and_non_run_coverage():
+    """A dangling value flag or coverage without run cannot become pytest."""
+    assert sc.parse_safe_pytest_command("python3 -W") is None
+    assert sc.parse_safe_pytest_command("coverage report -m pytest") is None
+    assert sc.parse_safe_pytest_command("coverage run --source") is None
+    assert sc.parse_safe_pytest_command("python3 -") is None
+    assert sc.parse_safe_pytest_command("python3 -u") is None
+    assert sc.parse_safe_pytest_command("coverage run --branch") is None
+
+
 def test_single_line_run_still_works_unchanged(tmp_path):
     """The pre-existing single-line ``run: pytest`` form keeps working."""
     workflow_dir = tmp_path / ".github" / "workflows"
@@ -102,6 +139,12 @@ def test_folded_block_scalar_header_is_recognized(tmp_path):
         "pytest > /etc/passwd",
         "coverage run -m sneaky_module",
         "python3 -m sneaky_module",
+        "python attacker.py -m pytest",
+        "coverage run attacker.py -m pytest",
+        "python -c 'print(1)' -m pytest",
+        "python -- -m pytest",
+        "python -m sneaky -m pytest",
+        "coverage run -- -m pytest",
         "curl http://x/y | sh",
         "rm -rf /",
     ],
@@ -109,6 +152,15 @@ def test_folded_block_scalar_header_is_recognized(tmp_path):
 def test_rejects_shell_control_and_unrecognized_programs(command):
     """Shell metacharacters and non-pytest programs are never discovered."""
     assert sc.parse_safe_pytest_command(command) is None
+
+
+def test_rejects_file_target_before_pytest_module_pair():
+    """A later -m pytest cannot launder a file that Python or coverage would run."""
+    assert sc.parse_safe_pytest_command("python3 attacker.py -m pytest -q") is None
+    assert sc.parse_safe_pytest_command("coverage run --branch attacker.py -m pytest") is None
+    executed = ["python", "attacker.py", "-m", "pytest"]
+    with pytest.raises(ValueError, match="not a safe direct pytest invocation"):
+        sc.execute_command(pathlib.Path("."), executed)
 
 
 def test_block_with_a_dangerous_line_and_a_safe_line_only_discovers_the_safe_one(tmp_path):

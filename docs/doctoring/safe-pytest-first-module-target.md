@@ -1,0 +1,26 @@
+# Safe pytest first-module-target binding
+
+## Incident and buyer impact
+
+`scripts/ci/safe_pytest_command.py` discovers pytest commands from `ci.yml`
+and executes them with `shell=False`. Flag-tolerant matching treated any later
+`-m pytest` pair as sufficient, so `python attacker.py -m pytest` and
+`coverage run attacker.py -m pytest` were classified as pytest. A
+pull-request-controlled workflow line could therefore execute a file the
+reviewer never approved as the test runner.
+
+## Decision
+
+The first execution target after recognized interpreter or `coverage run`
+flags must be `-m`/`--module pytest`. `python -m coverage run … -m pytest`
+remains allowed because the first `-m` is `coverage` and `run` then invokes
+pytest. File operands, `-c`, `--`, and earlier modules fail closed.
+
+## References
+
+MITRE. (n.d.). *CWE-78: Improper neutralization of special elements used in
+an OS command ('OS command injection')*.
+https://cwe.mitre.org/data/definitions/78.html
+
+OWASP Foundation. (2025). *Command injection prevention cheat sheet*.
+https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html

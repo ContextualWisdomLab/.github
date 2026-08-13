@@ -180,5 +180,8 @@ actual blocker, not the filename alone).
 
 ## References
 
-Reproduction evidence and full investigation trail: see this session's goal
-log (contextual-orchestrator autonomous ecosystem loop, 2026-08-13 cycle 4/5).
+Reproduction evidence and full investigation trail: ContextualWisdomLab/.github#949
+and the current-head tests in ``tests/test_safe_pytest_command.py``. The first
+``-m``/``--module`` target after runner flags must be ``pytest`` (or
+``python -m coverage run ... -m pytest``). A file, ``-c``, ``--``, or earlier
+module cannot be laundered by a later ``-m pytest`` pair.
