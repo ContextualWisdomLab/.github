@@ -22,6 +22,10 @@ hole.
 An empty changed-file set remains a no-op (`()`), so identity-only PRs are
 unchanged.
 
+IEEE 1028 requires every software product in the review package to
+receive a recorded disposition (IEEE, 2008). Naming one path therefore
+cannot authorize APPROVE when the trusted artifact lists more files.
+
 ## Trust boundary
 
 Changed-file identity still comes from the trusted workflow artifact, not
@@ -41,6 +45,9 @@ Remove the `unnamed_changed_files` checks from the two APPROVE blocks and
 the helper. Existing “at least one file” detection remains.
 
 ## References (APA 7th)
+
+IEEE. (2008). *IEEE standard for software reviews and audits* (IEEE Std
+1028-2008). https://doi.org/10.1109/IEEESTD.2008.4601584
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on
