@@ -118,7 +118,11 @@ Regression coverage must prove:
 - every nonempty line is a normalized exact package pin with one or more complete
   SHA-256 hashes; and
 - `pyproject.toml` enables branch measurement and the changed production module
-  retains 100% statement and branch coverage plus 100% production docstrings.
+  retains 100% statement and branch coverage plus 100% production docstrings; and
+- installer verification tests pin `sys.platform` to `linux` and
+  `platform.machine()` to `x86_64` through pytest monkeypatch so version,
+  cache, and cleanup paths execute on a non-Linux developer host, while the
+  portability contract still fail-closes unsupported runners before any download.
 
 ## Exact-head quality evidence
 
@@ -170,6 +174,14 @@ changes neither the trusted uv download boundary nor the dependency closure
 accepted by the coverage sandbox.
 
 ## References
+
+Python Software Foundation. (n.d.). *sys — System-specific parameters and functions*.
+Python 3 documentation. Retrieved August 13, 2026, from
+https://docs.python.org/3/library/sys.html#sys.platform
+
+pytest-dev. (n.d.). *Monkeypatching/mocking modules and environments*. pytest
+documentation. Retrieved August 13, 2026, from
+https://docs.pytest.org/en/stable/how-to/monkeypatch.html
 
 Astral Software, Inc. (n.d.). *Exporting a lockfile*. uv documentation. Retrieved
 August 4, 2026, from https://docs.astral.sh/uv/concepts/projects/export/
