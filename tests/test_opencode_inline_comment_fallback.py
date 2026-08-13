@@ -17,7 +17,9 @@ from scripts.ci.opencode_inline_comment_fallback import (
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
     parse_leftover_diff_receipts,
+    remap_left_comment_to_right_hunk,
     render_leftover_diff_receipts,
+    right_hunk_anchor_line,
     comment_on_changed_hunk,
     count_removed_suggestion_lines,
     extract_suggestion_replacement,
@@ -2448,4 +2450,252 @@ def test_leftover_manual_edit_excerpt_is_distinct_non_applyable_block(tmp_path):
     assert leftover_diff_fence_receipts(payload) == [
         ("scripts/ci/empty.py", 4, "cannot-provide", "")
     ]
+
+
+REWRITE_UNIFIED_DIFF = """\
+diff --git a/scripts/ci/rewrite.py b/scripts/ci/rewrite.py
+--- a/scripts/ci/rewrite.py
++++ b/scripts/ci/rewrite.py
+@@ -10,3 +20,3 @@
+-old
+-old
+-old
++new
++new
++new
+"""
+
+
+def test_right_hunk_anchor_prefers_same_line_then_first_right_line():
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF + REWRITE_UNIFIED_DIFF)
+    assert right_hunk_anchor_line("scripts/ci/example.py", 7, hunks) == 7
+    assert right_hunk_anchor_line("scripts/ci/rewrite.py", 11, hunks) == 20
+    assert right_hunk_anchor_line("scripts/ci/removed.py", 11, hunks) is None
+    assert right_hunk_anchor_line("scripts/ci/example.py", 7, None) is None
+    assert right_hunk_anchor_line("scripts/ci/example.py", 7, {}) is None
+    assert right_hunk_anchor_line("../escape.py", 7, hunks) is None
+    assert right_hunk_anchor_line("scripts/ci/example.py", 0, hunks) is None
+
+
+def test_remap_left_comment_onto_same_path_right_hunk():
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF + REWRITE_UNIFIED_DIFF)
+    left_applyable = {
+        "path": "scripts/ci/example.py",
+        "line": 7,
+        "side": "LEFT",
+        "body": SUGGESTED_DIFF_BODY,
+    }
+    remapped = remap_left_comment_to_right_hunk(left_applyable, hunks)
+    assert remapped["side"] == "RIGHT"
+    assert remapped["line"] == 7
+    assert remapped["body"] == SUGGESTED_DIFF_BODY
+    rewrite = remap_left_comment_to_right_hunk(
+        {
+            "path": "scripts/ci/rewrite.py",
+            "line": 11,
+            "side": "LEFT",
+            "start_line": 10,
+            "start_side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        hunks,
+    )
+    assert rewrite["side"] == "RIGHT"
+    assert rewrite["line"] == 20
+    assert "start_line" not in rewrite
+    assert "start_side" not in rewrite
+    unchanged_right = {
+        "path": "scripts/ci/example.py",
+        "line": 7,
+        "side": "RIGHT",
+        "body": SUGGESTED_DIFF_BODY,
+    }
+    assert remap_left_comment_to_right_hunk(unchanged_right, hunks) is unchanged_right
+    deleted_only = {
+        "path": "scripts/ci/removed.py",
+        "line": 11,
+        "side": "LEFT",
+        "body": SUGGESTED_DIFF_BODY,
+    }
+    assert remap_left_comment_to_right_hunk(deleted_only, hunks) is deleted_only
+    cannot = {
+        "path": "scripts/ci/example.py",
+        "line": 8,
+        "side": "LEFT",
+        "body": CANNOT_PROVIDE_DIFF_BODY,
+    }
+    assert remap_left_comment_to_right_hunk(cannot, hunks) is cannot
+    assert remap_left_comment_to_right_hunk(
+        {"path": "scripts/ci/example.py", "line": 7, "side": "LEFT", "body": "no fence"},
+        hunks,
+    )["side"] == "LEFT"
+    already = {
+        "path": "scripts/ci/example.py",
+        "line": 7,
+        "side": "LEFT",
+        "body": "```diff\n+x\n```\n```suggestion\nx\n```",
+    }
+    assert remap_left_comment_to_right_hunk(already, hunks) is already
+    assert remap_left_comment_to_right_hunk(
+        {
+            "path": "../escape.py",
+            "line": 7,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+        hunks,
+    )["side"] == "LEFT"
+    assert remap_left_comment_to_right_hunk(left_applyable, None) is left_applyable
+
+
+def test_left_leftover_becomes_applyable_on_same_path_right_hunk(tmp_path):
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF + REWRITE_UNIFIED_DIFF)
+    payload = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/rewrite.py",
+                "line": 11,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/removed.py",
+                "line": 11,
+                "side": "LEFT",
+                "body": SUGGESTED_DIFF_BODY,
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 8,
+                "side": "LEFT",
+                "body": CANNOT_PROVIDE_DIFF_BODY,
+            },
+        ),
+        hunks,
+    )
+    comments = payload["comments"]
+    assert comments[0]["side"] == "RIGHT"
+    assert comments[0]["line"] == 7
+    assert "```suggestion\n    new\n```" in comments[0]["body"]
+    assert comments[1]["side"] == "RIGHT"
+    assert comments[1]["line"] == 20
+    assert "```suggestion\n    new\n```" in comments[1]["body"]
+    assert comments[2]["side"] == "LEFT"
+    assert "```suggestion" not in comments[2]["body"]
+    assert comments[3]["side"] == "LEFT"
+    assert leftover_diff_fence_reason(comments[3]) == "LEFT"
+    applyable = applyable_suggestion_ranges(payload)
+    leftover = leftover_diff_fence_receipts(payload)
+    leftover_keys = {(path, line) for path, line, _reason, _excerpt in leftover}
+    applyable_starts = {(path, start) for path, start, _end in applyable}
+    assert ("scripts/ci/example.py", 7) in applyable_starts
+    assert ("scripts/ci/rewrite.py", 20) in applyable_starts
+    assert leftover_keys.isdisjoint(applyable_starts)
+    assert ("scripts/ci/removed.py", 11) in leftover_keys
+    assert ("scripts/ci/example.py", 8) in leftover_keys
+    assert leftover_diff_fence_reason(comments[0]) is None
+    assert leftover_diff_fence_reason(comments[1]) is None
+
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/rewrite.py", "line": 11},
+            {"path": "scripts/ci/removed.py", "line": 11},
+            {"path": "scripts/ci/example.py", "line": 8},
+        ),
+        applyable_locations=applyable,
+        leftover_locations=leftover,
+    )
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    applyable_section = body.split(applyable_heading, 1)[1].split(leftover_heading, 1)[0]
+    leftover_section = body.split(leftover_heading, 1)[1]
+    assert "- `scripts/ci/example.py:7`" in applyable_section
+    assert "- `scripts/ci/rewrite.py:20`" in applyable_section
+    assert "scripts/ci/removed.py" not in applyable_section
+    assert "cannot-provide" not in applyable_section
+    assert MANUAL_EDIT_HEADING not in applyable_section
+    assert "- `scripts/ci/removed.py:11` — LEFT" in leftover_section
+    assert "- `scripts/ci/example.py:8` — LEFT" in leftover_section
+    assert MANUAL_EDIT_HEADING in leftover_section
+    assert "```suggestion" not in leftover_section
+    assert "scripts/ci/rewrite.py:20" not in leftover_section
+
+    payload_path = tmp_path / "batch.json"
+    payload_path.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/rewrite.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/removed.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": SUGGESTED_DIFF_BODY,
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 8,
+                    "side": "LEFT",
+                    "body": CANNOT_PROVIDE_DIFF_BODY,
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(EXAMPLE_UNIFIED_DIFF + REWRITE_UNIFIED_DIFF, encoding="utf-8")
+    output = tmp_path / "filtered.json"
+    applyable_file = tmp_path / "applyable.txt"
+    leftover_file = tmp_path / "leftover.txt"
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload_path),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+            ]
+        )
+        == 0
+    )
+    applyable_text = applyable_file.read_text(encoding="utf-8")
+    leftover_text = leftover_file.read_text(encoding="utf-8")
+    assert "scripts/ci/example.py:7\n" in applyable_text
+    assert "scripts/ci/rewrite.py:20\n" in applyable_text
+    assert "scripts/ci/removed.py" not in applyable_text
+    assert "scripts/ci/removed.py:11\tLEFT\t" in leftover_text
+    assert "scripts/ci/example.py:8\tLEFT\t" in leftover_text
+    assert "scripts/ci/rewrite.py" not in leftover_text
+    filtered = json.loads(output.read_text(encoding="utf-8"))
+    sides = [(item["path"], item["side"], item["line"]) for item in filtered["comments"]]
+    assert ("scripts/ci/example.py", "RIGHT", 7) in sides
+    assert ("scripts/ci/rewrite.py", "RIGHT", 20) in sides
+    assert ("scripts/ci/removed.py", "LEFT", 11) in sides
 

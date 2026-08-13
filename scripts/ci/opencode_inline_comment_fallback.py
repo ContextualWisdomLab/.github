@@ -303,6 +303,60 @@ def suggestion_comment_range(
     return None, safe_line
 
 
+def right_hunk_anchor_line(
+    path: str,
+    left_line: int,
+    hunks: dict[str, dict[str, set[int]]] | None,
+) -> int | None:
+    """Return a same-path RIGHT hunk line to host a remapped LEFT comment."""
+    if not hunks:
+        return None
+    safe_path = safe_finding_path(path)
+    safe_line = safe_finding_line(left_line)
+    if safe_path is None or safe_line is None:
+        return None
+    right = hunks.get(safe_path, {}).get("RIGHT", set())
+    if not right:
+        return None
+    if safe_line in right:
+        return safe_line
+    return min(right)
+
+
+def remap_left_comment_to_right_hunk(
+    comment: dict[str, Any],
+    hunks: dict[str, dict[str, set[int]]] | None,
+) -> dict[str, Any]:
+    """Move an applyable LEFT leftover onto a same-path RIGHT hunk when one exists."""
+    if comment.get("side") != "LEFT":
+        return comment
+    body = comment.get("body")
+    if not isinstance(body, str) or "```diff" not in body:
+        return comment
+    if "```suggestion" in body:
+        return comment
+    replacement: str | None = None
+    for match in DIFF_FENCE_RE.finditer(body):
+        replacement = extract_suggestion_replacement(match.group(1))
+        if replacement is not None:
+            break
+    if replacement is None:
+        return comment
+    path = safe_finding_path(comment.get("path"))
+    line = safe_finding_line(comment.get("line"))
+    if path is None or line is None:
+        return comment
+    anchor = right_hunk_anchor_line(path, line, hunks)
+    if anchor is None:
+        return comment
+    remapped = dict(comment)
+    remapped["side"] = "RIGHT"
+    remapped["line"] = anchor
+    remapped.pop("start_line", None)
+    remapped.pop("start_side", None)
+    return remapped
+
+
 def apply_github_suggestion_blocks(
     payload: dict[str, Any],
     hunks: dict[str, dict[str, set[int]]] | None = None,
@@ -316,6 +370,7 @@ def apply_github_suggestion_blocks(
         if not isinstance(comment, dict):
             updated.append(comment)
             continue
+        comment = remap_left_comment_to_right_hunk(comment, hunks)
         body = comment.get("body")
         side = comment.get("side")
         if not isinstance(body, str) or side == "LEFT":
@@ -937,14 +992,15 @@ def _trusted_range_subset(
     items: list[tuple[str, int, int]] | None,
     allowed: set[tuple[str, int]],
 ) -> list[tuple[str, int, int]]:
-    """Return first-seen applyable ranges whose start is a trusted finding."""
+    """Return first-seen applyable ranges on a path that has a trusted finding."""
     if not items:
         return []
+    allowed_paths = {path for path, _line in allowed}
     kept: list[tuple[str, int, int]] = []
     seen: set[tuple[str, int, int]] = set()
     for item in items:
-        path, start, _end = item
-        if (path, start) not in allowed or item in seen:
+        path, _start, _end = item
+        if path not in allowed_paths or item in seen:
             continue
         seen.add(item)
         kept.append(item)

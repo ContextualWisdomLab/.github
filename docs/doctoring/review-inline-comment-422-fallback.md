@@ -52,9 +52,14 @@ Sadowski et al., 2018).
 After that filter, surviving RIGHT-side comments convert their
 `` ```diff `` suggested-diff fence into a GitHub `` ```suggestion ``
 block so the author can apply the replacement in one click (GitHub,
-n.d.-c). Only `+` lines become the replacement; `n/a`, “cannot provide”,
-LEFT-side comments, and replacements that would break the fence stay as
-the original `` ```diff `` context. When the suggested_diff removes more
+n.d.-c). A LEFT-side leftover that still has an extractable replacement
+is remapped onto a same-path current-head RIGHT hunk when one exists
+(same line when that line is still commentable, otherwise the first
+RIGHT hunk line) so GitHub can apply it as a suggestion instead of a
+manual edit (GitHub, n.d.-b, n.d.-c). Only `+` lines become the
+replacement; `n/a`, “cannot provide”, fence-breaking replacements, and
+LEFT comments on paths with no RIGHT hunk (pure deletions) stay as the
+original `` ```diff `` leftover. When the suggested_diff removes more
 than one current-head line and every line from the finding through that
 span sits on the same hunk, the comment also sets `start_line`, `line`,
 and `start_side` so GitHub applies one multi-line suggestion range
@@ -94,7 +99,9 @@ with the same control object used to build the inline `comments` array.
   ``path:start-end`` suggestion ranges, and a separate leftover-diff
   receipt list that labels remaining `` ```diff `` fences as
   ``cannot-provide`` or ``LEFT`` and renders their replacement text as
-  a non-applyable manual-edit `` ```diff `` block.
+  a non-applyable manual-edit `` ```diff `` block, and remapping of
+  applyable LEFT leftovers onto a same-path RIGHT hunk so they become
+  GitHub suggestion ranges.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
