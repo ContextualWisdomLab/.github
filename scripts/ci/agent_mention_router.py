@@ -496,26 +496,37 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     }
 
 
+def mention_reaction_path(request: MentionRequest) -> str | None:
+    """Return the REST path for an optional eyes reaction, if one exists."""
+    if request.source_kind == SOURCE_KIND_ISSUE_COMMENT:
+        return (
+            f"repos/{request.repository}/issues/comments/"
+            f"{request.comment_id}/reactions"
+        )
+    if request.source_kind == SOURCE_KIND_REVIEW_COMMENT:
+        return (
+            f"repos/{request.repository}/pulls/comments/"
+            f"{request.comment_id}/reactions"
+        )
+    return None
+
+
 def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
-    """Add the optional eyes reaction on an issue comment.
+    """Add the optional eyes reaction on an issue or review comment.
 
     GitHub App installation tokens and job ``GITHUB_TOKEN`` often receive
-    ``403 Resource not accessible by integration`` for issue-comment reactions
+    ``403 Resource not accessible by integration`` for comment reactions
     on pull requests. The reaction is user-experience only; dispatch has
     already been queued, so a reaction failure must not look like a missed
-    mention.
+    mention. Submitted review bodies have no REST reaction endpoint.
     """
 
-    if request.source_kind != SOURCE_KIND_ISSUE_COMMENT:
+    path = mention_reaction_path(request)
+    if path is None:
         return False
     try:
         client.request(
-            [
-                f"repos/{request.repository}/issues/comments/"
-                f"{request.comment_id}/reactions",
-                "-X",
-                "POST",
-            ],
+            [path, "-X", "POST"],
             input_payload={"content": "eyes"},
         )
     except RuntimeError as exc:

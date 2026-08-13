@@ -502,22 +502,55 @@ def test_issue_comment_reaction_403_does_not_drop_a_queued_mention(
 
 
 def test_add_mention_reaction_only_targets_issue_comments() -> None:
-    """Review-comment and review IDs never use the issue-comment reaction API."""
+    """Issue comments use the issue-comment reaction API."""
+
+    module = load_module()
+    issue_request = module.parse_event(event("@cwl-noema-review"))
+    assert issue_request is not None
+    client = FakeClient()
+    assert module.add_mention_reaction(client, issue_request) is True
+    assert client.calls[0][1] == {"content": "eyes"}
+    assert "/issues/comments/" in client.calls[0][0][0]
+    assert "/pulls/comments/" not in client.calls[0][0][0]
+
+
+def test_add_mention_reaction_targets_review_comments() -> None:
+    """Inline review comments use the pull-request review-comment reaction API."""
 
     module = load_module()
     review_request = module.parse_event(review_comment_event())
     assert review_request is not None
     client = FakeClient()
-    assert module.add_mention_reaction(client, review_request) is False
-    assert client.calls == []
-    issue_request = module.parse_event(event("@cwl-noema-review"))
-    assert issue_request is not None
-    assert module.add_mention_reaction(client, issue_request) is True
+    assert module.add_mention_reaction(client, review_request) is True
     assert client.calls[0][1] == {"content": "eyes"}
+    assert "/pulls/comments/" in client.calls[0][0][0]
+    assert "/issues/comments/" not in client.calls[0][0][0]
+    review_body = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_body is not None
+    body_client = FakeClient()
+    assert module.add_mention_reaction(body_client, review_body) is False
+    assert body_client.calls == []
+    assert module.mention_reaction_path(review_body) is None
+
+    class ReactionForbiddenClient(FakeClient):
+        """Raise the live GitHub App 403 only on the eyes reaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail reactions the same way the installation token failed."""
+
+            if any("reactions" in str(arg) for arg in args):
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    forbidden = ReactionForbiddenClient()
+    assert module.add_mention_reaction(forbidden, review_request) is False
 
 
 def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
-    """Review-comment and review IDs are not issue-comment reaction targets."""
+    """Review-comment dispatch reacts on the review-comment endpoint, not issue comments."""
 
     module = load_module()
     request = module.parse_event(review_comment_event())
@@ -530,7 +563,12 @@ def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
         dispatch_client=central,
         opencode_allowlist=frozenset(),
     ) == ("@cwl-noema-review",)
-    assert all("reactions" not in args[0] for args, _ in target.calls)
+    reaction_calls = [
+        args[0] for args, _ in target.calls if "reactions" in args[0]
+    ]
+    assert reaction_calls
+    assert all("/pulls/comments/" in path for path in reaction_calls)
+    assert all("/issues/comments/" not in path for path in reaction_calls)
     assert any(
         args[0].endswith("/issues/953/comments") for args, _ in target.calls
     )

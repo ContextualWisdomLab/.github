@@ -54,6 +54,12 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "TARGET_REPOSITORY_SOURCE" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
     assert "agent_mention_sweep.py" in sweep
+    helper = (ROOT / "scripts" / "ci" / "agent_mention_router.py").read_text(
+        encoding="utf-8"
+    )
+    assert "mention_reaction_path" in helper
+    assert "/pulls/comments/" in helper
+    assert "SOURCE_KIND_REVIEW_COMMENT" in helper
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:
