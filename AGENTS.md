@@ -6,4 +6,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 
 A bare `422` or issue `#422` is not a sealed GitHub HTTP 422.
 Surviving hunk comments convert suggested diffs into closed GitHub suggestion fences.
-
+Leftover overview receipts sanitize path and phrase so a leftover cannot close the HTML comment or reopen a suggestion fence.

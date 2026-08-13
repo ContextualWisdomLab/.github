@@ -497,6 +497,27 @@ def write_single_comment_payloads(
     return count
 
 
+
+def sanitize_leftover_excerpt(text: str) -> str:
+    """Return leftover receipt text that cannot break the overview HTML comment.
+
+    Leftover ``path:line`` rows live in ``<!-- opencode-review-overview -->``.
+    A leftover path or reason with ``-->`` or an HTML metacharacter would
+    close that comment or inject markup (CWE-116). Fence markers are also
+    removed so a leftover cannot reopen a GitHub suggestion block.
+    """
+    excerpt = (text or "").replace("\r\n", "\n").replace("\t", " ")
+    excerpt = (
+        excerpt.replace("```", "")
+        .replace("<!--", "")
+        .replace("-->", "")
+        .replace("<", "")
+        .replace(">", "")
+        .replace("&", "")
+    )
+    return excerpt.strip("\n")
+
+
 def render_inline_comment_receipts(
     locations: list[tuple[str, int]],
     error_phrase: str = "",
@@ -512,6 +533,8 @@ def render_inline_comment_receipts(
             phrase = phrases.get((path, line), "")
         if not phrase:
             phrase = error_phrase
+        path = sanitize_leftover_excerpt(path)
+        phrase = sanitize_leftover_excerpt(phrase)
         if phrase:
             lines.append(f"- `{path}:{line}` — {phrase}")
         else:
