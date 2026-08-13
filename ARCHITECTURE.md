@@ -76,7 +76,7 @@ repair, and delegates all privileged logic to the same sealed scheduler.
 flowchart TD
   YAML["Repository CI run: block"]
   Discover["discover_commands"]
-  First{"First module target is pytest?"}
+  First{"Recognized safe pytest argv?"}
   Shell{"No shell control tokens?"}
   Run["Execute argv with shell=False"]
   Reject["Do not run the line"]
@@ -91,7 +91,7 @@ flowchart TD
 
 CWE-88: a later `-m pytest` after a file operand cannot authorize
 execution. Reviewers stay `edit: deny`.
- 
+
 
 ## Control-plane data flow
 

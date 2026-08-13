@@ -122,26 +122,23 @@ unrecognized single-line `run:` command is ignored today. The block is
 never accepted or rejected as a unit; each line stands alone under the same
 rule that already governs every line in the file.
 
-### 2. Tolerate flags around `-m pytest`
+### 2. Tolerate flags before the first module target
 
-Replace the exact positional check with a "recognized runner, then `-m`
-`pytest` appears as a contiguous pair somewhere in its own argv" check:
+Replace the exact positional triple with a first-module-target check.
+Recognized runners may carry known flags, but the first execution target
+after those flags must be `-m`/`--module pytest`. A later `-m pytest` after
+a file operand, `-c`, `--`, or another module cannot authorize execution.
 
-```python
-def _contains_module_invocation(argv: Sequence[str], start: int, module: str) -> bool:
-    """Return whether ``-m module`` appears as a contiguous pair from ``start``."""
-    return any(
-        argv[index] == "-m" and argv[index + 1] == module
-        for index in range(start, len(argv) - 1)
-    )
-```
+Allowed shapes:
 
-`python[3] <flags> -m pytest <flags>` and `coverage run <flags> -m pytest
-<flags>` are now recognized; the executable and the presence of `run`
-immediately after `coverage` are still required exactly as before. The set
-of things this can ever cause `execute_command` to run is unchanged:
-`pytest`, `python -m pytest`, or `coverage run -m pytest` — with different
-flags, never a different program.
+- `pytest` / `py.test`
+- `python[3[.N]] <flags> -m pytest <flags>`
+- `coverage run <flags> -m pytest <flags>`
+- `python[3[.N]] -m coverage run <flags> -m pytest <flags>`
+
+Rejected shapes include `python attacker.py -m pytest` and
+`coverage run attacker.py -m pytest`. `_is_pytest_argv` is the gate;
+`execute_command` re-checks the same predicate with `shell=False`.
 
 ## Adversarial test cases (must all still fail to discover)
 

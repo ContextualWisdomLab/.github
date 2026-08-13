@@ -18,9 +18,9 @@ are the same runner class as `python3`. `python -m coverage run … -m pytest`
 remains allowed because the first `-m` is `coverage` and `run` then invokes
 pytest. File operands, `-c`, `--`, and earlier modules fail closed.
 
-CWE-88 forbids treating a later argument delimiter as the first execution
-target (MITRE, 2026). A file operand before `-m pytest` therefore cannot
-become the test runner.
+To prevent the argument-injection risk described by CWE-88, the parser binds
+execution to the first module target. A file operand before `-m pytest`
+therefore cannot become the test runner (MITRE, 2026).
 
 ## References
 
