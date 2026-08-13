@@ -21,8 +21,11 @@ items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
 After a refused attach, the publisher first checks that the failure is
-HTTP 422, splits the batch `comments` array into single-comment review
-payloads, and retries each with the same write helper. The first success
+HTTP 422, splits the batch `comments` array into at most 20
+single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
+default 20), and retries each with the same write helper. Comments past
+that cap are recorded as not retried instead of opening unbounded `gh
+api` writes. The first success
 uses `REQUEST_CHANGES` plus the review body; later successes use
 `COMMENT`. Survivors therefore still appear on Files changed. Remaining
 failures still rebuild the fallback from the `gh api` error file and

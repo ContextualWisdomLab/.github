@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 SEALED_422_RE = re.compile(
@@ -243,11 +245,35 @@ def render_single_comment_review(
     }
 
 
-def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> int:
-    """Write COMMENT-event single-comment payloads and return the file count."""
+def single_comment_retry_limit(raw: object | None = None) -> int:
+    """Return a positive one-at-a-time retry cap, defaulting to 20."""
+    if raw is None:
+        raw = os.environ.get("OPENCODE_INLINE_COMMENT_RETRY_LIMIT")
+    if isinstance(raw, bool):
+        return DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isdigit():
+            value = int(text)
+            if value > 0:
+                return value
+    return DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+
+
+def write_single_comment_payloads(
+    payload: dict[str, Any],
+    output_dir: Path,
+    limit: int | None = None,
+    deferred_path: Path | None = None,
+) -> int:
+    """Write at most ``limit`` COMMENT payloads and leftover ``path:line`` rows."""
+    items = iter_single_comment_payloads(payload)
+    cap = single_comment_retry_limit(limit)
     output_dir.mkdir(parents=True, exist_ok=True)
     count = 0
-    for index, item in enumerate(iter_single_comment_payloads(payload)):
+    for index, item in enumerate(items[:cap]):
         path = output_dir / f"comment-{index:03d}.json"
         path.write_text(
             json.dumps(
@@ -257,6 +283,11 @@ def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> 
             encoding="utf-8",
         )
         count += 1
+    if deferred_path is not None:
+        deferred_path.write_text(
+            "".join(f"{item['path']}:{item['line']}\n" for item in items[cap:]),
+            encoding="utf-8",
+        )
     return count
 
 
@@ -401,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--error-file", type=Path)
     parser.add_argument("--split-payload", type=Path)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--retry-limit", type=int)
+    parser.add_argument("--deferred-locations", type=Path)
     parser.add_argument("--is-unprocessable", action="store_true")
     parser.add_argument("--refused-locations", type=Path)
     parser.add_argument("--record-refusal", action="store_true")
@@ -443,7 +476,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.output_dir is None:
                 raise ValueError("--output-dir is required with --split-payload")
             payload = load_control(args.split_payload)
-            write_single_comment_payloads(payload, args.output_dir)
+            write_single_comment_payloads(
+                payload,
+                args.output_dir,
+                limit=args.retry_limit,
+                deferred_path=args.deferred_locations,
+            )
             return 0
         if args.control is None or args.body is None or args.output is None:
             raise ValueError("--control, --body, and --output are required")
