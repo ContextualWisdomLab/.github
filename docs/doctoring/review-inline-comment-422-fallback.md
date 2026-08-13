@@ -65,7 +65,10 @@ shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
-suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). Applyable vs
+suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). Leftover receipt ``path`` and reason
+text drop ``<!--``, ``-->``, and HTML metacharacters so a leftover
+row cannot close ``<!-- opencode-review-overview -->`` (CWE-116;
+MITRE, 2026). Applyable vs
 leftover classification uses a closed fence match (`` ```diff `` or
 `` ```suggestion `` plus a later closer), not a bare `` ```suggestion ``
 substring: leftover prose that mentions the token is still leftover
@@ -92,9 +95,11 @@ with the same control object used to build the inline `comments` array.
   current-head hunk, overview receipts that list applyable
   ``path:start-end`` suggestion ranges, a separate leftover-diff
   receipt list that labels remaining `` ```diff `` fences as
-  ``cannot-provide`` or ``LEFT``, and the closed-fence match that keeps
-  a leftover mention of `` ```suggestion `` plus every LEFT suggestion
-  out of the applyable receipt list.
+  ``cannot-provide`` or ``LEFT``, leftover receipt rows whose path or
+  reason cannot close ``<!-- opencode-review-overview -->``, and the
+  closed-fence match that keeps a leftover mention of
+  `` ```suggestion `` plus every LEFT suggestion out of the applyable
+  receipt list.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
@@ -122,6 +127,9 @@ https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pul
 GitHub. (n.d.-c). *Commenting on a pull request*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/commenting-on-a-pull-request#suggesting-changes-to-a-file
+
+MITRE. (2026). *CWE-116: Improper encoding or escaping of output*. Retrieved
+August 13, 2026, from https://cwe.mitre.org/data/definitions/116.html
 
 MITRE. (n.d.). *CWE-1288: Improper validation of unsafe equivalence in input*.
 Retrieved August 13, 2026, from https://cwe.mitre.org/data/definitions/1288.html

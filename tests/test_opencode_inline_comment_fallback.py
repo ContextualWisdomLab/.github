@@ -15,6 +15,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     leftover_diff_fence_receipts,
     parse_leftover_diff_receipts,
     render_leftover_diff_receipts,
+    sanitize_leftover_excerpt,
     comment_on_changed_hunk,
     count_removed_suggestion_lines,
     extract_suggestion_replacement,
@@ -1829,6 +1830,11 @@ def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable(
         "- `scripts/ci/example.py:12` — cannot-provide",
         "- `scripts/ci/removed.py:11` — LEFT",
     ]
+    assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
+    assert "-->" not in sanitize_leftover_excerpt("close --> comment")
+    assert render_leftover_diff_receipts(
+        [("scripts/ci/a-->b.py", 1, "LEFT<!-- -->")]
+    ) == ["- `scripts/ci/ab.py:1` — LEFT "]
 
 
 def test_overview_lists_applyable_and_leftover_under_distinct_headings(tmp_path):

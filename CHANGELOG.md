@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover OpenCode `path:line` receipt rows now drop HTML comment delimiters and `<`, `>`, `&` so a leftover path or reason cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Classified applyable OpenCode GitHub suggestions by a closed ```suggestion fence, not a bare substring, and kept LEFT-side suggestion fences in the leftover `LEFT` receipts so overview rows cannot advertise a one-click apply GitHub will reject.
 - Distinguished applyable OpenCode GitHub suggestion ranges from leftover ```diff fences (`cannot-provide` or `LEFT`) in the overview receipts so authors can see which hunks are one-click applies and which still need a manual edit.
 - Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies.
