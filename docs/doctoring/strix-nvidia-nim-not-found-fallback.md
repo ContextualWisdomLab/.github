@@ -30,10 +30,10 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
-The outer workflow may classify exhausted provider infrastructure as neutral only
-when the run log contains no vulnerability signal. Any reported severity or
-non-zero vulnerability count remains blocking. Scanner reports and attempt logs
-remain available as artifacts.
+Exhausted provider infrastructure is incomplete evidence and remains
+fail-closed even when the run log contains no vulnerability signal. A provider
+outage cannot be classified as a clean or neutral security result. Scanner
+reports and attempt logs remain available as artifacts.
 
 ## Verification contract
 

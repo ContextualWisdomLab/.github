@@ -99,6 +99,24 @@ The fallback was removed; only the explicit structured status description can
 supersede a stale Strix context. The contract tests reject reintroduction of
 the unbound fallback.
 
+The latest reproduction is run `31702234021` (job `94453926612`) for head
+`4d7267b3bf5a90a1fd5a64368bb5c9af33f12234`. GitHub again reported the Strix job
+as `success`, but the artifact contained only failed `run.json` files, no
+`evidence-binding.json`, and provider failures including NVIDIA NIM `429`, a
+GitHub Models `410` retirement brownout, and a context-window overflow. The
+executed step list had no provenance-validation step because the
+`pull_request_target` run used the trusted base workflow; that base workflow
+printed `Treating as a neutral skip` after the fallback attempts were
+exhausted. This is not clean security evidence and cannot clear the required
+check.
+
+The wrapper now treats any `neutral skip` marker in the captured gate log as
+incomplete evidence even when the gate exits zero. The regression contract pins
+that marker check. This protects future default-branch runs, while the PR that
+introduces the fix still requires a post-merge default-branch
+`repository_dispatch` run with a matching `evidence-binding.json`; a green
+`pull_request_target` result before that run remains base-workflow evidence only.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

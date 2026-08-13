@@ -743,6 +743,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'if [ "$strix_rc" -ne 0 ]; then' "strix wrapper fails when the trusted gate does not produce clean evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'exit "$strix_rc"' "strix wrapper propagates nonzero trusted-gate results"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "neutral[[:space:]]+skip" "strix wrapper rejects provider neutral-skip output even when the gate exits zero"
 	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" "Treating as a neutral skip" "strix wrapper must not convert provider outages into successful security evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
