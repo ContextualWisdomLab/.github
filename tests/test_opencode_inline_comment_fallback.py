@@ -3760,3 +3760,63 @@ def test_leftover_interior_of_deferred_range_omits_reason_bullet(tmp_path):
         assert "scripts/ci/example.py:5-7" not in applyable_section
         assert "```suggestion" not in applyable_section
 
+
+def test_leftover_heading_emits_deferred_range_once_for_multiple_interior_leftovers():
+    cannot_excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    na_excerpt = leftover_manual_edit_text(NA_DIFF_BODY)
+    leftover = [
+        ("scripts/ci/example.py", 6, "cannot-provide", cannot_excerpt),
+        ("scripts/ci/example.py", 7, "cannot-provide", na_excerpt),
+        ("scripts/ci/example.py", 12, "cannot-provide", cannot_excerpt),
+    ]
+    deferred = [("scripts/ci/example.py", 5, 7, None, None)]
+    rendered = render_leftover_diff_receipts(leftover, deferred=deferred)
+    joined = "\n".join(rendered)
+    assert rendered[0] == "- `scripts/ci/example.py:5-7`"
+    assert rendered[1] == f"  {MANUAL_EDIT_HEADING}"
+    assert joined.count("- `scripts/ci/example.py:5-7`") == 1
+    assert cannot_excerpt in joined
+    assert na_excerpt in joined
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in joined
+    assert "- `scripts/ci/example.py:7` — cannot-provide" not in joined
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in joined
+    first_edit = joined.index(MANUAL_EDIT_HEADING)
+    second_edit = joined.index(MANUAL_EDIT_HEADING, first_edit + 1)
+    outside = joined.index("- `scripts/ci/example.py:12` — cannot-provide")
+    assert first_edit < second_edit < outside
+
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 6},
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/example.py", "line": 12},
+        ),
+        deferred_locations=deferred,
+        applyable_locations=deferred,
+        leftover_locations=leftover,
+        retry_limit=1,
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = body.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert leftover_section.count("- `scripts/ci/example.py:5-7`") == 1
+    assert leftover_section.index("- `scripts/ci/example.py:5-7`") < leftover_section.index(
+        MANUAL_EDIT_HEADING
+    )
+    assert cannot_excerpt in leftover_section
+    assert na_excerpt in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in leftover_section
+    assert "- `scripts/ci/example.py:7` — cannot-provide" not in leftover_section
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert cannot_excerpt not in applyable_section
+        assert na_excerpt not in applyable_section
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+

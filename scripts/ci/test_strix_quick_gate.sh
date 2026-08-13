@@ -1504,6 +1504,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_manual_edits_with_deferred" "opencode deferred cannot-provide leftovers keep the Manual-edit overview block"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_deferred_matches" "opencode leftover heading lists deferred leftovers before Manual-edit excerpts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "range(start, end + 1)" "opencode leftover heading matches interior lines of a deferred path:start-end"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "seen_deferred" "opencode leftover heading emits one deferred range prefix for multiple interior leftovers"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "leftover_reason_bullet_duplicates_deferred" "opencode leftover heading omits a duplicate reason bullet after a deferred prefix"
 	assert_file_contains "$workflow_file" "--leftover-diff-locations" "opencode persists leftover diff-fence receipts in overview receipts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "These comments still have a suggested-diff fence that GitHub cannot apply:" "opencode overview lists leftover cannot-provide and LEFT diff fences"

@@ -774,15 +774,22 @@ def render_leftover_diff_receipts(
     receipts: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
     deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[str]:
-    """Return leftover lines with one deferred row, then a Manual-edit excerpt."""
+    """Return leftover lines with one deferred row, then each Manual-edit excerpt."""
     matches = leftover_deferred_matches(deferred)
     lines: list[str] = []
+    seen_deferred: set[tuple[str, int, int]] = set()
     for item in receipts:
         path, line, reason, excerpt = _leftover_receipt_parts(item)
         excerpt = excerpt.replace("```", "")
         deferred_item = matches.get((path, line))
         if deferred_item is not None:
-            lines.extend(render_applyable_receipts([deferred_item]))
+            deferred_path, start, end, _origin_path, _origin_line = (
+                _applyable_receipt_parts(deferred_item)
+            )
+            deferred_key = (deferred_path, start, end)
+            if deferred_key not in seen_deferred:
+                lines.extend(render_applyable_receipts([deferred_item]))
+                seen_deferred.add(deferred_key)
         if not leftover_reason_bullet_duplicates_deferred(path, line, deferred_item):
             lines.append(f"- `{path}:{line}` — {reason}")
         if not excerpt:
