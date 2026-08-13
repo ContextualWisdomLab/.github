@@ -27,7 +27,7 @@ without an override refuses the pair.
 
 ## Decision
 
-1. Pin `strix-agent==1.5.3` and keep `cryptography==50.0.0`.
+1. Pin `strix-agent==1.5.3` and keep `cryptography==50.0.0`. Materialize only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 2. Resolve the declared upper bound only at compile time through
    `requirements-strix-ci-overrides.txt` and
    `scripts/ci/compile_strix_ci_lock.sh`.
