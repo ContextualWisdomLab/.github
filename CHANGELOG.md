@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Posted review JSON now strips closed GitHub ` ```suggestion ` fences whose range overlaps leftover `path:start-end` coverage, so leftover `example.py:5-7` cannot still offer a one-click apply on interior `example.py:6` (CWE-1288).
 - Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - The leftover heading now prefixes the widest leftover `path:start-end` when a nested leftover range such as `example.py:5-6` sits inside leftover `example.py:5-7`, so authors see one leftover range then Manual-edit excerpts.
