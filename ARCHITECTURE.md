@@ -44,7 +44,8 @@ flowchart TD
 ```
 
 CWE-345: shadow findings are evaluation evidence, not authenticity
-evidence for merge. Reviewers stay `edit: deny`. Bind
+evidence for merge. CWE-841: semantic source judgment and merge
+readiness stay independent. Reviewers stay `edit: deny`. Bind
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
 ## Control-plane data flow

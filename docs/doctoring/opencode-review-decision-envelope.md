@@ -13,6 +13,10 @@ OpenCode Review must represent two independent decisions:
 
 Infrastructure or policy failure may block integration. It must never be converted into a source finding, severity, path, or line number. A failed coverage collector is evidence that coverage has not been proven, not evidence that the pull-request implementation contains a high-severity defect.
 
+CWE-841 forbids collapsing two required behaviors into one action
+(MITRE, 2026). Semantic source judgment and merge-readiness checks are
+therefore independent outputs.
+
 This change introduces an offline, deterministic decision-composition module. It does not yet modify the production OpenCode dispatch because other active branches own that large workflow. Production integration requires a later test-first slice after the writer lease clears.
 
 ## Problem
@@ -273,6 +277,9 @@ The pure decision module can be removed from a caller without changing reviewer 
 - A `READY` output is a deterministic policy composition result, not authority to bypass GitHub rulesets or merge administratively.
 
 ## References
+
+MITRE. (2026). *CWE-841: Improper enforcement of behavioral workflow*.
+https://cwe.mitre.org/data/definitions/841.html
 
 Booth, H., Souppaya, M., Vassilev, A., Ogata, M., Stanley, M., Scarfone, K., & Dodson, D. (2024). *Secure software development practices for generative AI and dual-use foundation models: An SSDF community profile* (NIST Special Publication 800-218A). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218A
 
