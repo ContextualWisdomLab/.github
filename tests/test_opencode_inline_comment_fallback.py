@@ -14,6 +14,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     decode_manual_edit_field,
     encode_manual_edit_field,
     exclude_deferred_applyable,
+    exclude_leftover_from_applyable,
     format_applyable_origin,
     format_deferred_receipt_row,
     merge_deferred_origins,
@@ -23,6 +24,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
+    leftover_manual_edits_with_deferred,
     parse_leftover_diff_receipts,
     remap_left_comment_to_right_hunk,
     render_leftover_diff_receipts,
@@ -3343,4 +3345,182 @@ def test_applyable_left_origin_parse_render_and_strip(tmp_path):
         "- `scripts/ci/rewrite.py:20` — from LEFT `scripts/ci/rewrite.py:11`"
         in receipt.read_text(encoding="utf-8")
     )
+
+
+def test_deferred_cannot_provide_and_deletion_keep_manual_edit_and_deferred_row(
+    tmp_path,
+):
+    hunks = parse_unified_diff_hunk_lines(
+        EXAMPLE_UNIFIED_DIFF
+        + "diff --git a/scripts/ci/blocked.py b/scripts/ci/blocked.py\n"
+        + "--- a/scripts/ci/blocked.py\n+++ b/scripts/ci/blocked.py\n"
+        + "@@ -4,1 +4,1 @@\n-    old\n+    new\n"
+    )
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": "posted first",
+        },
+        {
+            "path": "scripts/ci/blocked.py",
+            "line": 4,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/removed.py",
+            "line": 11,
+            "side": "LEFT",
+            "body": SUGGESTED_DIFF_BODY,
+        },
+    )
+    output = tmp_path / "filtered.json"
+    applyable_file = tmp_path / "applyable.txt"
+    leftover_file = tmp_path / "leftover.txt"
+    assert (
+        write_hunk_filtered_payload(
+            payload,
+            hunks,
+            output,
+            applyable_path=applyable_file,
+            leftover_path=leftover_file,
+        )
+        == 3
+    )
+    leftover_text = leftover_file.read_text(encoding="utf-8")
+    assert "scripts/ci/blocked.py:4\tcannot-provide\t" in leftover_text
+    assert "scripts/ci/removed.py:11\tLEFT\t" in leftover_text
+    applyable_text = applyable_file.read_text(encoding="utf-8")
+    assert "scripts/ci/blocked.py" not in applyable_text
+    assert "scripts/ci/removed.py" not in applyable_text
+    filtered = json.loads(output.read_text(encoding="utf-8"))
+    deferred_path = tmp_path / "deferred.txt"
+    singles_dir = tmp_path / "singles"
+    assert (
+        write_single_comment_payloads(
+            filtered, singles_dir, limit=1, deferred_path=deferred_path
+        )
+        == 1
+    )
+    posted = json.loads((singles_dir / "comment-000.json").read_text(encoding="utf-8"))
+    assert posted["comments"][0]["path"] == "scripts/ci/example.py"
+    deferred_text = deferred_path.read_text(encoding="utf-8")
+    assert "scripts/ci/blocked.py:4\n" in deferred_text
+    assert "scripts/ci/removed.py:11\n" in deferred_text
+    assert "```suggestion" not in deferred_text
+    leftover_receipts = parse_leftover_diff_receipts(leftover_text)
+    deferred_receipts = parse_applyable_ranges(deferred_text)
+    applyable_receipts = parse_applyable_ranges(applyable_text)
+    kept_leftover = leftover_manual_edits_with_deferred(
+        leftover_receipts, deferred_receipts
+    )
+    leftover_keys = {(path, line) for path, line, _reason, _excerpt in kept_leftover}
+    assert ("scripts/ci/blocked.py", 4) in leftover_keys
+    assert ("scripts/ci/removed.py", 11) in leftover_keys
+    assert exclude_leftover_from_applyable(applyable_receipts, kept_leftover) == []
+    assert exclude_leftover_from_applyable(
+        [("scripts/ci/blocked.py", 4, 4, None, None)],
+        leftover_receipts,
+    ) == []
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/blocked.py", "line": 4},
+            {"path": "scripts/ci/removed.py", "line": 11},
+        ),
+        attached_locations=[("scripts/ci/example.py", 7)],
+        deferred_locations=deferred_receipts,
+        applyable_locations=applyable_receipts
+        + [("scripts/ci/blocked.py", 4, 4, None, None)],
+        leftover_locations=leftover_receipts,
+        retry_limit=1,
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    deferred_heading = "were not retried (retry limit 1):"
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    assert leftover_heading in body
+    assert deferred_heading in body
+    leftover_section = body.split(leftover_heading, 1)[1]
+    assert MANUAL_EDIT_HEADING in leftover_section
+    assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in leftover_section
+    assert leftover_manual_edit_text(SUGGESTED_DIFF_BODY) in leftover_section
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" in leftover_section
+    assert "- `scripts/ci/removed.py:11` — LEFT" in leftover_section
+    deferred_section = body.split(deferred_heading, 1)[1]
+    if leftover_heading in deferred_section:
+        deferred_section = deferred_section.split(leftover_heading, 1)[0]
+    if applyable_heading in deferred_section:
+        deferred_section = deferred_section.split(applyable_heading, 1)[0]
+    assert "- `scripts/ci/blocked.py:4`" in deferred_section
+    assert "- `scripts/ci/removed.py:11`" in deferred_section
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert "scripts/ci/blocked.py" not in applyable_section
+        assert "scripts/ci/removed.py" not in applyable_section
+        assert MANUAL_EDIT_HEADING not in applyable_section
+        assert "```suggestion" not in applyable_section
+    assert leftover_manual_edits_with_deferred([], deferred_receipts) == []
+    assert leftover_manual_edits_with_deferred(leftover_receipts, []) == leftover_receipts
+    assert leftover_manual_edits_with_deferred(
+        [("scripts/ci/x.py", 1, "HTTP 422", "n")],
+        [],
+    ) == []
+    assert exclude_leftover_from_applyable(
+        [("scripts/ci/example.py", 7, 7, None, None)],
+        [],
+    ) == [("scripts/ci/example.py", 7, 7, None, None)]
+    assert exclude_leftover_from_applyable(
+        [("scripts/ci/example.py", 7, 7, None, None)], leftover_receipts
+    ) == [("scripts/ci/example.py", 7, 7, None, None)]
+
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 7},
+                {"path": "scripts/ci/blocked.py", "line": 4},
+                {"path": "scripts/ci/removed.py", "line": 11},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--deferred-locations",
+                str(deferred_path),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+                "--retry-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    rendered = receipt.read_text(encoding="utf-8")
+    assert leftover_heading in rendered
+    assert deferred_heading in rendered
+    assert MANUAL_EDIT_HEADING in rendered
+    assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in rendered
+    assert leftover_manual_edit_text(SUGGESTED_DIFF_BODY) in rendered
+    if applyable_heading in rendered:
+        assert "scripts/ci/blocked.py" not in rendered.split(applyable_heading, 1)[1]
 

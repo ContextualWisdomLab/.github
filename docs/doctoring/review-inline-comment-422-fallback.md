@@ -32,7 +32,10 @@ suggestions: their ``path:start-end`` range and leftover LEFT origin
 stay on the deferred overview list only, they are removed from the
 applyable heading so the receipt does not claim GitHub can apply a
 comment that was never sent, and they are recorded as not retried
-instead of opening unbounded ``gh api`` writes. The first success uses `REQUEST_CHANGES` plus the review
+instead of opening unbounded ``gh api`` writes. A deferred leftover
+that still has only a `` ```diff `` fence (``cannot-provide`` or a
+pure-deletion ``LEFT``) keeps that Manual-edit block as well as the
+deferred row. The first success uses `REQUEST_CHANGES` plus the review
 body; later successes use `COMMENT`. Survivors therefore still appear on
 Files changed. Remaining failures still rebuild the fallback from the
 `gh api` error file and write durable receipts into the OpenCode
@@ -106,7 +109,9 @@ with the same control object used to build the inline `comments` array.
   per-comment 422 phrases, the 20-comment one-at-a-time retry cap,
   preservation of ``start_line``/``start_side`` on remapped multi-line
   suggestion retries, deferred leftovers past the retry cap that keep
-  range and LEFT origin as non-applyable overview context, and
+  range and LEFT origin as non-applyable overview context, deferred
+  cannot-provide and pure-deletion leftovers that keep both the
+  Manual-edit block and the deferred row, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

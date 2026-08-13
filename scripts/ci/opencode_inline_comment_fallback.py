@@ -1075,6 +1075,53 @@ def exclude_deferred_applyable(
     return kept
 
 
+def leftover_manual_edits_with_deferred(
+    leftovers: list[tuple[str, int, str, str]],
+    deferred: list[tuple[str, int, int, str | None, int | None]],
+) -> list[tuple[str, int, str, str]]:
+    """Keep leftover Manual-edit receipts even when the same leftover is deferred."""
+    if not leftovers:
+        return []
+    deferred_points = {
+        (path, start)
+        for path, start, end, _origin_path, _origin_line in deferred
+        if start == end
+    }
+    deferred_points.update(
+        (path, end) for path, _start, end, _origin_path, _origin_line in deferred
+    )
+    kept: list[tuple[str, int, str, str]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in leftovers:
+        path, line, reason, excerpt = _leftover_receipt_parts(item)
+        if reason not in LEFTOVER_DIFF_REASONS or (path, line) in seen:
+            continue
+        seen.add((path, line))
+        kept.append((path, line, reason, excerpt))
+    if not deferred_points:
+        return kept
+    overlapping = [item for item in kept if (item[0], item[1]) in deferred_points]
+    rest = [item for item in kept if (item[0], item[1]) not in deferred_points]
+    return overlapping + rest
+
+
+def exclude_leftover_from_applyable(
+    applyable: list[tuple[str, int, int, str | None, int | None]],
+    leftovers: list[tuple[str, int, str, str]],
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Drop applyable ranges that are leftover cannot-provide or LEFT fences."""
+    leftover_points = {(path, line) for path, line, _reason, _excerpt in leftovers}
+    if not leftover_points:
+        return applyable
+    kept: list[tuple[str, int, int, str | None, int | None]] = []
+    for item in applyable:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        if (path, start) in leftover_points or (path, end) in leftover_points:
+            continue
+        kept.append((path, start, end, origin_path, origin_line))
+    return kept
+
+
 def render_inline_comment_receipts(
     locations: list[tuple[str, int]],
     error_phrase: str = "",
@@ -1355,9 +1402,12 @@ def render_inline_comment_failure_body(
         if leftover_locations is not None
         else []
     )
+    leftover = leftover_manual_edits_with_deferred(leftover, deferred)
     if deferred and applyable:
         deferred = merge_deferred_origins(deferred, applyable)
         applyable = exclude_deferred_applyable(applyable, deferred)
+    if leftover and applyable:
+        applyable = exclude_leftover_from_applyable(applyable, leftover)
     phrases: dict[tuple[str, int], str] | None = None
     if refused_receipts is not None:
         locations = [

@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Kept both the leftover Manual-edit ` ```diff ` block and the deferred range/origin row when a cannot-provide or pure-deletion leftover sits past the 20-comment 422 retry cap, and still omitted those fences from applyable GitHub suggestions.
 - Recorded leftover OpenCode comments past the 20-comment 422 retry cap as deferred overview ranges with their LEFT origin, and stopped listing them under applyable GitHub suggestions because those comments are never posted.
 - Kept `start_line`/`start_side` on remapped leftover OpenCode suggestions when a batch 422 is retried one comment at a time, so a multi-line RIGHT range still posts as one GitHub suggestion.
 - Labeled remapped leftover OpenCode applyable ranges with the original LEFT `path:line` so the overview shows `path:right` came from LEFT `path:left`.

@@ -1665,6 +1665,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "single_comment_range_fields" in helper
     assert "format_deferred_receipt_row" in helper
     assert "exclude_deferred_applyable" in helper
+    assert "leftover_manual_edits_with_deferred" in helper
+    assert "exclude_leftover_from_applyable" in helper
     assert "Manual edit (not a GitHub suggestion):" in helper
     assert (
         "These comments still have a suggested-diff fence that GitHub cannot apply:"
