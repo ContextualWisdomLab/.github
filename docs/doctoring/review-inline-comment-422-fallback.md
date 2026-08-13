@@ -26,7 +26,9 @@ overview comment (`<!-- opencode-review-overview -->`). Each receipt is
 `` `path:line` — GitHub HTTP 422: <phrase> ``. The phrase prefers JSON
 `errors[].message` (for example `pull_request_review_thread.path is
 invalid`) and otherwise the first `HTTP 422` line. URLs are stripped and
-the phrase is bounded to 240 characters.
+the phrase is bounded to 240 characters. Backticks and HTML
+metacharacters are escaped before the phrase is written into the
+overview body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.

@@ -103,6 +103,22 @@ def test_github_publication_error_phrase_falls_back_to_http_line():
         == "GitHub HTTP 422: 422"
     )
     assert render_inline_comment_receipts([], "GitHub HTTP 422") == []
+    assert (
+        github_publication_error_phrase(
+            '{"errors":[{"message":"path `<script>` & `diff`"}]}'
+        )
+        == (
+            "GitHub HTTP 422: path "
+            "\\u0060\\u003cscript\\u003e\\u0060 \\u0026 \\u0060diff\\u0060"
+        )
+    )
+    assert render_inline_comment_receipts(
+        [("scripts/ci/example.py", 7)],
+        "GitHub HTTP 422: path <script> & `diff`",
+    ) == [
+        "- `scripts/ci/example.py:7` — GitHub HTTP 422: path "
+        "\\u003cscript\\u003e \\u0026 \\u0060diff\\u0060"
+    ]
     assert github_publication_error_phrase("") == "GitHub review write failed"
     assert (
         github_publication_error_phrase("secondary rate limit")
