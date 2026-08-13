@@ -53,6 +53,7 @@ class MentionRequest:
     agents: tuple[str, ...]
     pull_request_base_sha: str = ""
     source_kind: str = SOURCE_KIND_ISSUE_COMMENT
+    review_node_id: str | None = None
 
 
 class GitHubClient:
@@ -230,6 +231,11 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError("pull request base SHA is missing or invalid")
     if not ACTOR_RE.fullmatch(actor):
         raise ValueError("comment actor is missing or invalid")
+    review_node_id = None
+    if source_kind == SOURCE_KIND_REVIEW:
+        raw_node_id = source.get("node_id")
+        if isinstance(raw_node_id, str) and raw_node_id.strip():
+            review_node_id = raw_node_id.strip()
     return MentionRequest(
         repository_name,
         number,
@@ -240,6 +246,7 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         agents,
         pull_request_base_sha=base_sha.lower(),
         source_kind=source_kind,
+        review_node_id=review_node_id,
     )
 
 
@@ -516,6 +523,8 @@ def mention_reaction_path(request: MentionRequest) -> str | None:
 
 def review_reaction_node_id(client: GitHubClient, request: MentionRequest) -> str | None:
     """Return the GraphQL node ID for a submitted pull-request review."""
+    if request.review_node_id:
+        return request.review_node_id
     payload = client.request(
         [
             f"repos/{request.repository}/pulls/"

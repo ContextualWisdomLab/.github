@@ -538,6 +538,7 @@ def test_build_requests_includes_review_comments_and_submitted_reviews() -> None
     review_comment["line"] = 143
     submitted_review = {
         "id": 49019778,
+        "node_id": "PRR_kwDOSweepReview",
         "body": "@opencode-agent review this exact head",
         "state": "COMMENTED",
         "submitted_at": "2026-08-05T11:30:00Z",
@@ -599,6 +600,7 @@ def test_build_requests_includes_review_comments_and_submitted_reviews() -> None
         ("cwl-noema-review",),
         ("opencode-agent",),
     ]
+    assert requests[1].review_node_id == "PRR_kwDOSweepReview"
     assert [request.source_kind for request in requests] == [
         "review_comment",
         "review",

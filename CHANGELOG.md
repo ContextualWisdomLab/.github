@@ -44,6 +44,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Submitted review-body mention reactions reuse the webhook or sweep `node_id` when GitHub already provided it, so the router does not make an extra review GET before GraphQL `addReaction`.
 - `@cwl-noema-review` and `@opencode-agent` mentions in submitted review bodies now receive the optional eyes reaction through GraphQL `addReaction` on the review node. A 403 or GraphQL error is a warning after dispatch, not a missed mention.
 - `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments now receive the optional eyes reaction on `POST /pulls/comments/{id}/reactions`. A 403 there is still a warning, not a missed dispatch. Submitted review bodies still have no REST reaction endpoint.
 - The local mention-router job now declares `reactions: write` so the optional eyes reaction is an allowed GitHub App write instead of live `403 Resource not accessible by integration` (runs 31686563920, 31670687388). The reaction remains non-fatal if GitHub still refuses it.
