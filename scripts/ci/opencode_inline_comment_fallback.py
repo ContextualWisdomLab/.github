@@ -398,7 +398,11 @@ def parse_applyable_ranges(text: str) -> list[tuple[str, int, int]]:
 def applyable_suggestion_ranges(
     payload: dict[str, Any],
 ) -> list[tuple[str, int, int]]:
-    """Return ``(path, start, end)`` for RIGHT-side comments with a suggestion fence."""
+    """Return ``(path, start, end)`` for RIGHT-side comments with a suggestion fence.
+
+    LEFT-side comments and ranges whose ``start_side`` is LEFT are leftovers,
+    not one-click GitHub applies.
+    """
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return []
@@ -410,7 +414,7 @@ def applyable_suggestion_ranges(
         body = comment.get("body")
         if not isinstance(body, str) or "```suggestion" not in body:
             continue
-        if comment.get("side") == "LEFT":
+        if comment.get("side") == "LEFT" or comment.get("start_side") == "LEFT":
             continue
         path = safe_finding_path(comment.get("path"))
         end = safe_finding_line(comment.get("line"))
@@ -547,6 +551,21 @@ def github_error_is_unprocessable(text: str) -> bool:
     return github_publication_error_phrase(raw).startswith("GitHub HTTP 422")
 
 
+def single_comment_range_fields(
+    comment: dict[str, Any],
+    line: int,
+    side: str,
+) -> dict[str, Any]:
+    """Return ``start_line``/``start_side`` when a multi-line suggestion range is safe."""
+    start = safe_finding_line(comment.get("start_line"))
+    if start is None or start >= line:
+        return {}
+    start_side = comment.get("start_side")
+    if start_side not in {"LEFT", "RIGHT"}:
+        start_side = side
+    return {"start_line": start, "start_side": start_side}
+
+
 def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return safe single-comment slices from a batch review payload."""
     comments = payload.get("comments")
@@ -566,15 +585,16 @@ def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]
         if path is None or line is None or not isinstance(body, str) or not body.strip():
             continue
         side = comment.get("side")
-        singles.append(
-            {
-                "path": path,
-                "line": line,
-                "side": side if side in {"LEFT", "RIGHT"} else "RIGHT",
-                "body": body,
-                "commit_id": commit_id,
-            }
-        )
+        side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"
+        item = {
+            "path": path,
+            "line": line,
+            "side": side_key,
+            "body": body,
+            "commit_id": commit_id,
+        }
+        item.update(single_comment_range_fields(comment, line, side_key))
+        singles.append(item)
     return singles
 
 
@@ -585,18 +605,18 @@ def render_single_comment_review(
     review_body: str,
 ) -> dict[str, Any]:
     """Return one GitHub review payload that carries a single inline comment."""
+    comment = {
+        "path": item["path"],
+        "line": item["line"],
+        "side": item["side"],
+        "body": item["body"],
+    }
+    comment.update(single_comment_range_fields(item, item["line"], item["side"]))
     return {
         "event": event,
         "body": review_body,
         "commit_id": item["commit_id"],
-        "comments": [
-            {
-                "path": item["path"],
-                "line": item["line"],
-                "side": item["side"],
-                "body": item["body"],
-            }
-        ],
+        "comments": [comment],
     }
 
 

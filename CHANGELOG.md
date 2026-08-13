@@ -13,7 +13,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies. LEFT-side comments are not advertised as applyable, and a `422` substring in a SHA or issue number no longer starts one-at-a-time retry (CWE-1288).
+- Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
+- Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies. LEFT-side comments, including a RIGHT-side range that still starts on LEFT, are not advertised as applyable, and a `422` substring in a SHA or issue number no longer starts one-at-a-time retry (CWE-1288).
 - Set `start_line`/`line` on surviving multi-line OpenCode GitHub suggestions so a replacement that spans more than one current-head hunk line applies as one range.
 - Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click.
 - Dropped OpenCode inline comments that sit outside every current-head changed hunk before the GitHub POST so those comments become overview receipts instead of a 422 that wipes the batch.
