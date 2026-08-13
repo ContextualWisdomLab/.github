@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and recorded leftover `path:line` rows past that cap so a batch 422 cannot open unbounded `gh api` writes.
 - Treated only sealed GitHub HTTP 422 tokens (`HTTP 422`, `status code 422`, `Error code: 422`, `Unprocessable Entity`) as unprocessable review writes, so issue `#422` or a path containing `422` cannot trigger the inline-comment 422 fallback.
 - Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence. A later retry of the same `path:line` keeps that comment's own phrase instead of dropping it as a duplicate row. Receipt phrases now escape backticks and HTML metacharacters before they are written into the overview body.
