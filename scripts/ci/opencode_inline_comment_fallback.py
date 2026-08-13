@@ -23,6 +23,7 @@ HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
 DIFF_FENCE_RE = re.compile(r"```diff\r?\n(.*?)```", re.DOTALL)
+SUGGESTION_FENCE_RE = re.compile(r"```suggestion\r?\n.*?```", re.DOTALL)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -821,6 +822,7 @@ def write_hunk_filtered_payload(
     applyable = exclude_leftover_from_applyable(
         applyable_suggestion_ranges(filtered), leftovers
     )
+    filtered = strip_overlapping_leftover_suggestions(filtered, leftovers)
     filtered = strip_left_origin_fields(filtered)
     comments = filtered.get("comments")
     output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
@@ -1159,6 +1161,57 @@ def leftover_manual_edits_with_deferred(
     overlapping = [item for item in kept if (item[0], item[1]) in matches]
     rest = [item for item in kept if (item[0], item[1]) not in matches]
     return overlapping + rest
+
+
+def strip_overlapping_leftover_suggestions(
+    payload: dict[str, Any],
+    leftovers: list[tuple[str, int, str, str]],
+) -> dict[str, Any]:
+    """Remove closed GitHub suggestion fences whose range contains a leftover line.
+
+    ``applyable.txt`` already omits those ranges. The posted review JSON must
+    not still offer a one-click apply for the same leftover span.
+    Only a closed `` ```suggestion `` fence is stripped; a prose mention of
+    the fence name is not a suggestion (CWE-1288).
+    """
+    leftover_points = {(path, line) for path, line, _reason, _excerpt in leftovers}
+    comments = payload.get("comments")
+    if not leftover_points or not isinstance(comments, list):
+        return payload
+    updated: list[Any] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            updated.append(comment)
+            continue
+        body = comment.get("body")
+        if (
+            not isinstance(body, str)
+            or comment.get("side") == "LEFT"
+            or "```suggestion\n" not in body.replace("\r\n", "\n")
+        ):
+            updated.append(comment)
+            continue
+        path = safe_finding_path(comment.get("path"))
+        end = safe_finding_line(comment.get("line"))
+        start_raw = comment.get("start_line")
+        start = safe_finding_line(start_raw) if start_raw is not None else end
+        if path is None or end is None or start is None:
+            updated.append(comment)
+            continue
+        if start > end:
+            start, end = end, start
+        if not any(
+            leftover_path == path and start <= leftover_line <= end
+            for leftover_path, leftover_line in leftover_points
+        ):
+            updated.append(comment)
+            continue
+        stripped = dict(comment)
+        stripped["body"] = SUGGESTION_FENCE_RE.sub("", body).rstrip() + "\n"
+        updated.append(stripped)
+    rewritten = dict(payload)
+    rewritten["comments"] = updated
+    return rewritten
 
 
 def exclude_leftover_from_applyable(

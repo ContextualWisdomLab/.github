@@ -90,7 +90,12 @@ shipped as one-click GitHub suggestions (GitHub, n.d.-c). ``write_hunk_filtered_
 and ``--filter-hunks`` omit an applyable ``path:start-end`` from
 ``--applyable-locations`` when a leftover cannot-provide or LEFT line
 sits inside that range, so ``applyable.txt`` cannot advertise a
-one-click apply for the same span as leftover ``example.py:6``. Comments that
+one-click apply for the same span as leftover ``example.py:6``. The same
+write path then removes closed `` ```suggestion `` fences from those
+overlapping payload comments so GitHub cannot still apply the omitted
+span. Multi-line ``start_line`` stays so deferred leftover ranges remain
+intact. A prose mention
+of the fence name is not a suggestion (CWE-1288; MITRE, 2026). Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a

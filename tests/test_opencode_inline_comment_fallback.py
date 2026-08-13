@@ -15,6 +15,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     encode_manual_edit_field,
     exclude_deferred_applyable,
     exclude_leftover_from_applyable,
+    strip_overlapping_leftover_suggestions,
     format_applyable_origin,
     format_deferred_receipt_row,
     merge_deferred_origins,
@@ -4172,6 +4173,21 @@ def test_write_hunk_filtered_payload_omits_applyable_range_containing_interior_l
     assert leftover_text.startswith("scripts/ci/example.py:6\tcannot-provide\t")
     assert "scripts/ci/example.py:5-7" not in applyable_text
     assert applyable_text == "scripts/ci/ok.py:4\n"
+    written = json.loads(output.read_text(encoding="utf-8"))
+    comments = written["comments"]
+    overlapping = next(
+        comment
+        for comment in comments
+        if comment.get("path") == "scripts/ci/example.py"
+        and "replace three lines" in comment.get("body", "")
+    )
+    assert "```suggestion" not in overlapping["body"]
+    kept = next(
+        comment
+        for comment in comments
+        if comment.get("path") == "scripts/ci/ok.py"
+    )
+    assert "```suggestion" in kept["body"]
 
     applyable_without_leftover_file = tmp_path / "applyable-no-leftover-file.txt"
     assert (
@@ -4222,4 +4238,72 @@ def test_write_hunk_filtered_payload_omits_applyable_range_containing_interior_l
     )
     assert "scripts/ci/example.py:5-7" not in cli_applyable.read_text(encoding="utf-8")
     assert cli_applyable.read_text(encoding="utf-8") == "scripts/ci/ok.py:4\n"
+    cli_written = json.loads((tmp_path / "cli-filtered.json").read_text(encoding="utf-8"))
+    cli_overlapping = next(
+        comment
+        for comment in cli_written["comments"]
+        if comment.get("path") == "scripts/ci/example.py"
+        and "replace three lines" in comment.get("body", "")
+    )
+    assert "```suggestion" not in cli_overlapping["body"]
+
+
+def test_strip_overlapping_leftover_suggestions_keeps_prose_mention_and_disjoint():
+    leftover = [("scripts/ci/example.py", 6, "cannot-provide", "n/a")]
+    payload = {
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "start_line": 5,
+                "start_side": "RIGHT",
+                "side": "RIGHT",
+                "body": "Use a suggestion.\n\n```suggestion\nfixed\n```\n",
+            },
+            {
+                "path": "scripts/ci/ok.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "Mentions ```suggestion in prose only.\n",
+            },
+            "not-an-object",
+        ]
+    }
+    stripped = strip_overlapping_leftover_suggestions(payload, leftover)
+    overlapping = stripped["comments"][0]
+    assert "```suggestion" not in overlapping["body"]
+    assert overlapping["start_line"] == 5
+    assert stripped["comments"][1]["body"] == "Mentions ```suggestion in prose only.\n"
+    assert strip_overlapping_leftover_suggestions(payload, []) == payload
+    assert strip_overlapping_leftover_suggestions({"comments": None}, leftover) == {
+        "comments": None
+    }
+    inverted = {
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "start_line": 7,
+                "side": "RIGHT",
+                "body": "```suggestion\nfixed\n```\n",
+            },
+            {
+                "path": "../escape.py",
+                "line": 6,
+                "side": "RIGHT",
+                "body": "```suggestion\nnope\n```\n",
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 6,
+                "start_line": 0,
+                "side": "RIGHT",
+                "body": "```suggestion\nkept\n```\n",
+            },
+        ]
+    }
+    inverted_stripped = strip_overlapping_leftover_suggestions(inverted, leftover)
+    assert "```suggestion" not in inverted_stripped["comments"][0]["body"]
+    assert "```suggestion" in inverted_stripped["comments"][1]["body"]
+    assert "```suggestion" in inverted_stripped["comments"][2]["body"]
 

@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- The hunk-filter write path now strips closed GitHub ` ```suggestion ` fences from review-payload comments whose `path:start-end` contains a leftover cannot-provide or LEFT line, so GitHub cannot offer a one-click apply for the same span that `applyable.txt` already omitted. A prose mention of the fence name is left intact (CWE-1288).
 - The hunk-filter write path now omits applyable `path:start-end` rows from `--applyable-locations` when a leftover cannot-provide or LEFT line sits inside that range, so `applyable.txt` cannot list a one-click apply for the same span as leftover `example.py:6`.
 - The leftover overview CLI now omits applyable `path:start-end` rows that contain a leftover cannot-provide or LEFT line, so `--leftover-diff-locations` plus `--applyable-locations` show Manual-edit instead of a one-click apply for the same span.
 - Dropped applyable overview `path:start-end` rows when a leftover cannot-provide or LEFT line sits inside that range, so authors see the Manual-edit instead of a one-click apply for the same span.
