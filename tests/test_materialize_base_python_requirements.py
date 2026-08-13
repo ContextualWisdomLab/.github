@@ -163,9 +163,16 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
-    assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert materializer._is_hash_pinned(b"-r requirements-other.txt\n")
+    assert not materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ./requirements-other.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ../escape.txt\n")
+    assert not materializer._is_bounded_requirement_include("-r .")
+    assert not materializer._is_bounded_requirement_include("-r -evil.txt")
+    assert not materializer._is_bounded_requirement_include("-r C:foo.txt")
+    assert not materializer._is_bounded_requirement_include("-r foo?bar.txt")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
     # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
     assert materializer._is_hash_pinned(
