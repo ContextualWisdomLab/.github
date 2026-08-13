@@ -648,6 +648,108 @@ def test_add_mention_reaction_targets_submitted_review_bodies() -> None:
     assert module.add_mention_reaction(GraphqlErrorClient(), review_request) is False
 
 
+def test_graphql_eyes_reaction_treats_already_reacted_as_success() -> None:
+    """Already-reacted GraphQL errors are eyes on the review, not a miss."""
+
+    module = load_module()
+    assert module.graphql_error_already_reacted("nope") is False
+    assert module.graphql_error_already_reacted({"code": "UNPROCESSABLE"}) is False
+    assert (
+        module.graphql_error_already_reacted(
+            {"message": "Reaction already exists. You can only react once."}
+        )
+        is True
+    )
+    assert module.graphql_error_already_reacted({"message": "Resource not accessible"}) is False
+    assert module.graphql_eyes_reaction_succeeded(None) is False
+    assert module.graphql_eyes_reaction_succeeded({}) is False
+    assert module.graphql_eyes_reaction_succeeded({"data": None}) is False
+    assert module.graphql_eyes_reaction_succeeded({"data": {"addReaction": None}}) is False
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": None}}}
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": {"content": 1}}}}
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+        )
+        is True
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {
+                "errors": [
+                    {"message": "You've already reacted with this emoji"},
+                ]
+            }
+        )
+        is True
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {
+                "errors": [
+                    {"message": "You've already reacted with this emoji"},
+                    {"message": "Resource not accessible by integration"},
+                ]
+            }
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"errors": ["not-an-object", {"message": "already reacted"}]}
+        )
+        is False
+    )
+
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+
+    class AlreadyReactedClient(FakeClient):
+        """Return the live already-reacted GraphQL body."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then the already-reacted error."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {
+                    "data": {"addReaction": None},
+                    "errors": [
+                        {"message": "You've already reacted with this emoji"},
+                    ],
+                }
+            return None
+
+    assert module.add_mention_reaction(AlreadyReactedClient(), review_request) is True
+
+    class EmptyGraphqlClient(FakeClient):
+        """Return a 200 GraphQL body with no addReaction payload."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then an empty GraphQL object."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {}
+            return None
+
+    assert module.add_mention_reaction(EmptyGraphqlClient(), review_request) is False
+
+
 def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
     """Review-comment dispatch reacts on the review-comment endpoint, not issue comments."""
 

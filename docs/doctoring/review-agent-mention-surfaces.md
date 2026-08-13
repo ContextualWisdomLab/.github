@@ -39,7 +39,11 @@ ContextualWisdomLab/.github#954 and then failed the job with
 receipt was posted. Review-comment mentions use
 ``POST /pulls/comments/{id}/reactions`` and treat the same 403 as a
 warning. Submitted review bodies have no REST reaction endpoint, so
-those surfaces acknowledge only with the existing receipt issue comment. The local job uses `pull-requests: write` so
+they resolve the review ``node_id`` and call GraphQL ``addReaction``
+with ``EYES``. The already-reacted GraphQL error is success because the
+review already has eyes. An empty ``data.addReaction`` payload is not.
+A 403 or other GraphQL ``errors`` payload is a warning after dispatch;
+the existing receipt issue comment still posts. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created, and
 `reactions: write` so the optional eyes reaction is an allowed GitHub
 App write. Live `route-local-agent-mention` run `31686563920` still
