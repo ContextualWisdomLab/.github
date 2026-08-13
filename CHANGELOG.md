@@ -10,9 +10,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
+- Central OpenCode and Noema review prompts now require a per-changed-file walk with an explicit disposition for every path, and they allocate review compute by workflow stage, role, and inference-level ablation (Fugu / Conductor / TRINITY) rather than wall-clock speed.
 
 ### Fixed
 
+- Trusted `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments and submitted review bodies now reach the mention router and organization sweep, including mixed-case handles; the local workflow hydrates the live PR from `issue.number` or `pull_request.number` and no longer depends on a case-sensitive conversation-comment body filter.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.

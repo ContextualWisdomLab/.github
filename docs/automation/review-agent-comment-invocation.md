@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-06
+Updated: 2026-08-13
 
 ## Purpose
 
@@ -13,12 +13,12 @@ The router never checks out or executes pull-request-controlled code. It reads l
 
 ## Architecture
 
-GitHub organization ruleset workflows support `pull_request`, `pull_request_target`, and `merge_group`, but not `issue_comment`. Separately, an `issue_comment` workflow runs only when that workflow file exists on the commented repository's default branch. Therefore, a workflow stored only in the central `.github` repository cannot directly receive comments created in sibling repositories.
+GitHub organization ruleset workflows support `pull_request`, `pull_request_target`, and `merge_group`, but not `issue_comment`, `pull_request_review_comment`, or `pull_request_review`. Separately, those conversation workflows run only when the workflow file exists on the commented repository's default branch. Therefore, a workflow stored only in the central `.github` repository cannot directly receive comments created in sibling repositories.
 
 The implementation uses two bounded paths:
 
-1. **Local fast path.** Comments on `ContextualWisdomLab/.github` trigger `issue_comment` immediately.
-2. **Organization sweep.** Every five minutes, the central workflow enumerates repositories visible to its cross-repository credential, finds recently updated open PRs and recent comments, validates trusted exact mentions, and consults the central exact-name Actions artifact ledger before queuing work.
+1. **Local fast path.** Conversation comments, line review comments, and submitted review bodies on `ContextualWisdomLab/.github` trigger immediately. Handle matching is case-insensitive in the Python parser; the workflow job does not pre-filter on a case-sensitive body substring.
+2. **Organization sweep.** Every five minutes, the central workflow enumerates repositories visible to its cross-repository credential, finds recently updated open PRs, recent issue comments, pull-request review comments, and submitted review bodies, validates trusted exact mentions, and consults the central exact-name Actions artifact ledger before queuing work.
 
 Each requested agent receives a deterministic invocation key containing the target repository, PR number, exact head SHA, base branch, requested agent, source comment ID, and requesting actor. Each agent-specific wrapper reconstructs the same canonical JSON from its validated payload, hashes it with SHA-256, and compares the result in constant time with the supplied key. Altering any bound field while retaining a syntactically valid key therefore fails closed.
 
@@ -35,7 +35,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 ## Trust and permission boundary
 
 - Accepted comment associations: `OWNER`, `MEMBER`, and `COLLABORATOR`.
-- Bot comments, ordinary contributors, issue comments outside PRs, closed PRs, malformed metadata, and lookalike handles fail closed.
+- Bot comments, ordinary contributors, issue comments outside PRs, closed PRs, pending reviews, malformed metadata, and lookalike handles fail closed.
 - Historical, duplicate, rejected, or already-ledgered requests do not consume the bounded new-work dispatch budget.
 - The workflow default token is read-only.
 - The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: read`.

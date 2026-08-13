@@ -243,6 +243,8 @@ def test_build_requests_ignores_receipt_markers_and_skips_closed_pulls() -> None
 
     sweep = module()
     comments_endpoint = "repos/ContextualWisdomLab/example/issues/7/comments"
+    review_comments_endpoint = "repos/ContextualWisdomLab/example/pulls/7/comments"
+    reviews_endpoint = "repos/ContextualWisdomLab/example/pulls/7/reviews"
     pull_endpoint = "repos/ContextualWisdomLab/example/pulls/7"
     comments = [
         comment(10, "@opencode-agent"),
@@ -255,7 +257,14 @@ def test_build_requests_ignores_receipt_markers_and_skips_closed_pulls() -> None
         comment(12, "@cwl-noema-review"),
         comment(13, "@opencode-agent", association="CONTRIBUTOR"),
     ]
-    client = FakeClient({comments_endpoint: [comments], pull_endpoint: live_pull()})
+    client = FakeClient(
+        {
+            comments_endpoint: [comments],
+            review_comments_endpoint: [[]],
+            reviews_endpoint: [[]],
+            pull_endpoint: live_pull(),
+        }
+    )
     requests = sweep.build_requests_for_pull_request(
         client, issue=candidate(), since="2026-08-04T00:00:00Z"
     )
@@ -266,7 +275,12 @@ def test_build_requests_ignores_receipt_markers_and_skips_closed_pulls() -> None
     ]
     assert {request.pull_request_base_sha for request in requests} == {"c" * 40}
     closed = FakeClient(
-        {comments_endpoint: [comments], pull_endpoint: live_pull("closed")}
+        {
+            comments_endpoint: [comments],
+            review_comments_endpoint: [[]],
+            reviews_endpoint: [[]],
+            pull_endpoint: live_pull("closed"),
+        }
     )
     assert (
         sweep.build_requests_for_pull_request(
@@ -494,3 +508,103 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+
+
+def test_build_requests_includes_review_comments_and_submitted_reviews() -> None:
+    """Sweep surfaces line comments and review bodies that issue comments miss."""
+
+    sweep = module()
+    comments_endpoint = "repos/ContextualWisdomLab/example/issues/7/comments"
+    review_comments_endpoint = "repos/ContextualWisdomLab/example/pulls/7/comments"
+    reviews_endpoint = "repos/ContextualWisdomLab/example/pulls/7/reviews"
+    pull_endpoint = "repos/ContextualWisdomLab/example/pulls/7"
+    ignored_review_comment = comment(224849227, "no agent handle here")
+    ignored_review = {
+        "id": 10,
+        "body": "@opencode-agent contributor cannot dispatch",
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-05T11:00:00Z",
+        "author_association": "CONTRIBUTOR",
+        "user": {"login": "outsider", "type": "User"},
+    }
+    review_comment = comment(
+        224849228,
+        "@CWL-Noema-Review please inspect this hunk",
+        association="OWNER",
+        login="seonghobae",
+    )
+    review_comment["pull_request_review_id"] = 49019778
+    review_comment["path"] = "scripts/ci/agent_mention_router.py"
+    review_comment["line"] = 143
+    submitted_review = {
+        "id": 49019778,
+        "body": "@opencode-agent review this exact head",
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-05T11:30:00Z",
+        "author_association": "MEMBER",
+        "user": {"login": "maintainer", "type": "User"},
+    }
+    pending_review = {
+        "id": 11,
+        "body": "@opencode-agent pending should not dispatch",
+        "state": "PENDING",
+        "author_association": "OWNER",
+        "user": {"login": "seonghobae", "type": "User"},
+    }
+    stale_review = {
+        "id": 12,
+        "body": "@cwl-noema-review stale review",
+        "state": "COMMENTED",
+        "submitted_at": "2026-07-01T00:00:00Z",
+        "author_association": "OWNER",
+        "user": {"login": "seonghobae", "type": "User"},
+    }
+    client = FakeClient(
+        {
+            comments_endpoint: [[]],
+            review_comments_endpoint: [[ignored_review_comment, review_comment]],
+            reviews_endpoint: [
+                [ignored_review, submitted_review, pending_review, stale_review]
+            ],
+            pull_endpoint: live_pull(),
+        }
+    )
+    requests = sweep.build_requests_for_pull_request(
+        client, issue=candidate(), since="2026-08-04T00:00:00Z"
+    )
+    assert [request.comment_id for request in requests] == [224849228, 49019778]
+    assert [request.agents for request in requests] == [
+        ("cwl-noema-review",),
+        ("opencode-agent",),
+    ]
+    assert [request.source_kind for request in requests] == [
+        "review_comment",
+        "review",
+    ]
+    assert [request.pull_request_number for request in requests] == [7, 7]
+
+
+def test_list_recent_reviews_rejects_invalid_submission_timestamps() -> None:
+    """A review inventory with a malformed submitted_at fails closed."""
+
+    sweep = module()
+    client = FakeClient(
+        {
+            "repos/ContextualWisdomLab/example/pulls/7/reviews": [
+                [
+                    {
+                        "id": 1,
+                        "body": "@cwl-noema-review",
+                        "submitted_at": "not-a-timestamp",
+                    }
+                ]
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="timestamp"):
+        sweep.list_recent_reviews(
+            client,
+            repository="ContextualWisdomLab/example",
+            pull_request_number=7,
+            since="2026-08-04T00:00:00Z",
+        )

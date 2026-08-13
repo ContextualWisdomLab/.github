@@ -33,11 +33,14 @@ HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
+SOURCE_KIND_ISSUE_COMMENT = "issue_comment"
+SOURCE_KIND_REVIEW_COMMENT = "review_comment"
+SOURCE_KIND_REVIEW = "review"
 
 
 @dataclass(frozen=True)
 class MentionRequest:
-    """Validated agent-mention request extracted from one issue comment event."""
+    """Validated agent-mention request from a PR comment, review comment, or review."""
 
     repository: str
     pull_request_number: int
@@ -47,6 +50,7 @@ class MentionRequest:
     actor: str
     agents: tuple[str, ...]
     pull_request_base_sha: str = ""
+    source_kind: str = SOURCE_KIND_ISSUE_COMMENT
 
 
 class GitHubClient:
@@ -133,33 +137,67 @@ def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
     return frozenset(processed)
 
 
-def parse_event(event: dict[str, Any]) -> MentionRequest | None:
-    """Return a validated mention request, or ``None`` for an ignored event."""
+def mention_source(event: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Return the mention-bearing GitHub object and its source kind.
 
+    Issue comments and review comments both arrive as ``comment``. A top-level
+    ``issue`` object selects the issue-comment kind; its absence selects the
+    pull-request review-comment kind. Submitted reviews use the ``review``
+    object when no comment is present.
+    """
+
+    comment = event.get("comment")
+    if isinstance(comment, dict) and (
+        comment.get("id") is not None or str(comment.get("body") or "")
+    ):
+        if "issue" in event:
+            return comment, SOURCE_KIND_ISSUE_COMMENT
+        return comment, SOURCE_KIND_REVIEW_COMMENT
+    review = event.get("review")
+    if isinstance(review, dict) and (
+        review.get("id") is not None or str(review.get("body") or "")
+    ):
+        return review, SOURCE_KIND_REVIEW
+    return None
+
+
+def parse_event(event: dict[str, Any]) -> MentionRequest | None:
+    """Return a validated mention request, or ``None`` for an ignored event.
+
+    Plain issue comments (an ``issue`` object without a ``pull_request``
+    marker) stay ignored. Review comments and submitted reviews have no
+    ``issue`` object; they bind through the top-level ``pull_request``.
+    """
+
+    source_pair = mention_source(event)
+    if source_pair is None:
+        return None
+    source, source_kind = source_pair
     issue = event.get("issue") or {}
-    comment = event.get("comment") or {}
     repository = event.get("repository") or {}
     pull_request = event.get("pull_request") or {}
-    if not issue.get("pull_request"):
+    if "issue" in event and not issue.get("pull_request"):
         return None
     if pull_request.get("state") != "open":
         return None
-    if str(comment.get("user", {}).get("type", "")).casefold() == "bot":
+    if str(source.get("user", {}).get("type", "")).casefold() == "bot":
         return None
-    if str(comment.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
+    if str(source.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
         return None
-    agents = exact_mentions(str(comment.get("body") or ""))
+    agents = exact_mentions(str(source.get("body") or ""))
     if not agents:
         return None
 
     repository_name = str(repository.get("full_name") or "").strip()
-    actor = str(comment.get("user", {}).get("login") or "").strip()
+    actor = str(source.get("user", {}).get("login") or "").strip()
     head_sha = str(pull_request.get("head", {}).get("sha") or "").strip()
     base = pull_request.get("base") or {}
     base_branch = str(base.get("ref") or "").strip()
     base_sha = str(base.get("sha") or "").strip()
     number = issue.get("number")
-    comment_id = comment.get("id")
+    if not isinstance(number, int):
+        number = pull_request.get("number")
+    comment_id = source.get("id")
     if not REPOSITORY_RE.fullmatch(repository_name):
         raise ValueError(
             "agent mentions are limited to ContextualWisdomLab repositories"
@@ -187,6 +225,7 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         actor,
         agents,
         pull_request_base_sha=base_sha.lower(),
+        source_kind=source_kind,
     )
 
 
@@ -478,14 +517,15 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    target_client.request(
-        [
-            f"{target_api}/issues/comments/{request.comment_id}/reactions",
-            "-X",
-            "POST",
-        ],
-        input_payload={"content": "eyes"},
-    )
+    if request.source_kind == SOURCE_KIND_ISSUE_COMMENT:
+        target_client.request(
+            [
+                f"{target_api}/issues/comments/{request.comment_id}/reactions",
+                "-X",
+                "POST",
+            ],
+            input_payload={"content": "eyes"},
+        )
     status_parts = [f"Queued {' and '.join(handles)}"]
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing
@@ -529,7 +569,7 @@ def load_event(path: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the mention router for one enriched GitHub issue-comment event."""
+    """Run the mention router for one enriched GitHub mention event."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--event-path", default=os.environ.get("GITHUB_EVENT_PATH", ""))
