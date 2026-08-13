@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - The leftover overview CLI now omits applyable `path:start-end` rows that contain a leftover cannot-provide or LEFT line, so `--leftover-diff-locations` plus `--applyable-locations` show Manual-edit instead of a one-click apply for the same span.
 - Dropped applyable overview `path:start-end` rows when a leftover cannot-provide or LEFT line sits inside that range, so authors see the Manual-edit instead of a one-click apply for the same span.
 - Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
