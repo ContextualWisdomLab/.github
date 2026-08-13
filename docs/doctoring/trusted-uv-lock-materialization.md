@@ -2,8 +2,6 @@
 
 ## Decision
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 Central coverage automation may translate a tracked `uv.lock` from the exact
 validated pull-request base revision into a pip-compatible, hash-pinned
 requirements closure. The translation must not depend on a mutable runner tool,
@@ -23,9 +21,7 @@ The implementation therefore:
 4. downloads one fixed official Astral `uv` archive from a literal HTTPS URL and
    accepts a response only when its parsed origin remains HTTPS,
    `releases.astral.sh`, and the absent or explicit default port 443; malformed
-   or nondefault ports fail closed. CWE-346 requires that origin check to live
-   in one helper so a later download path cannot skip scheme, host, or port
-   validation (MITRE, 2026);
+   or nondefault ports fail closed;
 5. verifies the bounded archive with a pinned SHA-256 digest before extraction;
 6. accepts only the expected regular-file tar member within explicit size bounds;
 7. writes the executable with mode `0755` and verifies that it reports the exact
@@ -187,9 +183,6 @@ Retrieved August 4, 2026, from https://docs.astral.sh/uv/reference/cli/
 Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform Resource Identifier
 (URI): Generic syntax* (STD 66; RFC 3986). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC3986
-
-MITRE. (2026). *CWE-346: Origin validation error*.
-https://cwe.mitre.org/data/definitions/346.html
 
 GitHub. (n.d.). *actions/checkout*. GitHub. Retrieved August 5, 2026, from
 https://github.com/actions/checkout
