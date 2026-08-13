@@ -5,11 +5,18 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/strix-changed-path-quality-ci.yml"
+      - ".github/workflows/strix.yml"
       - "CHANGELOG.md"
       - "docs/doctoring/strix-legal-git-paths.md"
       - "docs/doctoring/strix-quality-timeout-fixtures.md"
+      - "docs/doctoring/strix-agent-cryptography-override.md"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-overrides.txt"
+      - "requirements-strix-ci-hashes.txt"
+      - "scripts/ci/compile_strix_ci_lock.sh"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"
+      - "tests/test_strix_agent_cryptography_override.py"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
       - "tests/test_strix_quality_timeout_fixture_budget.py"
@@ -66,6 +73,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python -m coverage run -m pytest tests -q
           bash scripts/ci/test_strix_quick_gate.sh
-          python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py
+          python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py tests/test_strix_agent_cryptography_override.py
           bash -n scripts/ci/strix_quick_gate.sh
           git diff --exit-code
