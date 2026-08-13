@@ -10,7 +10,8 @@ disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap)
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
 truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
 The repo/Project — not private agent memory — is the source of truth. This file complements those
-documents; it does not replace them.
+documents; it does not replace them. Materialize accepts only exact SHA-256 pins or a bounded
+relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
 ## What this repository is
 

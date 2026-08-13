@@ -23,6 +23,15 @@ flowchart LR
   STRIX --> SCH
 ```
 
+## Bounded requirement includes (2026-08-14)
+
+Coverage materialize treats a lone `--require-hashes` line as non-evidence.
+Only exact SHA-256 package pins or a bounded relative `-r`/`--requirement`
+include (`target == PurePosixPath.as_posix()`, no `.`/`..` parts, candidate
+lock path only) enter the trusted image. Dotted includes such as
+`./lock.txt` and `-r other-hashes.txt` stay outside the build context
+(CWE-22; CWE-1288).
+
 ## Strix scanner pin (2026-08-13)
 
 Required Strix used `strix-agent==1.0.4`, which printed a finished
