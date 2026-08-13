@@ -41,6 +41,10 @@ issue-comment IDs, so those surfaces acknowledge only with the existing
 receipt issue comment. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created.
 
+CWE-755 forbids treating an exceptional secondary condition as a primary
+failure (MITRE, 2026). A 403 on the optional eyes reaction is therefore a
+warning, not a missed dispatch.
+
 Review thoroughness is tightened in the existing prompts rather than by adding
 a second reviewer product. Every current-head changed file must be named in
 the review summary. Compact four-step `ci-review` enumerates files and
@@ -68,6 +72,9 @@ case-sensitive workflow body filter without a replacement that still accepts
 review comments and mixed-case handles.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-755: Improper handling of exceptional conditions*.
+https://cwe.mitre.org/data/definitions/755.html
 
 GitHub. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 13, 2026, from
