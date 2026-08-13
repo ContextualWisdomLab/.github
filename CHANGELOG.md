@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - The leftover heading now prefixes the widest leftover `path:start-end` when a nested leftover range such as `example.py:5-6` sits inside leftover `example.py:5-7`, so authors see one leftover range then Manual-edit excerpts.
 - The leftover heading now prefixes one leftover `path:start-end` for leftover interiors of that range, so leftover `example.py:6` next to leftover `example.py:5-7` shows the range once then Manual-edit excerpts instead of two leftover reason bullets.
 - Leftover receipts now accept `path:start-end` as well as `path:line`, so a leftover cannot-provide range such as `example.py:5-7` drops overlapping applyable interiors (`example.py:6` and `example.py:5-7`) instead of being ignored.
