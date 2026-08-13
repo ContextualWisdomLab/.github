@@ -11,6 +11,8 @@ requires.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Add the extracted gate and its test to `fallback_changed_file_allowed` next
 to the other central review helpers. NIST SP 800-53 Rev. 5 SA-11 requires
 developer testing and evaluation to stay in the same assurance boundary as
