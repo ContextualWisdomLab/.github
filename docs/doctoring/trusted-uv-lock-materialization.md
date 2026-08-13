@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Central coverage automation may translate a tracked `uv.lock` from the exact
 validated pull-request base revision into a pip-compatible, hash-pinned
 requirements closure. The translation must not depend on a mutable runner tool,
