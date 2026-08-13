@@ -216,6 +216,32 @@ def test_native_trust_boundary_changes_block_deferral(
     ) is None
 
 
+def test_documentation_under_requirements_directory_does_not_block_deferral(
+    tmp_path: Path,
+) -> None:
+    """A prose file in docs/requirements/ is not a lock or packaging change."""
+
+    log, pyproject, changed_path = valid_inputs(tmp_path)
+    changed_path.write_text("docs/requirements/overview.md\n", encoding="utf-8")
+    assert (
+        gate.classify_pytest_inputs(
+            log_path=log,
+            pyproject_path=pyproject,
+            changed_files_path=changed_path,
+        )
+        == "fast_mlsirm._core"
+    )
+    changed_path.write_text("docs/requirements/pins.txt\n", encoding="utf-8")
+    assert (
+        gate.classify_pytest_inputs(
+            log_path=log,
+            pyproject_path=pyproject,
+            changed_files_path=changed_path,
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "changed",
     [

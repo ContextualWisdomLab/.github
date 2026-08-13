@@ -234,6 +234,8 @@ def _touches_native_or_trust_boundary(
             ".txt",
         }:
             return True
+        if "requirements" in path.parts and path.suffix in {".in", ".txt", ".lock"}:
+            return True
         if manifest_parent != PurePosixPath(".") and path.is_relative_to(manifest_parent):
             return True
         if path.name == "pyproject.toml":

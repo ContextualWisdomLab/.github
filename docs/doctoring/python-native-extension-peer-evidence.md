@@ -100,8 +100,10 @@ removes nor reinterprets them.
 
 The deferral exists only for an unchanged native/package trust boundary. Any
 change to the extension implementation, Cargo manifests or lock, maturin
-configuration, native stub, packaging metadata, dependency locks, or CI workflow
-requires a direct trusted native build path. This prevents a pull request from
+configuration, native stub, packaging metadata, dependency locks (including
+`.in` / `.txt` / `.lock` files under a `requirements` path), or CI workflow
+requires a direct trusted native build path. A prose file such as
+`docs/requirements/overview.md` is not a lock. This prevents a pull request from
 changing the thing being imported while asking the central sandbox to trust an
 older binary or a weakly named passing check.
 
