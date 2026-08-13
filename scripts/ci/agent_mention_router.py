@@ -490,6 +490,15 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     )
 
 
+ADD_REVIEW_REACTION_MUTATION = """
+mutation AddMentionEyes($id: ID!) {
+  addReaction(input: {subjectId: $id, content: EYES}) {
+    reaction { content }
+  }
+}
+""".strip()
+
+
 def mention_reaction_path(request: MentionRequest) -> str | None:
     """Return the REST path for an optional eyes reaction, if one exists."""
     if request.source_kind == SOURCE_KIND_ISSUE_COMMENT:
@@ -505,28 +514,63 @@ def mention_reaction_path(request: MentionRequest) -> str | None:
     return None
 
 
+def review_reaction_node_id(client: GitHubClient, request: MentionRequest) -> str | None:
+    """Return the GraphQL node ID for a submitted pull-request review."""
+    payload = client.request(
+        [
+            f"repos/{request.repository}/pulls/"
+            f"{request.pull_request_number}/reviews/{request.comment_id}"
+        ]
+    )
+    if not isinstance(payload, dict):
+        return None
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id.strip():
+        return None
+    return node_id.strip()
+
+
 def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
-    """Add the optional eyes reaction on an issue or review comment.
+    """Add the optional eyes reaction on a mention surface.
 
     GitHub App installation tokens and job ``GITHUB_TOKEN`` often receive
     ``403 Resource not accessible by integration`` for comment reactions
     on pull requests. The reaction is user-experience only; dispatch has
     already been queued, so a reaction failure must not look like a missed
-    mention. Submitted review bodies have no REST reaction endpoint.
+    mention. Submitted review bodies have no REST reaction endpoint, so
+    they use GraphQL ``addReaction`` on the review node.
     """
 
     path = mention_reaction_path(request)
-    if path is None:
-        return False
     try:
-        client.request(
-            [path, "-X", "POST"],
-            input_payload={"content": "eyes"},
+        if path is not None:
+            client.request(
+                [path, "-X", "POST"],
+                input_payload={"content": "eyes"},
+            )
+            return True
+        if request.source_kind != SOURCE_KIND_REVIEW:
+            return False
+        node_id = review_reaction_node_id(client, request)
+        if node_id is None:
+            return False
+        payload = client.request(
+            ["graphql"],
+            input_payload={
+                "query": ADD_REVIEW_REACTION_MUTATION,
+                "variables": {"id": node_id},
+            },
         )
     except RuntimeError as exc:
         print(
             "::warning::Could not add mention reaction on "
             f"comment {request.comment_id}: {exc}"
+        )
+        return False
+    if isinstance(payload, dict) and payload.get("errors"):
+        print(
+            "::warning::Could not add mention reaction on "
+            f"comment {request.comment_id}: GraphQL errors"
         )
         return False
     return True
