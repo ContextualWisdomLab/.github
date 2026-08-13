@@ -741,14 +741,33 @@ def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str, str]]:
     return receipts
 
 
+def leftover_deferred_matches(
+    deferred: list[tuple[str, int, int, str | None, int | None]] | None,
+) -> dict[tuple[str, int], tuple[str, int, int, str | None, int | None]]:
+    """Map leftover path:line to the deferred range that shares that location."""
+    matches: dict[tuple[str, int], tuple[str, int, int, str | None, int | None]] = {}
+    if not deferred:
+        return matches
+    for item in deferred:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        matches[(path, start)] = (path, start, end, origin_path, origin_line)
+        matches[(path, end)] = (path, start, end, origin_path, origin_line)
+    return matches
+
+
 def render_leftover_diff_receipts(
     receipts: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
+    deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[str]:
-    """Return overview lines with a non-applyable leftover manual-edit block."""
+    """Return leftover lines with deferred range/origin before a Manual-edit excerpt."""
+    matches = leftover_deferred_matches(deferred)
     lines: list[str] = []
     for item in receipts:
         path, line, reason, excerpt = _leftover_receipt_parts(item)
         excerpt = excerpt.replace("```", "")
+        deferred_item = matches.get((path, line))
+        if deferred_item is not None:
+            lines.extend(render_applyable_receipts([deferred_item]))
         lines.append(f"- `{path}:{line}` — {reason}")
         if not excerpt:
             continue
@@ -1282,7 +1301,7 @@ def render_inline_comment_failure_suffix(
             "These comments still have a suggested-diff fence that GitHub cannot apply:"
         )
         lines.append("")
-        lines.extend(render_leftover_diff_receipts(leftover))
+        lines.extend(render_leftover_diff_receipts(leftover, deferred=deferred))
     lines.append("")
     return "\n".join(lines)
 
