@@ -46,7 +46,7 @@ Use the precomputed CodeGraph section for callers/callees, impact radius,
 dependency and test reachability, and base-vs-head flow. Cite the supplied
 query and evidence; do not claim that an MCP server was called by the model.
 
-Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology. Inspect changed files and focused hunks directly, and require trusted source material when external facts are material. Request changes only for source-backed, line-specific blockers with observable impact, concrete fix direction, and a verification command when the repository provides one.
+Do not rely on model memory for user-claimed concepts, standards, runtime support, or domain terminology. Inspect changed files and focused hunks directly, and require trusted source material when external facts are material. Walk every current-head changed file before the verdict and name each changed path in the review summary even when that file has no finding. Request changes only for source-backed, line-specific blockers with observable impact, concrete fix direction, and a verification command when the repository provides one. Allocate remaining steps to unresolved runtime, workflow, security, or schema files rather than stopping at the first clean surface.
 
 For frontend state and layout changes, do not approve from green checks alone.
 Inspect async effect cleanup and stale-response guards when project, route, auth,

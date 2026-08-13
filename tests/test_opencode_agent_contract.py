@@ -1195,6 +1195,8 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "Execution provenance is mandatory" in ci_prompt
     assert "OPENCODE_EXECUTION_RECEIPT" in ci_prompt
     assert "opencode-review-control-v1" in ci_prompt
+    assert "Walk every current-head changed file before the verdict" in prompt
+    assert "Walk every current-head changed file before the verdict" in ci_prompt
     assert "async effect cleanup and stale-response guards" in ci_prompt
     assert "CSS layout contracts" in ci_prompt
     assert "modal, dialog, drawer, popover, and toast overlays" in ci_prompt_normalized
@@ -1776,6 +1778,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "naming and reserved-word" in prompt_template
     assert "connected code paths" in prompt_template
     assert "Implementation completeness is mandatory" in prompt_template
+    assert "Walk every current-head changed file before the verdict" in prompt_template
+    assert "Speed is not a success metric" in prompt_template
+    assert "Fugu-style inference-level ablation" in prompt_template
+    assert "Conductor-style staged task decomposition" in prompt_template
+    assert "TRINITY-style role-separated critic" in prompt_template
     assert (
         "placeholder bodies such as `pass`, `...`, `NotImplementedError`"
         in prompt_template

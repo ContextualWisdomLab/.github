@@ -371,3 +371,122 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+
+def review_comment_event(
+    body: str = "@CWL-Noema-Review look at this line",
+    *,
+    association: str = "OWNER",
+) -> dict:
+    """Build a GitHub pull_request_review_comment webhook payload."""
+
+    return {
+        "action": "created",
+        "comment": {
+            "id": 224849228,
+            "pull_request_review_id": 49019778,
+            "body": body,
+            "path": "scripts/ci/agent_mention_router.py",
+            "line": 143,
+            "commit_id": "a" * 40,
+            "author_association": association,
+            "user": {"login": "seonghobae", "type": "User"},
+        },
+        "pull_request": {
+            "number": 953,
+            "state": "open",
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main", "sha": "b" * 40},
+        },
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+    }
+
+
+def submitted_review_event(
+    body: str = "@opencode-agent review this head",
+    *,
+    association: str = "MEMBER",
+) -> dict:
+    """Build a GitHub pull_request_review submitted webhook payload."""
+
+    return {
+        "action": "submitted",
+        "review": {
+            "id": 49019778,
+            "body": body,
+            "state": "COMMENTED",
+            "submitted_at": "2026-08-13T04:12:00Z",
+            "author_association": association,
+            "user": {"login": "maintainer", "type": "User"},
+        },
+        "pull_request": {
+            "number": 953,
+            "state": "open",
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main", "sha": "b" * 40},
+        },
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+    }
+
+
+def test_parse_event_accepts_review_comments_and_submitted_reviews() -> None:
+    """Line comments and review bodies dispatch without an issue.pull_request marker."""
+
+    module = load_module()
+    review_comment = module.parse_event(review_comment_event())
+    assert review_comment is not None
+    assert review_comment.agents == ("cwl-noema-review",)
+    assert review_comment.pull_request_number == 953
+    assert review_comment.comment_id == 224849228
+    assert review_comment.source_kind == module.SOURCE_KIND_REVIEW_COMMENT
+    assert review_comment.actor == "seonghobae"
+
+    review = module.parse_event(submitted_review_event())
+    assert review is not None
+    assert review.agents == ("opencode-agent",)
+    assert review.comment_id == 49019778
+    assert review.source_kind == module.SOURCE_KIND_REVIEW
+
+    assert module.parse_event({}) is None
+    assert module.parse_event({"comment": {"id": 1, "body": "@opencode-agent"}}) is None
+    assert module.mention_source({}) is None
+    assert module.mention_source({"comment": "not-an-object", "review": 1}) is None
+
+
+def test_parse_event_still_ignores_plain_issues_without_pull_request_marker() -> None:
+    """An issue object without pull_request remains ignored even if a PR is attached."""
+
+    payload = review_comment_event()
+    payload["issue"] = {"number": 953}
+    assert load_module().parse_event(payload) is None
+
+
+def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
+    """Review-comment and review IDs are not issue-comment reaction targets."""
+
+    module = load_module()
+    request = module.parse_event(review_comment_event())
+    assert request is not None
+    target = FakeClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert all("reactions" not in args[0] for args, _ in target.calls)
+    assert any(
+        args[0].endswith("/issues/953/comments") for args, _ in target.calls
+    )
+
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+    review_target = FakeClient()
+    assert module.dispatch_request(
+        review_request,
+        target_client=review_target,
+        dispatch_client=FakeClient(),
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert all("reactions" not in args[0] for args, _ in review_target.calls)

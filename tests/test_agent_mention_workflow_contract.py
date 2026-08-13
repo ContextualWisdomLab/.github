@@ -16,7 +16,11 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     text = WORKFLOW.read_text(encoding="utf-8")
     header, jobs = text.split("\njobs:\n", 1)
     assert "issue_comment:" in header
+    assert "pull_request_review_comment:" in header
+    assert "pull_request_review:" in header
     assert 'cron: "*/5 * * * *"' in header
+    assert "github.event.issue.number || github.event.pull_request.number" in text
+    assert "contains(github.event.comment.body, '@cwl-noema-review')" not in text
     assert "workflow_dispatch:" not in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header
