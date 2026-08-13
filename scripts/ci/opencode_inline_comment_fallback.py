@@ -14,6 +14,8 @@ from typing import Any
 DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 LEFTOVER_DIFF_REASONS = frozenset({"LEFT", "cannot-provide"})
+MANUAL_EDIT_MAX_CHARS = 400
+MANUAL_EDIT_HEADING = "Manual edit (not a GitHub suggestion):"
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
@@ -447,6 +449,53 @@ def render_applyable_receipts(ranges: list[tuple[str, int, int]]) -> list[str]:
     return [f"- `{format_applyable_range(path, start, end)}`" for path, start, end in ranges]
 
 
+def leftover_manual_edit_text(body: object) -> str:
+    """Return bounded leftover `` ```diff `` text for a manual-edit overview block."""
+    if not isinstance(body, str):
+        return ""
+    excerpt = ""
+    for match in DIFF_FENCE_RE.finditer(body):
+        text = match.group(1) or ""
+        replacement = extract_suggestion_replacement(text)
+        if replacement:
+            excerpt = replacement
+            break
+        stripped = text.strip()
+        if stripped:
+            excerpt = stripped
+            break
+    excerpt = sanitize_leftover_excerpt(excerpt)
+    if not excerpt.strip():
+        return ""
+    if len(excerpt) > MANUAL_EDIT_MAX_CHARS:
+        excerpt = excerpt[:MANUAL_EDIT_MAX_CHARS].rstrip() + "…"
+    return excerpt
+
+
+def encode_manual_edit_field(text: str) -> str:
+    """Encode an already-extracted leftover excerpt for one leftover-receipt row."""
+    excerpt = sanitize_leftover_excerpt(text)
+    if len(excerpt) > MANUAL_EDIT_MAX_CHARS:
+        excerpt = excerpt[:MANUAL_EDIT_MAX_CHARS].rstrip() + "…"
+    return excerpt.replace("\n", "\\n")
+
+
+def decode_manual_edit_field(text: str) -> str:
+    """Decode a leftover excerpt stored on one leftover-receipt row."""
+    return (text or "").replace("\\n", "\n")
+
+
+def _leftover_receipt_parts(
+    item: tuple[str, int, str] | tuple[str, int, str, str],
+) -> tuple[str, int, str, str]:
+    """Normalize a leftover receipt to ``(path, line, reason, excerpt)``."""
+    path, line, reason = item[0], item[1], item[2]
+    excerpt = item[3] if len(item) >= 4 else ""
+    if not isinstance(excerpt, str):
+        excerpt = ""
+    return path, line, reason, excerpt
+
+
 def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
     """Return ``LEFT`` or ``cannot-provide`` when a comment kept only a diff fence."""
     body = comment.get("body")
@@ -465,12 +514,12 @@ def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
 
 def leftover_diff_fence_receipts(
     payload: dict[str, Any],
-) -> list[tuple[str, int, str]]:
-    """Return ``(path, line, reason)`` for comments that kept only a `` ```diff `` fence."""
+) -> list[tuple[str, int, str, str]]:
+    """Return ``(path, line, reason, excerpt)`` for leftover `` ```diff `` comments."""
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return []
-    receipts: list[tuple[str, int, str]] = []
+    receipts: list[tuple[str, int, str, str]] = []
     seen: set[tuple[str, int]] = set()
     for comment in comments:
         if not isinstance(comment, dict):
@@ -486,17 +535,43 @@ def leftover_diff_fence_receipts(
         if key in seen:
             continue
         seen.add(key)
-        receipts.append((path, line, reason))
+        receipts.append(
+            (path, line, reason, leftover_manual_edit_text(comment.get("body")))
+        )
     return receipts
 
 
-def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str]]:
-    """Parse ``path:line<TAB>LEFT|cannot-provide`` leftover-diff rows."""
-    return [
-        (path, line, phrase)
-        for path, line, phrase in parse_refused_receipts(text)
-        if phrase in LEFTOVER_DIFF_REASONS
-    ]
+def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str, str]]:
+    """Parse ``path:line<TAB>LEFT|cannot-provide[<TAB>excerpt]`` leftover rows."""
+    receipts: list[tuple[str, int, str, str]] = []
+    seen: set[tuple[str, int]] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        loc_text, sep, rest = line.partition("\t")
+        if not sep or ":" not in loc_text:
+            continue
+        path_text, _, line_text = loc_text.rpartition(":")
+        path = safe_finding_path(path_text)
+        try:
+            parsed_line = int(line_text)
+        except ValueError:
+            parsed_line = 0
+        line_number = safe_finding_line(parsed_line)
+        if path is None or line_number is None:
+            continue
+        reason, excerpt_sep, excerpt_field = rest.partition("\t")
+        reason = reason.strip()
+        if reason not in LEFTOVER_DIFF_REASONS:
+            continue
+        location = (path, line_number)
+        if location in seen:
+            continue
+        seen.add(location)
+        excerpt = decode_manual_edit_field(excerpt_field) if excerpt_sep else ""
+        receipts.append((path, line_number, reason, excerpt))
+    return receipts
 
 
 def sanitize_leftover_excerpt(text: str) -> str:
@@ -520,16 +595,24 @@ def sanitize_leftover_excerpt(text: str) -> str:
 
 
 def render_leftover_diff_receipts(
-    receipts: list[tuple[str, int, str]],
+    receipts: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
 ) -> list[str]:
-    """Return overview receipt lines for leftover `` ```diff `` fences."""
-    return [
-        (
-            f"- `{sanitize_leftover_excerpt(path)}:{line}` — "
-            f"{sanitize_leftover_excerpt(reason)}"
-        )
-        for path, line, reason in receipts
-    ]
+    """Return overview lines with a non-applyable leftover manual-edit block."""
+    lines: list[str] = []
+    for item in receipts:
+        path, line, reason, excerpt = _leftover_receipt_parts(item)
+        path = sanitize_leftover_excerpt(path)
+        reason = sanitize_leftover_excerpt(reason)
+        excerpt = sanitize_leftover_excerpt(excerpt)
+        lines.append(f"- `{path}:{line}` — {reason}")
+        if not excerpt:
+            continue
+        lines.append(f"  {MANUAL_EDIT_HEADING}")
+        lines.append("  ```diff")
+        for excerpt_line in excerpt.splitlines():
+            lines.append(f"  {excerpt_line}")
+        lines.append("  ```")
+    return lines
 
 
 def write_hunk_filtered_payload(
@@ -559,13 +642,14 @@ def write_hunk_filtered_payload(
             encoding="utf-8",
         )
     if leftover_path is not None:
-        leftover_path.write_text(
-            "".join(
-                f"{path}:{line}\t{reason}\n"
-                for path, line, reason in leftover_diff_fence_receipts(filtered)
-            ),
-            encoding="utf-8",
-        )
+        leftover_rows: list[str] = []
+        for path, line, reason, excerpt in leftover_diff_fence_receipts(filtered):
+            encoded = encode_manual_edit_field(excerpt)
+            if encoded:
+                leftover_rows.append(f"{path}:{line}\t{reason}\t{encoded}\n")
+            else:
+                leftover_rows.append(f"{path}:{line}\t{reason}\n")
+        leftover_path.write_text("".join(leftover_rows), encoding="utf-8")
     return len(comments) if isinstance(comments, list) else 0
 
 
@@ -748,7 +832,9 @@ def render_inline_comment_failure_suffix(
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
     applyable_locations: list[tuple[str, int, int]] | None = None,
-    leftover_locations: list[tuple[str, int, str]] | None = None,
+    leftover_locations: (
+        list[tuple[str, int, str]] | list[tuple[str, int, str, str]] | None
+    ) = None,
     retry_limit: int | None = None,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
@@ -907,15 +993,18 @@ def _trusted_range_subset(
 
 
 def _trusted_receipt_subset(
-    items: list[tuple[str, int, str]] | None,
+    items: (
+        list[tuple[str, int, str]] | list[tuple[str, int, str, str]] | None
+    ),
     allowed: set[tuple[str, int]],
-) -> list[tuple[str, int, str]]:
+) -> list[tuple[str, int, str, str]]:
     """Return first-seen leftover receipts whose path:line is a trusted finding."""
     if not items:
         return []
-    kept: list[tuple[str, int, str]] = []
+    kept: list[tuple[str, int, str, str]] = []
     seen: set[tuple[str, int]] = set()
-    for path, line, reason in items:
+    for item in items:
+        path, line, reason, excerpt = _leftover_receipt_parts(item)
         if (
             (path, line) not in allowed
             or (path, line) in seen
@@ -923,7 +1012,7 @@ def _trusted_receipt_subset(
         ):
             continue
         seen.add((path, line))
-        kept.append((path, line, reason))
+        kept.append((path, line, reason, excerpt))
     return kept
 
 
@@ -938,7 +1027,9 @@ def render_inline_comment_failure_body(
     deferred_locations: list[tuple[str, int]] | None = None,
     skipped_locations: list[tuple[str, int]] | None = None,
     applyable_locations: list[tuple[str, int, int]] | None = None,
-    leftover_locations: list[tuple[str, int, str]] | None = None,
+    leftover_locations: (
+        list[tuple[str, int, str]] | list[tuple[str, int, str, str]] | None
+    ) = None,
     retry_limit: int | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""

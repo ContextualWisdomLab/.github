@@ -7,12 +7,17 @@ import pytest
 from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     LEFTOVER_DIFF_REASONS,
+    MANUAL_EDIT_HEADING,
+    MANUAL_EDIT_MAX_CHARS,
     apply_github_suggestion_blocks,
     applyable_suggestion_ranges,
     body_has_diff_fence,
     body_has_suggestion_fence,
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
+    leftover_manual_edit_text,
+    encode_manual_edit_field,
+    decode_manual_edit_field,
     parse_leftover_diff_receipts,
     render_leftover_diff_receipts,
     sanitize_leftover_excerpt,
@@ -1771,13 +1776,23 @@ def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable(
     )
     applyable = applyable_suggestion_ranges(payload)
     leftover = leftover_diff_fence_receipts(payload)
-    leftover_keys = {(path, line) for path, line, _reason in leftover}
+    leftover_keys = {(path, line) for path, line, _reason, _excerpt in leftover}
     applyable_starts = {(path, start) for path, start, _end in applyable}
     assert applyable == [("scripts/ci/example.py", 5, 7)]
     assert leftover == [
-        ("scripts/ci/example.py", 12, "cannot-provide"),
-        ("scripts/ci/removed.py", 11, "LEFT"),
-        ("scripts/ci/example.py", 8, "cannot-provide"),
+        (
+            "scripts/ci/example.py",
+            12,
+            "cannot-provide",
+            leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY),
+        ),
+        ("scripts/ci/removed.py", 11, "LEFT", leftover_manual_edit_text(SUGGESTED_DIFF_BODY)),
+        (
+            "scripts/ci/example.py",
+            8,
+            "cannot-provide",
+            leftover_manual_edit_text(NA_DIFF_BODY),
+        ),
     ]
     assert leftover_keys.isdisjoint(applyable_starts)
     assert leftover_diff_fence_reason(
@@ -1815,15 +1830,22 @@ def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable(
                 "not-an-object",
             ]
         }
-    ) == [("scripts/ci/example.py", 12, "cannot-provide")]
+    ) == [
+        (
+            "scripts/ci/example.py",
+            12,
+            "cannot-provide",
+            leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY),
+        )
+    ]
     parsed = parse_leftover_diff_receipts(
         "scripts/ci/example.py:12\tcannot-provide\n"
         "scripts/ci/removed.py:11\tLEFT\n"
         "scripts/ci/example.py:9\tunknown\n"
     )
     assert parsed == [
-        ("scripts/ci/example.py", 12, "cannot-provide"),
-        ("scripts/ci/removed.py", 11, "LEFT"),
+        ("scripts/ci/example.py", 12, "cannot-provide", ""),
+        ("scripts/ci/removed.py", 11, "LEFT", ""),
     ]
     assert LEFTOVER_DIFF_REASONS == {"LEFT", "cannot-provide"}
     assert render_leftover_diff_receipts(parsed) == [
@@ -1832,6 +1854,29 @@ def test_leftover_diff_receipts_separate_left_and_cannot_provide_from_applyable(
     ]
     assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
     assert "-->" not in sanitize_leftover_excerpt("close --> comment")
+    assert leftover_manual_edit_text(12) == ""
+    assert leftover_manual_edit_text("no suggested-diff fence") == ""
+    assert leftover_manual_edit_text("```diff\n\n```") == ""
+    assert leftover_manual_edit_text(
+        "```diff\n<!-- opencode --><script>alert(1)</script>-->\n```"
+    ) == " opencode scriptalert(1)/script"
+    long_text = "x" * (MANUAL_EDIT_MAX_CHARS + 25)
+    assert leftover_manual_edit_text(f"```diff\n{long_text}\n```").endswith("…")
+    assert encode_manual_edit_field(long_text).endswith("…")
+    assert decode_manual_edit_field("") == ""
+    assert parse_leftover_diff_receipts("scripts/ci/a.py:notanint\tLEFT\n") == []
+    assert render_leftover_diff_receipts(
+        [("scripts/ci/a.py", 1, "LEFT", 12)]  # type: ignore[list-item]
+    ) == ["- `scripts/ci/a.py:1` — LEFT"]
+    assert render_leftover_diff_receipts(
+        [("scripts/ci/a.py", 1, "cannot-provide", "n/a")]
+    ) == [
+        "- `scripts/ci/a.py:1` — cannot-provide",
+        f"  {MANUAL_EDIT_HEADING}",
+        "  ```diff",
+        "  n/a",
+        "  ```",
+    ]
     assert render_leftover_diff_receipts(
         [("scripts/ci/a-->b.py", 1, "LEFT<!-- -->")]
     ) == ["- `scripts/ci/ab.py:1` — LEFT "]
@@ -1932,8 +1977,8 @@ def test_overview_lists_applyable_and_leftover_under_distinct_headings(tmp_path)
     )
     assert applyable.read_text(encoding="utf-8") == "scripts/ci/example.py:5-7\n"
     leftover_text = leftover.read_text(encoding="utf-8")
-    assert "scripts/ci/example.py:12\tcannot-provide\n" in leftover_text
-    assert "scripts/ci/removed.py:11\tLEFT\n" in leftover_text
+    assert "scripts/ci/example.py:12\tcannot-provide" in leftover_text
+    assert "scripts/ci/removed.py:11\tLEFT" in leftover_text
     assert "scripts/ci/example.py:5-7" not in leftover_text
     control_path = tmp_path / "control.json"
     body_path = tmp_path / "body.md"
@@ -2087,8 +2132,13 @@ def test_leftover_diff_fences_are_not_applyable_suggestions():
             "not-an-object",
         )
     ) == [
-        ("scripts/ci/removed.py", 11, "LEFT"),
-        ("scripts/ci/blocked.py", 4, "cannot-provide"),
+        ("scripts/ci/removed.py", 11, "LEFT", leftover_manual_edit_text(SUGGESTED_DIFF_BODY)),
+        (
+            "scripts/ci/blocked.py",
+            4,
+            "cannot-provide",
+            leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY),
+        ),
     ]
     parsed = parse_leftover_diff_receipts(
         "\n".join(
@@ -2105,8 +2155,8 @@ def test_leftover_diff_fences_are_not_applyable_suggestions():
         )
     )
     assert parsed == [
-        ("scripts/ci/removed.py", 11, "LEFT"),
-        ("scripts/ci/blocked.py", 4, "cannot-provide"),
+        ("scripts/ci/removed.py", 11, "LEFT", ""),
+        ("scripts/ci/blocked.py", 4, "cannot-provide", ""),
     ]
     assert render_leftover_diff_receipts(parsed) == [
         "- `scripts/ci/removed.py:11` — LEFT",
@@ -2241,9 +2291,26 @@ def test_overview_receipts_distinguish_applyable_from_leftover_diff_fences(tmp_p
         == 0
     )
     assert applyable.read_text(encoding="utf-8") == "scripts/ci/example.py:7\n"
-    assert leftover.read_text(encoding="utf-8") == (
-        "scripts/ci/removed.py:11\tLEFT\n"
-        "scripts/ci/blocked.py:4\tcannot-provide\n"
+    leftover_written = leftover.read_text(encoding="utf-8")
+    assert leftover_written.startswith("scripts/ci/removed.py:11\tLEFT")
+    assert "scripts/ci/blocked.py:4\tcannot-provide" in leftover_written
+    empty_excerpt_payload = tmp_path / "empty-excerpt.json"
+    empty_excerpt_leftover = tmp_path / "empty-excerpt.tsv"
+    write_hunk_filtered_payload(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "RIGHT",
+                "body": "```diff\n\n```",
+            }
+        ),
+        parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
+        empty_excerpt_payload,
+        leftover_path=empty_excerpt_leftover,
+    )
+    assert empty_excerpt_leftover.read_text(encoding="utf-8") == (
+        "scripts/ci/example.py:7\tcannot-provide\n"
     )
     control_path = tmp_path / "control.json"
     body_path = tmp_path / "body.md"

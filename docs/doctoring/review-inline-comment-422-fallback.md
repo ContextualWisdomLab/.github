@@ -68,7 +68,10 @@ replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
 suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). Leftover receipt ``path`` and reason
 text drop ``<!--``, ``-->``, and HTML metacharacters so a leftover
 row cannot close ``<!-- opencode-review-overview -->`` (CWE-116;
-MITRE, 2026). Applyable vs
+MITRE, 2026). Each leftover row also keeps a bounded excerpt of that
+fence as a distinct “Manual edit (not a GitHub suggestion):”
+`` ```diff `` block so the author can copy the replacement by hand.
+Excerpts use the same sanitizer. Applyable vs
 leftover classification uses a closed fence match (`` ```diff `` or
 `` ```suggestion `` plus a later closer), not a bare `` ```suggestion ``
 substring: leftover prose that mentions the token is still leftover
