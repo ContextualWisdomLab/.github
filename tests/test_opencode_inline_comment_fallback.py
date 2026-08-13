@@ -5,17 +5,21 @@ import sys
 import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
+    DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     github_error_is_unprocessable,
     github_publication_error_phrase,
     iter_single_comment_payloads,
     main,
     parse_refused_locations,
     parse_refused_receipts,
+    record_attached_receipt,
     record_refused_receipt,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
+    single_comment_retry_limit,
     trusted_finding_locations,
+    write_single_comment_payloads,
 )
 
 
@@ -677,3 +681,298 @@ def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):
     assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 1
     assert main(["--is-unprocessable"]) == 2
     assert main([]) == 2
+
+
+def _batch_payload(*comments: dict[str, object]) -> dict[str, object]:
+    """Return a batch review payload for retry-limit tests."""
+    return {
+        "event": "REQUEST_CHANGES",
+        "body": "review body",
+        "commit_id": "c" * 40,
+        "comments": list(comments),
+    }
+
+
+def test_single_comment_retry_limit_defaults_and_rejects_invalid(monkeypatch):
+    monkeypatch.delenv("OPENCODE_INLINE_COMMENT_RETRY_LIMIT", raising=False)
+    assert single_comment_retry_limit() == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(5) == 5
+    assert single_comment_retry_limit("3") == 3
+    assert single_comment_retry_limit(" 8 ") == 8
+    assert single_comment_retry_limit(0) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(-1) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit(True) == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit("abc") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    assert single_comment_retry_limit("0") == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    monkeypatch.setenv("OPENCODE_INLINE_COMMENT_RETRY_LIMIT", "4")
+    assert single_comment_retry_limit() == 4
+    monkeypatch.setenv("OPENCODE_INLINE_COMMENT_RETRY_LIMIT", "nope")
+    assert single_comment_retry_limit() == DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+
+
+def test_write_single_comment_payloads_caps_retry_and_records_deferred(tmp_path):
+    payload = _batch_payload(
+        {"path": "scripts/ci/a.py", "line": 1, "body": "one"},
+        {"path": "scripts/ci/b.py", "line": 2, "body": "two"},
+        {"path": "scripts/ci/c.py", "line": 3, "body": "three"},
+    )
+    output_dir = tmp_path / "singles"
+    deferred = tmp_path / "deferred.txt"
+    assert write_single_comment_payloads(payload, output_dir, limit=1, deferred_path=deferred) == 1
+    files = sorted(output_dir.glob("comment-*.json"))
+    assert [path.name for path in files] == ["comment-000.json"]
+    assert parse_refused_locations(deferred.read_text(encoding="utf-8")) == [
+        ("scripts/ci/b.py", 2),
+        ("scripts/ci/c.py", 3),
+    ]
+    empty_deferred = tmp_path / "none.txt"
+    assert write_single_comment_payloads(payload, tmp_path / "all", limit=20, deferred_path=empty_deferred) == 3
+    assert empty_deferred.read_text(encoding="utf-8") == ""
+
+
+def test_mixed_success_receipts_list_attached_beside_refused():
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/ok.py", "line": 4},
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/later.py", "line": 20},
+            {"path": "scripts/ci/skip.py", "line": 9},
+        ),
+        refused_receipts=[
+            (
+                "scripts/ci/example.py",
+                7,
+                "GitHub HTTP 422: pull_request_review_thread.path is invalid",
+            )
+        ],
+        attached_locations=[("scripts/ci/ok.py", 4), ("scripts/ci/missing.py", 1)],
+        deferred_locations=[("scripts/ci/later.py", 20), ("scripts/ci/later.py", 20)],
+        retry_limit=1,
+    )
+    assert "GitHub accepted these trusted current-head finding locations:" in body
+    assert "- `scripts/ci/ok.py:4`" in body
+    assert "These trusted current-head finding locations were still refused:" in body
+    assert (
+        "- `scripts/ci/example.py:7` — GitHub HTTP 422: "
+        "pull_request_review_thread.path is invalid"
+        in body
+    )
+    assert "were not retried (retry limit 1):" in body
+    assert "- `scripts/ci/later.py:20`" in body
+    assert "scripts/ci/skip.py:9" not in body
+    assert "scripts/ci/missing.py:1" not in body
+    deferred_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/later.py", "line": 20}),
+        refused_locations=[],
+        deferred_locations=[("scripts/ci/later.py", 20)],
+        retry_limit=1,
+    )
+    assert "were not retried (retry limit 1):" in deferred_only
+    assert "- `scripts/ci/later.py:20`" in deferred_only
+    assert "did not copy suggested diffs" in deferred_only
+    attached_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        refused_receipts=[],
+        attached_locations=[("scripts/ci/ok.py", 4)],
+    )
+    assert "- `scripts/ci/ok.py:4`" in attached_only
+    assert "were still refused" not in attached_only
+    attached_without_refused_kw = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/ok.py", "line": 4},
+            {"path": "scripts/ci/later.py", "line": 20},
+        ),
+        attached_locations=[("scripts/ci/ok.py", 4)],
+        deferred_locations=[("scripts/ci/later.py", 20)],
+        retry_limit=1,
+    )
+    assert "- `scripts/ci/ok.py:4`" in attached_without_refused_kw
+    assert "were not retried (retry limit 1):" in attached_without_refused_kw
+    assert "were still refused" not in attached_without_refused_kw
+    empty_outcome_files = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/ok.py", "line": 4}),
+        attached_locations=[],
+        deferred_locations=[],
+    )
+    assert "were still refused" not in empty_outcome_files
+    assert "did not accept the inline review comments" not in empty_outcome_files
+
+
+def test_cli_records_attached_and_bounded_split(tmp_path):
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            _batch_payload(
+                {"path": "scripts/ci/a.py", "line": 1, "side": "RIGHT", "body": "one"},
+                {"path": "scripts/ci/b.py", "line": 2, "side": "RIGHT", "body": "two"},
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "singles"
+    deferred = tmp_path / "deferred.txt"
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload),
+                "--output-dir",
+                str(output_dir),
+                "--retry-limit",
+                "1",
+                "--deferred-locations",
+                str(deferred),
+            ]
+        )
+        == 0
+    )
+    assert [path.name for path in sorted(output_dir.glob("comment-*.json"))] == [
+        "comment-000.json"
+    ]
+    assert "scripts/ci/b.py:2" in deferred.read_text(encoding="utf-8")
+
+    comment = tmp_path / "comment.json"
+    comment.write_text(
+        json.dumps({"comments": [{"path": "scripts/ci/a.py", "line": 1, "body": "x"}]}),
+        encoding="utf-8",
+    )
+    attached = tmp_path / "attached.txt"
+    assert (
+        main(
+            [
+                "--record-attach",
+                "--attached-locations",
+                str(attached),
+                "--comment-file",
+                str(comment),
+            ]
+        )
+        == 0
+    )
+    assert attached.read_text(encoding="utf-8") == "scripts/ci/a.py:1\n"
+    record_attached_receipt(tmp_path / "skip.txt", "../escape.py", 1)
+    record_attached_receipt(tmp_path / "skip.txt", "scripts/ci/a.py", 0)
+    assert not (tmp_path / "skip.txt").exists()
+    assert main(["--record-attach"]) == 2
+    string_line = tmp_path / "string-line.json"
+    string_line.write_text(
+        json.dumps({"comments": [{"path": "scripts/ci/a.py", "line": "1"}]}),
+        encoding="utf-8",
+    )
+    dest_empty = tmp_path / "empty-attach.txt"
+    assert (
+        main(
+            [
+                "--record-attach",
+                "--attached-locations",
+                str(dest_empty),
+                "--comment-file",
+                str(string_line),
+            ]
+        )
+        == 0
+    )
+    assert not dest_empty.exists() or dest_empty.read_text(encoding="utf-8") == ""
+    assert (
+        main(
+            [
+                "--record-attach",
+                "--attached-locations",
+                str(attached),
+                "--comment-file",
+                str(tmp_path / "missing-comment.json"),
+            ]
+        )
+        == 2
+    )
+    bad_comment = tmp_path / "bad-comment.json"
+    bad_comment.write_text("{}", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--record-attach",
+                "--attached-locations",
+                str(attached),
+                "--comment-file",
+                str(bad_comment),
+            ]
+        )
+        == 2
+    )
+
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    output_path = tmp_path / "out.md"
+    refused = tmp_path / "refused.txt"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/a.py", "line": 1},
+                {"path": "scripts/ci/b.py", "line": 2},
+                {"path": "scripts/ci/c.py", "line": 3},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    refused.write_text(
+        "scripts/ci/b.py:2\tGitHub HTTP 422: Line could not be resolved\n",
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(output_path),
+                "--refused-locations",
+                str(refused),
+                "--attached-locations",
+                str(attached),
+                "--deferred-locations",
+                str(deferred),
+                "--retry-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    written = output_path.read_text(encoding="utf-8")
+    assert "- `scripts/ci/a.py:1`" in written
+    assert "- `scripts/ci/b.py:2` — GitHub HTTP 422: Line could not be resolved" in written
+    assert "- `scripts/ci/c.py:3`" not in written
+    assert "scripts/ci/b.py:2`" in written or "were still refused" in written
+    assert "were not retried (retry limit 1):" in written
+    assert "- `scripts/ci/b.py:2`" in written or "scripts/ci/b.py:2" in written
+    assert main(
+        [
+            "--control",
+            str(control_path),
+            "--body",
+            str(body_path),
+            "--output",
+            str(output_path),
+            "--attached-locations",
+            str(tmp_path / "missing-attached.txt"),
+        ]
+    ) == 2
+    assert main(
+        [
+            "--control",
+            str(control_path),
+            "--body",
+            str(body_path),
+            "--output",
+            str(output_path),
+            "--deferred-locations",
+            str(tmp_path / "missing-deferred.txt"),
+        ]
+    ) == 2

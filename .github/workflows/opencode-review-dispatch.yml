@@ -5625,15 +5625,29 @@ jobs:
 
           retry_inline_comments_one_at_a_time() {
             local batch_payload_file="$1" review_body="$2" refused_locations_file="$3"
+            local attached_locations_file="${4:-}"
+            local deferred_locations_file="${5:-}"
             local split_dir comment_file wrapped_file error_file response_file
             local attached=0
             local found=0
+            local -a split_args
 
             : >"$refused_locations_file"
+            if [ -n "$attached_locations_file" ]; then
+              : >"$attached_locations_file"
+            fi
             split_dir="$(mktemp -d)"
-            if ! python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
-              --split-payload "$batch_payload_file" \
-              --output-dir "$split_dir"; then
+            split_args=(
+              python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py"
+              --split-payload "$batch_payload_file"
+              --output-dir "$split_dir"
+              --retry-limit "${OPENCODE_INLINE_COMMENT_RETRY_LIMIT:-20}"
+            )
+            if [ -n "$deferred_locations_file" ]; then
+              : >"$deferred_locations_file"
+              split_args+=(--deferred-locations "$deferred_locations_file")
+            fi
+            if ! "${split_args[@]}"; then
               rm -rf "$split_dir"
               return 1
             fi
@@ -5656,6 +5670,12 @@ jobs:
                 "$error_file" \
                 "$response_file"; then
                 attached=1
+                if [ -n "$attached_locations_file" ]; then
+                  python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
+                    --record-attach \
+                    --attached-locations "$attached_locations_file" \
+                    --comment-file "$comment_file" || true
+                fi
               else
                 python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
                   --record-refusal \
@@ -5702,25 +5722,32 @@ jobs:
                 && python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
                   --is-unprocessable --error-file "$gh_error_file"; then
                 refused_locations_file="$(mktemp)"
+                attached_locations_file="$(mktemp)"
+                deferred_locations_file="$(mktemp)"
                 if retry_inline_comments_one_at_a_time \
-                  "$review_payload_file" "$body" "$refused_locations_file"; then
-                  if [ -s "$refused_locations_file" ] && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
+                  "$review_payload_file" "$body" "$refused_locations_file" \
+                  "$attached_locations_file" "$deferred_locations_file"; then
+                  if { [ -s "$refused_locations_file" ] || [ -s "$deferred_locations_file" ]; } \
+                    && [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                     mixed_error_file="$gh_error_file"
                     if [ -s "${refused_locations_file}.errors" ]; then
                       mixed_error_file="${refused_locations_file}.errors"
                     fi
                     build_inline_comment_failure_body \
                       "$source_body_file" "$fallback_body_file" "$control_json" \
-                      "$mixed_error_file" "$refused_locations_file" || true
+                      "$mixed_error_file" "$refused_locations_file" \
+                      "$attached_locations_file" "$deferred_locations_file" || true
                     update_review_overview "$event" "$(cat "$fallback_body_file")"
                   else
                     update_review_overview "$event" "$body"
                   fi
                   rm -f "$gh_error_file" "$review_response_file" \
-                    "$refused_locations_file" "${refused_locations_file}.errors"
+                    "$refused_locations_file" "${refused_locations_file}.errors" \
+                    "$attached_locations_file" "$deferred_locations_file"
                   return 0
                 fi
-                rm -f "$refused_locations_file" "${refused_locations_file}.errors"
+                rm -f "$refused_locations_file" "${refused_locations_file}.errors" \
+                  "$attached_locations_file" "$deferred_locations_file"
               fi
               if [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                 build_inline_comment_failure_body \
@@ -5855,6 +5882,8 @@ jobs:
             local control_json="$3"
             local error_file="${4:-}"
             local refused_locations_file="${5:-}"
+            local attached_locations_file="${6:-}"
+            local deferred_locations_file="${7:-}"
             local -a fallback_args
 
             fallback_args=(
@@ -5862,12 +5891,19 @@ jobs:
               --control "$control_json"
               --body "$body_file"
               --output "$output_file"
+              --retry-limit "${OPENCODE_INLINE_COMMENT_RETRY_LIMIT:-20}"
             )
             if [ -n "$error_file" ]; then
               fallback_args+=(--error-file "$error_file")
             fi
             if [ -n "$refused_locations_file" ]; then
               fallback_args+=(--refused-locations "$refused_locations_file")
+            fi
+            if [ -n "$attached_locations_file" ]; then
+              fallback_args+=(--attached-locations "$attached_locations_file")
+            fi
+            if [ -n "$deferred_locations_file" ]; then
+              fallback_args+=(--deferred-locations "$deferred_locations_file")
             fi
             "${fallback_args[@]}"
           }

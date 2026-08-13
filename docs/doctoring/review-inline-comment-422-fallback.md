@@ -21,20 +21,22 @@ items. Unsafe paths (`..`, absolute, drive, backslash) and non-positive
 lines are omitted. An empty location set is stated explicitly.
 
 After a refused attach, the publisher first checks that the failure is
-HTTP 422, splits the batch `comments` array into single-comment review
-payloads, and retries each with the same write helper. The first success
-uses `REQUEST_CHANGES` plus the review body; later successes use
-`COMMENT`. Survivors therefore still appear on Files changed. Remaining
-failures still rebuild the fallback from the `gh api` error file and
-write durable receipts into the OpenCode overview comment
-(`<!-- opencode-review-overview -->`). On mixed success the receipt list
-contains only refused `path:line` rows, not the comments that already
-attached. Each refused row keeps the 422 phrase from that comment's own
-`gh api` stderr (JSON `errors[].message` such as
+HTTP 422, splits the batch `comments` array into at most 20
+single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
+default 20), and retries each with the same write helper. Comments past
+that cap are recorded as not retried instead of opening unbounded `gh
+api` writes. The first success uses `REQUEST_CHANGES` plus the review
+body; later successes use `COMMENT`. Survivors therefore still appear on
+Files changed. Remaining failures still rebuild the fallback from the
+`gh api` error file and write durable receipts into the OpenCode
+overview comment (`<!-- opencode-review-overview -->`). On mixed success
+the overview lists attached `path:line` rows beside refused `path:line`
+rows (each refused row keeps that comment's own 422 phrase) and any
+locations left untried by the retry cap. JSON `errors[].message` such as
 `pull_request_review_thread.path is invalid`, or the first `HTTP 422`
-line). A later comment's different GitHub error does not overwrite an
-earlier one. URLs are stripped and each phrase is bounded to 240
-characters.
+line, is the phrase source. A later comment's different GitHub error
+does not overwrite an earlier one. URLs are stripped and each phrase is
+bounded to 240 characters.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -46,9 +48,10 @@ Suggested diffs stay out of the PR-level body.
   the exact location list, GitHub JSON `errors[].message` phrases, HTTP 422
   line fallback, empty-set sentence, CLI success with `--error-file`,
   fail-closed unreadable control or error input, batch-to-single comment
-  splitting, `--is-unprocessable` classification, and mixed-success
-  receipts that omit attached path:line rows, and per-comment 422
-  phrases recorded beside each refused location.
+  splitting, `--is-unprocessable` classification, mixed-success
+  receipts that list attached path:line beside refused path:line,
+  per-comment 422 phrases, the 20-comment one-at-a-time retry cap, and
+  leftover path:line rows that were not retried.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.

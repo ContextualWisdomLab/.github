@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
 
@@ -97,6 +99,23 @@ def parse_refused_locations(text: str) -> list[tuple[str, int]]:
     return [(path, line) for path, line, _phrase in parse_refused_receipts(text)]
 
 
+def single_comment_retry_limit(raw: object | None = None) -> int:
+    """Return a positive one-at-a-time retry cap, defaulting to 20."""
+    if raw is None:
+        raw = os.environ.get("OPENCODE_INLINE_COMMENT_RETRY_LIMIT")
+    if isinstance(raw, bool):
+        return DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isdigit():
+            value = int(text)
+            if value > 0:
+                return value
+    return DEFAULT_SINGLE_COMMENT_RETRY_LIMIT
+
+
 def record_refused_receipt(
     dest: Path, path: str, line: int, error_text: str
 ) -> None:
@@ -108,6 +127,16 @@ def record_refused_receipt(
     phrase = github_publication_error_phrase(error_text)
     with dest.open("a", encoding="utf-8") as handle:
         handle.write(f"{safe_path}:{safe_line}\t{phrase}\n")
+
+
+def record_attached_receipt(dest: Path, path: str, line: int) -> None:
+    """Append one attached ``path:line`` row."""
+    safe_path = safe_finding_path(path)
+    safe_line = safe_finding_line(line)
+    if safe_path is None or safe_line is None:
+        return
+    with dest.open("a", encoding="utf-8") as handle:
+        handle.write(f"{safe_path}:{safe_line}\n")
 
 
 def _collapse_error_text(text: str) -> str:
@@ -218,11 +247,18 @@ def render_single_comment_review(
     }
 
 
-def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> int:
-    """Write COMMENT-event single-comment payloads and return the file count."""
+def write_single_comment_payloads(
+    payload: dict[str, Any],
+    output_dir: Path,
+    limit: int | None = None,
+    deferred_path: Path | None = None,
+) -> int:
+    """Write at most ``limit`` COMMENT payloads and leftover ``path:line`` rows."""
+    items = iter_single_comment_payloads(payload)
+    cap = single_comment_retry_limit(limit)
     output_dir.mkdir(parents=True, exist_ok=True)
     count = 0
-    for index, item in enumerate(iter_single_comment_payloads(payload)):
+    for index, item in enumerate(items[:cap]):
         path = output_dir / f"comment-{index:03d}.json"
         path.write_text(
             json.dumps(
@@ -232,6 +268,11 @@ def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> 
             encoding="utf-8",
         )
         count += 1
+    if deferred_path is not None:
+        deferred_path.write_text(
+            "".join(f"{item['path']}:{item['line']}\n" for item in items[cap:]),
+            encoding="utf-8",
+        )
     return count
 
 
@@ -263,11 +304,16 @@ def render_inline_comment_failure_suffix(
     error_phrase: str = "",
     mixed_success: bool = False,
     phrases: dict[tuple[str, int], str] | None = None,
+    attached_locations: list[tuple[str, int]] | None = None,
+    deferred_locations: list[tuple[str, int]] | None = None,
+    retry_limit: int | None = None,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
+    attached = attached_locations or []
+    deferred = deferred_locations or []
     heading = (
         "## Inline comment publication receipts"
-        if error_phrase or mixed_success
+        if error_phrase or mixed_success or attached or deferred
         else "## Inline comment publishing failed"
     )
     lines = [
@@ -275,12 +321,22 @@ def render_inline_comment_failure_suffix(
         heading,
         "",
     ]
+    if attached:
+        lines.append("GitHub accepted these trusted current-head finding locations:")
+        lines.append("")
+        lines.extend(render_inline_comment_receipts(attached))
+        lines.append("")
     if locations:
         if mixed_success:
-            lines.append(
-                "GitHub accepted some inline comments. These trusted "
-                "current-head finding locations were still refused:"
-            )
+            if attached:
+                lines.append(
+                    "These trusted current-head finding locations were still refused:"
+                )
+            else:
+                lines.append(
+                    "GitHub accepted some inline comments. These trusted "
+                    "current-head finding locations were still refused:"
+                )
         else:
             lines.append(
                 "GitHub did not accept the inline review comments for these "
@@ -299,7 +355,7 @@ def render_inline_comment_failure_suffix(
             "current-head changed hunks, or inspect the workflow log/control "
             "JSON and apply the changes manually."
         )
-    else:
+    elif not attached and not deferred:
         lines.append(
             "GitHub did not accept the inline review comments, and the "
             "control JSON had no trusted path:line findings. Inspect the "
@@ -309,8 +365,42 @@ def render_inline_comment_failure_suffix(
         if error_phrase:
             lines.append("")
             lines.append(f"- GitHub error: {error_phrase}")
+    if deferred:
+        if locations or attached:
+            lines.append("")
+        lines.append(
+            "These trusted current-head finding locations were not retried "
+            f"(retry limit {single_comment_retry_limit(retry_limit)}):"
+        )
+        lines.append("")
+        lines.extend(render_inline_comment_receipts(deferred))
+        if not locations:
+            lines.append("")
+            lines.append(
+                "OpenCode did not copy suggested diffs into this PR-level body. "
+                "Re-run the review after those exact path:line anchors sit on "
+                "current-head changed hunks, or inspect the workflow log/control "
+                "JSON and apply the changes manually."
+            )
     lines.append("")
     return "\n".join(lines)
+
+
+def _trusted_location_subset(
+    items: list[tuple[str, int]] | None,
+    allowed: set[tuple[str, int]],
+) -> list[tuple[str, int]]:
+    """Return first-seen locations that remain in the trusted control set."""
+    if not items:
+        return []
+    kept: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in items:
+        if item not in allowed or item in seen:
+            continue
+        seen.add(item)
+        kept.append(item)
+    return kept
 
 
 def render_inline_comment_failure_body(
@@ -320,12 +410,25 @@ def render_inline_comment_failure_body(
     error_text: str = "",
     refused_locations: list[tuple[str, int]] | None = None,
     refused_receipts: list[tuple[str, int, str]] | None = None,
+    attached_locations: list[tuple[str, int]] | None = None,
+    deferred_locations: list[tuple[str, int]] | None = None,
+    retry_limit: int | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
     error_phrase = github_publication_error_phrase(error_text) if error_text else ""
+    allowed = set(trusted_finding_locations(control))
+    attached = (
+        _trusted_location_subset(attached_locations, allowed)
+        if attached_locations is not None
+        else []
+    )
+    deferred = (
+        _trusted_location_subset(deferred_locations, allowed)
+        if deferred_locations is not None
+        else []
+    )
     phrases: dict[tuple[str, int], str] | None = None
     if refused_receipts is not None:
-        allowed = set(trusted_finding_locations(control))
         locations = [
             (path, line)
             for path, line, _phrase in refused_receipts
@@ -337,22 +440,29 @@ def render_inline_comment_failure_body(
             if phrase and (path, line) in allowed
         }
         mixed_success = True
-        if not locations:
+        if not locations and not attached and not deferred:
             return body.rstrip("\n") + "\n"
-    elif refused_locations is None:
+    elif refused_locations is None and attached_locations is None and deferred_locations is None:
         locations = trusted_finding_locations(control)
         mixed_success = False
+    elif refused_locations is None:
+        locations = []
+        mixed_success = True
+        if not attached and not deferred:
+            return body.rstrip("\n") + "\n"
     else:
-        allowed = set(trusted_finding_locations(control))
         locations = [item for item in refused_locations if item in allowed]
         mixed_success = True
-        if not locations:
+        if not locations and not attached and not deferred:
             return body.rstrip("\n") + "\n"
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
         locations,
         error_phrase=error_phrase,
         mixed_success=mixed_success,
         phrases=phrases,
+        attached_locations=attached or None,
+        deferred_locations=deferred or None,
+        retry_limit=retry_limit,
     )
 
 
@@ -378,10 +488,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--is-unprocessable", action="store_true")
     parser.add_argument("--refused-locations", type=Path)
+    parser.add_argument("--attached-locations", type=Path)
+    parser.add_argument("--deferred-locations", type=Path)
+    parser.add_argument("--retry-limit", type=int)
     parser.add_argument("--record-refusal", action="store_true")
+    parser.add_argument("--record-attach", action="store_true")
     parser.add_argument("--comment-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.record_attach:
+            if args.attached_locations is None or args.comment_file is None:
+                raise ValueError(
+                    "--attached-locations and --comment-file are required "
+                    "with --record-attach"
+                )
+            payload = load_control(args.comment_file)
+            comments = payload.get("comments")
+            if (
+                not isinstance(comments, list)
+                or not comments
+                or not isinstance(comments[0], dict)
+            ):
+                raise ValueError("comment file must contain comments[0]")
+            first = comments[0]
+            line = first.get("line")
+            record_attached_receipt(
+                args.attached_locations,
+                str(first.get("path") or ""),
+                line if isinstance(line, int) and not isinstance(line, bool) else 0,
+            )
+            return 0
         if args.record_refusal:
             if (
                 args.refused_locations is None
@@ -418,7 +554,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.output_dir is None:
                 raise ValueError("--output-dir is required with --split-payload")
             payload = load_control(args.split_payload)
-            write_single_comment_payloads(payload, args.output_dir)
+            write_single_comment_payloads(
+                payload,
+                args.output_dir,
+                limit=args.retry_limit,
+                deferred_path=args.deferred_locations,
+            )
             return 0
         if args.control is None or args.body is None or args.output is None:
             raise ValueError("--control, --body, and --output are required")
@@ -429,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         refused_locations = None
         refused_receipts = None
+        attached_locations = None
+        deferred_locations = None
         if args.refused_locations is not None:
             parsed_receipts = parse_refused_receipts(
                 args.refused_locations.read_text(encoding="utf-8")
@@ -439,6 +582,14 @@ def main(argv: list[str] | None = None) -> int:
                 refused_locations = [
                     (path, line) for path, line, _phrase in parsed_receipts
                 ]
+        if args.attached_locations is not None:
+            attached_locations = parse_refused_locations(
+                args.attached_locations.read_text(encoding="utf-8")
+            )
+        if args.deferred_locations is not None:
+            deferred_locations = parse_refused_locations(
+                args.deferred_locations.read_text(encoding="utf-8")
+            )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -449,6 +600,9 @@ def main(argv: list[str] | None = None) -> int:
             error_text=error_text,
             refused_locations=refused_locations,
             refused_receipts=refused_receipts,
+            attached_locations=attached_locations,
+            deferred_locations=deferred_locations,
+            retry_limit=args.retry_limit,
         ),
         encoding="utf-8",
     )

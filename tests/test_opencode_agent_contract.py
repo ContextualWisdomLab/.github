@@ -1624,6 +1624,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "inline review one-at-a-time" in workflow
     assert '--refused-locations "$refused_locations_file"' in workflow
     assert "--record-refusal" in workflow
+    assert "--record-attach" in workflow
+    assert '--attached-locations "$attached_locations_file"' in workflow
+    assert "--deferred-locations" in workflow
+    assert "--retry-limit" in workflow
+    assert "${OPENCODE_INLINE_COMMENT_RETRY_LIMIT:-20}" in workflow
     assert "accepted some inline comments" not in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
