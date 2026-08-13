@@ -10,6 +10,8 @@ or install an unreviewed native wheel.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Keep `hf-xet==1.6.0` with all seventeen published SHA-256 digests.
 `hf-xet` is Apache-2.0 (permissive SPDX). Do not hand-edit the hashes
 file later: regenerate from `requirements-strix-ci.txt`.
