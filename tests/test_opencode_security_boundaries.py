@@ -98,6 +98,7 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
             "openai sk-" + ("C" * 24),
             "slack xoxb-" + ("D" * 24),
             "aws AKIA" + ("E" * 16),
+            "nim nvapi-" + ("F" * 24),
         ]
     )
     cleaned = redactor.redact_text(source)
@@ -107,17 +108,22 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
     assert "sk-" not in cleaned
     assert "xoxb-" not in cleaned
     assert "AKIA" not in cleaned
-    assert cleaned.count(redactor.REDACTED) == 5
+    assert "nvapi-" not in cleaned
+    assert cleaned.count(redactor.REDACTED) == 6
 
 
 def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     """Recursive lists, empty input, and the streaming CLI share the same scrubber."""
-    source = '{"values":[{"ok":1,"api_key":"secret-value"},2]}\n'
+    source = '{"values":[{"ok":1,"api_key":"secret-value"},2],"note":"classic ghp_' + (
+        "A" * 24
+    ) + '"}\n'
     assert redactor.redact_text("") == ""
-    assert json.loads(redactor.redact_text(source))["values"] == [
+    parsed = json.loads(redactor.redact_text(source))
+    assert parsed["values"] == [
         {"ok": 1, "api_key": redactor.REDACTED},
         2,
     ]
+    assert "ghp_" not in parsed["note"]
 
     stdin = io.StringIO("SERVICE_TOKEN=opaque-service-token-value\n")
     stdout = io.StringIO()

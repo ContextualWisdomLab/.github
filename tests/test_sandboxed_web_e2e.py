@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import runpy
@@ -608,3 +609,28 @@ def test_wait_for_url_restricts_host_to_localhost():
 
     with pytest.raises(ValueError, match="URL host must be localhost"):
         sandboxed_web_e2e.wait_for_url("https://example.com/ready", 10, service)
+
+
+def test_emit_result_redacts_command_metadata(tmp_path, capsys):
+    """Command fields cannot leak NVIDIA NIM or GitHub token shapes."""
+    args = argparse.Namespace(
+        backend_cmd="start ghp_" + ("A" * 24),
+        frontend_cmd="start",
+        e2e_cmd="pytest",
+        evidence_note="key nvapi-" + ("F" * 24),
+        allow_env=[],
+        network="default",
+        keep_sandbox=False,
+    )
+    sandboxed_web_e2e.emit_result(
+        args=args,
+        copied_repo=tmp_path / "repo",
+        sandbox_root=tmp_path,
+        backend_ready=True,
+        frontend_ready=True,
+        exit_code=0,
+        elapsed_seconds=0.1,
+    )
+    output = capsys.readouterr().out
+    assert "ghp_" not in output
+    assert "nvapi-" not in output

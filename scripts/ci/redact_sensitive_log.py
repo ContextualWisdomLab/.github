@@ -30,6 +30,7 @@ PROVIDER_TOKEN_RES = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bnvapi-[A-Za-z0-9_-]{20,}\b"),
 )
 
 

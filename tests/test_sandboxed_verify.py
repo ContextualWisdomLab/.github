@@ -38,7 +38,7 @@ def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypat
     assert "OTHER_TOKEN" not in env
 
     sandboxed_verify.emit_result(
-        command=["true"],
+        command=["true", "ghp_" + ("A" * 24)],
         copied_repo=tmp_path / "repo",
         sandbox_root=tmp_path,
         exit_code=0,
@@ -46,7 +46,7 @@ def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypat
         kept=False,
         allowed_env=["GITHUB_TOKEN"],
         network="required",
-        evidence_note="fetch private dependency",
+        evidence_note="fetch private dependency nvapi-" + ("F" * 24),
     )
     output = capsys.readouterr().out
 
@@ -55,6 +55,8 @@ def test_scrubbed_env_allows_named_credentials_without_printing_values(monkeypat
     assert "fetch private dependency" in output
     assert "secret-value" not in output
     assert "other-secret" not in output
+    assert "ghp_" not in output
+    assert "nvapi-" not in output
 
 
 def test_copy_workspace_excludes_default_noise_and_keeps_sources(tmp_path):

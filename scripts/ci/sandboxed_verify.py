@@ -193,10 +193,10 @@ def emit_result(
     """Print a machine-readable execution evidence summary."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": list(command),
+        "command": [redact_text(part) for part in command],
         "cwd": str(copied_repo),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": evidence_note,
+        "evidence_note": redact_text(evidence_note),
         "exit_code": exit_code,
         "network": network,
         "sandbox": str(sandbox_root) if kept else "(removed)",
@@ -216,7 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        print(f"sandboxed-verify: command={redact_text(' '.join(args.command))}")
         if args.allow_env:
             print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
         if args.network != "default":
