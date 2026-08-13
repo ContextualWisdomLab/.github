@@ -21,6 +21,8 @@ from scripts.ci.opencode_inline_comment_fallback import (
     normalize_deferred_receipt,
     parse_applyable_origin_field,
     strip_left_origin_fields,
+    leftover_coverage_points,
+    leftover_receipt_range,
     leftover_deferred_matches,
     leftover_reason_bullet_duplicates_deferred,
     leftover_diff_fence_reason,
@@ -4222,4 +4224,155 @@ def test_write_hunk_filtered_payload_omits_applyable_range_containing_interior_l
     )
     assert "scripts/ci/example.py:5-7" not in cli_applyable.read_text(encoding="utf-8")
     assert cli_applyable.read_text(encoding="utf-8") == "scripts/ci/ok.py:4\n"
+
+
+def test_leftover_start_end_receipt_omits_interior_applyable_ranges(tmp_path):
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover = parse_leftover_diff_receipts(
+        f"scripts/ci/example.py:5-7\tcannot-provide\t{encode_manual_edit_field(excerpt)}\n"
+        "scripts/ci/skip.py:x\tcannot-provide\n"
+    )
+    assert leftover_coverage_points(leftover) == {
+        ("scripts/ci/example.py", 5),
+        ("scripts/ci/example.py", 6),
+        ("scripts/ci/example.py", 7),
+    }
+    assert leftover_coverage_points(None) == set()
+    assert leftover_coverage_points([("scripts/ci/x.py", 1, "HTTP 422", "n")]) == set()
+    assert leftover_receipt_range(()) == ("", 1, 1, "", "")
+    assert leftover_receipt_range((12, 0, 3, 4, 5)) == ("", 1, 3, "", "")
+    assert leftover_receipt_range(("scripts/ci/p.py", 8, 5, "cannot-provide", "x")) == (
+        "scripts/ci/p.py",
+        5,
+        8,
+        "cannot-provide",
+        "x",
+    )
+    assert leftover_receipt_range(("scripts/ci/p.py",)) == (
+        "scripts/ci/p.py",
+        1,
+        1,
+        "",
+        "",
+    )
+    assert leftover_receipt_range(("scripts/ci/p.py", 4, 4, True, 12))[:4] == (
+        "scripts/ci/p.py",
+        4,
+        4,
+        "",
+    )
+    assert parse_leftover_diff_receipts(
+        "scripts/ci/example.py:5-x\tcannot-provide\n"
+        "scripts/ci/example.py:8-5\tcannot-provide\n"
+        "scripts/ci/example.py:0-2\tcannot-provide\n"
+    ) == []
+    applyable = [
+        ("scripts/ci/example.py", 6, 6, None, None),
+        ("scripts/ci/example.py", 5, 7, None, None),
+        ("scripts/ci/ok.py", 4, 4, None, None),
+    ]
+    assert exclude_leftover_from_applyable(applyable, leftover) == [
+        ("scripts/ci/ok.py", 4, 4, None, None)
+    ]
+    rendered = render_leftover_diff_receipts(leftover)
+    assert rendered[0] == "- `scripts/ci/example.py:5-7` — cannot-provide"
+    assert excerpt in "\n".join(rendered)
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in "\n".join(rendered)
+
+    leftover_file = tmp_path / "leftover.txt"
+    leftover_file.write_text(
+        f"scripts/ci/example.py:5-7\tcannot-provide\t{encode_manual_edit_field(excerpt)}\n",
+        encoding="utf-8",
+    )
+    applyable_file = tmp_path / "applyable.txt"
+    applyable_file.write_text(
+        "scripts/ci/example.py:6\n"
+        "scripts/ci/example.py:5-7\n"
+        "scripts/ci/ok.py:4\n",
+        encoding="utf-8",
+    )
+    control_path = tmp_path / "control.json"
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/example.py", "line": 6},
+                {"path": "scripts/ci/ok.py", "line": 4},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path = tmp_path / "body.md"
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    receipt = tmp_path / "receipt.md"
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+            ]
+        )
+        == 0
+    )
+    rendered_cli = receipt.read_text(encoding="utf-8")
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = rendered_cli.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert "- `scripts/ci/example.py:5-7` — cannot-provide" in leftover_section
+    assert excerpt in leftover_section
+    applyable_section = rendered_cli.split(applyable_heading, 1)[1]
+    if leftover_heading in applyable_section:
+        applyable_section = applyable_section.split(leftover_heading, 1)[0]
+    assert "scripts/ci/example.py:6" not in applyable_section
+    assert "scripts/ci/example.py:5-7" not in applyable_section
+    assert "- `scripts/ci/ok.py:4`" in applyable_section
+
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "start_line": 5,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        }
+    )
+    assert leftover_diff_fence_receipts(payload)[0][:4] == (
+        "scripts/ci/example.py",
+        5,
+        7,
+        "cannot-provide",
+    )
+    swapped = leftover_diff_fence_receipts(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "start_line": 8,
+                "side": "RIGHT",
+                "body": CANNOT_PROVIDE_DIFF_BODY,
+            }
+        )
+    )
+    assert swapped[0][:4] == ("scripts/ci/example.py", 5, 8, "cannot-provide")
+    leftover_out = tmp_path / "written-leftover.txt"
+    write_hunk_filtered_payload(
+        payload,
+        parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
+        tmp_path / "filtered.json",
+        leftover_path=leftover_out,
+    )
+    assert leftover_out.read_text(encoding="utf-8").startswith(
+        "scripts/ci/example.py:5-7\tcannot-provide\t"
+    )
 

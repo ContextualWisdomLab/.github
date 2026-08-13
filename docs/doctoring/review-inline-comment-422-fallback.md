@@ -90,7 +90,11 @@ shipped as one-click GitHub suggestions (GitHub, n.d.-c). ``write_hunk_filtered_
 and ``--filter-hunks`` omit an applyable ``path:start-end`` from
 ``--applyable-locations`` when a leftover cannot-provide or LEFT line
 sits inside that range, so ``applyable.txt`` cannot advertise a
-one-click apply for the same span as leftover ``example.py:6``. Comments that
+one-click apply for the same span as leftover ``example.py:6``. Leftover
+receipts also accept ``path:start-end`` (and leftover comments with
+``start_line`` write that range), so leftover ``example.py:5-7`` covers
+every interior line when the overview consumer drops overlapping
+applyable rows. Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -132,7 +136,9 @@ with the same control object used to build the inline `comments` array.
   ``--leftover-diff-locations``, the hunk-filter write path and
   ``--filter-hunks`` ``applyable.txt`` that omit an overlapping
   applyable range when leftover ``example.py:6`` sits inside
-  ``example.py:5-7``, and
+  ``example.py:5-7``, leftover ``path:start-end`` receipts that cover
+  every interior leftover line so leftover ``example.py:5-7`` omits
+  applyable ``example.py:6``, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

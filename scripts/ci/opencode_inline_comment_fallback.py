@@ -660,15 +660,49 @@ def decode_manual_edit_field(text: str) -> str:
     return (text or "").replace("\\n", "\n")
 
 
-def _leftover_receipt_parts(
-    item: tuple[str, int, str] | tuple[str, int, str, str],
-) -> tuple[str, int, str, str]:
-    """Normalize a leftover receipt to ``(path, line, reason, excerpt)``."""
-    path, line, reason = item[0], item[1], item[2]
-    excerpt = item[3] if len(item) >= 4 else ""
+def leftover_receipt_range(
+    item: tuple[Any, ...],
+) -> tuple[str, int, int, str, str]:
+    """Normalize a leftover receipt to ``(path, start, end, reason, excerpt)``."""
+    path = item[0] if item else ""
+    if len(item) >= 4 and isinstance(item[2], int) and not isinstance(item[2], bool):
+        start = safe_finding_line(item[1])
+        end = safe_finding_line(item[2])
+        reason = item[3] if len(item) >= 4 else ""
+        excerpt = item[4] if len(item) >= 5 else ""
+    else:
+        start = end = safe_finding_line(item[1]) if len(item) >= 2 else None
+        reason = item[2] if len(item) >= 3 else ""
+        excerpt = item[3] if len(item) >= 4 else ""
+    if not isinstance(path, str):
+        path = ""
+    if start is None:
+        start = 1
+    if end is None:
+        end = start
+    if end < start:
+        start, end = end, start
+    if not isinstance(reason, str):
+        reason = ""
     if not isinstance(excerpt, str):
         excerpt = ""
-    return path, line, reason, excerpt
+    return path, start, end, reason, excerpt
+
+
+def leftover_coverage_points(
+    leftovers: list[tuple[Any, ...]] | None,
+) -> set[tuple[str, int]]:
+    """Return every leftover ``path:line``, including interiors of ``path:start-end``."""
+    points: set[tuple[str, int]] = set()
+    if not leftovers:
+        return points
+    for item in leftovers:
+        path, start, end, reason, _excerpt = leftover_receipt_range(item)
+        if reason not in LEFTOVER_DIFF_REASONS:
+            continue
+        for line in range(start, end + 1):
+            points.add((path, line))
+    return points
 
 
 def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
@@ -685,13 +719,13 @@ def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
 
 def leftover_diff_fence_receipts(
     payload: dict[str, Any],
-) -> list[tuple[str, int, str, str]]:
-    """Return ``(path, line, reason, excerpt)`` for leftover `` ```diff `` comments."""
+) -> list[tuple[Any, ...]]:
+    """Return leftover `` ```diff `` receipts, using ``path:start-end`` when spanned."""
     comments = payload.get("comments")
     if not isinstance(comments, list):
         return []
-    receipts: list[tuple[str, int, str, str]] = []
-    seen: set[tuple[str, int]] = set()
+    receipts: list[tuple[Any, ...]] = []
+    seen: set[tuple[str, int, int]] = set()
     for comment in comments:
         if not isinstance(comment, dict):
             continue
@@ -699,23 +733,29 @@ def leftover_diff_fence_receipts(
         if reason is None:
             continue
         path = safe_finding_path(comment.get("path"))
-        line = safe_finding_line(comment.get("line"))
-        if path is None or line is None:
+        end = safe_finding_line(comment.get("line"))
+        start_raw = comment.get("start_line")
+        start = safe_finding_line(start_raw) if start_raw is not None else end
+        if path is None or end is None or start is None:
             continue
-        key = (path, line)
+        if start > end:
+            start, end = end, start
+        key = (path, start, end)
         if key in seen:
             continue
         seen.add(key)
-        receipts.append(
-            (path, line, reason, leftover_manual_edit_text(comment.get("body")))
-        )
+        excerpt = leftover_manual_edit_text(comment.get("body"))
+        if start == end:
+            receipts.append((path, start, reason, excerpt))
+        else:
+            receipts.append((path, start, end, reason, excerpt))
     return receipts
 
 
-def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str, str]]:
-    """Parse ``path:line<TAB>LEFT|cannot-provide[<TAB>excerpt]`` leftover rows."""
-    receipts: list[tuple[str, int, str, str]] = []
-    seen: set[tuple[str, int]] = set()
+def parse_leftover_diff_receipts(text: str) -> list[tuple[Any, ...]]:
+    """Parse leftover ``path:line`` or ``path:start-end`` rows with optional excerpt."""
+    receipts: list[tuple[Any, ...]] = []
+    seen: set[tuple[str, int, int]] = set()
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -723,25 +763,39 @@ def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str, str]]:
         loc_text, sep, rest = line.partition("\t")
         if not sep or ":" not in loc_text:
             continue
-        path_text, _, line_text = loc_text.rpartition(":")
+        path_text, _, loc_rest = loc_text.rpartition(":")
         path = safe_finding_path(path_text)
-        try:
-            parsed_line = int(line_text)
-        except ValueError:
-            parsed_line = 0
-        line_number = safe_finding_line(parsed_line)
-        if path is None or line_number is None:
+        if path is None:
+            continue
+        if "-" in loc_rest:
+            start_text, _, end_text = loc_rest.partition("-")
+            try:
+                start_value = int(start_text)
+                end_value = int(end_text)
+            except ValueError:
+                continue
+        else:
+            try:
+                start_value = end_value = int(loc_rest)
+            except ValueError:
+                continue
+        start = safe_finding_line(start_value)
+        end = safe_finding_line(end_value)
+        if start is None or end is None or end < start:
             continue
         reason, excerpt_sep, excerpt_field = rest.partition("\t")
         reason = reason.strip()
         if reason not in LEFTOVER_DIFF_REASONS:
             continue
-        location = (path, line_number)
+        location = (path, start, end)
         if location in seen:
             continue
         seen.add(location)
         excerpt = decode_manual_edit_field(excerpt_field) if excerpt_sep else ""
-        receipts.append((path, line_number, reason, excerpt))
+        if start == end:
+            receipts.append((path, start, reason, excerpt))
+        else:
+            receipts.append((path, start, end, reason, excerpt))
     return receipts
 
 
@@ -764,18 +818,22 @@ def leftover_reason_bullet_duplicates_deferred(
     path: str,
     line: int,
     deferred_item: tuple[str, int, int, str | None, int | None] | None,
+    end: int | None = None,
 ) -> bool:
     """Return whether a leftover reason bullet would repeat a prefixed deferred row."""
     if deferred_item is None:
         return False
-    deferred_path, start, end, _origin_path, _origin_line = _applyable_receipt_parts(
-        deferred_item
+    leftover_end = line if end is None else end
+    deferred_path, start, deferred_end, _origin_path, _origin_line = (
+        _applyable_receipt_parts(deferred_item)
     )
-    return deferred_path == path and start <= line <= end
+    return (
+        deferred_path == path and start <= line and leftover_end <= deferred_end
+    )
 
 
 def render_leftover_diff_receipts(
-    receipts: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
+    receipts: list[tuple[Any, ...]],
     deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[str]:
     """Return leftover lines with one deferred row, then each Manual-edit excerpt."""
@@ -783,19 +841,25 @@ def render_leftover_diff_receipts(
     lines: list[str] = []
     seen_deferred: set[tuple[str, int, int]] = set()
     for item in receipts:
-        path, line, reason, excerpt = _leftover_receipt_parts(item)
+        path, start, end, reason, excerpt = leftover_receipt_range(item)
         excerpt = excerpt.replace("```", "")
-        deferred_item = matches.get((path, line))
+        deferred_item = None
+        for line in range(start, end + 1):
+            deferred_item = matches.get((path, line))
+            if deferred_item is not None:
+                break
         if deferred_item is not None:
-            deferred_path, start, end, _origin_path, _origin_line = (
+            deferred_path, deferred_start, deferred_end, _origin_path, _origin_line = (
                 _applyable_receipt_parts(deferred_item)
             )
-            deferred_key = (deferred_path, start, end)
+            deferred_key = (deferred_path, deferred_start, deferred_end)
             if deferred_key not in seen_deferred:
                 lines.extend(render_applyable_receipts([deferred_item]))
                 seen_deferred.add(deferred_key)
-        if not leftover_reason_bullet_duplicates_deferred(path, line, deferred_item):
-            lines.append(f"- `{path}:{line}` — {reason}")
+        if not leftover_reason_bullet_duplicates_deferred(
+            path, start, deferred_item, end=end
+        ):
+            lines.append(f"- `{format_applyable_range(path, start, end)}` — {reason}")
         if not excerpt:
             continue
         lines.append(f"  {MANUAL_EDIT_HEADING}")
@@ -841,12 +905,14 @@ def write_hunk_filtered_payload(
         applyable_path.write_text("".join(applyable_rows), encoding="utf-8")
     if leftover_path is not None:
         leftover_rows: list[str] = []
-        for path, line, reason, excerpt in leftovers:
+        for item in leftovers:
+            path, start, end, reason, excerpt = leftover_receipt_range(item)
+            loc = format_applyable_range(path, start, end)
             encoded = encode_manual_edit_field(excerpt)
             if encoded:
-                leftover_rows.append(f"{path}:{line}\t{reason}\t{encoded}\n")
+                leftover_rows.append(f"{loc}\t{reason}\t{encoded}\n")
             else:
-                leftover_rows.append(f"{path}:{line}\t{reason}\n")
+                leftover_rows.append(f"{loc}\t{reason}\n")
         leftover_path.write_text("".join(leftover_rows), encoding="utf-8")
     return len(comments) if isinstance(comments, list) else 0
 
@@ -1125,10 +1191,10 @@ def exclude_deferred_applyable(
 
 
 def leftover_manual_edits_with_deferred(
-    leftovers: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
+    leftovers: list[tuple[Any, ...]],
     deferred: list[tuple[str, int, int, str | None, int | None]],
     allowed: set[tuple[str, int]] | None = None,
-) -> list[tuple[str, int, str, str]]:
+) -> list[tuple[Any, ...]]:
     """Keep leftover Manual-edit receipts on a trusted finding or deferred range."""
     if not leftovers:
         return []
@@ -1140,33 +1206,53 @@ def leftover_manual_edits_with_deferred(
             for location, receipt in matches.items()
             if location[0] in allowed_paths
         }
-    kept: list[tuple[str, int, str, str]] = []
-    seen: set[tuple[str, int]] = set()
+
+    def leftover_row(
+        path: str, start: int, end: int, reason: str, excerpt: str
+    ) -> tuple[Any, ...]:
+        """Return a single-line leftover 4-tuple or a ranged leftover 5-tuple."""
+        if start == end:
+            return path, start, reason, excerpt
+        return path, start, end, reason, excerpt
+
+    def leftover_hits(path: str, start: int, end: int) -> bool:
+        """Return whether any leftover line sits inside a deferred range."""
+        return any((path, line) in matches for line in range(start, end + 1))
+
+    kept: list[tuple[Any, ...]] = []
+    seen: set[tuple[str, int, int]] = set()
     for item in leftovers:
-        path, line, reason, excerpt = _leftover_receipt_parts(item)
-        if reason not in LEFTOVER_DIFF_REASONS or (path, line) in seen:
+        path, start, end, reason, excerpt = leftover_receipt_range(item)
+        if reason not in LEFTOVER_DIFF_REASONS or (path, start, end) in seen:
             continue
-        if (
-            allowed is not None
-            and (path, line) not in allowed
-            and (path, line) not in matches
+        if allowed is not None and not any(
+            (path, line) in allowed or (path, line) in matches
+            for line in range(start, end + 1)
         ):
             continue
-        seen.add((path, line))
-        kept.append((path, line, reason, excerpt))
+        seen.add((path, start, end))
+        kept.append(leftover_row(path, start, end, reason, excerpt))
     if not matches:
         return kept
-    overlapping = [item for item in kept if (item[0], item[1]) in matches]
-    rest = [item for item in kept if (item[0], item[1]) not in matches]
+    overlapping = [
+        item
+        for item in kept
+        if leftover_hits(*leftover_receipt_range(item)[:3])
+    ]
+    rest = [
+        item
+        for item in kept
+        if not leftover_hits(*leftover_receipt_range(item)[:3])
+    ]
     return overlapping + rest
 
 
 def exclude_leftover_from_applyable(
     applyable: list[tuple[str, int, int, str | None, int | None]],
-    leftovers: list[tuple[str, int, str, str]],
+    leftovers: list[tuple[Any, ...]],
 ) -> list[tuple[str, int, int, str | None, int | None]]:
-    """Drop applyable ranges that are leftover cannot-provide or LEFT fences."""
-    leftover_points = {(path, line) for path, line, _reason, _excerpt in leftovers}
+    """Drop applyable ranges that overlap leftover cannot-provide or LEFT fences."""
+    leftover_points = leftover_coverage_points(leftovers)
     if not leftover_points:
         return applyable
     kept: list[tuple[str, int, int, str | None, int | None]] = []
