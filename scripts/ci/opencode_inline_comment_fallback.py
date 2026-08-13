@@ -705,6 +705,41 @@ def leftover_coverage_points(
     return points
 
 
+def leftover_range_matches(
+    leftovers: list[tuple[Any, ...]] | None,
+) -> dict[tuple[str, int], tuple[str, int, int, str, str]]:
+    """Map leftover path:line to the widest leftover start-end that contains it."""
+    matches: dict[tuple[str, int], tuple[str, int, int, str, str]] = {}
+    if not leftovers:
+        return matches
+    for item in leftovers:
+        path, start, end, reason, excerpt = leftover_receipt_range(item)
+        if reason not in LEFTOVER_DIFF_REASONS or start == end:
+            continue
+        receipt = (path, start, end, reason, excerpt)
+        width = end - start
+        for line in range(start, end + 1):
+            existing = matches.get((path, line))
+            if existing is None or existing[2] - existing[1] < width:
+                matches[(path, line)] = receipt
+    return matches
+
+
+def leftover_reason_bullet_duplicates_leftover_range(
+    path: str,
+    start: int,
+    end: int,
+    leftover_range: tuple[Any, ...] | None,
+) -> bool:
+    """Return whether a leftover reason bullet would repeat a leftover start-end prefix."""
+    if leftover_range is None:
+        return False
+    range_path, range_start, range_end, _reason, _excerpt = leftover_receipt_range(
+        leftover_range
+    )
+    return range_path == path and range_start <= start and end <= range_end
+
+
 def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
     """Return ``LEFT`` or ``cannot-provide`` when a comment kept only a diff fence."""
     body = comment.get("body")
@@ -836,13 +871,20 @@ def render_leftover_diff_receipts(
     receipts: list[tuple[Any, ...]],
     deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[str]:
-    """Return leftover lines with one deferred row, then each Manual-edit excerpt."""
+    """Return leftover lines with one leftover-range or deferred row, then Manual-edit."""
     matches = leftover_deferred_matches(deferred)
+    range_matches = leftover_range_matches(receipts)
     lines: list[str] = []
     seen_deferred: set[tuple[str, int, int]] = set()
+    seen_leftover_ranges: set[tuple[str, int, int]] = set()
     for item in receipts:
         path, start, end, reason, excerpt = leftover_receipt_range(item)
         excerpt = excerpt.replace("```", "")
+        leftover_range: tuple[Any, ...] | None
+        if start < end:
+            leftover_range = leftover_receipt_range(item)
+        else:
+            leftover_range = range_matches.get((path, start))
         deferred_item = None
         for line in range(start, end + 1):
             deferred_item = matches.get((path, line))
@@ -856,8 +898,25 @@ def render_leftover_diff_receipts(
             if deferred_key not in seen_deferred:
                 lines.extend(render_applyable_receipts([deferred_item]))
                 seen_deferred.add(deferred_key)
+        if leftover_range is not None:
+            range_path, range_start, range_end, range_reason, _range_excerpt = (
+                leftover_receipt_range(leftover_range)
+            )
+            leftover_key = (range_path, range_start, range_end)
+            if leftover_key not in seen_leftover_ranges and (
+                not leftover_reason_bullet_duplicates_deferred(
+                    range_path, range_start, deferred_item, end=range_end
+                )
+            ):
+                lines.append(
+                    f"- `{format_applyable_range(range_path, range_start, range_end)}`"
+                    f" — {range_reason}"
+                )
+                seen_leftover_ranges.add(leftover_key)
         if not leftover_reason_bullet_duplicates_deferred(
             path, start, deferred_item, end=end
+        ) and not leftover_reason_bullet_duplicates_leftover_range(
+            path, start, end, leftover_range
         ):
             lines.append(f"- `{format_applyable_range(path, start, end)}` — {reason}")
         if not excerpt:

@@ -94,7 +94,10 @@ one-click apply for the same span as leftover ``example.py:6``. Leftover
 receipts also accept ``path:start-end`` (and leftover comments with
 ``start_line`` write that range), so leftover ``example.py:5-7`` covers
 every interior line when the overview consumer drops overlapping
-applyable rows. Comments that
+applyable rows. The leftover heading prefixes one leftover
+``path:start-end`` for leftover interiors of that range, so leftover
+``example.py:6`` next to leftover ``example.py:5-7`` shows the range
+once then the Manual-edit excerpts. Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -138,7 +141,10 @@ with the same control object used to build the inline `comments` array.
   applyable range when leftover ``example.py:6`` sits inside
   ``example.py:5-7``, leftover ``path:start-end`` receipts that cover
   every interior leftover line so leftover ``example.py:5-7`` omits
-  applyable ``example.py:6``, and
+  applyable ``example.py:6``, leftover heading prefix of one leftover
+  ``path:start-end`` for leftover interiors of that range so leftover
+  ``example.py:6`` next to leftover ``example.py:5-7`` does not repeat
+  the leftover reason bullet, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
