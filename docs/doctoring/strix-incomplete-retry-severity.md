@@ -53,6 +53,10 @@ evidence.
 Do not lower the two-approval ruleset. Do not treat provider brownout as
 approval evidence. Review agents remain `edit: deny`.
 
+CWE-754 forbids treating an exceptional leftover condition as the
+primary check result (MITRE, 2026). A mid-retry TUI `Severity:` line
+therefore cannot override the trusted incomplete-log-only verdict.
+
 ## Trust boundary
 
 The incomplete-log-only phrases are printed by the trusted `strix_quick_gate.sh`
@@ -93,6 +97,9 @@ the incomplete-evidence sentence also appears, remove the
 classifier unless GitHub Models is again a live, non-retired provider.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
+conditions*. https://cwe.mitre.org/data/definitions/754.html
 
 GitHub. (n.d.). *Workflow syntax for GitHub Actions*. GitHub Docs. Retrieved
 August 13, 2026, from

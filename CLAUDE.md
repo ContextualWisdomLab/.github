@@ -64,7 +64,10 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
-  `scorecard-governance.md`, SBOM inventory.
+  `scorecard-governance.md`, SBOM inventory. Doctoring records live under
+  `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
+  diagram for the Strix incomplete-retry severity gate and merge trust
+  boundaries.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
