@@ -6,12 +6,15 @@ import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
+    comment_on_changed_hunk,
+    filter_payload_comments_to_hunks,
     github_error_is_unprocessable,
     github_publication_error_phrase,
     iter_single_comment_payloads,
     main,
     parse_refused_locations,
     parse_refused_receipts,
+    parse_unified_diff_hunk_lines,
     record_attached_receipt,
     record_refused_receipt,
     render_inline_comment_failure_body,
@@ -19,6 +22,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     render_single_comment_review,
     single_comment_retry_limit,
     trusted_finding_locations,
+    write_hunk_filtered_payload,
     write_single_comment_payloads,
 )
 
@@ -976,3 +980,259 @@ def test_cli_records_attached_and_bounded_split(tmp_path):
             str(tmp_path / "missing-deferred.txt"),
         ]
     ) == 2
+
+
+EXAMPLE_UNIFIED_DIFF = """\
+diff --git a/scripts/ci/example.py b/scripts/ci/example.py
+index 1111111..2222222 100644
+--- a/scripts/ci/example.py
++++ b/scripts/ci/example.py
+@@ -5,7 +5,8 @@ def run():
+     keep
+     keep
+     keep
+-    old
++    new
+     keep
+     keep
+     keep
+diff --git a/scripts/ci/removed.py b/scripts/ci/removed.py
+index 3333333..0000000 100644
+--- a/scripts/ci/removed.py
++++ /dev/null
+@@ -10,3 +0,0 @@ leftover
+-gone
+-gone
+-gone
+diff --git a/scripts/ci/added.py b/scripts/ci/added.py
+new file mode 100644
+index 0000000..4444444
+--- /dev/null
++++ b/scripts/ci/added.py
+@@ -0,0 +1 @@
++created
+diff --git a/old/name.py b/scripts/ci/renamed.py
+similarity index 90%
+rename from old/name.py
+rename to scripts/ci/renamed.py
+index 5555555..6666666 100644
+--- a/old/name.py
++++ b/scripts/ci/renamed.py
+@@ -2 +2 @@
+-old
++new
+"""
+
+
+def test_parse_unified_diff_hunk_lines_covers_github_commentable_ranges():
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+
+    assert hunks["scripts/ci/example.py"]["RIGHT"] == set(range(5, 13))
+    assert hunks["scripts/ci/example.py"]["LEFT"] == set(range(5, 12))
+    assert hunks["scripts/ci/removed.py"]["LEFT"] == {10, 11, 12}
+    assert hunks["scripts/ci/removed.py"]["RIGHT"] == set()
+    assert hunks["scripts/ci/added.py"]["RIGHT"] == {1}
+    assert hunks["scripts/ci/added.py"]["LEFT"] == set()
+    assert hunks["scripts/ci/renamed.py"]["RIGHT"] == {2}
+    assert hunks["old/name.py"]["LEFT"] == {2}
+    assert parse_unified_diff_hunk_lines("") == {}
+    assert parse_unified_diff_hunk_lines("+++ not-a-path\n--- also-bad\n") == {}
+    assert comment_on_changed_hunk("scripts/ci/example.py", 5, hunks)
+    assert comment_on_changed_hunk("scripts/ci/example.py", 12, hunks)
+    assert not comment_on_changed_hunk("scripts/ci/example.py", 20, hunks)
+    assert comment_on_changed_hunk(
+        "scripts/ci/removed.py", 11, hunks, side="LEFT"
+    )
+    assert not comment_on_changed_hunk(
+        "scripts/ci/removed.py", 11, hunks, side="RIGHT"
+    )
+    assert not comment_on_changed_hunk("../escape.py", 1, hunks)
+    assert not comment_on_changed_hunk("scripts/ci/example.py", 0, hunks)
+    assert comment_on_changed_hunk(
+        "scripts/ci/example.py", 7, hunks, side="NOPE"
+    )
+
+
+def test_filter_payload_comments_to_hunks_drops_off_hunk_before_post():
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    payload = _batch_payload(
+        {"path": "scripts/ci/example.py", "line": 7, "side": "RIGHT", "body": "on hunk"},
+        {"path": "scripts/ci/example.py", "line": 20, "side": "RIGHT", "body": "past hunk"},
+        {"path": "scripts/ci/example.py", "line": 20, "side": "RIGHT", "body": "duplicate skip"},
+        {"path": "scripts/ci/removed.py", "line": 11, "side": "LEFT", "body": "deleted"},
+        {"path": "scripts/ci/missing.py", "line": 3, "body": "unchanged path"},
+        {"path": "../escape.py", "line": 1, "body": "unsafe"},
+        "not-an-object",
+    )
+
+    filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
+    assert [item["line"] for item in filtered["comments"]] == [7, 11]
+    assert skipped == [
+        ("scripts/ci/example.py", 20),
+        ("scripts/ci/missing.py", 3),
+    ]
+    unchanged, no_skip = filter_payload_comments_to_hunks(payload, {})
+    assert unchanged["comments"] == payload["comments"]
+    assert no_skip == []
+    no_comments, empty_skip = filter_payload_comments_to_hunks(
+        {"event": "COMMENT", "comments": "bad"}, hunks
+    )
+    assert no_comments["comments"] == "bad"
+    assert empty_skip == []
+
+
+def test_skipped_receipts_list_off_hunk_locations():
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 7},
+            {"path": "scripts/ci/example.py", "line": 20},
+            {"path": "scripts/ci/ok.py", "line": 4},
+        ),
+        attached_locations=[("scripts/ci/ok.py", 4)],
+        skipped_locations=[
+            ("scripts/ci/example.py", 20),
+            ("scripts/ci/foreign.py", 1),
+        ],
+    )
+    assert "GitHub accepted these trusted current-head finding locations:" in body
+    assert "- `scripts/ci/ok.py:4`" in body
+    assert (
+        "were not posted because they sit outside every current-head changed hunk:"
+        in body
+    )
+    assert "- `scripts/ci/example.py:20`" in body
+    assert "scripts/ci/foreign.py" not in body
+    skipped_only = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 20}),
+        skipped_locations=[("scripts/ci/example.py", 20)],
+    )
+    assert (
+        "were not posted because they sit outside every current-head changed hunk:"
+        in skipped_only
+    )
+    assert "did not copy suggested diffs" in skipped_only
+    assert "did not accept the inline review comments" not in skipped_only
+    skipped_with_deferred = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/later.py", "line": 20},
+            {"path": "scripts/ci/example.py", "line": 20},
+        ),
+        deferred_locations=[("scripts/ci/later.py", 20)],
+        skipped_locations=[("scripts/ci/example.py", 20)],
+        retry_limit=1,
+    )
+    assert "were not retried (retry limit 1):" in skipped_with_deferred
+    assert (
+        "were not posted because they sit outside every current-head changed hunk:"
+        in skipped_with_deferred
+    )
+
+
+def test_cli_filters_payload_to_current_head_hunks(tmp_path):
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            _batch_payload(
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "side": "RIGHT",
+                    "body": "keep",
+                },
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 20,
+                    "side": "RIGHT",
+                    "body": "drop",
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    hunks_diff = tmp_path / "hunks.diff"
+    hunks_diff.write_text(EXAMPLE_UNIFIED_DIFF, encoding="utf-8")
+    output = tmp_path / "filtered.json"
+    skipped = tmp_path / "skipped.txt"
+
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(payload),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+                "--skipped-locations",
+                str(skipped),
+            ]
+        )
+        == 0
+    )
+    filtered = json.loads(output.read_text(encoding="utf-8"))
+    assert [item["line"] for item in filtered["comments"]] == [7]
+    assert skipped.read_text(encoding="utf-8") == "scripts/ci/example.py:20\n"
+    assert write_hunk_filtered_payload(
+        json.loads(payload.read_text(encoding="utf-8")),
+        parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF),
+        tmp_path / "again.json",
+    ) == 1
+    assert main(["--filter-hunks"]) == 2
+    assert (
+        main(
+            [
+                "--filter-hunks",
+                "--payload",
+                str(tmp_path / "missing.json"),
+                "--hunks-diff",
+                str(hunks_diff),
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(control({"path": "scripts/ci/example.py", "line": 20})),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--skipped-locations",
+                str(skipped),
+            ]
+        )
+        == 0
+    )
+    assert "scripts/ci/example.py:20" in receipt.read_text(encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--skipped-locations",
+                str(tmp_path / "missing-skipped.txt"),
+            ]
+        )
+        == 2
+    )

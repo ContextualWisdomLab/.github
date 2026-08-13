@@ -1629,6 +1629,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "--deferred-locations" in workflow
     assert "--retry-limit" in workflow
     assert "${OPENCODE_INLINE_COMMENT_RETRY_LIMIT:-20}" in workflow
+    assert "--filter-hunks" in workflow
+    assert "--hunks-diff" in workflow
+    assert "prefilter_inline_comments_to_hunks" in workflow
+    assert '--skipped-locations "$skipped_locations_file"' in workflow
+    assert "--unified=3" in workflow
     assert "accepted some inline comments" not in workflow
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step

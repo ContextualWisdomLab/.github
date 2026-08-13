@@ -38,6 +38,17 @@ line, is the phrase source. A later comment's different GitHub error
 does not overwrite an earlier one. URLs are stripped and each phrase is
 bounded to 240 characters.
 
+Before the first GitHub POST, the publisher runs
+`git diff --unified=3` from the merge base to the current head and keeps
+only comments whose `path:line` sits inside a parsed hunk range, including
+hunk context lines. GitHub accepts review comments only on those diff
+hunks (GitHub, n.d.-b); off-hunk comments are recorded as skipped
+`path:line` receipts instead of being sent. An empty hunk map leaves the
+payload unchanged so a failed diff collection cannot drop every comment.
+This matches the modern-review expectation that discussion belongs on the
+changed hunk rather than elsewhere in the file (Bacchelli & Bird, 2013;
+Sadowski et al., 2018).
+
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
 Suggested diffs stay out of the PR-level body.
@@ -51,7 +62,8 @@ Suggested diffs stay out of the PR-level body.
   splitting, `--is-unprocessable` classification, mixed-success
   receipts that list attached path:line beside refused path:line,
   per-comment 422 phrases, the 20-comment one-at-a-time retry cap, and
-  leftover path:line rows that were not retried.
+  leftover path:line rows that were not retried, unified-diff hunk
+  parsing, and the pre-POST filter that drops off-hunk comments.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
@@ -75,3 +87,8 @@ https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request
 GitHub. (n.d.-b). *Create a review comment for a pull request*. GitHub Docs.
 Retrieved August 13, 2026, from
 https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pull-request
+
+Sadowski, C., Söderberg, E., Church, L., Sipko, M., & Bacchelli, A. (2018).
+Modern code review: A case study at Google. In *Proceedings of the 40th
+International Conference on Software Engineering: Software Engineering in
+Practice* (pp. 181–190). ACM. https://doi.org/10.1145/3183519.3183525

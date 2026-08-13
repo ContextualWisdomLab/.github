@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a GitHub 422 inline-comment fallback that cites trusted path:line."""
+"""Filter inline comments to current-head hunks and cite refused path:line."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ from typing import Any
 DEFAULT_SINGLE_COMMENT_RETRY_LIMIT = 20
 ERROR_PHRASE_MAX_CHARS = 240
 HTTP_422_LINE_RE = re.compile(r"(?im)^(?:gh:\s*)?(.*HTTP 422.*)$")
+HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
+MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -127,6 +130,117 @@ def record_refused_receipt(
     phrase = github_publication_error_phrase(error_text)
     with dest.open("a", encoding="utf-8") as handle:
         handle.write(f"{safe_path}:{safe_line}\t{phrase}\n")
+
+
+def _hunk_side_lines(start_text: str, count_text: str | None) -> set[int]:
+    """Return inclusive new- or old-file line numbers for one unified hunk side."""
+    start = int(start_text)
+    count = int(count_text) if count_text is not None else 1
+    if count < 1:
+        return set()
+    return set(range(start, start + count))
+
+
+def _diff_path(raw_path: str) -> str | None:
+    """Return a safe repository path from a unified-diff a/ or b/ suffix."""
+    return safe_finding_path(raw_path.strip().strip('"'))
+
+
+def parse_unified_diff_hunk_lines(
+    diff_text: str,
+) -> dict[str, dict[str, set[int]]]:
+    """Return LEFT/RIGHT commentable lines for each path in a unified diff."""
+    hunks: dict[str, dict[str, set[int]]] = {}
+    current_left: str | None = None
+    current_right: str | None = None
+    for raw in (diff_text or "").splitlines():
+        if raw.startswith("+++ "):
+            match = PLUS_PATH_RE.match(raw)
+            current_right = _diff_path(match.group(1)) if match else None
+            continue
+        if raw.startswith("--- "):
+            match = MINUS_PATH_RE.match(raw)
+            current_left = _diff_path(match.group(1)) if match else None
+            continue
+        header = HUNK_HEADER_RE.match(raw)
+        if header is None:
+            continue
+        left_lines = _hunk_side_lines(header.group(1), header.group(2))
+        right_lines = _hunk_side_lines(header.group(3), header.group(4))
+        if current_left and left_lines:
+            bucket = hunks.setdefault(current_left, {"LEFT": set(), "RIGHT": set()})
+            bucket["LEFT"].update(left_lines)
+        if current_right and right_lines:
+            bucket = hunks.setdefault(current_right, {"LEFT": set(), "RIGHT": set()})
+            bucket["RIGHT"].update(right_lines)
+    return hunks
+
+
+def comment_on_changed_hunk(
+    path: str,
+    line: int,
+    hunks: dict[str, dict[str, set[int]]],
+    *,
+    side: str = "RIGHT",
+) -> bool:
+    """Return whether ``path:line`` sits on a current-head changed hunk."""
+    safe_path = safe_finding_path(path)
+    safe_line = safe_finding_line(line)
+    if safe_path is None or safe_line is None:
+        return False
+    side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"
+    return safe_line in hunks.get(safe_path, {}).get(side_key, set())
+
+
+def filter_payload_comments_to_hunks(
+    payload: dict[str, Any],
+    hunks: dict[str, dict[str, set[int]]],
+) -> tuple[dict[str, Any], list[tuple[str, int]]]:
+    """Keep only comments whose path:line sits on a current-head changed hunk."""
+    comments = payload.get("comments")
+    if not hunks or not isinstance(comments, list):
+        return payload, []
+    kept: list[Any] = []
+    skipped: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        path = safe_finding_path(comment.get("path"))
+        line = safe_finding_line(comment.get("line"))
+        if path is None or line is None:
+            continue
+        side = comment.get("side")
+        side_key = side if side in {"LEFT", "RIGHT"} else "RIGHT"
+        if comment_on_changed_hunk(path, line, hunks, side=side_key):
+            kept.append(comment)
+            continue
+        location = (path, line)
+        if location in seen:
+            continue
+        seen.add(location)
+        skipped.append(location)
+    filtered = dict(payload)
+    filtered["comments"] = kept
+    return filtered, skipped
+
+
+def write_hunk_filtered_payload(
+    payload: dict[str, Any],
+    hunks: dict[str, dict[str, set[int]]],
+    output: Path,
+    skipped_path: Path | None = None,
+) -> int:
+    """Write a hunk-filtered review payload and optional skipped ``path:line`` rows."""
+    filtered, skipped = filter_payload_comments_to_hunks(payload, hunks)
+    comments = filtered.get("comments")
+    output.write_text(json.dumps(filtered, ensure_ascii=True), encoding="utf-8")
+    if skipped_path is not None:
+        skipped_path.write_text(
+            "".join(f"{path}:{line}\n" for path, line in skipped),
+            encoding="utf-8",
+        )
+    return len(comments) if isinstance(comments, list) else 0
 
 
 def record_attached_receipt(dest: Path, path: str, line: int) -> None:
@@ -306,14 +420,16 @@ def render_inline_comment_failure_suffix(
     phrases: dict[tuple[str, int], str] | None = None,
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
+    skipped_locations: list[tuple[str, int]] | None = None,
     retry_limit: int | None = None,
 ) -> str:
     """Return the PR-body suffix used when GitHub rejects inline comments."""
     attached = attached_locations or []
     deferred = deferred_locations or []
+    skipped = skipped_locations or []
     heading = (
         "## Inline comment publication receipts"
-        if error_phrase or mixed_success or attached or deferred
+        if error_phrase or mixed_success or attached or deferred or skipped
         else "## Inline comment publishing failed"
     )
     lines = [
@@ -355,7 +471,7 @@ def render_inline_comment_failure_suffix(
             "current-head changed hunks, or inspect the workflow log/control "
             "JSON and apply the changes manually."
         )
-    elif not attached and not deferred:
+    elif not attached and not deferred and not skipped:
         lines.append(
             "GitHub did not accept the inline review comments, and the "
             "control JSON had no trusted path:line findings. Inspect the "
@@ -375,6 +491,23 @@ def render_inline_comment_failure_suffix(
         lines.append("")
         lines.extend(render_inline_comment_receipts(deferred))
         if not locations:
+            lines.append("")
+            lines.append(
+                "OpenCode did not copy suggested diffs into this PR-level body. "
+                "Re-run the review after those exact path:line anchors sit on "
+                "current-head changed hunks, or inspect the workflow log/control "
+                "JSON and apply the changes manually."
+            )
+    if skipped:
+        if locations or attached or deferred:
+            lines.append("")
+        lines.append(
+            "These trusted current-head finding locations were not posted "
+            "because they sit outside every current-head changed hunk:"
+        )
+        lines.append("")
+        lines.extend(render_inline_comment_receipts(skipped))
+        if not locations and not deferred:
             lines.append("")
             lines.append(
                 "OpenCode did not copy suggested diffs into this PR-level body. "
@@ -412,6 +545,7 @@ def render_inline_comment_failure_body(
     refused_receipts: list[tuple[str, int, str]] | None = None,
     attached_locations: list[tuple[str, int]] | None = None,
     deferred_locations: list[tuple[str, int]] | None = None,
+    skipped_locations: list[tuple[str, int]] | None = None,
     retry_limit: int | None = None,
 ) -> str:
     """Append the 422 fallback suffix to an existing REQUEST_CHANGES body."""
@@ -427,6 +561,11 @@ def render_inline_comment_failure_body(
         if deferred_locations is not None
         else []
     )
+    skipped = (
+        _trusted_location_subset(skipped_locations, allowed)
+        if skipped_locations is not None
+        else []
+    )
     phrases: dict[tuple[str, int], str] | None = None
     if refused_receipts is not None:
         locations = [
@@ -440,20 +579,25 @@ def render_inline_comment_failure_body(
             if phrase and (path, line) in allowed
         }
         mixed_success = True
-        if not locations and not attached and not deferred:
+        if not locations and not attached and not deferred and not skipped:
             return body.rstrip("\n") + "\n"
-    elif refused_locations is None and attached_locations is None and deferred_locations is None:
+    elif (
+        refused_locations is None
+        and attached_locations is None
+        and deferred_locations is None
+        and skipped_locations is None
+    ):
         locations = trusted_finding_locations(control)
         mixed_success = False
     elif refused_locations is None:
         locations = []
         mixed_success = True
-        if not attached and not deferred:
+        if not attached and not deferred and not skipped:
             return body.rstrip("\n") + "\n"
     else:
         locations = [item for item in refused_locations if item in allowed]
         mixed_success = True
-        if not locations and not attached and not deferred:
+        if not locations and not attached and not deferred and not skipped:
             return body.rstrip("\n") + "\n"
     return body.rstrip("\n") + render_inline_comment_failure_suffix(
         locations,
@@ -462,6 +606,7 @@ def render_inline_comment_failure_body(
         phrases=phrases,
         attached_locations=attached or None,
         deferred_locations=deferred or None,
+        skipped_locations=skipped or None,
         retry_limit=retry_limit,
     )
 
@@ -490,12 +635,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refused-locations", type=Path)
     parser.add_argument("--attached-locations", type=Path)
     parser.add_argument("--deferred-locations", type=Path)
+    parser.add_argument("--skipped-locations", type=Path)
     parser.add_argument("--retry-limit", type=int)
     parser.add_argument("--record-refusal", action="store_true")
     parser.add_argument("--record-attach", action="store_true")
     parser.add_argument("--comment-file", type=Path)
+    parser.add_argument("--filter-hunks", action="store_true")
+    parser.add_argument("--payload", type=Path)
+    parser.add_argument("--hunks-diff", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.filter_hunks:
+            if args.payload is None or args.hunks_diff is None or args.output is None:
+                raise ValueError(
+                    "--payload, --hunks-diff, and --output are required "
+                    "with --filter-hunks"
+                )
+            payload = load_control(args.payload)
+            hunks = parse_unified_diff_hunk_lines(
+                args.hunks_diff.read_text(encoding="utf-8")
+            )
+            write_hunk_filtered_payload(
+                payload,
+                hunks,
+                args.output,
+                skipped_path=args.skipped_locations,
+            )
+            return 0
         if args.record_attach:
             if args.attached_locations is None or args.comment_file is None:
                 raise ValueError(
@@ -572,6 +738,7 @@ def main(argv: list[str] | None = None) -> int:
         refused_receipts = None
         attached_locations = None
         deferred_locations = None
+        skipped_locations = None
         if args.refused_locations is not None:
             parsed_receipts = parse_refused_receipts(
                 args.refused_locations.read_text(encoding="utf-8")
@@ -590,6 +757,10 @@ def main(argv: list[str] | None = None) -> int:
             deferred_locations = parse_refused_locations(
                 args.deferred_locations.read_text(encoding="utf-8")
             )
+        if args.skipped_locations is not None:
+            skipped_locations = parse_refused_locations(
+                args.skipped_locations.read_text(encoding="utf-8")
+            )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -602,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
             refused_receipts=refused_receipts,
             attached_locations=attached_locations,
             deferred_locations=deferred_locations,
+            skipped_locations=skipped_locations,
             retry_limit=args.retry_limit,
         ),
         encoding="utf-8",
