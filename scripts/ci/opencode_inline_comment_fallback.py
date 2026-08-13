@@ -635,6 +635,26 @@ def strip_left_origin_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return rewritten
 
 
+def sanitize_leftover_excerpt(text: str) -> str:
+    """Return leftover excerpt text that cannot break the overview HTML comment.
+
+    The overview lives in ``<!-- opencode-review-overview -->``. A leftover
+    ``-->`` or HTML metacharacter would close that comment or inject markup
+    (CWE-116). Fence markers are also removed so a leftover cannot reopen
+    a GitHub suggestion block.
+    """
+    excerpt = (text or "").replace("\r\n", "\n").replace("\t", " ")
+    excerpt = (
+        excerpt.replace("```", "")
+        .replace("<!--", "")
+        .replace("-->", "")
+        .replace("<", "")
+        .replace(">", "")
+        .replace("&", "")
+    )
+    return excerpt.strip("\n")
+
+
 def leftover_manual_edit_text(body: object) -> str:
     """Return bounded leftover `` ```diff `` text for a manual-edit overview block."""
     if not isinstance(body, str):
@@ -650,7 +670,7 @@ def leftover_manual_edit_text(body: object) -> str:
         if stripped:
             excerpt = stripped
             break
-    excerpt = excerpt.replace("```", "").replace("\r\n", "\n").strip("\n")
+    excerpt = sanitize_leftover_excerpt(excerpt)
     if not excerpt.strip():
         return ""
     if len(excerpt) > MANUAL_EDIT_MAX_CHARS:
@@ -660,7 +680,7 @@ def leftover_manual_edit_text(body: object) -> str:
 
 def encode_manual_edit_field(text: str) -> str:
     """Encode an already-extracted leftover excerpt for one leftover-receipt row."""
-    excerpt = (text or "").replace("```", "").replace("\t", " ").replace("\r\n", "\n")
+    excerpt = sanitize_leftover_excerpt(text)
     if len(excerpt) > MANUAL_EDIT_MAX_CHARS:
         excerpt = excerpt[:MANUAL_EDIT_MAX_CHARS].rstrip() + "…"
     return excerpt.replace("\n", "\\n")
