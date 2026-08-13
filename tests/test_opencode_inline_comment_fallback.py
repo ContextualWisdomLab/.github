@@ -22,6 +22,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     parse_applyable_origin_field,
     strip_left_origin_fields,
     leftover_deferred_matches,
+    leftover_reason_bullet_duplicates_deferred,
     leftover_diff_fence_reason,
     leftover_diff_fence_receipts,
     leftover_manual_edit_text,
@@ -3450,8 +3451,10 @@ def test_deferred_cannot_provide_and_deletion_keep_manual_edit_and_deferred_row(
     assert MANUAL_EDIT_HEADING in leftover_section
     assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in leftover_section
     assert leftover_manual_edit_text(SUGGESTED_DIFF_BODY) in leftover_section
-    assert "- `scripts/ci/blocked.py:4` — cannot-provide" in leftover_section
-    assert "- `scripts/ci/removed.py:11` — LEFT" in leftover_section
+    assert "- `scripts/ci/blocked.py:4`" in leftover_section
+    assert "- `scripts/ci/removed.py:11`" in leftover_section
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" not in leftover_section
+    assert "- `scripts/ci/removed.py:11` — LEFT" not in leftover_section
     deferred_section = body.split(deferred_heading, 1)[1]
     if leftover_heading in deferred_section:
         deferred_section = deferred_section.split(leftover_heading, 1)[0]
@@ -3584,12 +3587,30 @@ def test_leftover_heading_lists_deferred_leftover_before_manual_edit(tmp_path):
     )
     joined = "\n".join(rendered_leftover)
     blocked_row = joined.index("- `scripts/ci/blocked.py:4`")
-    blocked_reason = joined.index("- `scripts/ci/blocked.py:4` — cannot-provide")
     blocked_edit = joined.index(MANUAL_EDIT_HEADING)
     posted_reason = joined.index("- `scripts/ci/example.py:8` — cannot-provide")
-    assert blocked_row < blocked_reason < blocked_edit < posted_reason
+    assert blocked_row < blocked_edit < posted_reason
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" not in joined
     assert leftover_manual_edit_text(NA_DIFF_BODY) in joined
     assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in joined
+    assert leftover_reason_bullet_duplicates_deferred(
+        "scripts/ci/blocked.py", 4, None
+    ) is False
+    assert leftover_reason_bullet_duplicates_deferred(
+        "scripts/ci/blocked.py",
+        4,
+        ("scripts/ci/other.py", 4, 4, None, None),
+    ) is False
+    assert leftover_reason_bullet_duplicates_deferred(
+        "scripts/ci/blocked.py",
+        9,
+        ("scripts/ci/blocked.py", 4, 4, None, None),
+    ) is False
+    assert leftover_reason_bullet_duplicates_deferred(
+        "scripts/ci/blocked.py",
+        4,
+        ("scripts/ci/blocked.py", 4, 4, None, None),
+    ) is True
 
     body = render_inline_comment_failure_body(
         "## Findings\n",
@@ -3617,7 +3638,7 @@ def test_leftover_heading_lists_deferred_leftover_before_manual_edit(tmp_path):
         leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
     )
     assert leftover_section.index("- `scripts/ci/blocked.py:4`") < blocked_excerpt_at
-    assert leftover_section.index("- `scripts/ci/blocked.py:4` — cannot-provide") < blocked_excerpt_at
+    assert "- `scripts/ci/blocked.py:4` — cannot-provide" not in leftover_section
     applyable_heading = "GitHub can apply these suggested replacements:"
     if applyable_heading in leftover_section:
         leftover_section = leftover_section.split(applyable_heading, 1)[0]

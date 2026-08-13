@@ -755,11 +755,25 @@ def leftover_deferred_matches(
     return matches
 
 
+def leftover_reason_bullet_duplicates_deferred(
+    path: str,
+    line: int,
+    deferred_item: tuple[str, int, int, str | None, int | None] | None,
+) -> bool:
+    """Return whether a leftover reason bullet would repeat a prefixed deferred row."""
+    if deferred_item is None:
+        return False
+    deferred_path, start, end, _origin_path, _origin_line = _applyable_receipt_parts(
+        deferred_item
+    )
+    return deferred_path == path and start <= line <= end
+
+
 def render_leftover_diff_receipts(
     receipts: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
     deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[str]:
-    """Return leftover lines with deferred range/origin before a Manual-edit excerpt."""
+    """Return leftover lines with one deferred row, then a Manual-edit excerpt."""
     matches = leftover_deferred_matches(deferred)
     lines: list[str] = []
     for item in receipts:
@@ -768,7 +782,8 @@ def render_leftover_diff_receipts(
         deferred_item = matches.get((path, line))
         if deferred_item is not None:
             lines.extend(render_applyable_receipts([deferred_item]))
-        lines.append(f"- `{path}:{line}` — {reason}")
+        if not leftover_reason_bullet_duplicates_deferred(path, line, deferred_item):
+            lines.append(f"- `{path}:{line}` — {reason}")
         if not excerpt:
             continue
         lines.append(f"  {MANUAL_EDIT_HEADING}")

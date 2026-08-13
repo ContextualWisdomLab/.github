@@ -37,8 +37,9 @@ that still has only a `` ```diff `` fence (``cannot-provide`` or a
 pure-deletion ``LEFT``) keeps that Manual-edit block as well as the
 deferred row. When leftover and deferred share a ``path:line``, the
 leftover heading lists the deferred range/origin first, then the
-Manual-edit excerpt, and deferred leftovers appear before leftovers
-that were already posted. The first success uses `REQUEST_CHANGES` plus the review
+Manual-edit excerpt, without repeating the leftover reason bullet,
+and deferred leftovers appear before leftovers that were already
+posted. The first success uses `REQUEST_CHANGES` plus the review
 body; later successes use `COMMENT`. Survivors therefore still appear on
 Files changed. Remaining failures still rebuild the fallback from the
 `gh api` error file and write durable receipts into the OpenCode
@@ -115,7 +116,8 @@ with the same control object used to build the inline `comments` array.
   range and LEFT origin as non-applyable overview context, deferred
   cannot-provide and pure-deletion leftovers that keep both the
   Manual-edit block and the deferred row, leftover-heading order that
-  lists a shared deferred leftover before its Manual-edit excerpt, and
+  lists a shared deferred leftover before its Manual-edit excerpt
+  without a duplicate reason bullet, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
