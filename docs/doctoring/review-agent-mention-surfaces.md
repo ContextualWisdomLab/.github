@@ -2,6 +2,9 @@
 
 검토 기준일: **2026-08-13**
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r`
+include; a lone `--require-hashes` line is not lock evidence.
+
 ## Incident
 
 Trusted maintainers invoked `@cwl-noema-review` and `@opencode-agent` from
