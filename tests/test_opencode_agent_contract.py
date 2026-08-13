@@ -1671,6 +1671,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "leftover_reason_bullet_duplicates_deferred" in helper
     assert "range(start, end + 1)" in helper
     assert "seen_deferred" in helper
+    assert "allowed=allowed" in helper
     assert "Manual edit (not a GitHub suggestion):" in helper
     assert (
         "These comments still have a suggested-diff fence that GitHub cannot apply:"

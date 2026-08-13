@@ -3820,3 +3820,95 @@ def test_leftover_heading_emits_deferred_range_once_for_multiple_interior_leftov
         assert na_excerpt not in applyable_section
         assert "scripts/ci/example.py:5-7" not in applyable_section
 
+
+def trusted_interior_leftover_fixture() -> tuple[
+    list[tuple[str, int, str, str]],
+    list[tuple[str, int, int, str | None, int | None]],
+    set[tuple[str, int]],
+    str,
+]:
+    """Interior leftover inside a trusted deferred range, plus an untrusted leftover."""
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover = [
+        ("scripts/ci/example.py", 6, "cannot-provide", excerpt),
+        ("scripts/ci/foreign.py", 1, "cannot-provide", "ignored"),
+    ]
+    deferred = [("scripts/ci/example.py", 5, 7, None, None)]
+    allowed = {("scripts/ci/example.py", 5)}
+    return leftover, deferred, allowed, excerpt
+
+
+def test_trusted_interior_leftover_kept_under_deferred_range():
+    from scripts.ci.opencode_inline_comment_fallback import _trusted_receipt_subset
+
+    leftover, deferred, allowed, excerpt = trusted_interior_leftover_fixture()
+    kept = _trusted_receipt_subset(leftover, allowed, deferred=deferred)
+    assert kept == [("scripts/ci/example.py", 6, "cannot-provide", excerpt)]
+    assert _trusted_receipt_subset(leftover, allowed) == []
+    assert _trusted_receipt_subset([], allowed, deferred=deferred) == []
+    assert _trusted_receipt_subset(None, allowed, deferred=deferred) == []
+    untrusted_deferred = [
+        *deferred,
+        ("scripts/ci/foreign.py", 1, 3, None, None),
+    ]
+    assert _trusted_receipt_subset(
+        leftover, allowed, deferred=untrusted_deferred
+    ) == kept
+    assert leftover_manual_edits_with_deferred(
+        leftover, deferred, allowed=allowed
+    ) == kept
+    assert leftover_manual_edits_with_deferred(
+        leftover, untrusted_deferred, allowed=allowed
+    ) == kept
+    assert leftover_manual_edits_with_deferred(leftover, [], allowed=allowed) == []
+    assert leftover_manual_edits_with_deferred(
+        leftover, deferred, allowed={("scripts/ci/example.py", 6)}
+    )[0][:2] == ("scripts/ci/example.py", 6)
+    assert leftover_manual_edits_with_deferred(
+        leftover,
+        [("scripts/ci/foreign.py", 1, 3, None, None)],
+        allowed=allowed,
+    ) == []
+    assert _trusted_receipt_subset(
+        leftover,
+        allowed,
+        deferred=[
+            ("scripts/ci/foreign.py", 1, 3, None, None),
+            ("scripts/ci/example.py", 5, 7, None, None),
+        ],
+    ) == [("scripts/ci/example.py", 6, "cannot-provide", excerpt)]
+    assert _trusted_receipt_subset(
+        leftover,
+        allowed,
+        deferred=[("scripts/ci/foreign.py", 1, 3, None, None)],
+    ) == []
+
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control({"path": "scripts/ci/example.py", "line": 5}),
+        deferred_locations=deferred,
+        applyable_locations=deferred,
+        leftover_locations=leftover,
+        retry_limit=1,
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    assert leftover_heading in body
+    leftover_section = body.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert leftover_section.index("- `scripts/ci/example.py:5-7`") < leftover_section.index(
+        MANUAL_EDIT_HEADING
+    )
+    assert excerpt in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in leftover_section
+    assert "foreign.py" not in leftover_section
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert excerpt not in applyable_section
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+

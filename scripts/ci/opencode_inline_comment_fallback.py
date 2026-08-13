@@ -1118,18 +1118,32 @@ def exclude_deferred_applyable(
 
 
 def leftover_manual_edits_with_deferred(
-    leftovers: list[tuple[str, int, str, str]],
+    leftovers: list[tuple[str, int, str, str]] | list[tuple[str, int, str]],
     deferred: list[tuple[str, int, int, str | None, int | None]],
+    allowed: set[tuple[str, int]] | None = None,
 ) -> list[tuple[str, int, str, str]]:
-    """Keep leftover Manual-edit receipts even when the same leftover is deferred."""
+    """Keep leftover Manual-edit receipts on a trusted finding or deferred range."""
     if not leftovers:
         return []
     matches = leftover_deferred_matches(deferred)
+    if allowed is not None:
+        allowed_paths = {path for path, _line in allowed}
+        matches = {
+            location: receipt
+            for location, receipt in matches.items()
+            if location[0] in allowed_paths
+        }
     kept: list[tuple[str, int, str, str]] = []
     seen: set[tuple[str, int]] = set()
     for item in leftovers:
         path, line, reason, excerpt = _leftover_receipt_parts(item)
         if reason not in LEFTOVER_DIFF_REASONS or (path, line) in seen:
+            continue
+        if (
+            allowed is not None
+            and (path, line) not in allowed
+            and (path, line) not in matches
+        ):
             continue
         seen.add((path, line))
         kept.append((path, line, reason, excerpt))
@@ -1366,23 +1380,17 @@ def _trusted_range_subset(
 def _trusted_receipt_subset(
     items: list[tuple[str, int, str, str]] | list[tuple[str, int, str]] | None,
     allowed: set[tuple[str, int]],
+    deferred: list[tuple[str, int, int, str | None, int | None]] | None = None,
 ) -> list[tuple[str, int, str, str]]:
-    """Return first-seen leftover receipts whose path:line is a trusted finding."""
+    """Return leftover receipts on a trusted finding or trusted deferred range."""
     if not items:
         return []
-    kept: list[tuple[str, int, str, str]] = []
-    seen: set[tuple[str, int]] = set()
-    for item in items:
-        path, line, reason, excerpt = _leftover_receipt_parts(item)
-        if (
-            (path, line) not in allowed
-            or (path, line) in seen
-            or reason not in LEFTOVER_DIFF_REASONS
-        ):
-            continue
-        seen.add((path, line))
-        kept.append((path, line, reason, excerpt))
-    return kept
+    trusted_deferred = (
+        _trusted_deferred_subset(deferred, allowed) if deferred else []
+    )
+    return leftover_manual_edits_with_deferred(
+        items, trusted_deferred, allowed=allowed
+    )
 
 
 def render_inline_comment_failure_body(
@@ -1433,7 +1441,7 @@ def render_inline_comment_failure_body(
         else []
     )
     leftover = (
-        _trusted_receipt_subset(leftover_locations, allowed)
+        _trusted_receipt_subset(leftover_locations, allowed, deferred=deferred)
         if leftover_locations is not None
         else []
     )

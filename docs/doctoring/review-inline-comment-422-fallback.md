@@ -119,7 +119,9 @@ with the same control object used to build the inline `comments` array.
   lists a shared deferred leftover before its Manual-edit excerpt
   without a duplicate reason bullet, including leftover lines inside a
   deferred ``path:start-end`` grouped under one deferred range prefix,
-  and
+  leftover Manual-edit excerpts kept when the leftover line sits inside
+  a trusted deferred range even if that exact line is not a trusted
+  finding, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
