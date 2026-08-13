@@ -110,6 +110,8 @@ def test_unhashed_requirements_without_lock_keep_resolver_audit(
     module = load_module()
     requirements = tmp_path / "requirements-demo.txt"
     requirements.write_text("demo==1.0.0\n", encoding="utf-8")
+    named_lock = tmp_path / "requirements-strix-ci-hashes.txt"
+    named_lock.write_text("strix-agent==1.5.3\n", encoding="utf-8")
 
     command = module.audit_command(requirements)
 
@@ -120,6 +122,8 @@ def test_unhashed_requirements_without_lock_keep_resolver_audit(
         "-r",
         str(requirements),
     ]
+    assert module.is_hashed_lock(named_lock) is False
+    assert "--disable-pip" not in (module.audit_command(named_lock) or [])
 
 
 def test_discover_skips_git_and_audits_manifest(
@@ -131,6 +135,9 @@ def test_discover_skips_git_and_audits_manifest(
     (tmp_path / ".git").mkdir()
     git_copy = tmp_path / ".git" / "requirements-hidden.txt"
     git_copy.write_text("hidden==1.0.0\n", encoding="utf-8")
+    venv = tmp_path / ".venv" / "lib"
+    venv.mkdir(parents=True)
+    (venv / "requirements-venv.txt").write_text("venv==1.0.0\n", encoding="utf-8")
     visible = tmp_path / "requirements-visible-hashes.txt"
     _conflicting_strix_lock(visible)
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")

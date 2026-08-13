@@ -52,7 +52,9 @@ line on the protected base before #961 can go green.
 
 `tests/test_pip_audit_requirements.py` reconstructs the #961 lock shape and
 requires `--disable-pip` for that file, a skip for the override/input pair,
-and the `--no-deps` installer line on `strix.yml`.
+and the `--no-deps` installer line on `strix.yml`. A `*-hashes.txt` name
+without `--hash=` / `--require-hashes` is not treated as a complete lock,
+and discovery skips `.venv` trees.
 
 ## References (APA 7th)
 

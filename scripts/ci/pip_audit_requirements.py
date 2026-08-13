@@ -19,6 +19,9 @@ from collections.abc import Callable, Sequence
 
 
 Runner = Callable[[Sequence[str]], int]
+SKIP_DISCOVERY_PARTS = frozenset(
+    {".git", ".venv", "venv", "node_modules", "__pycache__"}
+)
 
 
 def _requirement_lines(path: pathlib.Path) -> list[str]:
@@ -40,10 +43,13 @@ def is_override_file(path: pathlib.Path) -> bool:
 
 
 def is_hashed_lock(path: pathlib.Path) -> bool:
-    """Return whether *path* is a pip hash-checking lock."""
+    """Return whether *path* actually contains pip hash-checking evidence.
 
-    if path.name.endswith("-hashes.txt"):
-        return True
+    A ``*-hashes.txt`` name alone is not enough: an empty or pin-only file
+    would otherwise be audited with ``--disable-pip`` and report a clean
+    empty set instead of a missing complete lock.
+    """
+
     lines = _requirement_lines(path)
     if not lines:
         return False
@@ -89,11 +95,11 @@ def audit_command(path: pathlib.Path) -> list[str] | None:
 
 
 def discover_requirement_files(root: pathlib.Path) -> list[pathlib.Path]:
-    """Return ``requirements*.txt`` files under *root*, skipping ``.git``."""
+    """Return ``requirements*.txt`` files under *root*, skipping VCS and venvs."""
 
     found: list[pathlib.Path] = []
     for path in sorted(root.rglob("requirements*.txt")):
-        if ".git" in path.parts:
+        if SKIP_DISCOVERY_PARTS.intersection(path.parts):
             continue
         if not path.is_file():
             continue
