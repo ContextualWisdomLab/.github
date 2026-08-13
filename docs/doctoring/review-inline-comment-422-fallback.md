@@ -83,6 +83,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 
 ## References (APA 7th)
 
+MITRE. (2026). *CWE-1288: Improper validation of syntactic correctness of
+input*. https://cwe.mitre.org/data/definitions/1288.html
+
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on
 Software Engineering* (pp. 712–721). IEEE.
