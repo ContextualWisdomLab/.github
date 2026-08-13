@@ -58,6 +58,20 @@ run must produce a matching `evidence-binding.json` before the result is called
 clean. The observed run above is inconclusive and must not be used as approval
 evidence.
 
+The same boundary was reproduced on the current exact head of PR #965. Run
+`31696985802` (job `94436969831`) reported `success` for head
+`b8695c534cf15a2227d92f942dcce3c653276393`, but the downloaded
+`strix-reports` artifact had no `evidence-binding.json`, no provenance-validation
+step, one `completed` `run.json` without head/commit metadata, and three failed
+`run.json` files. Its gate log also contained NVIDIA NIM `429`, GitHub Models
+`410` retirement-brownout, `failing closed`, and `No Strix vulnerability
+report artifact was produced` markers. Because this was again the trusted
+base workflow selected by `pull_request_target`, the green job is
+inconclusive base-workflow evidence, not proof that the PR-head provenance
+change ran. It must not be used to clear the required security check; only a
+post-merge/default-branch `repository_dispatch` run with a matching structured
+binding and clean provider evidence can establish completion.
+
 The provenance step also fails closed when `scan-head-sha.txt` exists but
 does not match the evidence head SHA. A scan started on a different commit
 cannot be published as current-head evidence.
