@@ -111,6 +111,84 @@ def github_publication_error_phrase(text: str) -> str:
     return "GitHub review write failed"
 
 
+def github_error_is_unprocessable(text: str) -> bool:
+    """Return whether GitHub rejected the review write as HTTP 422."""
+    raw = text or ""
+    if "422" in raw or "Unprocessable Entity" in raw:
+        return True
+    return "422" in github_publication_error_phrase(raw)
+
+
+def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return safe single-comment slices from a batch review payload."""
+    comments = payload.get("comments")
+    commit_id = payload.get("commit_id")
+    if not isinstance(comments, list) or not isinstance(commit_id, str):
+        return []
+    commit_id = commit_id.strip()
+    if not commit_id:
+        return []
+    singles: list[dict[str, Any]] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        path = safe_finding_path(comment.get("path"))
+        line = safe_finding_line(comment.get("line"))
+        body = comment.get("body")
+        if path is None or line is None or not isinstance(body, str) or not body.strip():
+            continue
+        side = comment.get("side")
+        singles.append(
+            {
+                "path": path,
+                "line": line,
+                "side": side if side in {"LEFT", "RIGHT"} else "RIGHT",
+                "body": body,
+                "commit_id": commit_id,
+            }
+        )
+    return singles
+
+
+def render_single_comment_review(
+    item: dict[str, Any],
+    *,
+    event: str,
+    review_body: str,
+) -> dict[str, Any]:
+    """Return one GitHub review payload that carries a single inline comment."""
+    return {
+        "event": event,
+        "body": review_body,
+        "commit_id": item["commit_id"],
+        "comments": [
+            {
+                "path": item["path"],
+                "line": item["line"],
+                "side": item["side"],
+                "body": item["body"],
+            }
+        ],
+    }
+
+
+def write_single_comment_payloads(payload: dict[str, Any], output_dir: Path) -> int:
+    """Write COMMENT-event single-comment payloads and return the file count."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for index, item in enumerate(iter_single_comment_payloads(payload)):
+        path = output_dir / f"comment-{index:03d}.json"
+        path.write_text(
+            json.dumps(
+                render_single_comment_review(item, event="COMMENT", review_body=""),
+                ensure_ascii=True,
+            ),
+            encoding="utf-8",
+        )
+        count += 1
+    return count
+
+
 def render_inline_comment_receipts(
     locations: list[tuple[str, int]], error_phrase: str
 ) -> list[str]:
@@ -192,14 +270,30 @@ def load_control(path: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Write a REQUEST_CHANGES body plus path:line receipts and optional 422 phrase."""
+    """Write 422 fallback text or split a batch review into single comments."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--control", required=True, type=Path)
-    parser.add_argument("--body", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--control", type=Path)
+    parser.add_argument("--body", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--error-file", type=Path)
+    parser.add_argument("--split-payload", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--is-unprocessable", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.is_unprocessable:
+            if args.error_file is None:
+                raise ValueError("--error-file is required with --is-unprocessable")
+            error_text = args.error_file.read_text(encoding="utf-8")
+            return 0 if github_error_is_unprocessable(error_text) else 1
+        if args.split_payload is not None:
+            if args.output_dir is None:
+                raise ValueError("--output-dir is required with --split-payload")
+            payload = load_control(args.split_payload)
+            write_single_comment_payloads(payload, args.output_dir)
+            return 0
+        if args.control is None or args.body is None or args.output is None:
+            raise ValueError("--control, --body, and --output are required")
         control = load_control(args.control)
         body = args.body.read_text(encoding="utf-8")
         error_text = (

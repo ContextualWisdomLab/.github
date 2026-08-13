@@ -5623,6 +5623,52 @@ jobs:
             exit 0
           }
 
+          retry_inline_comments_one_at_a_time() {
+            local batch_payload_file="$1" review_body="$2"
+            local split_dir comment_file wrapped_file error_file response_file
+            local attached=0
+            local found=0
+
+            split_dir="$(mktemp -d)"
+            if ! python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
+              --split-payload "$batch_payload_file" \
+              --output-dir "$split_dir"; then
+              rm -rf "$split_dir"
+              return 1
+            fi
+            for comment_file in "$split_dir"/comment-*.json; do
+              [ -f "$comment_file" ] || continue
+              found=1
+              wrapped_file="$(mktemp)"
+              error_file="$(mktemp)"
+              response_file="$(mktemp)"
+              if [ "$attached" -eq 0 ]; then
+                jq --arg body "$review_body" --arg event "REQUEST_CHANGES" \
+                  '.event = $event | .body = $body' "$comment_file" >"$wrapped_file"
+              else
+                cp "$comment_file" "$wrapped_file"
+              fi
+              if post_pull_review_with_retry \
+                "inline review one-at-a-time" \
+                "$review_write_token" \
+                "$wrapped_file" \
+                "$error_file" \
+                "$response_file"; then
+                attached=1
+              fi
+              rm -f "$wrapped_file" "$error_file" "$response_file"
+              if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" = "1" ]; then
+                rm -rf "$split_dir"
+                return 1
+              fi
+            done
+            rm -rf "$split_dir"
+            if [ "$found" -eq 0 ] || [ "$attached" -eq 0 ]; then
+              return 1
+            fi
+            return 0
+          }
+
           create_pull_review_with_payload() {
             local event="$1" body="$2" review_payload_file="$3" fallback_body_file="$4"
             local source_body_file="${5:-}"
@@ -5642,6 +5688,15 @@ jobs:
             emit_review_body_to_action_log "$event" "$body" "$review_payload_file"
             if ! post_pull_review_with_retry "inline review" "$review_write_token" "$review_payload_file" "$gh_error_file" "$review_response_file"; then
               warn_gh_publication_failure "pull review inline comments" "$gh_error_file"
+              if [ "${REVIEW_PUBLICATION_STALE_HEAD:-}" != "1" ] \
+                && python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
+                  --is-unprocessable --error-file "$gh_error_file"; then
+                if retry_inline_comments_one_at_a_time "$review_payload_file" "$body"; then
+                  rm -f "$gh_error_file" "$review_response_file"
+                  update_review_overview "$event" "$body"
+                  return 0
+                fi
+              fi
               if [ -n "$source_body_file" ] && [ -n "$control_json" ]; then
                 build_inline_comment_failure_body \
                   "$source_body_file" "$fallback_body_file" "$control_json" "$gh_error_file" || true

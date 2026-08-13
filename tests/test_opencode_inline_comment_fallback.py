@@ -5,10 +5,13 @@ import sys
 import pytest
 
 from scripts.ci.opencode_inline_comment_fallback import (
+    github_error_is_unprocessable,
     github_publication_error_phrase,
+    iter_single_comment_payloads,
     main,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
+    render_single_comment_review,
     trusted_finding_locations,
 )
 
@@ -289,3 +292,128 @@ def test_cli_writes_fallback_and_rejects_unreadable_control(tmp_path, monkeypatc
             "scripts/ci/opencode_inline_comment_fallback.py", run_name="__main__"
         )
     assert excinfo.value.code == 0
+
+
+def test_github_error_is_unprocessable_detects_real_422_bodies():
+    assert github_error_is_unprocessable(
+        '{"message":"Validation Failed","errors":['
+        '{"message":"pull_request_review_thread.path is invalid"}]}'
+    )
+    assert github_error_is_unprocessable("gh: HTTP 422: Unprocessable Entity")
+    assert not github_error_is_unprocessable("Resource not accessible by integration")
+    assert not github_error_is_unprocessable("")
+
+
+def test_iter_single_comment_payloads_keeps_only_safe_comments():
+    payload = {
+        "event": "REQUEST_CHANGES",
+        "body": "review body",
+        "commit_id": "a" * 40,
+        "comments": [
+            {
+                "path": "scripts/ci/example.py",
+                "line": 7,
+                "side": "RIGHT",
+                "body": "first",
+            },
+            {"path": "../escape.py", "line": 1, "body": "bad"},
+            {"path": "scripts/ci/other.py", "line": 12, "body": "second"},
+            {"path": "scripts/ci/plain.py", "line": 4, "body": "no-side"},
+            "not-an-object",
+            {"path": "scripts/ci/empty.py", "line": 3, "body": "  "},
+        ],
+    }
+
+    singles = iter_single_comment_payloads(payload)
+    assert [(item["path"], item["line"], item["side"]) for item in singles] == [
+        ("scripts/ci/example.py", 7, "RIGHT"),
+        ("scripts/ci/other.py", 12, "RIGHT"),
+        ("scripts/ci/plain.py", 4, "RIGHT"),
+    ]
+    first = render_single_comment_review(
+        singles[0], event="REQUEST_CHANGES", review_body="review body"
+    )
+    assert first["event"] == "REQUEST_CHANGES"
+    assert first["body"] == "review body"
+    assert first["comments"] == [
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": "first",
+        }
+    ]
+    later = render_single_comment_review(
+        singles[1], event="COMMENT", review_body=""
+    )
+    assert later["event"] == "COMMENT"
+    assert later["body"] == ""
+    assert later["comments"][0]["path"] == "scripts/ci/other.py"
+    assert iter_single_comment_payloads({"comments": []}) == []
+    assert iter_single_comment_payloads({"comments": "bad"}) == []
+    assert iter_single_comment_payloads({"commit_id": "", "comments": [{}]}) == []
+
+
+def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):
+    payload = tmp_path / "batch.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "event": "REQUEST_CHANGES",
+                "body": "review body",
+                "commit_id": "b" * 40,
+                "comments": [
+                    {
+                        "path": "scripts/ci/example.py",
+                        "line": 7,
+                        "side": "RIGHT",
+                        "body": "first",
+                    },
+                    {
+                        "path": "scripts/ci/other.py",
+                        "line": 12,
+                        "side": "LEFT",
+                        "body": "second",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "singles"
+
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+    files = sorted(output_dir.glob("comment-*.json"))
+    assert [path.name for path in files] == ["comment-000.json", "comment-001.json"]
+    first = json.loads(files[0].read_text(encoding="utf-8"))
+    assert first["event"] == "COMMENT"
+    assert first["comments"][0]["line"] == 7
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(tmp_path / "missing-batch.json"),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 2
+    )
+    assert main(["--split-payload", str(payload)]) == 2
+    error_path = tmp_path / "422.txt"
+    error_path.write_text("gh: HTTP 422: Unprocessable Entity\n", encoding="utf-8")
+    assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 0
+    error_path.write_text("Resource not accessible by integration\n", encoding="utf-8")
+    assert main(["--is-unprocessable", "--error-file", str(error_path)]) == 1
+    assert main(["--is-unprocessable"]) == 2
+    assert main([]) == 2

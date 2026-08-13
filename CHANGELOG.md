@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- After a batch GitHub 422, retried OpenCode inline comments one at a time so comments on surviving hunks still attach instead of dropping the entire review thread.
 - Stored each refused OpenCode inline comment as a durable overview receipt that pairs the trusted `path:line` with the GitHub 422 error phrase from `gh api` stderr or JSON `errors[].message`.
 - Named each trusted `path:line` in the OpenCode GitHub 422 inline-comment fallback so a refused attach still tells the author the exact current-head location instead of a generic “cited finding lines” sentence.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
