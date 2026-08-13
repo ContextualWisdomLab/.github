@@ -53,6 +53,17 @@ ablates hypotheses against current-head evidence. Speed is not a success
 metric. Review agents remain `edit: deny`. The LLM key remains
 `NVIDIA_NIM_API_KEY`.
 
+## Repository-dispatch property limit
+
+GitHub `repository_dispatch` accepts at most ten top-level `client_payload`
+properties (GitHub, n.d.-b). Live router run `31672030631` dispatched
+`@cwl-noema-review` for ContextualWisdomLab/.github#956 at
+`0c253f0d` and then failed `@opencode-agent` with HTTP 422: "No more than
+10 properties are allowed; 14 were supplied." The five review-only flags
+now travel as one nested `review_contract` object. The wrapper reads
+`github.event.client_payload.review_contract.*`. The invocation digest
+still hashes the flat claim, so review-agent keying is unchanged.
+
 ## Verification contract
 
 `tests/test_agent_mention_router.py` and `tests/test_agent_mention_sweep.py`
@@ -79,6 +90,10 @@ https://cwe.mitre.org/data/definitions/755.html
 GitHub. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+
+GitHub. (n.d.-b). *REST API endpoints for repositories: Create a repository
+dispatch event*. GitHub Docs. Retrieved August 13, 2026, from
+https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event
 
 GitHub. (n.d.). *REST API endpoints for pull request review comments*. GitHub
 Docs. Retrieved August 13, 2026, from

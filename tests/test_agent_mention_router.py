@@ -222,9 +222,9 @@ def test_eligible_agents_and_payloads() -> None:
     assert opencode["event_type"] == "agent-mention-opencode"
     assert opencode["client_payload"]["base_branch"] == "develop"
     assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
-    assert opencode["client_payload"]["merge_mode"] == "disabled"
-    assert opencode["client_payload"]["enable_auto_merge"] is False
-    assert opencode["client_payload"]["update_branches"] is False
+    assert opencode["client_payload"]["review_contract"]["merge_mode"] == "disabled"
+    assert opencode["client_payload"]["review_contract"]["enable_auto_merge"] is False
+    assert opencode["client_payload"]["review_contract"]["update_branches"] is False
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:

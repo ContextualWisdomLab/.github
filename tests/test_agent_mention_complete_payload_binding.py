@@ -145,6 +145,54 @@ def test_invocation_claim_binds_all_security_relevant_fields() -> None:
         assert _digest(altered) != opencode_key
 
 
+def test_repository_dispatch_payloads_fit_github_property_limit() -> None:
+    """Keep mention dispatches inside GitHub's 10 top-level client_payload keys.
+
+    Live router run 31672030631 queued Noema for ContextualWisdomLab/.github#956
+    at ``0c253f0d`` and then failed OpenCode with HTTP 422: "No more than 10
+    properties are allowed; 14 were supplied." Nested review-only flags stay
+    one property so the invocation keying is unchanged.
+    """
+
+    router = _load_router()
+    request = router.parse_event(_event())
+    assert request is not None
+    limit = router.REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTY_LIMIT
+    assert limit == 10
+
+    noema = router.noema_payload(request)["client_payload"]
+    opencode = router.opencode_payload(request)["client_payload"]
+    assert len(noema) <= limit
+    assert len(opencode) <= limit
+    assert len(opencode) == 10
+    assert "trigger_reviews" not in opencode
+    assert "review_dispatch_limit" not in opencode
+    assert "enable_auto_merge" not in opencode
+    assert "update_branches" not in opencode
+    assert "merge_mode" not in opencode
+    assert opencode["review_contract"] == {
+        "enable_auto_merge": False,
+        "merge_mode": "disabled",
+        "review_dispatch_limit": "1",
+        "trigger_reviews": True,
+        "update_branches": False,
+    }
+
+    with pytest.raises(ValueError, match="11 top-level properties"):
+        router.bound_repository_dispatch_client_payload(
+            {f"field_{index}": index for index in range(11)},
+            label="OpenCode",
+        )
+
+    wrapper = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event.client_payload.review_contract.trigger_reviews" in wrapper
+    assert "github.event.client_payload.review_contract.review_dispatch_limit" in wrapper
+    assert "github.event.client_payload.review_contract.enable_auto_merge" in wrapper
+    assert "github.event.client_payload.review_contract.update_branches" in wrapper
+    assert "github.event.client_payload.review_contract.merge_mode" in wrapper
+    assert "github.event.client_payload.trigger_reviews }}" not in wrapper
+
+
 def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
     """Both wrappers fail closed before reusing an exact-name artifact claim."""
 

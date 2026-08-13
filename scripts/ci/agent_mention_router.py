@@ -28,6 +28,7 @@ LEDGER_ARTIFACTS_ENDPOINT = (
     f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
 )
 LEDGER_ARTIFACT_PREFIX = "cwl-agent-invocation-"
+REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTY_LIMIT = 10
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
@@ -408,49 +409,86 @@ def dispatched_agents(
     return frozenset(observed)
 
 
+def bound_repository_dispatch_client_payload(
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Return ``payload`` after failing closed above GitHub's property limit.
+
+    ``repository_dispatch`` accepts at most ten top-level ``client_payload``
+    properties. Live router run 31672030631 hit HTTP 422 with 14 OpenCode
+    keys after Noema had already queued, so a mention looked like a miss.
+    """
+
+    property_count = len(payload)
+    if property_count > REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTY_LIMIT:
+        raise ValueError(
+            f"{label} mention client_payload has {property_count} top-level "
+            "properties; GitHub repository_dispatch allows at most "
+            f"{REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTY_LIMIT}"
+        )
+    return payload
+
+
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the durable Noema wrapper dispatch request body."""
 
     agent = "cwl-noema-review"
     return {
         "event_type": "agent-mention-noema",
-        "client_payload": {
-            "target_repository": request.repository,
-            "pr_number": request.pull_request_number,
-            "pr_head_sha": request.pull_request_head_sha,
-            "pr_base_sha": request.pull_request_base_sha,
-            "base_branch": request.pull_request_base_branch,
-            "requested_agent": agent,
-            "agent_invocation_key": agent_invocation_key(request, agent),
-            "requested_by": request.actor,
-            "source_comment_id": request.comment_id,
-        },
+        "client_payload": bound_repository_dispatch_client_payload(
+            {
+                "target_repository": request.repository,
+                "pr_number": request.pull_request_number,
+                "pr_head_sha": request.pull_request_head_sha,
+                "pr_base_sha": request.pull_request_base_sha,
+                "base_branch": request.pull_request_base_branch,
+                "requested_agent": agent,
+                "agent_invocation_key": agent_invocation_key(request, agent),
+                "requested_by": request.actor,
+                "source_comment_id": request.comment_id,
+            },
+            label="Noema",
+        ),
     }
 
 
 def opencode_payload(request: MentionRequest) -> dict[str, Any]:
-    """Return the durable review-only OpenCode wrapper dispatch body."""
+    """Return the durable review-only OpenCode wrapper dispatch body.
+
+    GitHub ``repository_dispatch`` accepts at most ten top-level
+    ``client_payload`` properties. Review-only behavior flags are nested
+    under ``review_contract`` so the live 14-key payload cannot 422 after
+    a successful Noema dispatch. The invocation key still hashes the flat
+    claim, so review-agent keying is unchanged.
+    """
 
     agent = "opencode-agent"
     claim = agent_invocation_claim(request, agent)
     return {
         "event_type": "agent-mention-opencode",
-        "client_payload": {
-            "target_repository": request.repository,
-            "pr_number": request.pull_request_number,
-            "pr_head_sha": request.pull_request_head_sha,
-            "pr_base_sha": request.pull_request_base_sha,
-            "base_branch": request.pull_request_base_branch,
-            "trigger_reviews": claim["trigger_reviews"],
-            "review_dispatch_limit": claim["review_dispatch_limit"],
-            "enable_auto_merge": claim["enable_auto_merge"],
-            "update_branches": claim["update_branches"],
-            "merge_mode": claim["merge_mode"],
-            "requested_agent": agent,
-            "agent_invocation_key": agent_invocation_key(request, agent),
-            "requested_by": request.actor,
-            "source_comment_id": request.comment_id,
-        },
+        "client_payload": bound_repository_dispatch_client_payload(
+            {
+                "target_repository": request.repository,
+                "pr_number": request.pull_request_number,
+                "pr_head_sha": request.pull_request_head_sha,
+                "pr_base_sha": request.pull_request_base_sha,
+                "base_branch": request.pull_request_base_branch,
+                "requested_agent": agent,
+                "agent_invocation_key": agent_invocation_key(request, agent),
+                "requested_by": request.actor,
+                "source_comment_id": request.comment_id,
+                "review_contract": {
+                    "enable_auto_merge": claim["enable_auto_merge"],
+                    "merge_mode": claim["merge_mode"],
+                    "review_dispatch_limit": claim["review_dispatch_limit"],
+                    "trigger_reviews": claim["trigger_reviews"],
+                    "update_branches": claim["update_branches"],
+                },
+            },
+            label="OpenCode",
+        ),
     }
 
 
