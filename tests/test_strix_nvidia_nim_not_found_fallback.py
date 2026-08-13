@@ -268,6 +268,22 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
                 "failing closed.\n"
             )
         )
+        self.assertTrue(
+            _workflow_neutralizes(
+                "LLM CONNECTION FAILED\n"
+                "│  Severity: HIGH\n"
+                "│  Vulnerabilities 2\n"
+                "Strix scan failed after provider infrastructure or "
+                "failure-signal output; failing closed.\n"
+            )
+        )
+        self.assertTrue(
+            _workflow_neutralizes(
+                "LLM CONNECTION FAILED\n"
+                "│  Severity: HIGH\n"
+                "incomplete-evidence: leftover TUI after midstream retry\n"
+            )
+        )
 
     def test_incomplete_retry_console_severity_does_not_block_neutralization(
         self,
@@ -314,6 +330,11 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("incomplete_log_only_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
         self.assertIn("log-only severity markers are incomplete evidence", workflow)
+        self.assertIn("incomplete-evidence", workflow)
+        self.assertIn(
+            "failed after provider infrastructure or failure-signal output",
+            workflow,
+        )
         self.assertIn(
             "Strix reported zero vulnerabilities before provider infrastructure "
             "failure",

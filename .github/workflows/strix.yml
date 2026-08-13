@@ -872,7 +872,7 @@ jobs:
           # exact incomplete-evidence sentence, after which GitHub Models
           # returned 410 retirement brownout. Honor the gate instead of
           # treating the leftover TUI text as an accepted finding.
-          incomplete_log_only_signal='log-only severity markers are incomplete evidence|Strix reported zero vulnerabilities before provider infrastructure failure'
+          incomplete_log_only_signal='log-only severity markers are incomplete evidence|incomplete-evidence|Strix reported zero vulnerabilities before provider infrastructure failure|failed after provider infrastructure or failure-signal output'
 
           # Neutral skip when the LLM backend was unavailable and either no
           # vulnerability signal exists or the trusted gate already classified

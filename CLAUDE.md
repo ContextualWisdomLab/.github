@@ -129,3 +129,6 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+
+Strix leftover-TUI neutralization honors `incomplete-evidence` and the
+infra-failure gate sentence. See `ARCHITECTURE.md`.

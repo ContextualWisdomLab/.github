@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Strix leftover-TUI neutralization now also honors the hyphenated `incomplete-evidence` token and the exact gate sentence `failed after provider infrastructure or failure-signal output`, so a mid-retry `Severity:` line plus that infra-failure verdict is not treated as an accepted finding.
 - Strix no longer fails a required check when a mid-retry TUI `Severity:` / `Vulnerabilities N` line is left in the console after the trusted gate already printed that those markers are incomplete log-only evidence. GitHub Models `github_models_retirement_brownout` is classified as backend unavailability. The exact gate sentence `failed after provider infrastructure or failure-signal output` is also classified as backend unavailability. Accepted findings without that gate verdict still fail closed. The decision record now cites CWE-754 so leftover TUI severity cannot be treated as an accepted finding.
 - Recorded the org control-plane architecture, including the incomplete-retry severity gate, so agents reconstruct the Strix evidence trust boundary from the repo instead of private memory.
 - Replaced indented `<<'PY'` inline Python in `strix.yml` with quoted `python3 -c` programs so a raw `bash -n` of the workflow is no longer an unclosed-heredoc false fail, and added a contract that extracts the Actions-stripped run blocks and executes the trusted-source, executable-hash, and Vertex credential snippets.

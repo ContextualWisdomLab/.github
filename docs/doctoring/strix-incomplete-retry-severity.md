@@ -42,8 +42,11 @@ evidence.
 1. Classify `github_models_retirement_brownout` and the gate sentence
    `failed after provider infrastructure or failure-signal output` as
    backend unavailability.
-2. Introduce `incomplete_log_only_signal` bound to the two exact gate
-   sentences above.
+2. Introduce `incomplete_log_only_signal` bound to those two exact gate
+   sentences, the hyphenated `incomplete-evidence` token (#965 wrapper
+   spelling), and `failed after provider infrastructure or
+   failure-signal output` so leftover TUI plus that infra-failure
+   verdict also neutralize.
 3. Neutralize only when a backend-unavailable signal is present and either
    no vulnerability signal exists or the incomplete-log-only gate verdict
    is present.
