@@ -10,6 +10,8 @@ the scheduled scan used the same reviewed binary.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Pin `init`, `analyze`, and `upload-sarif` to one immutable SHA
 (`5595ccaf912efad79be6eef63a5619ff05969be3`, v4.37.6) in both
 `codeql-pr.yml` and `scheduled-security-scan.yml`. Contract tests reject
