@@ -856,6 +856,98 @@ def test_changed_file_and_verification_posture_detection():
     )
 
 
+def test_approval_must_name_every_current_head_changed_file(tmp_path, monkeypatch):
+    """A CodeRabbit-thin approval that names one of two files cannot pass."""
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/example.py\n.github/workflows/strix.yml\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+
+    assert norm.unnamed_changed_files(
+        "Reviewed scripts/ci/example.py.",
+        FULL_SUMMARY,
+    ) == (".github/workflows/strix.yml",)
+    assert (
+        norm.unnamed_changed_files(
+            "Reviewed scripts/ci/example.py and .github/workflows/strix.yml.",
+            FULL_SUMMARY,
+        )
+        == ()
+    )
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(reason="Reviewed scripts/ci/example.py only."),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any(
+        "does not name every current-head changed file" in reason
+        and ".github/workflows/strix.yml" in reason
+        for reason in reasons
+    )
+
+    reasons.clear()
+    accepted = norm.valid_control(
+        control(
+            reason=(
+                "Reviewed scripts/ci/example.py and .github/workflows/strix.yml "
+                "on the current head."
+            )
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+        rejection_reasons=reasons,
+    )
+    assert accepted is not None
+    assert accepted["result"] == "APPROVE"
+
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    norm.current_changed_files.cache_clear()
+    assert norm.unnamed_changed_files("any reason", "any summary") == ()
+
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+    monkeypatch.setattr(norm, "repair_approval_summary", lambda reason, summary: summary)
+    monkeypatch.setattr(
+        norm,
+        "repair_approval_reason",
+        lambda reason, summary: reason.replace(".github/workflows/strix.yml", ""),
+    )
+    reasons.clear()
+    assert (
+        norm.valid_control(
+            control(
+                reason=(
+                    "Reviewed scripts/ci/example.py and .github/workflows/strix.yml "
+                    "on the current head."
+                )
+            ),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any(
+        "does not name every current-head changed file" in reason
+        for reason in reasons
+    )
+
+
 def test_actual_changed_file_detection_prefers_current_head_file_list(
     tmp_path, monkeypatch
 ):
@@ -1205,8 +1297,16 @@ def test_changed_file_kind_contradictions_are_rejected(tmp_path, monkeypatch):
         )
     )
     approval = control(
-        reason="No blockers found after inspecting .github/workflows/opencode-review.yml.",
-        summary=false_summary,
+        reason=(
+            "No blockers found after inspecting "
+            ".github/workflows/opencode-review.yml and "
+            "scripts/ci/test_strix_quick_gate.sh."
+        ),
+        summary=false_summary.replace(
+            ".github/workflows/opencode-review.yml",
+            ".github/workflows/opencode-review.yml and "
+            "scripts/ci/test_strix_quick_gate.sh",
+        ),
     )
 
     assert norm.changed_file_is_source_like(".github/workflows/opencode-review.yml")
@@ -1287,8 +1387,17 @@ def test_material_changed_file_scope_rejects_trivial_string_approval(
         + FULL_SUMMARY.replace("scripts/ci/example.py", ".github/workflows/strix.yml")
     )
     approval = control(
-        reason="Typo fix with no functional impact",
-        summary=summary,
+        reason=(
+            "Typo fix with no functional impact in .github/workflows/strix.yml, "
+            "scripts/ci/test_strix_quick_gate.sh, and "
+            "tests/test_opencode_agent_contract.py"
+        ),
+        summary=summary.replace(
+            ".github/workflows/strix.yml",
+            ".github/workflows/strix.yml, "
+            "scripts/ci/test_strix_quick_gate.sh, and "
+            "tests/test_opencode_agent_contract.py",
+        ),
     )
 
     assert norm.changed_file_is_material(".github/workflows/strix.yml")
@@ -1341,10 +1450,17 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     norm.current_changed_files.cache_clear()
 
     approval = control(
-        reason="Typo fix in documentation string",
+        reason=(
+            "Typo fix in documentation string across "
+            ".github/workflows/opencode-review.yml, "
+            "scripts/ci/run_opencode_review_model_pool.sh, and "
+            "tests/test_opencode_agent_contract.py"
+        ),
         summary=FULL_SUMMARY.replace(
             "scripts/ci/example.py",
-            "scripts/ci/run_opencode_review_model_pool.sh",
+            ".github/workflows/opencode-review.yml, "
+            "scripts/ci/run_opencode_review_model_pool.sh, and "
+            "tests/test_opencode_agent_contract.py",
         ),
     )
 
@@ -1819,12 +1935,13 @@ M\tsrc/test/java/example/LogSanitizerTest.java
 
     candidate = control(
         reason=(
-            "src/main/java/example/LogSanitizer.java hardens log input and adds "
-            "a regression test."
+            "src/main/java/example/LogSanitizer.java hardens log input and "
+            "src/test/java/example/LogSanitizerTest.java adds a regression test."
         ),
         summary=FULL_SUMMARY.replace(
             "scripts/ci/example.py",
-            "src/main/java/example/LogSanitizer.java",
+            "src/main/java/example/LogSanitizer.java and "
+            "src/test/java/example/LogSanitizerTest.java",
         ),
         adversarial_validation={
             "status": "passed",

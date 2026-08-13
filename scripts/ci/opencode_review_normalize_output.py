@@ -863,6 +863,21 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     return any(changed_file in combined for changed_file in changed_files)
 
 
+def unnamed_changed_files(reason: str, summary: str) -> tuple[str, ...]:
+    """Return current-head changed files the approval never names.
+
+    Naming one file is not a file-by-file walk. Live OpenCode approvals that
+    cited a single path while leaving the rest unnamed were thinner than the
+    CodeRabbit per-file contract the buyer asked for.
+    """
+
+    changed_files = current_changed_files()
+    if not changed_files:
+        return ()
+    combined = f"{reason}\n{summary}"
+    return tuple(sorted(path for path in changed_files if path not in combined))
+
+
 def mentions_verification_posture(reason: str, summary: str) -> bool:
     """Return whether an approval records the concrete review surfaces checked."""
     combined = f"{reason}\n{summary}".casefold()
@@ -1289,6 +1304,12 @@ def valid_control(
             return reject("approval admits missing structural review")
         if not mentions_actual_changed_file(reason, summary):
             return reject("approval does not cite changed-file evidence")
+        unnamed = unnamed_changed_files(reason, summary)
+        if unnamed:
+            return reject(
+                "approval does not name every current-head changed file: "
+                + ", ".join(unnamed)
+            )
         if not mentions_verification_posture(reason, summary):
             return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
@@ -1311,6 +1332,12 @@ def valid_control(
             return reject("review prose does not follow the preferred PR language")
         if not mentions_actual_changed_file(reason, summary):
             return reject("approval does not cite changed-file evidence")
+        unnamed = unnamed_changed_files(reason, summary)
+        if unnamed:
+            return reject(
+                "approval does not name every current-head changed file: "
+                + ", ".join(unnamed)
+            )
         if not mentions_verification_posture(reason, summary):
             return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
