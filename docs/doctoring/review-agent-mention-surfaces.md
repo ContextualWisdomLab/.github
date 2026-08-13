@@ -20,6 +20,8 @@ convenience gap.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Accept three mention surfaces that share the same trust checks
 (`OWNER` / `MEMBER` / `COLLABORATOR`, non-bot, exact handle, open PR, live
 head SHA):

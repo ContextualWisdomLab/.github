@@ -14,6 +14,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Treated GraphQL already-reacted eyes on a submitted review body as success, and required `data.addReaction` before claiming the optional reaction landed. An empty or error GraphQL body is a warning after dispatch, not a missed mention.
 - Reused the webhook/sweep `review.node_id` for GraphQL `addReaction` so a submitted review-body mention does not spend an extra REST GET before the eyes reaction.
 - `@cwl-noema-review` and `@opencode-agent` mentions in submitted review bodies now receive the optional eyes reaction through GraphQL `addReaction` on the review node. A 403 or GraphQL error is a warning after dispatch, not a missed mention.
