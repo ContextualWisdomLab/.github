@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Rejected OpenCode `REQUEST_CHANGES` line `0` and `True` inside `finding_location_error` so a current-head path cannot be treated as anchored when the EOF probe would accept `0 > line_count` as false.
 - Rejected OpenCode `REQUEST_CHANGES` findings whose path is not an exact current-head changed file or whose line is past EOF, so GitHub can attach inline review comments instead of dropping unanchored blockers. The decision record now cites CWE-1288 so path and line must stay consistent with the trusted current-head artifact.
 - Recorded the org control-plane architecture, including the line-anchored finding gate, so agents reconstruct the inline-comment trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

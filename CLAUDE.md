@@ -129,3 +129,7 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+
+`finding_location_error` rejects line `0` and `True` so the EOF probe
+cannot treat `0 > line_count` as an anchor. See `ARCHITECTURE.md` and
+`docs/doctoring/review-line-anchored-findings.md`.

@@ -592,9 +592,12 @@ def finding_location_error(path: str, line: int) -> str:
 
     CodeRabbit-style blockers name a changed file and a real source line so
     GitHub can attach an inline review comment. A positive integer on an
-    unchanged path or past EOF is not an anchor.
+    unchanged path or past EOF is not an anchor. Line 0 and ``bool``
+    values are not anchors even when they would pass the EOF check.
     """
 
+    if isinstance(line, bool) or not isinstance(line, int) or line <= 0:
+        return "line must be a positive integer"
     if not isinstance(path, str) or not path.strip():
         return "path must be a non-empty current-head file"
     changed_files = current_changed_files()

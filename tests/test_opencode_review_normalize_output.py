@@ -1624,6 +1624,14 @@ def test_valid_control_filters_shape_head_and_review_contract(monkeypatch):
 
     assert norm.finding_location_error("scripts/ci/example.py", 7) == ""
     assert (
+        norm.finding_location_error("scripts/ci/example.py", 0)
+        == "line must be a positive integer"
+    )
+    assert (
+        norm.finding_location_error("scripts/ci/example.py", True)
+        == "line must be a positive integer"
+    )
+    assert (
         norm.finding_location_error("README.md", 1)
         == "path is not a current-head changed file"
     )

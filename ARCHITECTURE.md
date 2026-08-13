@@ -43,7 +43,8 @@ flowchart TD
 ```
 
 CWE-1288: path and line must be consistent with the trusted current-head
-artifact. Reviewers stay `edit: deny`.
+artifact. Line `0` and `True` are not anchors (`0 > line_count` is
+false). Reviewers stay `edit: deny`.
 
 ## Control-plane data flow
 

@@ -16,6 +16,10 @@ Unanchored blockers are also a weaker review artifact: modern code review is exp
 `scripts/ci/opencode_review_normalize_output.py` now fail-closes each `REQUEST_CHANGES` finding through `finding_location_error()` before the review is published:
 
 - `path` must be a non-empty string.
+- `line` must be a positive integer. Line `0` and JSON/`bool` `true`
+  (`isinstance(True, int)` is true in Python) are rejected inside
+  `finding_location_error` itself: `0 > line_count` is false, so the EOF
+  probe would otherwise treat line 0 as an anchor (CWE-1288; MITRE, 2026).
 - When the trusted changed-file artifact is present, `path` must be an exact current-head changed file.
 - The path/line pair must then pass the existing bounded source-tree probe (`adversarial_probe_location_error`): the file exists in `OPENCODE_SOURCE_WORKDIR`, is a regular file under the 2 MiB bound, and `line` is `<=` the current-head line count.
 
@@ -39,6 +43,8 @@ inline comment.
 3. A finding at line 999 is rejected as past EOF.
 4. An empty path is rejected.
 5. With the changed-file artifact removed, a missing path still fails because it does not exist in the trusted source tree.
+6. Line `0` and `True` are rejected as not a positive integer even when
+   the path is an exact current-head changed file.
 
 `tests/test_opencode_agent_contract.py` pins the prompt phrases `exact current-head changed file` and `line past EOF`.
 
