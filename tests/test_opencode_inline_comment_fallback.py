@@ -15,6 +15,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     record_refused_receipt,
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
+    sanitize_leftover_excerpt,
     render_single_comment_review,
     single_comment_retry_limit,
     trusted_finding_locations,
@@ -109,6 +110,9 @@ def test_github_publication_error_phrase_falls_back_to_http_line():
         == "GitHub HTTP 422: 422"
     )
     assert render_inline_comment_receipts([], "GitHub HTTP 422") == []
+    assert sanitize_leftover_excerpt("a & b <c>") == "a  b c"
+    assert "-->" not in sanitize_leftover_excerpt("close --> comment")
+    assert "```" not in sanitize_leftover_excerpt("```suggestion\nsecret")
     assert (
         github_publication_error_phrase(
             '{"errors":[{"message":"path `<script>` & `diff`"}]}'
