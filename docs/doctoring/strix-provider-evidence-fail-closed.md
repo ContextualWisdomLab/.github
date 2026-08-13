@@ -22,7 +22,20 @@ The trusted gate remains responsible for bounded retry and fallback. The
 workflow wrapper now propagates every non-zero gate result. Provider outages,
 timeouts, missing reports, and malformed evidence therefore remain failed
 security checks until a clean, current-head scan is available. A successful
-check is reserved for a trusted gate exit of zero.
+check is reserved for a trusted gate exit of zero that did not also print
+fail-closed or incomplete-evidence text.
+
+CWE-754 (MITRE, 2026) and IEEE 1028 (IEEE, 2008): a zero process exit is
+an unusual condition when the same log says the scan is failing closed.
+The wrapper must not treat that as a completed security review.
 
 This preserves the security boundary: infrastructure failure may delay a merge,
 but it cannot create an unaudited approval signal.
+
+## References
+
+MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
+conditions*. https://cwe.mitre.org/data/definitions/754.html
+
+IEEE. (2008). *IEEE standard for software reviews and audits* (IEEE Std
+1028-2008). https://doi.org/10.1109/IEEESTD.2008.4601584
