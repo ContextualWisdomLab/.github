@@ -46,6 +46,7 @@ TRUSTED_UV_ARCHIVE_SHA256 = (
     "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 )
 TRUSTED_UV_ARCHIVE_MEMBER = "uv-x86_64-unknown-linux-gnu/uv"
+TRUSTED_UV_LINUX_MACHINES = frozenset({"x86_64", "amd64"})
 TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
@@ -240,10 +241,17 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
     return binary
 
 
+def _trusted_uv_runner_supported() -> bool:
+    """Return True only on Linux using the pinned ``x86_64`` archive ISA."""
+    if sys.platform != "linux":
+        return False
+    return platform.machine().strip().lower() in TRUSTED_UV_LINUX_MACHINES
+
+
 @functools.cache
 def _install_trusted_uv() -> str:
     """Install and verify the pinned uv exporter once for this process."""
-    if sys.platform != "linux" or platform.machine() != "x86_64":
+    if not _trusted_uv_runner_supported():
         raise RuntimeError(
             "the pinned trusted uv archive supports only linux x86_64 runners"
         )

@@ -30,7 +30,7 @@ flowchart LR
 ```mermaid
 flowchart TD
   Host["Developer or CI host"]
-  Gate{"sys.platform is linux and machine is x86_64?"}
+  Gate{"linux and machine in x86_64/amd64?"}
   Install["Verify pinned archive, version, and cache"]
   Reject["Fail closed: unsupported runner"]
 
@@ -42,6 +42,7 @@ flowchart TD
 Unit tests simulate the Linux x86_64 runner and clear the process cache
 so they measure verification, not the host-architecture gate. CWE-670:
 a stale cache hit after the monkeypatch would skip the path under test.
+Linux `amd64` / `AMD64` share the pinned archive ISA (CWE-20).
 
 ## Control-plane data flow
 
