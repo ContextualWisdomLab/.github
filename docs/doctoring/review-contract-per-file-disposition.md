@@ -13,9 +13,12 @@ CodeRabbit” gap.
 ## Decision
 
 `unnamed_changed_files(reason, summary)` returns every path from
-`current_changed_files()` that does not appear as a literal substring.
-`valid_control` rejects APPROVE when that tuple is non-empty, both before
-and after bounded-evidence repair. Developer experience / User experience
+`current_changed_files()` that is not named as a whole path token.
+A longer sibling such as ``example.py.bak`` contains ``example.py`` as a
+prefix substring; that is not a disposition of the shorter file
+(CWE-1288; MITRE, 2026). ``path:line`` still counts. `valid_control`
+rejects APPROVE when that tuple is non-empty, both before and after
+bounded-evidence repair. Developer experience / User experience
 section labels were already required; this change only closes the file-walk
 hole.
 
@@ -37,7 +40,8 @@ walk.
 `test_approval_must_name_every_current_head_changed_file` uses a two-file
 current-head list (`scripts/ci/example.py` and `.github/workflows/strix.yml`).
 Naming only the first file is rejected. Naming both is accepted. A post-repair
-reason that drops the second path is still rejected.
+reason that drops the second path is still rejected. Naming only
+``scripts/ci/example.py.bak`` still leaves ``scripts/ci/example.py`` unnamed.
 
 ## Rollback
 
@@ -45,6 +49,9 @@ Remove the `unnamed_changed_files` checks from the two APPROVE blocks and
 the helper. Existing “at least one file” detection remains.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-1288: Improper validation of consistency within input*.
+https://cwe.mitre.org/data/definitions/1288.html
 
 IEEE. (2008). *IEEE standard for software reviews and audits* (IEEE Std
 1028-2008). https://doi.org/10.1109/IEEESTD.2008.4601584

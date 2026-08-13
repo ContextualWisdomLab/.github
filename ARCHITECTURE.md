@@ -31,7 +31,7 @@ flowchart LR
 flowchart TD
   Artifact["Trusted current-head changed-file artifact"]
   Reason["APPROVE reason and summary"]
-  Named{"Every artifact path is a literal substring?"}
+  Named{"Every artifact path is a whole path token?"}
   Accept["valid_control APPROVE"]
   Reject["Reject: unnamed current-head files"]
 

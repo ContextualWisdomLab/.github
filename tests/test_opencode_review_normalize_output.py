@@ -879,6 +879,25 @@ def test_approval_must_name_every_current_head_changed_file(tmp_path, monkeypatc
         )
         == ()
     )
+    assert (
+        norm.unnamed_changed_files(
+            "Reviewed scripts/ci/example.py.bak only.",
+            "Coverage: 100%.",
+        )
+        == (".github/workflows/strix.yml", "scripts/ci/example.py")
+    )
+    assert norm.changed_file_named_in_text(
+        "Reviewed scripts/ci/example.py:7.", "scripts/ci/example.py"
+    )
+    assert not norm.changed_file_named_in_text(
+        "Reviewed scripts/ci/example.py.bak.", "scripts/ci/example.py"
+    )
+    assert not norm.changed_file_named_in_text("", "scripts/ci/example.py")
+    assert not norm.changed_file_named_in_text("scripts/ci/example.py", "")
+    assert norm._path_token_continues("scripts/ci/example.py.bak", 22)
+    assert not norm._path_token_continues("scripts/ci/example.py.", 22)
+    assert not norm._path_token_continues("x", -1)
+    assert not norm._path_token_continues("x", 1)
 
     reasons: list[str] = []
     assert (
