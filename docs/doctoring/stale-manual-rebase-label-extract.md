@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 `perform_rebase` still rebases a same-repository behind or dirty pull
 request, force-pushes with lease on success, and labels plus comments on
 conflict. A labeled-and-dirty candidate remains skipped upstream. The
