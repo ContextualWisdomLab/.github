@@ -62,6 +62,8 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "SOURCE_KIND_REVIEW_COMMENT" in helper
     assert "ADD_REVIEW_REACTION_MUTATION" in helper
     assert "addReaction" in helper
+    assert "graphql_eyes_reaction_succeeded" in helper
+    assert "graphql_error_already_reacted" in helper
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:

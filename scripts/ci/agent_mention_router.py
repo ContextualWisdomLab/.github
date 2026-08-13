@@ -545,6 +545,42 @@ def review_reaction_node_id(client: GitHubClient, request: MentionRequest) -> st
     return node_id.strip()
 
 
+def graphql_error_already_reacted(item: object) -> bool:
+    """Return whether one GraphQL error is an idempotent already-reacted reply."""
+    if not isinstance(item, dict):
+        return False
+    message = item.get("message")
+    if not isinstance(message, str):
+        return False
+    lowered = message.casefold()
+    return "already" in lowered and "react" in lowered
+
+
+def graphql_eyes_reaction_succeeded(payload: object) -> bool:
+    """Return whether GraphQL ``addReaction`` produced or already had eyes.
+
+    An empty or non-object payload is not success. A HTTP 200 body that
+    only reports ``errors`` is success only when every error is the
+    already-reacted reply; mixed or unrelated errors stay failures.
+    """
+    if not isinstance(payload, dict):
+        return False
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        return all(graphql_error_already_reacted(item) for item in errors)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    added = data.get("addReaction")
+    if not isinstance(added, dict):
+        return False
+    reaction = added.get("reaction")
+    if not isinstance(reaction, dict):
+        return False
+    content = reaction.get("content")
+    return isinstance(content, str) and content.casefold() == "eyes"
+
+
 def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
     """Add the optional eyes reaction on a mention surface.
 
@@ -553,7 +589,9 @@ def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
     on pull requests. The reaction is user-experience only; dispatch has
     already been queued, so a reaction failure must not look like a missed
     mention. Submitted review bodies have no REST reaction endpoint, so
-    they use GraphQL ``addReaction`` on the review node.
+    they use GraphQL ``addReaction`` on the review node. A second mention
+    on the same review may receive the already-reacted GraphQL error; that
+    is still eyes on the review, not a missed dispatch.
     """
 
     path = mention_reaction_path(request)
@@ -582,13 +620,13 @@ def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
             f"comment {request.comment_id}: {exc}"
         )
         return False
-    if isinstance(payload, dict) and payload.get("errors"):
-        print(
-            "::warning::Could not add mention reaction on "
-            f"comment {request.comment_id}: GraphQL errors"
-        )
-        return False
-    return True
+    if graphql_eyes_reaction_succeeded(payload):
+        return True
+    print(
+        "::warning::Could not add mention reaction on "
+        f"comment {request.comment_id}: GraphQL errors"
+    )
+    return False
 
 
 def dispatch_request(

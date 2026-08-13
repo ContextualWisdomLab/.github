@@ -40,8 +40,10 @@ receipt was posted. Review-comment mentions use
 ``POST /pulls/comments/{id}/reactions`` and treat the same 403 as a
 warning. Submitted review bodies have no REST reaction endpoint, so
 they resolve the review ``node_id`` and call GraphQL ``addReaction``
-with ``EYES``. A 403 or GraphQL ``errors`` payload is a warning after
-dispatch; the existing receipt issue comment still posts. The local job uses `pull-requests: write` so
+with ``EYES``. A 403 is a warning after dispatch. A GraphQL already-reacted
+error is success (eyes are already on the review). An empty GraphQL body
+or a non-already-reacted ``errors`` payload is a warning. The existing
+receipt issue comment still posts. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created, and
 `reactions: write` so the optional eyes reaction is an allowed GitHub
 App write. Live `route-local-agent-mention` run `31686563920` still
@@ -78,7 +80,9 @@ still hashes the flat claim, so review-agent keying is unchanged.
 drive `parse_event` and `build_requests_for_pull_request` with GitHub-shaped
 review-comment and submitted-review payloads, including mixed-case handles,
 and pin ``POST /pulls/comments/{id}/reactions`` for review-comment mentions
-and GraphQL ``addReaction`` for submitted review bodies.
+and GraphQL ``addReaction`` for submitted review bodies, including
+already-reacted GraphQL errors as success and empty GraphQL bodies as
+failure.
 `tests/test_agent_mention_workflow_contract.py` pins the new workflow triggers
 and the absence of the case-sensitive body `contains` filter.
 `tests/test_opencode_agent_contract.py` pins the per-file walk and
