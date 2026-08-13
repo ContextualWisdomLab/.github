@@ -12,3 +12,4 @@ Current increment: surviving OpenCode suggested diffs become GitHub
 `suggestion` blocks; retry requires a real HTTP 422 (CWE-1288). See
 [`ARCHITECTURE.md`](ARCHITECTURE.md) and
 [`docs/doctoring/review-inline-comment-422-fallback.md`](docs/doctoring/review-inline-comment-422-fallback.md).
+Leftover overview receipts sanitize path and phrase so a leftover cannot close the HTML comment or reopen a suggestion fence.
