@@ -20,7 +20,7 @@ The handoff contains exactly:
 - `source-identity.json`; and
 - `checksums.sha256`.
 
-The checksum file binds the other five files. Externally supplied digests bind all six files, including the checksum file itself. Each SBOM is strict RFC 8259 JSON: duplicate names, non-finite numbers, malformed UTF-8, and oversized control data fail closed. Each CycloneDX document must have integer document version `1`, a deterministic RFC 4122 UUIDv5 serial derived from the exact filename and SHA-256 digest, and one root component of type `file`. That root component must name the exact distribution, carry exactly one `cwl:artifact:filename` property, and contain exactly one canonical SHA-256 hash record with no alternate algorithm or unreviewed fields.
+The checksum file binds the other five files. Externally supplied digests bind all six files, including the checksum file itself. Each SBOM is strict RFC 8259 JSON: duplicate names, non-finite numbers, malformed UTF-8, and oversized control data fail closed. RFC 8259 forbids NaN and Infinity as JSON numbers (Bray, 2017); the verifier therefore rejects `parse_constant` values instead of accepting Python's default extension. Each CycloneDX document must have integer document version `1`, a deterministic RFC 4122 UUIDv5 serial derived from the exact filename and SHA-256 digest, and one root component of type `file`. That root component must name the exact distribution, carry exactly one `cwl:artifact:filename` property, and contain exactly one canonical SHA-256 hash record with no alternate algorithm or unreviewed fields.
 
 ## Exact-head lifecycle
 
@@ -84,6 +84,10 @@ Rollback means restoring a previously reviewed workflow version and producing ne
 - `artifact-metadata: write` does not imply that a non-registry distribution has been published, deployed, or approved for release.
 
 ## References
+
+Bray, T. (2017). *The JavaScript Object Notation (JSON) data interchange
+format* (RFC 8259). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC8259
 
 CycloneDX Core Working Group. (2025). *CycloneDX specification 1.7*. OWASP Foundation. https://cyclonedx.org/specification/overview/
 
