@@ -62,6 +62,13 @@ The provenance step also fails closed when `scan-head-sha.txt` exists but
 does not match the evidence head SHA. A scan started on a different commit
 cannot be published as current-head evidence.
 
+A completed successful `run.json` with no `head_sha` or `commit_sha` (including
+nested `scan_results` fields) is also incomplete evidence. The wrapper
+previously substituted the scan-start SHA for that missing binding. That let a
+copied or metadata-less report publish as current-head evidence. Provenance now
+skips those candidates. Only a `run.json` that itself carries a matching head
+SHA can pair with `penetration_test_report.md`.
+
 The failed-check evidence collector follows the same rule. A generic successful
 check-run or workflow-run is not sufficient to supersede a stale Strix failure;
 the collector accepts only a downloaded `strix-reports` artifact whose binding

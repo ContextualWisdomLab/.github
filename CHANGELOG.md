@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Refused a completed successful Strix `run.json` that carries no `head_sha` or `commit_sha` metadata. Provenance no longer substitutes the scan-start SHA for that missing binding, so an unbound report cannot publish as current-head evidence (CWE-754).
 - Kept the required Strix check fail-closed when the trusted gate prints fail-closed or incomplete-evidence text even if the process exits 0, so a provider outage cannot become a green security check (CWE-754). The wrapper now matches hyphenated and spaced spellings of those markers, not only `failing closed` and `incomplete evidence`. Scan-start `scan-head-sha.txt` must also match the evidence head SHA before provenance can publish.
 
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
