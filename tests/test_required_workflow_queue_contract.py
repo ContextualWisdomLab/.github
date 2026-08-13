@@ -1115,6 +1115,15 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
         "Default-branch repository_dispatch Strix structured evidence binding passed"
         in opencode_workflow
     )
+    assert 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' not in opencode_workflow
+    success_function = opencode_workflow.split(
+        "current_head_manual_strix_success_status()", 1
+    )[1].split("latest_current_head_manual_strix_run()", 1)[0]
+    assert "latest_current_head_manual_strix_run" not in success_function
+    assert (
+        "Default-branch repository_dispatch Strix structured evidence binding passed"
+        in success_function
+    )
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:

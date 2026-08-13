@@ -69,6 +69,15 @@ matches the current head and run ID, whose report exists, and whose SHA-256
 digest matches the binding. If that artifact cannot be downloaded or verified,
 the failed check remains active.
 
+The same fail-closed rule applies to status supersession. A previous
+`current_head_manual_strix_success_status` implementation fell back to any
+same-head `repository_dispatch` run whose API result said `completed/success`.
+That run result is not proof that the structured artifact was bound to the
+head, run ID, and report digest, so it could recreate a false-green path.
+The fallback was removed; only the explicit structured status description can
+supersede a stale Strix context. The contract tests reject reintroduction of
+the unbound fallback.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

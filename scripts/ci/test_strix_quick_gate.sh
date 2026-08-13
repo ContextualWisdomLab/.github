@@ -1123,7 +1123,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
 	assert_file_contains "$workflow_file" 'current_head_manual_strix_success_status()' "opencode approval can identify same-head manual Strix success status evidence"
-	assert_file_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode self-modifying-workflow guard observes manual Strix run completion without treating a generic success as bound evidence"
+	assert_file_not_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode approval must not treat an unbound manual Strix run as successful evidence"
 	assert_file_contains "$workflow_file" 'filter_superseded_strix_failures()' "opencode approval filters only explicitly superseded stale Strix failures"
 	assert_file_contains "$workflow_file" '"- Strix Security Scan/"*|"- strix:"*' "opencode approval filters stale Strix workflow helper checks after newer manual evidence"
 	assert_file_contains "$workflow_file" 'Default-branch repository_dispatch Strix structured evidence binding passed' "opencode approval requires an explicit structured manual Strix evidence status description"
