@@ -8,6 +8,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+STRIX_REQUIREMENT_FILES = (
+    ROOT / "requirements-strix-ci.txt",
+    ROOT / "requirements-strix-ci-hashes.txt",
+)
+PATCHED_DEPENDENCY_PINS = {
+    "aiohttp": "3.14.3",
+    "cryptography": "50.0.0",
+}
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -31,6 +39,17 @@ def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
     assert '-r "${RUNNER_TEMP}/strix-quality-requirements.txt"' in workflow
     for requirement, digest in EXPECTED_WHEEL_HASHES.items():
         assert f"{requirement} --hash=sha256:{digest}" in workflow
+
+
+def test_strix_requirement_locks_keep_patched_dependabot_pins() -> None:
+    """Both Strix locks must retain the published patched dependency pins."""
+    for requirements_file in STRIX_REQUIREMENT_FILES:
+        content = requirements_file.read_text(encoding="utf-8")
+        for package, version in PATCHED_DEPENDENCY_PINS.items():
+            matches = re.findall(rf"(?m)^{re.escape(package)}==([^\s\\]+)", content)
+            assert matches == [version], (
+                f"{requirements_file.name} must pin {package} exactly once at {version}"
+            )
 
 
 def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
