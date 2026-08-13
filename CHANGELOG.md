@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - The hunk-filter write path now strips closed GitHub ` ```suggestion ` fences from review-payload comments whose `path:start-end` contains a leftover cannot-provide or LEFT line, so GitHub cannot offer a one-click apply for the same span that `applyable.txt` already omitted. A prose mention of the fence name is left intact (CWE-1288).
 - The hunk-filter write path now omits applyable `path:start-end` rows from `--applyable-locations` when a leftover cannot-provide or LEFT line sits inside that range, so `applyable.txt` cannot list a one-click apply for the same span as leftover `example.py:6`.
