@@ -7,4 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 LEFT leftover suggestion fences are not applyable overview ranges.
 The write path strips closed GitHub suggestion fences whose range contains a leftover line.
 Leftover Manual-edit excerpts strip HTML comment delimiters and metacharacters.
-
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
