@@ -15,6 +15,8 @@ checks.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Reject `"Error: Test failures" not in text` before any summary, error-block,
 or missing-package regular expression. CPython membership on `str` uses
 two-way string matching and is linear in the haystack (Crochemore & Perrin,
