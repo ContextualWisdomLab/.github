@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 The trusted OpenCode coverage sandbox binds Rust coverage to the reviewed LLVM
 19 executables shipped by Debian's `llvm-19` package:
 
