@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click. A closed ```suggestion fence, not a bare substring, is treated as already applyable (CWE-1288).
 - Treated only sealed GitHub HTTP 422 tokens (`HTTP 422`, `status code 422`, `Error code: 422`, `Unprocessable Entity`) as unprocessable review writes, so issue `#422` or a path containing `422` cannot trigger the inline-comment 422 fallback.
 - Dropped OpenCode inline comments that sit outside every current-head changed hunk before the GitHub POST so those comments become overview receipts instead of a 422 that wipes the batch. A present collected diff with no commentable hunks (binary-only) now skips every comment instead of fail-opening the original payload.
