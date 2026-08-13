@@ -129,6 +129,20 @@ def record_refused_receipt(
         handle.write(f"{safe_path}:{safe_line}\t{phrase}\n")
 
 
+def receipt_finding_line(comment: dict[str, Any]) -> int | None:
+    """Return the finding line a posted comment receipt should cite.
+
+    Multi-line GitHub suggestions set ``line`` to the span end. The
+    trusted finding lives on ``start_line`` when that field is a
+    positive integer, so attach and refusal rows stay in
+    ``trusted_finding_locations`` (GitHub, n.d.-b).
+    """
+    start = safe_finding_line(comment.get("start_line"))
+    if start is not None:
+        return start
+    return safe_finding_line(comment.get("line"))
+
+
 def record_attached_receipt(dest: Path, path: str, line: int) -> None:
     """Append one attached ``path:line`` row."""
     safe_path = safe_finding_path(path)
@@ -548,11 +562,11 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise ValueError("comment file must contain comments[0]")
             first = comments[0]
-            line = first.get("line")
+            line = receipt_finding_line(first)
             record_attached_receipt(
                 args.attached_locations,
                 str(first.get("path") or ""),
-                line if isinstance(line, int) and not isinstance(line, bool) else 0,
+                line if line is not None else 0,
             )
             return 0
         if args.record_refusal:
@@ -574,11 +588,11 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise ValueError("comment file must contain comments[0]")
             first = comments[0]
-            line = first.get("line")
+            line = receipt_finding_line(first)
             record_refused_receipt(
                 args.refused_locations,
                 str(first.get("path") or ""),
-                line if isinstance(line, int) and not isinstance(line, bool) else 0,
+                line if line is not None else 0,
                 args.error_file.read_text(encoding="utf-8"),
             )
             return 0

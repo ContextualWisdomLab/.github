@@ -39,6 +39,9 @@ line, is the phrase source. A later comment's different GitHub error
 does not overwrite an earlier one. URLs are stripped and each phrase is
 bounded to 240 characters. Backticks and HTML metacharacters are
 escaped before the phrase is written into the overview body.
+When a multi-line GitHub suggestion rewrites ``line`` to the span end,
+attach and refusal receipts cite ``start_line`` so the overview still
+names the trusted finding (GitHub, n.d.-b).
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
