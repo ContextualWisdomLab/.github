@@ -25,6 +25,11 @@ The reviewer prompt states the same contract: path is an exact current-head chan
 
 This change does not alter APPROVE semantics, review-agent `edit: deny`, two-approval rules, or mention-dispatch.
 
+CWE-1288 forbids accepting internally inconsistent input (MITRE, 2026).
+A finding whose path is not a current-head changed file, or whose line is
+past EOF, is inconsistent with the trusted artifact and cannot become an
+inline comment.
+
 ## Verification contract
 
 `tests/test_opencode_review_normalize_output.py` pins:
@@ -42,6 +47,9 @@ This change does not alter APPROVE semantics, review-agent `edit: deny`, two-app
 If a legitimate current-head blocker cannot be expressed as an exact changed-file path plus existing line, keep the finding in the review body and do not loosen the inline-comment gate. Do not accept `N/A`, line 0, or off-diff paths so that GitHub can attach a thread.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-1288: Improper validation of consistency within input*.
+https://cwe.mitre.org/data/definitions/1288.html
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of modern code review. In *Proceedings of the 35th International Conference on Software Engineering* (pp. 712–721). IEEE. https://doi.org/10.1109/ICSE.2013.6606617
 
