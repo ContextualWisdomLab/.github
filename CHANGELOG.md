@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Stopped listing LEFT-side leftover ```suggestion fences as applyable GitHub ranges after a remapped 422 retry, because GitHub cannot apply a suggestion on the deleted side.
 - Kept `start_line`/`start_side` on remapped leftover OpenCode suggestions when a batch 422 is retried one comment at a time, so a multi-line RIGHT range still posts as one GitHub suggestion.
 - Labeled remapped leftover OpenCode applyable ranges with the original LEFT `path:line` so the overview shows `path:right` came from LEFT `path:left`.
