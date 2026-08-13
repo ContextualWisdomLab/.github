@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Leftover Manual-edit excerpts now drop HTML comment delimiters and `<`, `>`, `&` before they enter the overview comment, so a leftover `-->` cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Stopped listing LEFT-side leftover GitHub suggestion fences as applyable ranges, because GitHub cannot apply a suggestion on the deleted side.
 - Kept leftover Manual-edit excerpts that sit inside a trusted deferred multi-line `path:start-end` even when that exact leftover line is not itself a trusted finding, so authors still see the deferred range then the Manual-edit.
