@@ -70,6 +70,29 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Safe pytest discovery
+
+```mermaid
+flowchart TD
+  YAML["Repository CI run: block"]
+  Discover["discover_commands"]
+  First{"First module target is pytest?"}
+  Shell{"No shell control tokens?"}
+  Run["Execute argv with shell=False"]
+  Reject["Do not run the line"]
+
+  YAML --> Discover
+  Discover --> First
+  First -->|"no"| Reject
+  First -->|"yes"| Shell
+  Shell -->|"no"| Reject
+  Shell -->|"yes"| Run
+```
+
+CWE-88: a later `-m pytest` after a file operand cannot authorize
+execution. Reviewers stay `edit: deny`.
+ 
+
 ## Control-plane data flow
 
 ```mermaid
@@ -124,3 +147,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/safe-pytest-first-module-target.md`](docs/doctoring/safe-pytest-first-module-target.md)
+  — safe pytest discovery boundary and CWE-88 evidence.

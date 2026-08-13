@@ -16,7 +16,15 @@ flags must be `-m`/`--module pytest`. `python -m coverage run … -m pytest`
 remains allowed because the first `-m` is `coverage` and `run` then invokes
 pytest. File operands, `-c`, `--`, and earlier modules fail closed.
 
+CWE-88 forbids treating a later argument delimiter as the first execution
+target (MITRE, 2026). A file operand before `-m pytest` therefore cannot
+become the test runner.
+
 ## References
+
+MITRE. (2026). *CWE-88: Improper neutralization of argument delimiters in
+a command ('argument injection')*.
+https://cwe.mitre.org/data/definitions/88.html
 
 MITRE. (n.d.). *CWE-78: Improper neutralization of special elements used in
 an OS command ('OS command injection')*.
