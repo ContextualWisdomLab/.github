@@ -39,7 +39,12 @@ ContextualWisdomLab/.github#954 and then failed the job with
 receipt was posted. Review-comment and review identifiers are not
 issue-comment IDs, so those surfaces acknowledge only with the existing
 receipt issue comment. The local job uses `pull-requests: write` so
-conversation receipts on pull requests can be created.
+conversation receipts on pull requests can be created, and
+`reactions: write` so the optional eyes reaction is an allowed GitHub
+App write. Live `route-local-agent-mention` run `31686563920` still
+failed on `main` after dispatch because the default-branch job token
+lacked `reactions` and POST `/issues/comments/{id}/reactions` returned
+`403 Resource not accessible by integration`.
 
 CWE-755 forbids treating an exceptional secondary condition as a primary
 failure (MITRE, 2026). A 403 on the optional eyes reaction is therefore a
