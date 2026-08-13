@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -50,6 +51,8 @@ TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
+TRUSTED_UV_DOWNLOAD_ATTEMPTS = 3
+TRUSTED_UV_DOWNLOAD_RETRY_DELAY_SECONDS = 2.0
 
 
 class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
@@ -165,51 +168,77 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     return completed.stdout
 
 
-def _download_trusted_uv_archive() -> bytes:
-    """Download the fixed uv release archive through one HTTPS trust boundary."""
-    _install_trusted_uv_url_opener()
-    try:
-        # Keep the audited URL literal at the network sink so static analysis can
-        # prove that neither user data nor repository content selects a scheme,
-        # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
-            "uv-x86_64-unknown-linux-gnu.tar.gz",
-            timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
-        ) as response:
-            final_url = urllib.parse.urlparse(response.geturl())
-            try:
-                final_port = final_url.port
-            except ValueError as exc:
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                ) from exc
-            if (
-                (final_url.scheme, final_url.hostname)
-                != ("https", "releases.astral.sh")
-                or final_port not in (None, 443)
-            ):
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                )
-            payload = bytearray()
-            while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
-                chunk = response.read(
-                    TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
-                )
-                if not chunk:
-                    break
-                payload.extend(chunk)
-    except OSError as exc:
-        raise RuntimeError(
-            f"trusted uv archive download failed: {type(exc).__name__}"
-        ) from exc
+def _fetch_trusted_uv_archive_once() -> bytes:
+    """Perform one download attempt through the fixed HTTPS trust boundary.
+
+    Raises ``OSError`` (the network-level failure) on a transient fetch
+    problem so the caller can decide whether to retry, and ``RuntimeError``
+    for every trust-boundary violation (unsafe redirect, oversized payload),
+    which must fail closed on the first occurrence and is never retried.
+    """
+    # Keep the audited URL literal at the network sink so static analysis can
+    # prove that neither user data nor repository content selects a scheme,
+    # host, path, query, fragment, method, or request header.
+    with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+        "uv-x86_64-unknown-linux-gnu.tar.gz",
+        timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
+    ) as response:
+        final_url = urllib.parse.urlparse(response.geturl())
+        try:
+            final_port = final_url.port
+        except ValueError as exc:
+            raise RuntimeError(
+                "trusted uv archive redirected outside the fixed "
+                "releases.astral.sh HTTPS origin"
+            ) from exc
+        if (
+            (final_url.scheme, final_url.hostname) != ("https", "releases.astral.sh")
+            or final_port not in (None, 443)
+        ):
+            raise RuntimeError(
+                "trusted uv archive redirected outside the fixed "
+                "releases.astral.sh HTTPS origin"
+            )
+        payload = bytearray()
+        while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
+            chunk = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload))
+            if not chunk:
+                break
+            payload.extend(chunk)
 
     if len(payload) > TRUSTED_UV_DOWNLOAD_MAX_BYTES:
         raise RuntimeError("trusted uv archive exceeded the bounded download size")
     return bytes(payload)
+
+
+def _download_trusted_uv_archive() -> bytes:
+    """Download the fixed uv release archive through one HTTPS trust boundary.
+
+    The single shared ``releases.astral.sh`` origin is fetched by every
+    coverage-evidence run across the organization, so it occasionally answers
+    a transient network or HTTP error under concurrent load even though the
+    file itself is healthy (observed directly: repeated
+    ``trusted uv archive download failed: HTTPError`` failures on
+    unmodified, otherwise-passing pull requests). A bounded number of
+    attempts absorbs that transient condition; every attempt still runs the
+    full trust boundary unchanged (redirect rejection, host/port pin, size
+    bound, and the checksum/member verification performed by the caller), so
+    retrying strictly adds resilience and never weakens a check.
+    """
+    _install_trusted_uv_url_opener()
+    last_error: OSError | None = None
+    for attempt in range(TRUSTED_UV_DOWNLOAD_ATTEMPTS):
+        if attempt:
+            time.sleep(TRUSTED_UV_DOWNLOAD_RETRY_DELAY_SECONDS * attempt)
+        try:
+            return _fetch_trusted_uv_archive_once()
+        except OSError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(
+        f"trusted uv archive download failed: {type(last_error).__name__}"
+    ) from last_error
 
 
 def _verified_uv_binary(archive_payload: bytes) -> bytes:

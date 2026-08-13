@@ -24,11 +24,16 @@ def _module_tree() -> ast.Module:
 
 
 def _download_function() -> ast.FunctionDef:
-    """Return the trusted-uv downloader function from the parsed module."""
+    """Return the trusted-uv single-attempt network-sink function from the module.
+
+    ``_download_trusted_uv_archive`` is a bounded-retry wrapper around this
+    function; the literal-URL network sink itself lives in
+    ``_fetch_trusted_uv_archive_once`` so it runs unchanged on every attempt.
+    """
     for node in _module_tree().body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_download_trusted_uv_archive":
+        if isinstance(node, ast.FunctionDef) and node.name == "_fetch_trusted_uv_archive_once":
             return node
-    raise AssertionError("trusted uv downloader function is missing")
+    raise AssertionError("trusted uv single-attempt downloader function is missing")
 
 
 def _assigned_literal(name: str) -> object:

@@ -514,31 +514,87 @@ def test_download_trusted_uv_archive_accepts_fixed_https_origin(
 def test_download_trusted_uv_archive_rejects_unsafe_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A redirect away from the fixed HTTPS release host fails closed."""
+    """A redirect away from the fixed HTTPS release host fails closed, unretried."""
     response = FakeHttpResponse("https://example.invalid/uv.tar.gz")
-    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
 
     with pytest.raises(RuntimeError, match="redirected outside"):
         materializer._download_trusted_uv_archive()
+    assert calls == 1
 
 
-def test_download_trusted_uv_archive_rejects_network_and_size_failures(
+def test_download_trusted_uv_archive_rejects_oversized_archive_unretried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Network errors and oversized archives cannot enter the trusted tool path."""
-    monkeypatch.setattr(
-        materializer.urllib.request,
-        "urlopen",
-        lambda *_a, **_k: (_ for _ in ()).throw(OSError("offline")),
-    )
-    with pytest.raises(RuntimeError, match="download failed"):
-        materializer._download_trusted_uv_archive()
-
+    """An oversized archive fails closed on the first attempt without retrying."""
     response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, b"12345")
-    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
     monkeypatch.setattr(materializer, "TRUSTED_UV_DOWNLOAD_MAX_BYTES", 4)
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+    assert calls == 1
+
+
+def test_download_trusted_uv_archive_exhausts_retries_and_reports_download_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A persistent transient network error retries a bounded number of times."""
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise OSError("offline")
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(materializer.time, "sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="download failed"):
+        materializer._download_trusted_uv_archive()
+    assert calls == materializer.TRUSTED_UV_DOWNLOAD_ATTEMPTS
+
+
+def test_download_trusted_uv_archive_retries_transient_failure_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient failure on the first attempt is absorbed by a later retry.
+
+    The shared ``releases.astral.sh`` origin serves every coverage-evidence
+    run org-wide, so a lone transient error (observed directly in production
+    as ``trusted uv archive download failed: HTTPError``) must not fail the
+    whole job when a subsequent attempt would have succeeded.
+    """
+    payload = b"archive"
+    response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
+    calls = 0
+
+    def _urlopen(*_a: object, **_k: object) -> FakeHttpResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("transient")
+        return response
+
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", _urlopen)
+    sleeps: list[float] = []
+    monkeypatch.setattr(materializer.time, "sleep", sleeps.append)
+
+    assert materializer._download_trusted_uv_archive() == payload
+    assert calls == 2
+    assert sleeps == [materializer.TRUSTED_UV_DOWNLOAD_RETRY_DELAY_SECONDS]
 
 
 def test_verified_uv_binary_accepts_exact_archive(
