@@ -37,6 +37,11 @@ The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
 Suggested diffs stay out of the PR-level body.
 
+CWE-1288: classify a 422 only from an `HTTP 422` line, the
+`Unprocessable Entity` reason phrase, or a JSON `errors[].message`
+already rendered as `GitHub HTTP 422`. A bare `422` substring (commit
+SHA, issue number) must not start the one-at-a-time retry.
+
 ## Verification contract
 
 - `tests/test_opencode_inline_comment_fallback.py` pins safe-pair extraction,
@@ -54,6 +59,9 @@ If GitHub later accepts off-diff comments, keep citing the attempted
 `path:line` in the fallback. Do not restore a location-free sentence.
 
 ## References (APA 7th)
+
+MITRE. (2026). *CWE-1288: Improper validation of syntactic correctness of
+input*. https://cwe.mitre.org/data/definitions/1288.html
 
 Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
 modern code review. In *Proceedings of the 35th International Conference on

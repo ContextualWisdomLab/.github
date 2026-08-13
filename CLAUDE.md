@@ -63,6 +63,9 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
   dependency sets (see below).
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
+- `ARCHITECTURE.md` — control-plane mermaid (system context, 422
+  classification gate, review sequence, trust boundaries). Reconstruct
+  from the repo, not private agent memory.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
   `scorecard-governance.md`, SBOM inventory.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
