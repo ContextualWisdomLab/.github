@@ -922,6 +922,10 @@ jobs:
             echo "::error::Strix evidence must contain the exact head SHA recorded at scan start."
             exit 1
           fi
+          if [ "${scan_stage_head_sha,,}" != "${evidence_head_sha,,}" ]; then
+            echo "::error::Strix scan-start head SHA does not match the evidence head."
+            exit 1
+          fi
 
           successful_run_file=""
           report_file=""

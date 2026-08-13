@@ -58,6 +58,10 @@ run must produce a matching `evidence-binding.json` before the result is called
 clean. The observed run above is inconclusive and must not be used as approval
 evidence.
 
+The provenance step also fails closed when `scan-head-sha.txt` exists but
+does not match the evidence head SHA. A scan started on a different commit
+cannot be published as current-head evidence.
+
 The failed-check evidence collector follows the same rule. A generic successful
 check-run or workflow-run is not sufficient to supersede a stale Strix failure;
 the collector accepts only a downloaded `strix-reports` artifact whose binding

@@ -230,6 +230,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "scan_results.scan_completed == true" "strix workflow requires a completed Strix scan result"
 	assert_file_contains "$workflow_file" "strix_scan_head_sha" "strix workflow records the head SHA at scan start"
 	assert_file_contains "$workflow_file" "scan-head-sha.txt" "strix workflow preserves the scan-stage head SHA artifact"
+	assert_file_contains "$workflow_file" "Strix scan-start head SHA does not match the evidence head." "strix workflow binds the scan-start SHA to the evidence head"
 	assert_file_contains "$workflow_file" "candidate_head_sha" "strix workflow binds each candidate report to a head SHA"
 	assert_file_contains "$workflow_file" "candidate_metadata_count" "strix workflow inspects every candidate head metadata field"
 	assert_file_contains "$workflow_file" "candidate_metadata_matches" "strix workflow rejects conflicting candidate head metadata"
