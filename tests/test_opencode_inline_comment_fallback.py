@@ -1896,6 +1896,18 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         "- `scripts/ci/ok.py:4`",
     ]
     assert applyable_suggestion_ranges({"comments": "bad"}) == []
+    assert applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "scripts/ci/removed.py",
+                    "line": 11,
+                    "side": "LEFT",
+                    "body": "```suggestion\nremoved = True\n```\n",
+                }
+            ]
+        }
+    ) == []
     payload = apply_github_suggestion_blocks(
         _batch_payload(
             {
