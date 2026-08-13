@@ -2,6 +2,9 @@
 
 ## Incident and buyer impact
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r`
+include; a lone `--require-hashes` line is not lock evidence.
+
 A stale free alias (`ling-3.0-flash-free` and five ungoverned catalog names)
 could occupy the central review pool for 3600 seconds and exhaust the step
 without a verdict. Paid NVIDIA NIM and GitHub Models candidates never ran.
