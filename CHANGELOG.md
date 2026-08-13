@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- A REQUEST_CHANGES finding now also names a current-head file when its suggested diff carries an identical `diff --git a/X b/X` header. A mismatched `a/` and `b/` pair does not dispose either path (IEEE 1028).
 - OpenCode REQUEST_CHANGES now fails closed when the review omits any current-head changed file. A finding path or a named no-blocker disposition counts; a single-file blocker that never mentions the rest of the diff is not a file-by-file walk (IEEE 1028).
 - OpenCode APPROVE now treats a path as named only when it appears as a whole token, so citing `example.py.bak` cannot dispose `example.py` via a prefix substring.
 - OpenCode APPROVE now fails closed when the reason/summary omits any current-head changed file. Naming one path is no longer a file-by-file walk; the trusted changed-file artifact remains the file set. The decision record now cites IEEE 1028 so every changed item must receive a review disposition.

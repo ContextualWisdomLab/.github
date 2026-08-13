@@ -906,6 +906,29 @@ def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     )
 
 
+_SUGGESTED_DIFF_GIT_RE = re.compile(
+    r"^diff --git a/(.+?) b/\1$",
+    re.MULTILINE,
+)
+
+
+def suggested_diff_named_files(diff: object) -> set[str]:
+    """Return current-head files named by identical ``diff --git a/X b/X`` headers.
+
+    A finding whose ``path`` is missing or unsafe can still dispose a file
+    when its suggested diff cites that exact current-head path on both
+    sides. A mismatched ``a/`` and ``b/`` pair is not a name.
+    """
+    if not isinstance(diff, str) or not diff:
+        return set()
+    changed = set(current_changed_files())
+    return {
+        path
+        for path in _SUGGESTED_DIFF_GIT_RE.findall(diff)
+        if path in changed
+    }
+
+
 def unnamed_changed_files(
     reason: str,
     summary: str,
@@ -916,7 +939,8 @@ def unnamed_changed_files(
     Naming one file is not a file-by-file walk. Live OpenCode reviews that
     cited a single path while leaving the rest unnamed were thinner than the
     CodeRabbit per-file contract the buyer asked for. A REQUEST_CHANGES
-    finding path counts as naming that file.
+    finding path or an identical ``diff --git a/X b/X`` header counts as
+    naming that file.
     """
 
     changed_files = current_changed_files()
@@ -930,6 +954,7 @@ def unnamed_changed_files(
         path = finding.get("path")
         if isinstance(path, str) and path:
             finding_paths.add(path)
+        finding_paths.update(suggested_diff_named_files(finding.get("suggested_diff")))
     return tuple(
         sorted(
             path

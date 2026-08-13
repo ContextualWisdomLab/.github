@@ -13,10 +13,12 @@ CodeRabbit” gap.
 ## Decision
 
 `unnamed_changed_files(reason, summary, findings=None)` returns every path
-from `current_changed_files()` that is not named as a whole path token
-and is not a REQUEST_CHANGES finding path. A longer sibling such as
-``example.py.bak`` contains ``example.py`` as a prefix substring; that is
-not a disposition of the shorter file (CWE-1288; MITRE, 2026).
+from `current_changed_files()` that is not named as a whole path token,
+is not a REQUEST_CHANGES finding path, and is not cited by an identical
+``diff --git a/X b/X`` header in that finding's suggested diff. A
+mismatched ``a/`` and ``b/`` pair names neither path. A longer sibling
+such as ``example.py.bak`` contains ``example.py`` as a prefix substring;
+that is not a disposition of the shorter file (CWE-1288; MITRE, 2026).
 ``path:line`` still counts. `valid_control` rejects APPROVE and
 REQUEST_CHANGES when that tuple is non-empty. A REQUEST_CHANGES finding
 on one file plus a named no-blocker disposition of the rest is enough;
