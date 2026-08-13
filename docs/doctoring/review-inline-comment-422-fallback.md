@@ -62,7 +62,8 @@ and `start_side` so GitHub applies one multi-line suggestion range
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
 shipped as one-click GitHub suggestions (GitHub, n.d.-c). LEFT-side
-comments are omitted from that applyable list. Suggested diffs still
+comments, and ranges whose `start_side` is still LEFT, are omitted from
+that applyable list. Suggested diffs still
 stay out of the PR-level body. A bare ``422`` substring in a SHA or
 issue number is not treated as HTTP 422 (CWE-1288).
 
