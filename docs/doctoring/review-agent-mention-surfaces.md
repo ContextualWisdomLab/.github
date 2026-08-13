@@ -42,7 +42,9 @@ warning. Submitted review bodies have no REST reaction endpoint, so
 they resolve the review ``node_id`` and call GraphQL ``addReaction``
 with ``EYES``. Webhook and sweep review payloads already include
 ``node_id``; the router reuses that value and only GETs the review when
-the payload omitted it. A 403 or GraphQL ``errors`` payload is a warning
+the payload omitted it. The already-reacted GraphQL error is success
+because the review already has eyes. An empty ``data.addReaction``
+payload is not. A 403 or other GraphQL ``errors`` payload is a warning
 after dispatch; the existing receipt issue comment still posts. The local job uses `pull-requests: write` so
 conversation receipts on pull requests can be created, and
 `reactions: write` so the optional eyes reaction is an allowed GitHub

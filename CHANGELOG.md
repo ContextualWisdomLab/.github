@@ -44,6 +44,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- GraphQL `addReaction` on a submitted review body treats the already-reacted error as success and refuses an empty or missing `data.addReaction` payload, so a second mention on the same review is not a missed dispatch and a blank 200 is not eyes.
 - Submitted review-body mention reactions reuse the webhook or sweep `node_id` when GitHub already provided it, so the router does not make an extra review GET before GraphQL `addReaction`.
 - `@cwl-noema-review` and `@opencode-agent` mentions in submitted review bodies now receive the optional eyes reaction through GraphQL `addReaction` on the review node. A 403 or GraphQL error is a warning after dispatch, not a missed mention.
 - `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments now receive the optional eyes reaction on `POST /pulls/comments/{id}/reactions`. A 403 there is still a warning, not a missed dispatch. Submitted review bodies still have no REST reaction endpoint.

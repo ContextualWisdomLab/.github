@@ -9,3 +9,4 @@ OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/d
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 Pending and dismissed reviews do not dispatch mention agents. See [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`docs/doctoring/review-agent-mention-surfaces.md`](docs/doctoring/review-agent-mention-surfaces.md).
 The local mention job grants `reactions: write` so the optional eyes reaction is permitted, while the reaction remains non-fatal if GitHub still refuses it.
+GraphQL already-reacted eyes on a review body are success.
