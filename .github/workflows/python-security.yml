@@ -232,25 +232,7 @@ jobs:
       - name: Run pip-audit (hard gate on any known vulnerability)
         run: |
           set -euo pipefail
-          status=0
-
-          # Audit every discovered requirements file.
-          while IFS= read -r req; do
-            echo "::group::pip-audit -r ${req}"
-            pip-audit --strict --desc=on -r "${req}" || status=1
-            echo "::endgroup::"
-          done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
-
-          # Audit the project itself when a PEP 621 / lock manifest exists.
-          if find . -maxdepth 2 -type f \
-              \( -name 'pyproject.toml' -o -name 'pylock.*.toml' \) \
-              -not -path './.git/*' | head -1 | grep -q .; then
-            echo "::group::pip-audit . (project manifest)"
-            pip-audit --strict --desc=on . || status=1
-            echo "::endgroup::"
-          fi
-
-          if [ "${status}" != "0" ]; then
-            echo "::error::pip-audit reported known-vulnerable Python dependencies."
-            exit 1
-          fi
+          # Hashed complete locks are audited with --disable-pip so pip cannot
+          # re-apply a stale Requires-Dist bound and label ResolutionImpossible
+          # as a known vulnerability (ContextualWisdomLab/.github#961).
+          python3 scripts/ci/pip_audit_requirements.py

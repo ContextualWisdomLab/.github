@@ -543,7 +543,13 @@ jobs:
           # private install umask before creating the credential-bearing Strix
           # entry point; the runtime gate still rejects any later relaxation.
           umask 022
-          python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
+          # The compiled lock is the complete closed set. --no-deps is required
+          # so pip does not re-apply a stale Requires-Dist bound (strix-agent
+          # still declares cryptography<49) after a CVE-fixed cryptography pin
+          # was resolved at compile time. pull_request_target runs this file
+          # from the base branch, so this flag must land on main before a
+          # lock that needs it can install.
+          python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes --no-deps -r requirements-strix-ci-hashes.txt
           strix_executable="$(command -v strix || true)"
           if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
             || [ ! -f "$strix_executable" ] || [ -L "$strix_executable" ] \

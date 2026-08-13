@@ -87,6 +87,10 @@ interrogate
 ## Hash-pinned requirements discipline
 
 CI installs Python tools only with `pip install --require-hashes` from the `*-hashes.txt` files.
+The required Strix installer adds `--no-deps` so pip cannot re-apply a stale
+`Requires-Dist` bound after a compile-time cryptography override. `python-security.yml`
+audits those hashed locks through `scripts/ci/pip_audit_requirements.py` (`pip-audit
+--disable-pip`). See `docs/doctoring/strix-hashed-lock-no-deps.md`.
 Never hand-edit a `-hashes.txt` file: edit the top-level `requirements-<tool>-ci.txt` input, then
 regenerate with the exact `uv pip compile` command recorded in the hashes file's header comment,
 e.g.:
