@@ -37,6 +37,12 @@ flowchart TD
 
 The policy does not repair, synthesize, or mutate lockfile metadata. It consumes the validated lock unchanged. It preserves the existing lockfile version, path, link, URL, origin, tarball suffix, and SHA-512 controls while admitting npm's location-keyed metadata representation.
 
+RFC 3986 treats userinfo, port, query, and fragment as distinct URI
+components that change origin identity (Berners-Lee et al., 2005). An
+explicit `:443` is therefore not the same pin as the default HTTPS origin
+`registry.npmjs.org`. The validator rejects every explicit port, not only
+non-default ones.
+
 The canonical root pin is a provenance anchor for metadata-only locations, not a claim that all nested locations share one physical installation. A complete nested record is validated independently and does not depend on the root. Missing roots, version drift, malformed identity, partial fields, alternate registries, malformed URLs, and invalid integrity remain blocking.
 
 ### Filesystem publication boundary
@@ -77,6 +83,10 @@ The dedicated quality workflow runs Python 3.10 compilation, Python 3.14 focused
 6. Rerun the complete exact-head quality, security, and supply-chain matrix after any repair.
 
 ## References
+
+Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform Resource
+Identifier (URI): Generic syntax* (RFC 3986). Internet Engineering Task
+Force. https://doi.org/10.17487/RFC3986
 
 npm, Inc. (2026). *package-lock.json*. npm Docs. https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json
 

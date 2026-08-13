@@ -70,6 +70,30 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Nested npm metadata pins
+
+```mermaid
+flowchart TD
+  Entry["packages map entry"]
+  Link{"workspace link?"}
+  Fields{"resolved and integrity?"}
+  Root{"canonical root?"}
+  Accept["Accept after HTTPS SHA-512 pin"]
+  Reject["Fail closed"]
+
+  Entry --> Link
+  Link -->|"yes"| Accept
+  Link -->|"no"| Fields
+  Fields -->|"both"| Accept
+  Fields -->|"one"| Reject
+  Fields -->|"neither"| Root
+  Root -->|"yes"| Reject
+  Root -->|"no"| Accept
+```
+
+An explicit port, userinfo, query, or fragment is not the default npm
+registry origin. Publication uses no-follow, descriptor-relative opens.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -126,3 +150,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/npm-nested-metadata-canonical-pins.md`](docs/doctoring/npm-nested-metadata-canonical-pins.md)
+  — current increment's lockfile decision and APA 7th citations.
