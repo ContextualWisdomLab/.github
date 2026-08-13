@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
 - Set `start_line`/`line`/`side`/`start_side` on surviving multi-line OpenCode GitHub suggestions so a replacement that spans more than one current-head hunk line applies as one range.
 - Converted surviving OpenCode inline suggested diffs into GitHub `suggestion` blocks so authors can apply the replacement on the current-head hunk in one click. A `422` substring in a SHA or issue number no longer starts one-at-a-time retry (CWE-1288).
