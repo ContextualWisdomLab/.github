@@ -11,6 +11,12 @@ The central coverage materializer downloads one checksum-pinned uv archive from 
 
 The fixed `GET` is safe and idempotent, so a bounded retry does not mutate remote or repository state. Each attempt repeats the same literal URL and exact timeout. The retry loop does not follow redirects, enable proxies, change the release URL, use repository-controlled headers, or accept an unverified payload.
 
+NIST SP 800-218 PW.4.1 requires third-party software to come from expected,
+trusted sources with integrity verification (Souppaya et al., 2022). Retrying
+HTTP 425 Too Early (Thomson et al., 2018) or 429/5xx (Fielding et al., 2022)
+is therefore an availability control only. It cannot widen the origin, skip
+SHA-256 verification, or treat TLS and permanent DNS failures as transient.
+
 ## Fail-closed exclusions
 
 The following conditions are never retried:
@@ -85,6 +91,11 @@ The output-binding remediation must not be rolled back to pathname prechecks or 
 ## References
 
 Fielding, R. T., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110). RFC Editor. https://doi.org/10.17487/RFC9110
+
+Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure Software Development
+Framework (SSDF) version 1.1: Recommendations for mitigating the risk of
+software vulnerabilities* (NIST Special Publication 800-218). National
+Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
 
 Nottingham, M., & Fielding, R. (2012). *Additional HTTP status codes* (RFC 6585). RFC Editor. https://doi.org/10.17487/RFC6585
 

@@ -70,6 +70,27 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Trusted uv transient retry
+
+```mermaid
+flowchart TD
+  Get["GET pinned GitHub Releases HTTPS archive"]
+  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 or EAI_AGAIN / timeout / reset?"}
+  Retry["At most three attempts; discard partial bytes"]
+  Verify["SHA-256 then versioned executable"]
+  Fail["Fail closed after one attempt"]
+
+  Get --> Status
+  Status -->|"yes, attempts remain"| Retry
+  Retry --> Get
+  Status -->|"yes, exhausted"| Fail
+  Status -->|"TLS, 404, malformed, other"| Fail
+  Status -->|"200 + exact size"| Verify
+```
+
+A retry cannot change the origin, follow a redirect, or accept an
+unverified payload.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -103,6 +124,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Output directories are opened with `O_NOFOLLOW` and validated by
+  device/inode after `fsync`.
 
 ## Quality gates
 
@@ -124,3 +147,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md)
+  — current increment's retry decision and APA 7th citations.
