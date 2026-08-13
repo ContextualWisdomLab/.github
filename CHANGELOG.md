@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
 - Capped one-at-a-time OpenCode inline retries at 20 comments and listed attached `path:line` beside refused receipts so the overview shows both outcomes, plus any locations left untried by the cap. A `422` substring inside a SHA or issue number no longer starts that retry (CWE-1288), and receipt phrases escape backticks and HTML metacharacters.
 - Kept each refused OpenCode inline comment's own GitHub 422 phrase next to its `path:line` so mixed retries do not collapse every failure into one shared error sentence.
 - After a mixed one-at-a-time inline retry, listed only the refused `path:line` rows in the overview receipts so attached hunks are not reported as failed.
