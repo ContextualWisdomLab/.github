@@ -1095,6 +1095,9 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "log-only severity markers are incomplete evidence" in workflow
     assert "github_models_retirement_brownout" in workflow
     assert (
+        "failed after provider infrastructure or failure-signal output" in workflow
+    )
+    assert (
         'grep -Eiq "$incomplete_log_only_signal" "$strix_run_log"' in workflow
     )
 

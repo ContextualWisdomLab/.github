@@ -39,7 +39,9 @@ Keep accepted findings fail-closed. Honor the trusted gate when it has
 already classified leftover console severity as incomplete log-only
 evidence.
 
-1. Classify `github_models_retirement_brownout` as backend unavailability.
+1. Classify `github_models_retirement_brownout` and the gate sentence
+   `failed after provider infrastructure or failure-signal output` as
+   backend unavailability.
 2. Introduce `incomplete_log_only_signal` bound to the two exact gate
    sentences above.
 3. Neutralize only when a backend-unavailable signal is present and either
