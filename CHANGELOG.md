@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Accepted Linux `amd64` / `AMD64` / padded `x86_64` as the pinned trusted-uv archive ISA so Debian-style runners reach the digest-verified installer instead of fail-closing on a spelling of the same architecture.
 - Simulated Linux x86_64 in the trusted-uv installer verification tests so version, cache, and cleanup coverage runs on macOS developer hosts without downloading the production Linux archive or weakening the unsupported-runner fail-closed gate. The decision record now cites CWE-670 so the process-cached installer is cleared before those tests measure verification.
 - Recorded the org control-plane architecture, including the trusted-uv installer platform simulation, so agents reconstruct the runner-path trust boundary from the repo instead of private memory.
