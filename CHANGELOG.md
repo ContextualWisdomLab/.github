@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Isolated trusted interactive review-agent mentions from scheduled organization sweeps with separate job-level concurrency groups; interactive requests use the bounded 100-pending `queue: max` contract while sweeps retain non-cancelling single-pending coalescing, leaving the durable exact-name artifact ledger as forwarding authority. The decision record now cites NIST SP 800-53 AU-6/SC-5 and CWE-362 so a shared concurrency group cannot replace a pending trusted comment.
 - Recorded the org control-plane architecture, including isolated mention queues, so agents reconstruct the trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

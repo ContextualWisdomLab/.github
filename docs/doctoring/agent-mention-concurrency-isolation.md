@@ -26,6 +26,8 @@ This replacement does not reuse predecessor PR #815 or stacked development PR #8
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Move concurrency from the workflow to the two jobs and give each event class a separate group.
 
 ```yaml
