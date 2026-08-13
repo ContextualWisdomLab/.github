@@ -97,7 +97,8 @@ with the same control object used to build the inline `comments` array.
   ``path:start-end`` suggestion ranges, and a separate leftover-diff
   receipt list that labels remaining `` ```diff `` fences as
   ``cannot-provide`` or ``LEFT`` and renders their replacement text as
-  a non-applyable manual-edit `` ```diff `` block.
+  a non-applyable manual-edit `` ```diff `` block whose excerpt cannot
+  close ``<!-- opencode-review-overview -->``.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
@@ -125,6 +126,9 @@ https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pul
 GitHub. (n.d.-c). *Commenting on a pull request*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/commenting-on-a-pull-request#suggesting-changes-to-a-file
+
+MITRE. (2026). *CWE-116: Improper encoding or escaping of output*. Retrieved
+August 13, 2026, from https://cwe.mitre.org/data/definitions/116.html
 
 Sadowski, C., Söderberg, E., Church, L., Sipko, M., & Bacchelli, A. (2018).
 Modern code review: A case study at Google. In *Proceedings of the 40th
