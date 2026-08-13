@@ -19,6 +19,7 @@ HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
 DIFF_FENCE_RE = re.compile(r"```diff\r?\n(.*?)```", re.DOTALL)
+SUGGESTION_FENCE_RE = re.compile(r"```suggestion\r?\n(.*?)```", re.DOTALL)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -265,6 +266,16 @@ def render_github_suggestion_block(replacement: str) -> str:
     return f"```suggestion\n{replacement}\n```"
 
 
+def body_has_diff_fence(body: str) -> bool:
+    """Return True when ``body`` contains a closed `` ```diff `` fence."""
+    return DIFF_FENCE_RE.search(body) is not None
+
+
+def body_has_suggestion_fence(body: str) -> bool:
+    """Return True when ``body`` contains a closed `` ```suggestion `` fence."""
+    return SUGGESTION_FENCE_RE.search(body) is not None
+
+
 def count_removed_suggestion_lines(diff_text: str) -> int:
     """Return how many current-file lines a unified suggested_diff removes."""
     count = 0
@@ -329,7 +340,7 @@ def apply_github_suggestion_blocks(
                 break
         new_comment = dict(comment)
         if replacement is not None:
-            if "```suggestion" not in body:
+            if not body_has_suggestion_fence(body):
                 new_comment["body"] = (
                     f"{body.rstrip()}\n\n{render_github_suggestion_block(replacement)}\n"
                 )
@@ -409,7 +420,11 @@ def applyable_suggestion_ranges(
         if not isinstance(comment, dict):
             continue
         body = comment.get("body")
-        if not isinstance(body, str) or "```suggestion" not in body:
+        if (
+            not isinstance(body, str)
+            or comment.get("side") == "LEFT"
+            or not body_has_suggestion_fence(body)
+        ):
             continue
         path = safe_finding_path(comment.get("path"))
         end = safe_finding_line(comment.get("line"))
@@ -435,13 +450,17 @@ def render_applyable_receipts(ranges: list[tuple[str, int, int]]) -> list[str]:
 def leftover_diff_fence_reason(comment: dict[str, Any]) -> str | None:
     """Return ``LEFT`` or ``cannot-provide`` when a comment kept only a diff fence."""
     body = comment.get("body")
-    if not isinstance(body, str) or "```diff" not in body:
+    if not isinstance(body, str):
         return None
-    if "```suggestion" in body:
-        return None
+    has_diff = body_has_diff_fence(body)
+    has_suggestion = body_has_suggestion_fence(body)
     if comment.get("side") == "LEFT":
-        return "LEFT"
-    return "cannot-provide"
+        if has_diff or has_suggestion:
+            return "LEFT"
+        return None
+    if has_diff and not has_suggestion:
+        return "cannot-provide"
+    return None
 
 
 def leftover_diff_fence_receipts(
