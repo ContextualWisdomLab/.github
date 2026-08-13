@@ -16,6 +16,11 @@ It can only identify one narrow execution-environment limitation and defer the
 final decision to separately successful native build and test checks on the same
 commit.
 
+CWE-829 forbids including functionality from an untrusted control sphere
+(MITRE, 2026). A source-only sandbox therefore must not run pull-request
+maturin or cargo hooks to recover from `ModuleNotFoundError`. Peer evidence
+is exact-head repository CI, not a sandbox compile.
+
 ## Observed failure
 
 `ContextualWisdomLab/fast-mlsirm#546` uses the maturin mixed-project layout:
@@ -155,6 +160,9 @@ introducing a Python substitute for Rust arithmetic.
 
 GitHub. (2026). *REST API endpoints for workflow runs*. GitHub Docs.
 https://docs.github.com/en/rest/actions/workflow-runs
+
+MITRE. (2026). *CWE-829: Inclusion of functionality from untrusted control
+sphere*. https://cwe.mitre.org/data/definitions/829.html
 
 Maturin contributors. (2026). *Bindings*. Maturin user guide.
 https://www.maturin.rs/bindings

@@ -70,6 +70,25 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## PyO3 peer-evidence gate
+
+```mermaid
+flowchart TD
+  Sandbox["Source-only OpenCode sandbox"]
+  Collect{"ModuleNotFoundError on PyO3 module?"}
+  Peer{"Exact-head native build and test succeeded?"}
+  Defer["Classify environment limitation; do not pass tests"]
+  Fail["Product failure remains a failure"]
+
+  Sandbox --> Collect
+  Collect -->|"no"| Fail
+  Collect -->|"yes"| Peer
+  Peer -->|"no"| Fail
+  Peer -->|"yes"| Defer
+```
+
+The sandbox never runs pull-request maturin or cargo hooks.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -103,6 +122,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Rust remains the psychometric arithmetic owner. The peer gate does not
+  introduce a Python substitute.
 
 ## Quality gates
 
@@ -124,3 +145,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/python-native-extension-peer-evidence.md`](docs/doctoring/python-native-extension-peer-evidence.md)
+  — current increment's peer-evidence decision and APA 7th citations.

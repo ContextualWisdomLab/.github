@@ -33,6 +33,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
 - Added a bounded PyO3/maturin pytest-failure classifier and exact-head native peer-check verifier so source-only OpenCode sandboxes can distinguish one unchanged-extension collection limitation from product failures without skipping tests, executing pull-request build hooks, or weakening Rust ownership.
+- Added a bounded PyO3/maturin pytest-failure classifier and exact-head native peer-check verifier so source-only OpenCode sandboxes can distinguish one unchanged-extension collection limitation from product failures without skipping tests, executing pull-request build hooks, or weakening Rust ownership. The decision record now cites CWE-829 so a missing compiled extension cannot authorize pull-request-selected build hooks inside the isolated sandbox.
+- Recorded the org control-plane architecture, including the PyO3 peer-evidence gate, so agents reconstruct the native-extension trust boundary from the repo instead of private memory.
 
 ### Fixed
 
