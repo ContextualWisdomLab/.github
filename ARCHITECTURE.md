@@ -70,6 +70,25 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Empirical review-quality gate
+
+```mermaid
+flowchart TD
+  Pilot["Lifecycle-yield pilot"]
+  Gold{"n >= 50 head-matched PRs and gold findings?"}
+  Wilson["Wilson 95% CI vs CodeRabbit"]
+  Shadow["Shadow mode; not a merge gate"]
+  Insufficient["INSUFFICIENT_EVIDENCE"]
+
+  Pilot --> Gold
+  Gold -->|"no"| Insufficient
+  Gold -->|"yes"| Wilson
+  Wilson --> Shadow
+```
+
+Coverage-check failures stay merge-readiness evidence. They are not
+source-defect labels and cannot prove commercial parity.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -78,6 +97,7 @@ sequenceDiagram
   participant RW as Required workflows
   participant OC as OpenCode reviewer
   participant SV as sandboxed_verify / web E2E
+  participant QG as Quality scorer
   participant MS as Merge scheduler
 
   PR->>RW: pull_request_target on trusted base
@@ -85,6 +105,7 @@ sequenceDiagram
   OC->>SV: PoC command in isolated copy
   SV-->>OC: redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
+  QG->>QG: confined paths; INSUFFICIENT_EVIDENCE until gold n
   MS->>PR: merge only on current-head approval + green checks
 ```
 
@@ -103,6 +124,10 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- The quality scorer reads only confined path roots and never executes
+  model-proposed commands.
+- The quality scorer reads only confined path roots and never executes
+  model-proposed commands.
 
 ## Quality gates
 
@@ -111,6 +136,7 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
+tests pin workflow structure and governance prose so drift fails closed.
 
 ## Related durable documents
 
@@ -124,3 +150,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/opencode-review-quality-evaluation.md`](docs/doctoring/opencode-review-quality-evaluation.md)
+  — current increment's measurement decision and APA 7th citations.

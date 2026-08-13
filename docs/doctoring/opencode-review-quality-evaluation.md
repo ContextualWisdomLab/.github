@@ -20,6 +20,14 @@ The immediate decision is therefore to:
 
 The pilot result is intentionally **`INSUFFICIENT_EVIDENCE`**, not PASS or FAIL.
 
+Wilson score intervals remain the fail-closed estimator for binomial
+precision and recall because the normal approximation is unreliable at the
+small *n* of a three-repository pilot (Brown et al., 2001). IEEE Std 1012
+requires verification and validation evidence to stay independent of the
+item under test (IEEE, 2017). Lifecycle-yield counts and coverage-check
+failures therefore cannot be reused as expert-gold defect labels or as
+proof of commercial parity.
+
 ## Why a real-pull-request benchmark is mandatory
 
 Synthetic mutation suites remain useful for deterministic regression tests, but they do not establish production review quality. Kumar, Bararia, and Raj (2026) reported that the best tested model achieved F1 = 0.847 on synthetic samples but only F1 = 0.066 on real pull requests, with performance deteriorating sharply as diff size increased. AACR-Bench likewise argues that raw pull-request comments are incomplete ground truth and uses AI-assisted, expert-verified repository-level annotation, increasing defect coverage by 285% over the original review records (Zhang et al., 2026).
@@ -202,7 +210,15 @@ The reference is a moving commercial product. Benchmark snapshots must record Co
 
 ## References
 
+Brown, L. D., Cai, T. T., & DasGupta, A. (2001). Interval estimation for a
+binomial proportion. *Statistical Science, 16*(2), 101–133.
+https://doi.org/10.1214/ss/1009213286
+
 Hu, R., Wang, X., Wen, X.-C., Zhang, Z., Jiang, B., Gao, P., Peng, C., & Gao, C. (2025). *Benchmarking LLMs for fine-grained code review with enriched context in practice* (arXiv:2511.07017). arXiv. https://doi.org/10.48550/arXiv.2511.07017
+
+IEEE. (2017). *IEEE standard for system, software, and hardware verification
+and validation* (IEEE Std 1012-2016).
+https://doi.org/10.1109/IEEESTD.2017.8055462
 
 Jin, H., & Chen, H. (2026). *Are LLMs reliable code reviewers? Systematic overcorrection in requirement conformance judgement* (arXiv:2603.00539). arXiv. https://arxiv.org/abs/2603.00539
 
