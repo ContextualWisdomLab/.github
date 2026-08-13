@@ -1609,6 +1609,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'post_pull_review_with_retry "inline review" "$review_write_token"'
         in publish_step
     )
+    assert "opencode_inline_comment_fallback.py" in workflow
+    assert (
+        'build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"'
+        in workflow
+    )
     assert "OPENCODE_EXHAUSTED_REKICK_" not in publish_step
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "10800"' not in publish_step
     assert "steps.opencode_review_model_pool.outcome == 'success'" not in workflow

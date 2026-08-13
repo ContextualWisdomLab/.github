@@ -5766,12 +5766,12 @@ jobs:
           build_inline_comment_failure_body() {
             local body_file="$1"
             local output_file="$2"
+            local control_json="$3"
 
-            {
-              cat "$body_file"
-              printf '\n## Inline comment publishing failed\n\n'
-              printf 'GitHub did not accept the inline review comments for the cited finding lines, so OpenCode did not copy suggested diffs into this PR-level body. Re-run the review after the findings are anchored to changed diff lines, or inspect the workflow log/control JSON and apply the changes manually.\n'
-            } >"$output_file"
+            python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_inline_comment_fallback.py" \
+              --control "$control_json" \
+              --body "$body_file" \
+              --output "$output_file"
           }
 
           publish_request_changes_from_control() {
@@ -5785,7 +5785,7 @@ jobs:
             fallback_body_file="$(mktemp)"
             format_request_changes_body "$control_json" "$body_file"
             build_request_changes_review_payload "$control_json" "$body_file" "$payload_file"
-            build_inline_comment_failure_body "$body_file" "$fallback_body_file"
+            build_inline_comment_failure_body "$body_file" "$fallback_body_file" "$control_json"
             create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file"
             rm -f "$body_file" "$payload_file" "$fallback_body_file"
           }
