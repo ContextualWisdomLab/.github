@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Classified applyable OpenCode GitHub suggestions by a closed ```suggestion fence, not a bare substring, so leftover prose that mentions the token is not advertised as a one-click apply (CWE-1288).
 - Applyable OpenCode `path:start-end` overview rows now drop HTML comment delimiters and `<`, `>`, `&` so a leftover path cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Kept `start_line`/`start_side` on one-at-a-time 422 retries so a multi-line GitHub suggestion still posts as one range instead of a single comment on the last line.
 - Listed applyable OpenCode GitHub suggestion ranges (`path:line` or `path:start-end`) in the overview receipts so authors can see which surviving hunks shipped as one-click applies. LEFT-side comments, including a RIGHT-side range that still starts on LEFT, are not advertised as applyable, and a `422` substring in a SHA or issue number no longer starts one-at-a-time retry (CWE-1288).

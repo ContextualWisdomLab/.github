@@ -68,7 +68,10 @@ leftover delimiter cannot close ``<!-- opencode-review-overview -->``
 comments, and ranges whose `start_side` is still LEFT, are omitted from
 that applyable list. Suggested diffs still
 stay out of the PR-level body. A bare ``422`` substring in a SHA or
-issue number is not treated as HTTP 422 (CWE-1288).
+issue number is not treated as HTTP 422 (CWE-1288). Applyable vs leftover
+classification uses a closed `` ```suggestion `` fence, not a bare
+substring, so leftover prose that mentions the token is not advertised
+as a one-click apply (CWE-1288; MITRE, n.d.).
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.

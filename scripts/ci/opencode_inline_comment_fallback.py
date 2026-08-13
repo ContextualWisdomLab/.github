@@ -18,6 +18,7 @@ HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 PLUS_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)(?:\t.*)?$")
 MINUS_PATH_RE = re.compile(r"^--- a/(.+?)(?:\t.*)?$")
 DIFF_FENCE_RE = re.compile(r"```diff\r?\n(.*?)```", re.DOTALL)
+SUGGESTION_FENCE_RE = re.compile(r"```suggestion\r?\n(.*?)```", re.DOTALL)
 
 
 def safe_finding_path(raw_path: object) -> str | None:
@@ -264,6 +265,11 @@ def render_github_suggestion_block(replacement: str) -> str:
     return f"```suggestion\n{replacement}\n```"
 
 
+def body_has_suggestion_fence(body: str) -> bool:
+    """Return True when ``body`` contains a closed `` ```suggestion `` fence."""
+    return SUGGESTION_FENCE_RE.search(body) is not None
+
+
 def count_removed_suggestion_lines(diff_text: str) -> int:
     """Return how many current-file lines a unified suggested_diff removes."""
     count = 0
@@ -328,7 +334,7 @@ def apply_github_suggestion_blocks(
                 break
         new_comment = dict(comment)
         if replacement is not None:
-            if "```suggestion" not in body:
+            if not body_has_suggestion_fence(body):
                 new_comment["body"] = (
                     f"{body.rstrip()}\n\n{render_github_suggestion_block(replacement)}\n"
                 )
@@ -433,7 +439,7 @@ def applyable_suggestion_ranges(
         if not isinstance(comment, dict):
             continue
         body = comment.get("body")
-        if not isinstance(body, str) or "```suggestion" not in body:
+        if not isinstance(body, str) or not body_has_suggestion_fence(body):
             continue
         if comment.get("side") == "LEFT" or comment.get("start_side") == "LEFT":
             continue

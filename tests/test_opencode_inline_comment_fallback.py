@@ -8,6 +8,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     DEFAULT_SINGLE_COMMENT_RETRY_LIMIT,
     apply_github_suggestion_blocks,
     applyable_suggestion_ranges,
+    body_has_suggestion_fence,
     comment_on_changed_hunk,
     count_removed_suggestion_lines,
     extract_suggestion_replacement,
@@ -1621,6 +1622,20 @@ def test_applyable_ranges_parse_and_render_path_start_end():
         }
     )
     assert swapped == [("scripts/ci/example.py", 5, 7)]
+    mention_only = "Authors should use a ```suggestion fence.\n"
+    assert not body_has_suggestion_fence(mention_only)
+    assert applyable_suggestion_ranges(
+        {
+            "comments": [
+                {
+                    "path": "scripts/ci/example.py",
+                    "line": 7,
+                    "side": "RIGHT",
+                    "body": mention_only,
+                }
+            ]
+        }
+    ) == []
     assert applyable_suggestion_ranges(
         {
             "comments": [
