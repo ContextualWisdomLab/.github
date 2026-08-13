@@ -2,6 +2,8 @@
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 The central coverage materializer downloads one checksum-pinned uv archive from one literal Astral HTTPS URL. It performs at most **three total attempts**, separated by deterministic delays of one and two seconds, only for this closed availability set:
 
 - HTTP `408`, `425`, `429`, `500`, `502`, `503`, `504`, and `522`;
