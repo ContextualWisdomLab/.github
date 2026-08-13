@@ -835,13 +835,11 @@ jobs:
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
           export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
 
-          # Capture the gate exit code plus its console output. The gate returns
-          # exit 1 both for genuine blocking vulnerabilities AND for
-          # LLM-backend-unavailable outcomes (GitHub Models "Too many requests"
-          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached
-          # token-cap, connection/warm-up failures) that could not complete a scan. A backend outage is CI
-          # infrastructure noise, not a security finding, so it must not fail
-          # the required check and block merges.
+          # Capture the gate exit code plus its console output. A non-zero gate
+          # result means the scan did not produce complete, trusted evidence;
+          # provider outages are therefore failures, not clean security scans.
+          # Fallback and retry policy belongs in the trusted gate itself. This
+          # wrapper must never convert an incomplete scan into success.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e
@@ -849,37 +847,10 @@ jobs:
           strix_rc="${PIPESTATUS[0]}"
           set -e
 
-          if [ "$strix_rc" -eq 0 ]; then
-            exit 0
-          fi
-
-          # Preserve configuration failures (exit 2) and any unexpected exit
-          # code as hard failures — only the scan-failure code (1) can be an
-          # infrastructure/backend-unavailability outcome.
-          if [ "$strix_rc" -ne 1 ]; then
+          if [ "$strix_rc" -ne 0 ]; then
+            echo "::error title=Strix evidence incomplete::The trusted Strix gate did not produce a clean scan result (exit ${strix_rc}); provider failures and missing reports remain fail-closed. See the strix-reports artifact and the run log."
             exit "$strix_rc"
           fi
-
-          # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
-          # Any evidence that a vulnerability was actually reported. Its presence
-          # forces a hard failure so real findings are NEVER downgraded. Keep the
-          # severity branch anchored away from identifiers so environment lines
-          # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
-          reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
-
-          # Neutral skip only when ALL hold: a backend-unavailability signal is
-          # present and no vulnerability was reported anywhere. This preserves
-          # real security gating while keeping uncontrollable provider outages
-          # from blocking current-head merge progress.
-          if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
-            echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
-            exit 0
-          fi
-
-          echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
-          exit "$strix_rc"
 
       - name: Collect Strix reports for artifact upload
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
