@@ -11,6 +11,8 @@ from scripts.ci.opencode_inline_comment_fallback import (
     MANUAL_EDIT_MAX_CHARS,
     apply_github_suggestion_blocks,
     applyable_suggestion_ranges,
+    body_has_diff_fence,
+    body_has_suggestion_fence,
     decode_manual_edit_field,
     encode_manual_edit_field,
     exclude_deferred_applyable,
@@ -2429,6 +2431,34 @@ def test_leftover_diff_fences_are_not_applyable_suggestions():
     assert leftover_diff_fence_reason({"body": "```suggestion\nx\n```"}) is None
     assert leftover_diff_fence_reason(
         {"body": "```diff\nn/a\n```\n\n```suggestion\nkept\n```\n"}
+    ) is None
+    mention_only = (
+        "Authors should use a ```suggestion fence.\n\n"
+        "```diff\nn/a\n```\n"
+    )
+    assert body_has_diff_fence(mention_only)
+    assert not body_has_suggestion_fence(mention_only)
+    assert leftover_diff_fence_reason(
+        {"path": "scripts/ci/blocked.py", "line": 4, "side": "RIGHT", "body": mention_only}
+    ) == "cannot-provide"
+    assert applyable_suggestion_ranges(_batch_payload(
+        {
+            "path": "scripts/ci/blocked.py",
+            "line": 4,
+            "side": "RIGHT",
+            "body": mention_only,
+        }
+    )) == []
+    left_suggestion = {
+        "path": "scripts/ci/removed.py",
+        "line": 11,
+        "side": "LEFT",
+        "body": "```suggestion\nremoved = True\n```\n",
+    }
+    assert leftover_diff_fence_reason(left_suggestion) == "LEFT"
+    assert applyable_suggestion_ranges(_batch_payload(left_suggestion)) == []
+    assert leftover_diff_fence_reason(
+        {"side": "LEFT", "body": "Authors should use a ```suggestion fence."}
     ) is None
     converted = apply_github_suggestion_blocks(
         _batch_payload(applyable_comment, left_comment, cannot_comment)

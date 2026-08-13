@@ -14,6 +14,13 @@ from scripts.ci import materialize_base_python_requirements as materializer
 from tests.conftest import FakeHttpResponse
 
 
+def _simulate_linux_x86_64_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let installer verification tests run on a non-Linux developer host."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    materializer._install_trusted_uv.cache_clear()
+
+
 def git(repo: Path, *args: str) -> str:
     """Run git in a temporary fixture repository."""
     return subprocess.run(
@@ -644,6 +651,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
+    _simulate_linux_x86_64_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -690,6 +698,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
+    _simulate_linux_x86_64_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -721,6 +730,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    _simulate_linux_x86_64_runner(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

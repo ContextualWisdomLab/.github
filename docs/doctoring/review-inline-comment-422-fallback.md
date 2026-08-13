@@ -79,7 +79,10 @@ and `start_side` so GitHub applies one multi-line suggestion range
 (GitHub, n.d.-b). A range that would leave the hunk stays single-line.
 The publisher then persists those applyable ranges as overview receipts
 (``path:line`` or ``path:start-end``) so the author can see which hunks
-shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
+shipped as one-click GitHub suggestions (GitHub, n.d.-c). Applyable vs
+leftover uses a closed fence match, not a bare `` ```suggestion ``
+substring (CWE-1288; MITRE, n.d.). A leftover mention of the token, and
+every LEFT suggestion, stay leftover. Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
@@ -147,6 +150,9 @@ https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pul
 GitHub. (n.d.-c). *Commenting on a pull request*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/commenting-on-a-pull-request#suggesting-changes-to-a-file
+
+MITRE. (n.d.). *CWE-1288: Improper validation of unsafe equivalence in input*.
+Retrieved August 13, 2026, from https://cwe.mitre.org/data/definitions/1288.html
 
 Sadowski, C., Söderberg, E., Church, L., Sipko, M., & Bacchelli, A. (2018).
 Modern code review: A case study at Google. In *Proceedings of the 40th

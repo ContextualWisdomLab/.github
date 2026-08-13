@@ -126,3 +126,6 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+
+Overview receipts classify applyable GitHub suggestions by a closed fence.
+See `docs/doctoring/review-inline-comment-422-fallback.md`.
