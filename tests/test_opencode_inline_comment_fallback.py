@@ -3912,3 +3912,100 @@ def test_trusted_interior_leftover_kept_under_deferred_range():
         assert excerpt not in applyable_section
         assert "scripts/ci/example.py:5-7" not in applyable_section
 
+
+def test_cli_overview_keeps_interior_leftover_not_in_control(tmp_path):
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 6,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 5,
+            "side": "RIGHT",
+            "body": MULTILINE_DIFF_BODY,
+        },
+    )
+    output = tmp_path / "filtered.json"
+    leftover_file = tmp_path / "leftover.txt"
+    applyable_file = tmp_path / "applyable.txt"
+    assert write_hunk_filtered_payload(
+        payload, hunks, output, applyable_path=applyable_file, leftover_path=leftover_file
+    ) == 2
+    leftover_receipts = parse_leftover_diff_receipts(
+        leftover_file.read_text(encoding="utf-8")
+    )
+    assert leftover_receipts[0][:3] == ("scripts/ci/example.py", 6, "cannot-provide")
+    deferred_path = tmp_path / "deferred.txt"
+    assert (
+        write_single_comment_payloads(
+            json.loads(output.read_text(encoding="utf-8")),
+            tmp_path / "singles",
+            limit=1,
+            deferred_path=deferred_path,
+        )
+        == 1
+    )
+    deferred_receipts = parse_applyable_ranges(deferred_path.read_text(encoding="utf-8"))
+    assert deferred_receipts[0][:3] == ("scripts/ci/example.py", 5, 7)
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover_file.write_text(
+        leftover_file.read_text(encoding="utf-8")
+        + "scripts/ci/foreign.py:1\tcannot-provide\tignored\n",
+        encoding="utf-8",
+    )
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    control_path.write_text(
+        json.dumps(control({"path": "scripts/ci/example.py", "line": 5})),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--deferred-locations",
+                str(deferred_path),
+                "--applyable-locations",
+                str(applyable_file),
+                "--leftover-diff-locations",
+                str(leftover_file),
+                "--retry-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    rendered = receipt.read_text(encoding="utf-8")
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    assert leftover_heading in rendered
+    leftover_section = rendered.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert leftover_section.index("- `scripts/ci/example.py:5-7`") < leftover_section.index(
+        MANUAL_EDIT_HEADING
+    )
+    assert excerpt in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in leftover_section
+    assert "foreign.py" not in leftover_section
+    if applyable_heading in rendered:
+        applyable_section = rendered.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert excerpt not in applyable_section
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+        assert "```suggestion" not in applyable_section
+
