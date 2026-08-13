@@ -8,3 +8,4 @@ One-at-a-time 422 retries must keep multi-line start_line/start_side.
 One-at-a-time 422 retries are capped at 20 comments; leftovers become deferred path:line rows.
 One-at-a-time 422 retries strip leftover ```diff/```patch fences so unapplyable leftover diffs cannot 422 the retry.
 Leftover overview receipts sanitize path and phrase so a leftover cannot close the HTML comment or reopen a suggestion fence.
+Leftover overview paths that contain `-->`, `<!--`, or a suggestion fence are omitted.
