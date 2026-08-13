@@ -1,5 +1,7 @@
 # Doctoring record: Python native-extension peer evidence
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 ## Purpose
 
 The central OpenCode coverage sandbox executes pull-request tests without a
