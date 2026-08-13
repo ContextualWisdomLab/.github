@@ -1663,6 +1663,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "from LEFT" in helper
     assert "strip_left_origin_fields" in helper
     assert "single_comment_range_fields" in helper
+    assert "format_deferred_receipt_row" in helper
+    assert "exclude_deferred_applyable" in helper
     assert "Manual edit (not a GitHub suggestion):" in helper
     assert (
         "These comments still have a suggested-diff fence that GitHub cannot apply:"

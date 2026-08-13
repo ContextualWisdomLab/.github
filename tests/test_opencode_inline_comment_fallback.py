@@ -13,7 +13,11 @@ from scripts.ci.opencode_inline_comment_fallback import (
     applyable_suggestion_ranges,
     decode_manual_edit_field,
     encode_manual_edit_field,
+    exclude_deferred_applyable,
     format_applyable_origin,
+    format_deferred_receipt_row,
+    merge_deferred_origins,
+    normalize_deferred_receipt,
     parse_applyable_origin_field,
     strip_left_origin_fields,
     leftover_diff_fence_reason,
@@ -847,6 +851,268 @@ def test_write_single_comment_payloads_caps_retry_and_records_deferred(tmp_path)
     empty_deferred = tmp_path / "none.txt"
     assert write_single_comment_payloads(payload, tmp_path / "all", limit=20, deferred_path=empty_deferred) == 3
     assert empty_deferred.read_text(encoding="utf-8") == ""
+
+
+def test_deferred_past_retry_cap_keeps_range_origin_and_is_not_applyable(tmp_path):
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    remapped = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/ok.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "first posted",
+            },
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "side": "LEFT",
+                "body": MULTILINE_DIFF_BODY,
+            },
+        ),
+        hunks,
+    )
+    deferred_comment = remapped["comments"][1]
+    assert deferred_comment["start_line"] == 5
+    assert deferred_comment["line"] == 7
+    assert deferred_comment["_left_origin_line"] == 5
+    output_dir = tmp_path / "singles"
+    deferred = tmp_path / "deferred.txt"
+    assert (
+        write_single_comment_payloads(
+            remapped, output_dir, limit=1, deferred_path=deferred
+        )
+        == 1
+    )
+    assert sorted(path.name for path in output_dir.glob("comment-*.json")) == [
+        "comment-000.json"
+    ]
+    posted = json.loads((output_dir / "comment-000.json").read_text(encoding="utf-8"))
+    assert posted["comments"][0]["path"] == "scripts/ci/ok.py"
+    assert "start_line" not in posted["comments"][0]
+    deferred_text = deferred.read_text(encoding="utf-8")
+    assert deferred_text == (
+        "scripts/ci/example.py:5-7\tLEFT scripts/ci/example.py:5\n"
+    )
+    assert "```suggestion" not in deferred_text
+    assert format_deferred_receipt_row({"path": 12, "line": 4}) == ""
+    assert format_deferred_receipt_row({"path": "scripts/ci/a.py", "line": 4}) == (
+        "scripts/ci/a.py:4\n"
+    )
+    assert format_deferred_receipt_row(
+        {"path": "scripts/ci/a.py", "line": 7, "start_line": 5}
+    ) == "scripts/ci/a.py:5-7\n"
+    assert format_deferred_receipt_row(
+        {"path": "scripts/ci/a.py", "line": 5, "start_line": 5}
+    ) == "scripts/ci/a.py:5\n"
+    assert normalize_deferred_receipt(("scripts/ci/later.py", 20)) == (
+        "scripts/ci/later.py",
+        20,
+        20,
+        None,
+        None,
+    )
+    assert normalize_deferred_receipt(("scripts/ci/later.py", 20, 20)) == (
+        "scripts/ci/later.py",
+        20,
+        20,
+        None,
+        None,
+    )
+    assert normalize_deferred_receipt(
+        ("scripts/ci/later.py", 20, 22, "scripts/ci/later.py", 11)
+    ) == ("scripts/ci/later.py", 20, 22, "scripts/ci/later.py", 11)
+    assert normalize_deferred_receipt(("scripts/ci/later.py",)) is None
+    assert normalize_deferred_receipt(("scripts/ci/later.py", 0)) is None
+    assert normalize_deferred_receipt(("scripts/ci/later.py", 7, 3)) is None
+    assert normalize_deferred_receipt(("scripts/ci/later.py", 20, 22, None)) is None
+    assert merge_deferred_origins(
+        [("scripts/ci/example.py", 5, 7, None, None)],
+        [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)],
+    ) == [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)]
+    assert merge_deferred_origins(
+        [("scripts/ci/example.py", 7, 7, None, None)],
+        [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)],
+    ) == [("scripts/ci/example.py", 7, 7, "scripts/ci/example.py", 5)]
+    assert merge_deferred_origins(
+        [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)],
+        [("scripts/ci/other.py", 1, 2, "scripts/ci/other.py", 1)],
+    ) == [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)]
+    assert exclude_deferred_applyable(
+        [("scripts/ci/example.py", 5, 7, None, None)],
+        [("scripts/ci/example.py", 7, 7, None, None)],
+    ) == []
+    stripped = strip_left_origin_fields(remapped)
+    stripped_deferred = tmp_path / "stripped-deferred.txt"
+    assert (
+        write_single_comment_payloads(
+            stripped, tmp_path / "stripped-singles", limit=1, deferred_path=stripped_deferred
+        )
+        == 1
+    )
+    assert stripped_deferred.read_text(encoding="utf-8") == "scripts/ci/example.py:5-7\n"
+    assert merge_deferred_origins(
+        parse_applyable_ranges(stripped_deferred.read_text(encoding="utf-8")),
+        applyable_suggestion_ranges(remapped),
+    ) == [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)]
+
+    rewrite = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/ok.py",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "first posted",
+            },
+            {
+                "path": "scripts/ci/rewrite.py",
+                "line": 11,
+                "side": "LEFT",
+                "body": MULTILINE_DIFF_BODY,
+            },
+        ),
+        parse_unified_diff_hunk_lines(REWRITE_UNIFIED_DIFF),
+    )
+    assert rewrite["comments"][1]["line"] == 22
+    assert rewrite["comments"][1]["start_line"] == 20
+    rewrite_deferred = tmp_path / "rewrite-deferred.txt"
+    assert (
+        write_single_comment_payloads(
+            rewrite, tmp_path / "rewrite-singles", limit=1, deferred_path=rewrite_deferred
+        )
+        == 1
+    )
+    assert rewrite_deferred.read_text(encoding="utf-8") == (
+        "scripts/ci/rewrite.py:20-22\tLEFT scripts/ci/rewrite.py:11\n"
+    )
+    applyable = applyable_suggestion_ranges(remapped)
+    deferred_receipts = parse_applyable_ranges(deferred_text)
+    merged = merge_deferred_origins(deferred_receipts, applyable)
+    assert merged == [
+        ("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)
+    ]
+    remaining = exclude_deferred_applyable(applyable, merged)
+    assert all(item[0] != "scripts/ci/example.py" for item in remaining)
+    from scripts.ci.opencode_inline_comment_fallback import _trusted_deferred_subset
+
+    assert _trusted_deferred_subset(None, {("scripts/ci/ok.py", 4)}) == []
+    assert _trusted_deferred_subset(
+        [("scripts/ci/ok.py", 0), ("scripts/ci/ok.py", 4)],
+        {("scripts/ci/ok.py", 4)},
+    ) == [("scripts/ci/ok.py", 4, 4, None, None)]
+    assert merge_deferred_origins(
+        [("scripts/ci/a.py", 2, 2, None, None)],
+        [("scripts/ci/a.py", 2, 2, None, None)],
+    ) == [("scripts/ci/a.py", 2, 2, None, None)]
+    assert merge_deferred_origins(
+        [("scripts/ci/a.py", 2, 2, "scripts/ci/a.py", 1)],
+        [("scripts/ci/a.py", 2, 2, "scripts/ci/a.py", 9)],
+    ) == [("scripts/ci/a.py", 2, 2, "scripts/ci/a.py", 1)]
+    assert merge_deferred_origins(
+        [("scripts/ci/example.py", 5, 7, None, None)],
+        [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)],
+    ) == [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)]
+    assert exclude_deferred_applyable(
+        [("scripts/ci/example.py", 5, 7, None, None)],
+        [("scripts/ci/example.py", 5, 5, None, None)],
+    ) == []
+    kept_other = exclude_deferred_applyable(
+        [
+            ("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5),
+            ("scripts/ci/ok.py", 4, 4, None, None),
+        ],
+        [("scripts/ci/example.py", 5, 7, "scripts/ci/example.py", 5)],
+    )
+    assert kept_other == [("scripts/ci/ok.py", 4, 4, None, None)]
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/ok.py", "line": 4},
+            {"path": "scripts/ci/example.py", "line": 5},
+        ),
+        attached_locations=[("scripts/ci/ok.py", 4)],
+        deferred_locations=deferred_receipts,
+        applyable_locations=applyable,
+        retry_limit=1,
+    )
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    deferred_heading = "were not retried (retry limit 1):"
+    assert deferred_heading in body
+    assert "- `scripts/ci/example.py:5-7` — from LEFT `scripts/ci/example.py:5`" in body
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+        assert "```suggestion" not in applyable_section
+    deferred_section = body.split(deferred_heading, 1)[1]
+    if applyable_heading in deferred_section:
+        deferred_section = deferred_section.split(applyable_heading, 1)[0]
+    assert "```suggestion" not in deferred_section
+    assert "from LEFT `scripts/ci/example.py:5`" in deferred_section
+
+    payload_path = tmp_path / "batch.json"
+    payload_path.write_text(json.dumps(remapped), encoding="utf-8")
+    cli_dir = tmp_path / "cli-singles"
+    cli_deferred = tmp_path / "cli-deferred.txt"
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload_path),
+                "--output-dir",
+                str(cli_dir),
+                "--deferred-locations",
+                str(cli_deferred),
+                "--retry-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert cli_deferred.read_text(encoding="utf-8") == (
+        "scripts/ci/example.py:5-7\tLEFT scripts/ci/example.py:5\n"
+    )
+    control_path = tmp_path / "control.json"
+    body_path = tmp_path / "body.md"
+    receipt = tmp_path / "receipt.md"
+    applyable_file = tmp_path / "applyable.txt"
+    applyable_file.write_text(
+        "scripts/ci/example.py:5-7\tLEFT scripts/ci/example.py:5\n",
+        encoding="utf-8",
+    )
+    control_path.write_text(
+        json.dumps(
+            control(
+                {"path": "scripts/ci/ok.py", "line": 4},
+                {"path": "scripts/ci/example.py", "line": 5},
+            )
+        ),
+        encoding="utf-8",
+    )
+    body_path.write_text("## Findings\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--control",
+                str(control_path),
+                "--body",
+                str(body_path),
+                "--output",
+                str(receipt),
+                "--deferred-locations",
+                str(cli_deferred),
+                "--applyable-locations",
+                str(applyable_file),
+                "--retry-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+    rendered = receipt.read_text(encoding="utf-8")
+    assert "were not retried (retry limit 1):" in rendered
+    assert "- `scripts/ci/example.py:5-7` — from LEFT `scripts/ci/example.py:5`" in rendered
+    if applyable_heading in rendered:
+        assert "scripts/ci/example.py:5-7" not in rendered.split(applyable_heading, 1)[1]
 
 
 def test_mixed_success_receipts_list_attached_beside_refused():

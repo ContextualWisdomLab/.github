@@ -910,6 +910,11 @@ def iter_single_comment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]
             "commit_id": commit_id,
         }
         item.update(single_comment_range_fields(comment, line, side_key))
+        origin_path = safe_finding_path(comment.get(LEFT_ORIGIN_PATH_KEY))
+        origin_line = safe_finding_line(comment.get(LEFT_ORIGIN_LINE_KEY))
+        if origin_path is not None and origin_line is not None:
+            item[LEFT_ORIGIN_PATH_KEY] = origin_path
+            item[LEFT_ORIGIN_LINE_KEY] = origin_line
         singles.append(item)
     return singles
 
@@ -959,10 +964,115 @@ def write_single_comment_payloads(
         count += 1
     if deferred_path is not None:
         deferred_path.write_text(
-            "".join(f"{item['path']}:{item['line']}\n" for item in items[cap:]),
+            "".join(format_deferred_receipt_row(item) for item in items[cap:]),
             encoding="utf-8",
         )
     return count
+
+
+def format_deferred_receipt_row(item: dict[str, Any]) -> str:
+    """Return one deferred leftover row with range and LEFT origin, never a suggestion."""
+    path = item.get("path")
+    line = safe_finding_line(item.get("line"))
+    if not isinstance(path, str) or line is None:
+        return ""
+    start = safe_finding_line(item.get("start_line"))
+    loc = format_applyable_range(path, start, line) if start is not None and start < line else f"{path}:{line}"
+    origin = format_applyable_origin(
+        safe_finding_path(item.get(LEFT_ORIGIN_PATH_KEY)),
+        safe_finding_line(item.get(LEFT_ORIGIN_LINE_KEY)),
+    )
+    if origin:
+        return f"{loc}\t{origin}\n"
+    return f"{loc}\n"
+
+
+def normalize_deferred_receipt(
+    item: tuple[Any, ...],
+) -> tuple[str, int, int, str | None, int | None] | None:
+    """Normalize a deferred leftover row to an applyable-shaped receipt."""
+    if len(item) >= 5:
+        return _applyable_receipt_parts(
+            item  # type: ignore[arg-type]
+        )
+    if len(item) == 3:
+        path, start_raw, end_raw = item[0], item[1], item[2]
+        start = safe_finding_line(start_raw)
+        end = safe_finding_line(end_raw)
+        if not isinstance(path, str) or start is None or end is None or end < start:
+            return None
+        return path, start, end, None, None
+    if len(item) != 2:
+        return None
+    path, line_raw = item[0], item[1]
+    line = safe_finding_line(line_raw)
+    if not isinstance(path, str) or line is None:
+        return None
+    return path, line, line, None, None
+
+
+def _trusted_deferred_subset(
+    items: list[tuple[Any, ...]] | None,
+    allowed: set[tuple[str, int]],
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Return trusted deferred leftovers as range receipts."""
+    if not items:
+        return []
+    normalized: list[tuple[str, int, int, str | None, int | None]] = []
+    for item in items:
+        receipt = normalize_deferred_receipt(item)
+        if receipt is not None:
+            normalized.append(receipt)
+    return _trusted_range_subset(normalized, allowed)
+
+
+def merge_deferred_origins(
+    deferred: list[tuple[str, int, int, str | None, int | None]],
+    applyable: list[tuple[str, int, int, str | None, int | None]],
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Copy LEFT origin from applyable rows onto matching deferred leftovers."""
+    origins: dict[tuple[str, int, int], tuple[str, int]] = {}
+    for item in applyable:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        if origin_path is None or origin_line is None:
+            continue
+        origins[(path, start, end)] = (origin_path, origin_line)
+        origins[(path, start, start)] = (origin_path, origin_line)
+        origins[(path, end, end)] = (origin_path, origin_line)
+    merged: list[tuple[str, int, int, str | None, int | None]] = []
+    for path, start, end, origin_path, origin_line in deferred:
+        if origin_path is None or origin_line is None:
+            found = (
+                origins.get((path, start, end))
+                or origins.get((path, start, start))
+                or origins.get((path, end, end))
+            )
+            if found is not None:
+                origin_path, origin_line = found
+        merged.append((path, start, end, origin_path, origin_line))
+    return merged
+
+
+def exclude_deferred_applyable(
+    applyable: list[tuple[str, int, int, str | None, int | None]],
+    deferred: list[tuple[str, int, int, str | None, int | None]],
+) -> list[tuple[str, int, int, str | None, int | None]]:
+    """Drop applyable ranges that were not retried, so they are not posted as suggestions."""
+    exact = {(path, start, end) for path, start, end, _origin_path, _origin_line in deferred}
+    points = {
+        (path, start)
+        for path, start, end, _origin_path, _origin_line in deferred
+        if start == end
+    }
+    kept: list[tuple[str, int, int, str | None, int | None]] = []
+    for item in applyable:
+        path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
+        if (path, start, end) in exact:
+            continue
+        if (path, start) in points or (path, end) in points:
+            continue
+        kept.append((path, start, end, origin_path, origin_line))
+    return kept
 
 
 def render_inline_comment_receipts(
@@ -994,7 +1104,11 @@ def render_inline_comment_failure_suffix(
     mixed_success: bool = False,
     phrases: dict[tuple[str, int], str] | None = None,
     attached_locations: list[tuple[str, int]] | None = None,
-    deferred_locations: list[tuple[str, int]] | None = None,
+    deferred_locations: (
+        list[tuple[str, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+        | None
+    ) = None,
     skipped_locations: list[tuple[str, int]] | None = None,
     applyable_locations: (
         list[tuple[str, int, int]]
@@ -1082,7 +1196,7 @@ def render_inline_comment_failure_suffix(
             f"(retry limit {single_comment_retry_limit(retry_limit)}):"
         )
         lines.append("")
-        lines.extend(render_inline_comment_receipts(deferred))
+        lines.extend(render_applyable_receipts(deferred))
         if not locations:
             lines.append("")
             lines.append(
@@ -1197,7 +1311,11 @@ def render_inline_comment_failure_body(
     refused_locations: list[tuple[str, int]] | None = None,
     refused_receipts: list[tuple[str, int, str]] | None = None,
     attached_locations: list[tuple[str, int]] | None = None,
-    deferred_locations: list[tuple[str, int]] | None = None,
+    deferred_locations: (
+        list[tuple[str, int]]
+        | list[tuple[str, int, int, str | None, int | None]]
+        | None
+    ) = None,
     skipped_locations: list[tuple[str, int]] | None = None,
     applyable_locations: (
         list[tuple[str, int, int]]
@@ -1218,7 +1336,7 @@ def render_inline_comment_failure_body(
         else []
     )
     deferred = (
-        _trusted_location_subset(deferred_locations, allowed)
+        _trusted_deferred_subset(deferred_locations, allowed)
         if deferred_locations is not None
         else []
     )
@@ -1237,6 +1355,9 @@ def render_inline_comment_failure_body(
         if leftover_locations is not None
         else []
     )
+    if deferred and applyable:
+        deferred = merge_deferred_origins(deferred, applyable)
+        applyable = exclude_deferred_applyable(applyable, deferred)
     phrases: dict[tuple[str, int], str] | None = None
     if refused_receipts is not None:
         locations = [
@@ -1449,7 +1570,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.attached_locations.read_text(encoding="utf-8")
             )
         if args.deferred_locations is not None:
-            deferred_locations = parse_refused_locations(
+            deferred_locations = parse_applyable_ranges(
                 args.deferred_locations.read_text(encoding="utf-8")
             )
         if args.skipped_locations is not None:
