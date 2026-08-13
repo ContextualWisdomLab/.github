@@ -1509,7 +1509,7 @@ def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
     assert check_structural_approval(generic_deflection) == 4
 
 
-def test_valid_control_filters_shape_head_and_review_contract():
+def test_valid_control_filters_shape_head_and_review_contract(monkeypatch):
     kwargs = {
         "expected_head_sha": "head",
         "expected_run_id": "run",
@@ -1598,9 +1598,47 @@ def test_valid_control_filters_shape_head_and_review_contract():
     )
     assert norm.valid_control(request, **kwargs)["result"] == "REQUEST_CHANGES"
 
+    off_list = finding(path="README.md", line=1)
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            dict(request, findings=[off_list]),
+            rejection_reasons=reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any("not a current-head changed file" in reason for reason in reasons)
+
+    past_eof = finding(line=999)
+    reasons.clear()
+    assert (
+        norm.valid_control(
+            dict(request, findings=[past_eof]),
+            rejection_reasons=reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any("exceeds the current-head file length" in reason for reason in reasons)
+
+    assert norm.finding_location_error("scripts/ci/example.py", 7) == ""
+    assert (
+        norm.finding_location_error("README.md", 1)
+        == "path is not a current-head changed file"
+    )
+    assert (
+        norm.finding_location_error("", 1)
+        == "path must be a non-empty current-head file"
+    )
+
     approve_without_findings_key = control()
     approve_without_findings_key.pop("findings")
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
+
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    norm.current_changed_files.cache_clear()
+    assert "does not exist" in norm.finding_location_error("README.md", 1)
 
 
 def test_valid_control_canonicalizes_known_safe_finding_field_drift():
@@ -2554,8 +2592,8 @@ def test_escapes_html_comment_breakout(tmp_path):
         result="REQUEST_CHANGES",
         findings=[
             {
-                "path": "test.py",
-                "line": 1,
+                "path": "scripts/ci/example.py",
+                "line": 7,
                 "severity": "high",
                 "title": "Test finding",
                 "problem": "--> injected string with < and > and &",

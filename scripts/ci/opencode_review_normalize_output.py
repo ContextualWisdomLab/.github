@@ -587,6 +587,22 @@ def required_adversarial_probe_count() -> int:
     return 1
 
 
+def finding_location_error(path: str, line: int) -> str:
+    """Return why a REQUEST_CHANGES finding is not line-anchored on current head.
+
+    CodeRabbit-style blockers name a changed file and a real source line so
+    GitHub can attach an inline review comment. A positive integer on an
+    unchanged path or past EOF is not an anchor.
+    """
+
+    if not isinstance(path, str) or not path.strip():
+        return "path must be a non-empty current-head file"
+    changed_files = current_changed_files()
+    if changed_files and path not in changed_files:
+        return "path is not a current-head changed file"
+    return adversarial_probe_location_error(path, line)
+
+
 def adversarial_probe_location_error(path: str, line: int) -> str:
     """Return why a probe path/line is not present in the bounded source tree."""
     source_root_text = os.environ.get("OPENCODE_SOURCE_WORKDIR", "").strip()
@@ -1350,6 +1366,9 @@ def valid_control(
                 return reject(
                     f"finding {finding_index} field {field} must be a non-empty string"
                 )
+        location_error = finding_location_error(str(finding["path"]).strip(), line)
+        if location_error:
+            return reject(f"finding {finding_index} {location_error}")
         normalized_findings.append(finding)
 
     normalized = {

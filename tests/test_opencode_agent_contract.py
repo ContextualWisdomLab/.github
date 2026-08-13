@@ -1676,6 +1676,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Never emit raw tool-call markup" in model_pool_runner
     assert "Do not request changes solely because your tool call" in model_pool_runner
     assert "never use line 0" in model_pool_runner
+    assert "exact current-head changed file" in model_pool_runner
+    assert "line past EOF" in model_pool_runner
     assert "retry budget exhausted" not in model_pool_runner
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
@@ -1736,6 +1738,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Never print raw tool-call markup" in prompt_template
     assert "Do not request changes solely because your tool call" in prompt_template
     assert "never use line 0" in prompt_template
+    assert "exact current-head changed file" in prompt_template
+    assert "line past EOF" in prompt_template
     assert "Current-head authority order" in workflow
     assert "historical context only" in workflow
     assert "Do not infer active failed checks" in workflow
