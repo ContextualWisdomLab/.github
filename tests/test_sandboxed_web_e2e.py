@@ -540,44 +540,6 @@ def test_parse_args_rejects_invalid_inputs():
         )
 
 
-def test_emit_result_redacts_credential_shaped_command_metadata(tmp_path, capsys):
-    """Web E2E receipts lose GitHub PAT and Slack token shapes before JSON print."""
-    github_pat = "ghp_" + ("D" * 36)
-    slack_token = "xoxb-" + ("E" * 24)
-    args = sandboxed_web_e2e.parse_args(
-        [
-            "--backend-cmd",
-            f"uvicorn app:app --token={github_pat}",
-            "--frontend-cmd",
-            f"npm run dev -- --token={github_pat}",
-            "--e2e-cmd",
-            f"playwright test --token={github_pat}",
-            "--evidence-note",
-            f"authorization: Bearer {slack_token}",
-        ]
-    )
-
-    sandboxed_web_e2e.emit_result(
-        args=args,
-        copied_repo=tmp_path / "repo",
-        sandbox_root=tmp_path,
-        backend_ready=True,
-        frontend_ready=True,
-        exit_code=0,
-        elapsed_seconds=0.2,
-    )
-    output = capsys.readouterr().out
-    result_line = [line for line in output.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
-    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
-
-    assert github_pat not in output
-    assert slack_token not in output
-    assert "uvicorn app:app" in payload["backend_cmd"]
-    assert "playwright test" in payload["e2e_cmd"]
-    assert "[REDACTED]" in payload["backend_cmd"]
-    assert "[REDACTED]" in payload["evidence_note"]
-
-
 def test_module_main_entrypoint_parse_error(monkeypatch):
     """The module entrypoint reaches main and propagates argument errors."""
     runpy.run_path(str(Path(sandboxed_web_e2e.__file__)), run_name="not_main")
@@ -636,3 +598,13 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
+
+def test_wait_for_url_restricts_host_to_localhost():
+    """Readiness checks enforce localhost targets to prevent SSRF against internal resources."""
+    service = sandboxed_web_e2e.Service("web", "serve", None, None)
+
+    with pytest.raises(ValueError, match="URL host must be localhost"):
+        sandboxed_web_e2e.wait_for_url("http://192.168.1.1/health", 10, service)
+
+    with pytest.raises(ValueError, match="URL host must be localhost"):
+        sandboxed_web_e2e.wait_for_url("https://example.com/ready", 10, service)

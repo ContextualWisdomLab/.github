@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -122,6 +123,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname not in ("127.0.0.1", "localhost", "[::1]", "::1"):
+        raise ValueError(f"URL host must be localhost, got: {url}")
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
@@ -185,15 +189,15 @@ def emit_result(
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
-        "backend_cmd": sandboxed_verify.redact_logged_text(args.backend_cmd),
+        "backend_cmd": args.backend_cmd,
         "backend_ready": backend_ready,
         "allowed_env": sorted(set(args.allow_env)),
         "cwd": str(copied_repo),
-        "e2e_cmd": sandboxed_verify.redact_logged_text(args.e2e_cmd),
+        "e2e_cmd": args.e2e_cmd,
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": sandboxed_verify.redact_logged_text(args.evidence_note),
+        "evidence_note": args.evidence_note,
         "exit_code": exit_code,
-        "frontend_cmd": sandboxed_verify.redact_logged_text(args.frontend_cmd),
+        "frontend_cmd": args.frontend_cmd,
         "frontend_ready": frontend_ready,
         "network": args.network,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",

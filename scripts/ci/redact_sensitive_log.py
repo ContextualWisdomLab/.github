@@ -12,7 +12,8 @@ REDACTED = "[REDACTED]"
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
+    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|"
+    r"backend[_-]?cmd|frontend[_-]?cmd|e2e[_-]?cmd|evidence[_-]?note)",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -41,6 +42,8 @@ def _redact_json(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_unstructured(value)
     return value
 
 

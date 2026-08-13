@@ -3,4 +3,3 @@ __pycache__/
 .coverage
 .pytest_cache/
 .codegraph/
-.venv/

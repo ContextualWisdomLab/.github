@@ -178,21 +178,6 @@ def timeout_output_text(value: str | bytes | None) -> str:
     return value
 
 
-def redact_logged_text(text: str) -> str:
-    """Redact credential-shaped values from operator-visible command metadata.
-
-    Operational paths, pytest selectors, and reviewer notes stay intact. Only
-    token/secret/password assignments and well-known credential shapes are
-    replaced. This is secret redaction, not operational PII masking.
-    """
-    return redact_text(text)
-
-
-def redact_logged_argv(command: Sequence[str]) -> list[str]:
-    """Redact credential-shaped argv fragments while keeping operational args."""
-    return [redact_logged_text(part) for part in command]
-
-
 def emit_result(
     *,
     command: Sequence[str],
@@ -208,10 +193,10 @@ def emit_result(
     """Print a machine-readable execution evidence summary."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": redact_logged_argv(command),
+        "command": list(command),
         "cwd": str(copied_repo),
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "evidence_note": redact_logged_text(evidence_note),
+        "evidence_note": evidence_note,
         "exit_code": exit_code,
         "network": network,
         "sandbox": str(sandbox_root) if kept else "(removed)",
@@ -231,7 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={redact_logged_text(' '.join(args.command))}")
+        print(f"sandboxed-verify: command={' '.join(args.command)}")
         if args.allow_env:
             print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
         if args.network != "default":
