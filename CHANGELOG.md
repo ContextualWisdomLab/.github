@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Kept `start_line`/`start_side` on remapped leftover OpenCode suggestions when a batch 422 is retried one comment at a time, so a multi-line RIGHT range still posts as one GitHub suggestion.
 - Labeled remapped leftover OpenCode applyable ranges with the original LEFT `path:line` so the overview shows `path:right` came from LEFT `path:left`.
 - Anchored remapped leftover OpenCode LEFT comments to the first RIGHT line of the same `@@` hunk when the original line is gone, so multi-hunk files do not attach the suggestion to an earlier hunk.
 - Remapped leftover OpenCode LEFT suggested-diff comments onto a same-path current-head RIGHT hunk when one exists so those replacements become one-click GitHub suggestions instead of leftover manual-edit blocks. Pure deletions and cannot-provide fences stay leftover.

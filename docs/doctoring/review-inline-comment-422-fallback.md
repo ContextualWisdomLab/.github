@@ -23,7 +23,11 @@ lines are omitted. An empty location set is stated explicitly.
 After a refused attach, the publisher first checks that the failure is
 HTTP 422, splits the batch `comments` array into at most 20
 single-comment review payloads (`OPENCODE_INLINE_COMMENT_RETRY_LIMIT`,
-default 20), and retries each with the same write helper. Comments past
+default 20), and retries each with the same write helper. A remapped
+leftover that already has a multi-line GitHub suggestion range keeps
+``start_line`` and ``start_side`` on those single-comment retries so
+the replacement still applies as one range after the split (GitHub,
+n.d.-b, n.d.-c). Comments past
 that cap are recorded as not retried instead of opening unbounded `gh
 api` writes. The first success uses `REQUEST_CHANGES` plus the review
 body; later successes use `COMMENT`. Survivors therefore still appear on
@@ -96,7 +100,9 @@ with the same control object used to build the inline `comments` array.
   fail-closed unreadable control or error input, batch-to-single comment
   splitting, `--is-unprocessable` classification, mixed-success
   receipts that list attached path:line beside refused path:line,
-  per-comment 422 phrases, the 20-comment one-at-a-time retry cap, and
+  per-comment 422 phrases, the 20-comment one-at-a-time retry cap,
+  preservation of ``start_line``/``start_side`` on remapped multi-line
+  suggestion retries, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,

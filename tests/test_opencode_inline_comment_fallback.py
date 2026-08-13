@@ -44,6 +44,7 @@ from scripts.ci.opencode_inline_comment_fallback import (
     render_inline_comment_failure_body,
     render_inline_comment_receipts,
     render_single_comment_review,
+    single_comment_range_fields,
     single_comment_retry_limit,
     trusted_finding_locations,
     write_hunk_filtered_payload,
@@ -644,6 +645,96 @@ def test_iter_single_comment_payloads_keeps_only_safe_comments():
     assert iter_single_comment_payloads({"comments": []}) == []
     assert iter_single_comment_payloads({"comments": "bad"}) == []
     assert iter_single_comment_payloads({"commit_id": "", "comments": [{}]}) == []
+
+
+def test_single_comment_retry_keeps_multiline_start_line_and_start_side(tmp_path):
+    assert single_comment_range_fields({"start_line": 5, "start_side": "RIGHT"}, 7, "RIGHT") == {
+        "start_line": 5,
+        "start_side": "RIGHT",
+    }
+    assert single_comment_range_fields({"start_line": 7}, 7, "RIGHT") == {}
+    assert single_comment_range_fields({"start_line": 8, "start_side": "RIGHT"}, 7, "RIGHT") == {}
+    assert single_comment_range_fields({"start_line": 0, "start_side": "RIGHT"}, 7, "RIGHT") == {}
+    assert single_comment_range_fields({"start_line": 5, "start_side": "NOPE"}, 7, "RIGHT") == {
+        "start_line": 5,
+        "start_side": "RIGHT",
+    }
+    assert single_comment_range_fields({"start_line": 5}, 7, "LEFT") == {
+        "start_line": 5,
+        "start_side": "LEFT",
+    }
+
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    remapped = apply_github_suggestion_blocks(
+        _batch_payload(
+            {
+                "path": "scripts/ci/example.py",
+                "line": 5,
+                "side": "LEFT",
+                "body": MULTILINE_DIFF_BODY,
+            }
+        ),
+        hunks,
+    )
+    comment = remapped["comments"][0]
+    assert comment["side"] == "RIGHT"
+    assert comment["start_line"] == 5
+    assert comment["line"] == 7
+    assert comment["start_side"] == "RIGHT"
+    payload = {
+        "event": "REQUEST_CHANGES",
+        "body": "review body",
+        "commit_id": remapped["commit_id"],
+        "comments": remapped["comments"],
+    }
+    singles = iter_single_comment_payloads(payload)
+    assert singles[0]["start_line"] == 5
+    assert singles[0]["start_side"] == "RIGHT"
+    assert singles[0]["line"] == 7
+    rendered = render_single_comment_review(
+        singles[0], event="REQUEST_CHANGES", review_body="review body"
+    )
+    assert rendered["comments"][0]["start_line"] == 5
+    assert rendered["comments"][0]["start_side"] == "RIGHT"
+    assert rendered["comments"][0]["line"] == 7
+    assert "_left_origin_path" not in rendered["comments"][0]
+
+    output_dir = tmp_path / "singles"
+    assert write_single_comment_payloads(payload, output_dir) == 1
+    written = json.loads((output_dir / "comment-000.json").read_text(encoding="utf-8"))
+    assert written["comments"][0]["start_line"] == 5
+    assert written["comments"][0]["start_side"] == "RIGHT"
+    assert written["comments"][0]["line"] == 7
+    assert "start_line" not in render_single_comment_review(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 7,
+            "side": "RIGHT",
+            "body": "single",
+            "commit_id": "c" * 40,
+        },
+        event="COMMENT",
+        review_body="",
+    )["comments"][0]
+
+    payload_path = tmp_path / "batch.json"
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    cli_dir = tmp_path / "cli-singles"
+    assert (
+        main(
+            [
+                "--split-payload",
+                str(payload_path),
+                "--output-dir",
+                str(cli_dir),
+            ]
+        )
+        == 0
+    )
+    cli_written = json.loads((cli_dir / "comment-000.json").read_text(encoding="utf-8"))
+    assert cli_written["comments"][0]["start_line"] == 5
+    assert cli_written["comments"][0]["start_side"] == "RIGHT"
+    assert cli_written["comments"][0]["line"] == 7
 
 
 def test_cli_splits_batch_payload_into_single_comment_files(tmp_path):
