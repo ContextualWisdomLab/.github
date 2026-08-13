@@ -54,7 +54,8 @@ line on the protected base before #961 can go green.
 requires `--disable-pip` for that file, a skip for the override/input pair,
 and the `--no-deps` installer line on `strix.yml`. A `*-hashes.txt` name
 or a lone `--require-hashes` directive without `--hash=` is not treated
-as a complete lock, and discovery skips `.venv` trees.
+as a complete lock. A mixed file with one hashed line beside unhashed
+packages also stays on the resolver path. Discovery skips `.venv` trees.
 
 ## References (APA 7th)
 

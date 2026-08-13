@@ -25,10 +25,12 @@ SKIP_DISCOVERY_PARTS = frozenset(
 
 
 def _requirement_lines(path: pathlib.Path) -> list[str]:
-    """Return non-empty, non-comment requirement lines."""
+    """Return logical requirement lines, joining backslash continuations."""
 
+    text = path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
+    joined = text.replace("\\\n", " ")
     lines: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for raw_line in joined.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -45,15 +47,15 @@ def is_override_file(path: pathlib.Path) -> bool:
 def is_hashed_lock(path: pathlib.Path) -> bool:
     """Return whether *path* actually contains pip hash-checking evidence.
 
-    A ``*-hashes.txt`` name or a lone ``--require-hashes`` directive is not
-    enough: an empty, pin-only, or directive-only file would otherwise be
-    audited with ``--disable-pip`` and report a clean incomplete set.
+    A ``*-hashes.txt`` name, a lone ``--require-hashes`` directive, or a
+    mixed file with one hashed line beside unhashed packages is not
+    enough: those would otherwise be audited with ``--disable-pip`` and
+    report a clean incomplete set.
     """
 
     lines = _requirement_lines(path)
-    if not lines:
-        return False
-    return any("--hash=" in line for line in lines)
+    package_lines = [line for line in lines if line != "--require-hashes"]
+    return bool(package_lines) and all("--hash=" in line for line in package_lines)
 
 
 def hashed_sibling(path: pathlib.Path) -> pathlib.Path | None:

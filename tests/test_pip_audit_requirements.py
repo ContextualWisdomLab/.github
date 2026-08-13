@@ -261,6 +261,15 @@ def test_pylock_manifest_and_require_hashes_directive(
     assert "--disable-pip" in (module.audit_command(hashed) or [])
     assert module.is_hashed_lock(comment_only) is False
     assert module.hashed_sibling(odd) is None
+    mixed = tmp_path / "requirements-mixed.txt"
+    mixed.write_text(
+        "strix-agent==1.5.3 \\\n"
+        "    --hash=sha256:" + ("c" * 64) + "\n"
+        "unhashed-demo==1.0.0\n",
+        encoding="utf-8",
+    )
+    assert module.is_hashed_lock(mixed) is False
+    assert "--disable-pip" not in (module.audit_command(mixed) or [])
 
 
 def test_workflow_invokes_helper_and_strix_installs_without_resolving() -> None:
