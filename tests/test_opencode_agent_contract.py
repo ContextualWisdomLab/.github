@@ -1655,6 +1655,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         encoding="utf-8"
     )
     assert "leftover_diff_fence_receipts" in helper
+    assert "leftover_manual_edit_text" in helper
+    assert "Manual edit (not a GitHub suggestion):" in helper
     assert (
         "These comments still have a suggested-diff fence that GitHub cannot apply:"
         in helper

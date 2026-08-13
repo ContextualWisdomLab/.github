@@ -1495,6 +1495,7 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "GitHub can apply these suggested replacements:" "opencode overview lists applyable suggestion ranges"
 	assert_file_contains "$workflow_file" "--leftover-diff-locations" "opencode persists leftover suggested-diff fences separately from applyable ranges"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "These comments still have a suggested-diff fence that GitHub cannot apply:" "opencode overview lists leftover LEFT and cannot-provide diffs"
+	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "Manual edit (not a GitHub suggestion):" "opencode leftover receipts include a non-applyable manual-edit block"
 	assert_file_contains "$workflow_file" "--leftover-diff-locations" "opencode persists leftover diff-fence receipts in overview receipts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_inline_comment_fallback.py" "These comments still have a suggested-diff fence that GitHub cannot apply:" "opencode overview lists leftover cannot-provide and LEFT diff fences"
 	assert_file_contains "$workflow_file" '--skipped-locations "$skipped_locations_file"' "opencode records off-hunk path:line rows that were not posted"

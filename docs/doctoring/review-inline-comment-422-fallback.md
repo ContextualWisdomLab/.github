@@ -65,9 +65,14 @@ shipped as one-click GitHub suggestions (GitHub, n.d.-c). Comments that
 kept only a `` ```diff `` fence are listed separately with the reason
 ``cannot-provide`` (``n/a``, “cannot provide”, fence-breaking
 replacement, or no ``+`` lines) or ``LEFT`` (GitHub cannot apply a
-suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). A comment that
-already has `` ```suggestion `` is applyable, not leftover. Suggested
-diffs still stay out of the PR-level body.
+suggestion on the deleted side; GitHub, n.d.-b, n.d.-c). Each leftover
+row also keeps a bounded excerpt of that fence as a distinct
+“Manual edit (not a GitHub suggestion):” `` ```diff `` block so the
+author can copy the replacement by hand. That block is never a GitHub
+`` ```suggestion `` fence and is never listed under the applyable
+``path:line`` / ``path:start-end`` heading (GitHub, n.d.-c). A comment
+that already has `` ```suggestion `` is applyable, not leftover.
+Suggested diffs still stay out of the PR-level body.
 
 The publisher calls this helper from `build_inline_comment_failure_body`
 with the same control object used to build the inline `comments` array.
@@ -88,7 +93,8 @@ with the same control object used to build the inline `comments` array.
   current-head hunk, overview receipts that list applyable
   ``path:start-end`` suggestion ranges, and a separate leftover-diff
   receipt list that labels remaining `` ```diff `` fences as
-  ``cannot-provide`` or ``LEFT``.
+  ``cannot-provide`` or ``LEFT`` and renders their replacement text as
+  a non-applyable manual-edit `` ```diff `` block.
 - `tests/test_opencode_agent_contract.py` and
   `scripts/ci/test_strix_quick_gate.sh` pin the workflow call with
   `$control_json`.
