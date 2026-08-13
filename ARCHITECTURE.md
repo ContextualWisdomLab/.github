@@ -70,6 +70,28 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## LLVM 19 Rust coverage boundary
+
+```mermaid
+flowchart TD
+  Image["Coverage image installs llvm-19"]
+  Build{"llvm-cov-19 and llvm-profdata-19 executable?"}
+  Run["Networkless docker run with literal paths"]
+  Ensure{"ensure_rust_toolchain exact equality?"}
+  Cov["cargo llvm-cov"]
+  Fail["Coverage-evidence failure"]
+
+  Image --> Build
+  Build -->|"no"| Fail
+  Build -->|"yes"| Run
+  Run --> Ensure
+  Ensure -->|"no"| Fail
+  Ensure -->|"yes"| Cov
+```
+
+Unversioned `llvm-cov` on `PATH` is not a producer. Missing reviewed paths
+fail closed instead of measuring a different toolchain.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -103,6 +125,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Rust coverage never falls back to a host-runner or dynamically downloaded
+  LLVM binary.
 
 ## Quality gates
 
@@ -124,3 +148,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/opencode-rust-coverage-runtime-boundary.md`](docs/doctoring/opencode-rust-coverage-runtime-boundary.md)
+  — current increment's toolchain decision and APA 7th citations.
