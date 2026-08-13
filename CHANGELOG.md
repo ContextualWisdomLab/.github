@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Omitted the duplicate leftover reason bullet when a leftover line sits inside a deferred multi-line `path:start-end`, so authors see the deferred range then the Manual-edit excerpt.
 - Omitted the duplicate leftover reason bullet when the leftover heading already prefixes a deferred range/origin for the same `path:line`, so authors see one deferred line then the Manual-edit excerpt.
 - Listed a deferred leftover ahead of its Manual-edit excerpt in the leftover heading when the same `path:line` is both deferred and leftover, so authors see the unposted fence first.
 - Kept both the leftover Manual-edit ` ```diff ` block and the deferred range/origin row when a cannot-provide or pure-deletion leftover sits past the 20-comment 422 retry cap, and still omitted those fences from applyable GitHub suggestions.

@@ -744,14 +744,15 @@ def parse_leftover_diff_receipts(text: str) -> list[tuple[str, int, str, str]]:
 def leftover_deferred_matches(
     deferred: list[tuple[str, int, int, str | None, int | None]] | None,
 ) -> dict[tuple[str, int], tuple[str, int, int, str | None, int | None]]:
-    """Map leftover path:line to the deferred range that shares that location."""
+    """Map leftover path:line to the deferred range that contains that location."""
     matches: dict[tuple[str, int], tuple[str, int, int, str | None, int | None]] = {}
     if not deferred:
         return matches
     for item in deferred:
         path, start, end, origin_path, origin_line = _applyable_receipt_parts(item)
-        matches[(path, start)] = (path, start, end, origin_path, origin_line)
-        matches[(path, end)] = (path, start, end, origin_path, origin_line)
+        receipt = (path, start, end, origin_path, origin_line)
+        for line in range(start, end + 1):
+            matches[(path, line)] = receipt
     return matches
 
 
@@ -1116,14 +1117,7 @@ def leftover_manual_edits_with_deferred(
     """Keep leftover Manual-edit receipts even when the same leftover is deferred."""
     if not leftovers:
         return []
-    deferred_points = {
-        (path, start)
-        for path, start, end, _origin_path, _origin_line in deferred
-        if start == end
-    }
-    deferred_points.update(
-        (path, end) for path, _start, end, _origin_path, _origin_line in deferred
-    )
+    matches = leftover_deferred_matches(deferred)
     kept: list[tuple[str, int, str, str]] = []
     seen: set[tuple[str, int]] = set()
     for item in leftovers:
@@ -1132,10 +1126,10 @@ def leftover_manual_edits_with_deferred(
             continue
         seen.add((path, line))
         kept.append((path, line, reason, excerpt))
-    if not deferred_points:
+    if not matches:
         return kept
-    overlapping = [item for item in kept if (item[0], item[1]) in deferred_points]
-    rest = [item for item in kept if (item[0], item[1]) not in deferred_points]
+    overlapping = [item for item in kept if (item[0], item[1]) in matches]
+    rest = [item for item in kept if (item[0], item[1]) not in matches]
     return overlapping + rest
 
 

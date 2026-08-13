@@ -3644,3 +3644,119 @@ def test_leftover_heading_lists_deferred_leftover_before_manual_edit(tmp_path):
         leftover_section = leftover_section.split(applyable_heading, 1)[0]
     assert "```suggestion" not in leftover_section
 
+
+def test_leftover_interior_of_deferred_range_omits_reason_bullet(tmp_path):
+    excerpt = leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY)
+    leftover = [
+        ("scripts/ci/example.py", 12, "cannot-provide", excerpt),
+        ("scripts/ci/example.py", 6, "cannot-provide", excerpt),
+    ]
+    deferred = [("scripts/ci/example.py", 5, 7, None, None)]
+    matches = leftover_deferred_matches(deferred)
+    assert matches[("scripts/ci/example.py", 5)] == deferred[0]
+    assert matches[("scripts/ci/example.py", 6)] == deferred[0]
+    assert matches[("scripts/ci/example.py", 7)] == deferred[0]
+    assert leftover_reason_bullet_duplicates_deferred(
+        "scripts/ci/example.py", 6, deferred[0]
+    ) is True
+    ordered = leftover_manual_edits_with_deferred(leftover, deferred)
+    assert [(path, line) for path, line, _reason, _excerpt in ordered] == [
+        ("scripts/ci/example.py", 6),
+        ("scripts/ci/example.py", 12),
+    ]
+    rendered = render_leftover_diff_receipts(ordered, deferred=deferred)
+    assert rendered[0] == "- `scripts/ci/example.py:5-7`"
+    assert rendered[1] == f"  {MANUAL_EDIT_HEADING}"
+    joined = "\n".join(rendered)
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in joined
+    assert "- `scripts/ci/example.py:12` — cannot-provide" in joined
+    assert excerpt in joined
+
+    hunks = parse_unified_diff_hunk_lines(EXAMPLE_UNIFIED_DIFF)
+    payload = _batch_payload(
+        {
+            "path": "scripts/ci/example.py",
+            "line": 6,
+            "side": "RIGHT",
+            "body": CANNOT_PROVIDE_DIFF_BODY,
+        },
+        {
+            "path": "scripts/ci/example.py",
+            "line": 5,
+            "side": "RIGHT",
+            "body": MULTILINE_DIFF_BODY,
+        },
+    )
+    output = tmp_path / "filtered.json"
+    leftover_file = tmp_path / "leftover.txt"
+    applyable_file = tmp_path / "applyable.txt"
+    assert write_hunk_filtered_payload(
+        payload, hunks, output, applyable_path=applyable_file, leftover_path=leftover_file
+    ) == 2
+    leftover_receipts = parse_leftover_diff_receipts(
+        leftover_file.read_text(encoding="utf-8")
+    )
+    applyable_receipts = parse_applyable_ranges(
+        applyable_file.read_text(encoding="utf-8")
+    )
+    assert leftover_receipts[0][:3] == ("scripts/ci/example.py", 6, "cannot-provide")
+    assert applyable_receipts[0][:3] == ("scripts/ci/example.py", 5, 7)
+    deferred_path = tmp_path / "deferred.txt"
+    assert (
+        write_single_comment_payloads(
+            json.loads(output.read_text(encoding="utf-8")),
+            tmp_path / "singles",
+            limit=1,
+            deferred_path=deferred_path,
+        )
+        == 1
+    )
+    deferred_receipts = parse_applyable_ranges(deferred_path.read_text(encoding="utf-8"))
+    assert deferred_receipts[0][:3] == ("scripts/ci/example.py", 5, 7)
+    fixture_matches = leftover_deferred_matches(deferred_receipts)
+    assert ("scripts/ci/example.py", 6) in fixture_matches
+    fixture_rendered = render_leftover_diff_receipts(
+        leftover_receipts, deferred=deferred_receipts
+    )
+    assert fixture_rendered[0] == "- `scripts/ci/example.py:5-7`"
+    assert fixture_rendered[1] == f"  {MANUAL_EDIT_HEADING}"
+    assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in "\n".join(
+        fixture_rendered
+    )
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in "\n".join(
+        fixture_rendered
+    )
+
+    body = render_inline_comment_failure_body(
+        "## Findings\n",
+        control(
+            {"path": "scripts/ci/example.py", "line": 6},
+            {"path": "scripts/ci/example.py", "line": 5},
+        ),
+        attached_locations=[("scripts/ci/example.py", 6)],
+        deferred_locations=deferred_receipts,
+        applyable_locations=applyable_receipts,
+        leftover_locations=leftover_receipts,
+        retry_limit=1,
+    )
+    leftover_heading = (
+        "These comments still have a suggested-diff fence that GitHub cannot apply:"
+    )
+    leftover_section = body.split(leftover_heading, 1)[1]
+    applyable_heading = "GitHub can apply these suggested replacements:"
+    if applyable_heading in leftover_section:
+        leftover_section = leftover_section.split(applyable_heading, 1)[0]
+    assert leftover_section.index("- `scripts/ci/example.py:5-7`") < leftover_section.index(
+        MANUAL_EDIT_HEADING
+    )
+    assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) in leftover_section
+    assert "- `scripts/ci/example.py:6` — cannot-provide" not in leftover_section
+    if applyable_heading in body:
+        applyable_section = body.split(applyable_heading, 1)[1]
+        if leftover_heading in applyable_section:
+            applyable_section = applyable_section.split(leftover_heading, 1)[0]
+        assert leftover_manual_edit_text(CANNOT_PROVIDE_DIFF_BODY) not in applyable_section
+        assert MANUAL_EDIT_HEADING not in applyable_section
+        assert "scripts/ci/example.py:5-7" not in applyable_section
+        assert "```suggestion" not in applyable_section
+

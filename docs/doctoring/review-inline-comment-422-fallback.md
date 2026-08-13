@@ -117,7 +117,8 @@ with the same control object used to build the inline `comments` array.
   cannot-provide and pure-deletion leftovers that keep both the
   Manual-edit block and the deferred row, leftover-heading order that
   lists a shared deferred leftover before its Manual-edit excerpt
-  without a duplicate reason bullet, and
+  without a duplicate reason bullet, including leftover lines inside a
+  deferred ``path:start-end``, and
   leftover path:line rows that were not retried, unified-diff hunk
   parsing, the pre-POST filter that drops off-hunk comments, and
   conversion of surviving suggested diffs into GitHub suggestion blocks,
