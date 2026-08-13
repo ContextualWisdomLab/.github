@@ -107,6 +107,14 @@ After protected merge:
 6. alert immediately on a queue-limit rejection, unexpected cancellation of an interactive route, or when the interactive queue approaches the documented 100-pending limit;
 7. keep metrics finite-cardinality and exclude comment text, source diffs, tokens, and model responses.
 
+NIST SP 800-53 Rev. 5 AU-6 requires review of audit records and SC-5 requires
+protection against resource exhaustion (National Institute of Standards and
+Technology, 2020). The 10-minute receipt alert and the 100-pending overflow
+signal are those controls: they distinguish a bounded wait from a dropped
+trusted mention. GitHub documents that `queue: max` holds at most 100 pending
+members and rejects overflow rather than replacing the oldest pending run
+(GitHub, n.d.-a).
+
 A downstream reviewer may still fail closed because credentials, providers, checks, or exact-head evidence are unavailable. That remains distinct from a routing queue failure.
 
 ## Rollback
@@ -122,3 +130,11 @@ GitHub. (n.d.). *Control the concurrency of workflows and jobs*. GitHub Docs. Re
 GitHub. (n.d.). *REST API endpoints for GitHub Actions artifacts*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/rest/actions/artifacts
 
 GitHub. (n.d.). *Store and share data with workflow artifacts*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/actions/tutorials/store-and-share-data
+
+GitHub. (n.d.-a). *Usage limits, billing, and administration*. GitHub Docs.
+Retrieved August 13, 2026, from
+https://docs.github.com/en/actions/reference/limits
+
+National Institute of Standards and Technology. (2020). *Security and
+privacy controls for information systems and organizations* (NIST SP
+800-53 Rev. 5). https://doi.org/10.6028/NIST.SP.800-53r5

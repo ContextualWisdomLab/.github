@@ -13,7 +13,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Isolated trusted interactive review-agent mentions from scheduled organization sweeps with separate job-level concurrency groups; interactive requests use the bounded 100-pending `queue: max` contract while sweeps retain non-cancelling single-pending coalescing, leaving the durable exact-name artifact ledger as forwarding authority.
+- Isolated trusted interactive review-agent mentions from scheduled organization sweeps with separate job-level concurrency groups; interactive requests use the bounded 100-pending `queue: max` contract while sweeps retain non-cancelling single-pending coalescing, leaving the durable exact-name artifact ledger as forwarding authority. The decision record now cites NIST SP 800-53 AU-6/SC-5 so a 10-minute missing-receipt or 100-pending overflow is an availability alert, not a silent wait.
+- Recorded the org control-plane architecture, including isolated mention queues, so agents reconstruct the trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.
