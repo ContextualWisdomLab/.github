@@ -74,6 +74,8 @@ def test_strix_workflow_installs_the_complete_lock_without_re_resolving() -> Non
     install = WORKFLOW.read_text(encoding="utf-8")
     assert "--require-hashes --no-deps -r requirements-strix-ci-hashes.txt" in install
     assert "--require-hashes -r requirements-strix-ci-hashes.txt\n" not in install
+    assert 'expected = {"strix-agent": "1.5.3", "cryptography": "50.0.0"}' in install
+    assert "metadata.version(name)" in install
 
 
 def test_quality_workflow_reruns_when_the_override_contract_changes() -> None:

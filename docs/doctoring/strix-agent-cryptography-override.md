@@ -35,7 +35,9 @@ without an override refuses the pair.
    `pip install --require-hashes --no-deps`. The lock already lists every
    wheel; `--no-deps` prevents pip from re-applying the stale
    `cryptography<49` metadata bound that would otherwise make CI
-   uninstallable.
+   uninstallable. Immediately after install, the workflow fail-closes
+   unless `importlib.metadata` reports `strix-agent==1.5.3` and
+   `cryptography==50.0.0`.
 4. Do not scrape console TUI lines as a substitute report. The gate still
    requires a durable artifact.
 
@@ -55,8 +57,9 @@ SARIF keyword catalogue, not a PKCS#7 call.
 
 `tests/test_strix_agent_cryptography_override.py` proves the input pin,
 the singleton override, both versions in the compiled lock, the compile
-script flags, the `--no-deps` install line, and that quality CI retriggers
-when any of those files change.
+script flags, the `--no-deps` install line, the post-install
+`strix-agent==1.5.3` / `cryptography==50.0.0` metadata check, and that
+quality CI retriggers when any of those files change.
 
 ## Rollback
 
