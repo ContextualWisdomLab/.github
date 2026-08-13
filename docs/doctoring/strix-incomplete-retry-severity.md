@@ -72,6 +72,16 @@ outer-workflow regular expressions against synthetic logs:
 4. `tests/test_required_workflow_queue_contract.py` pins the new signal name
    and GitHub Models brownout marker.
 
+## Inline Python quoting
+
+`strix.yml` previously used indented `<<'PY'` heredocs inside YAML `run: |`
+blocks. GitHub Actions strips the common indent before bash runs, so those
+closers were valid in CI. A raw `bash -n` of the workflow file does not strip
+indent and reported an unclosed heredoc from the trusted-source resolver to
+EOF. The three inline Python programs are now quoted `python3 -c` programs,
+which close independently of column 0. The trusted-source resolver still runs
+before checkout and therefore stays inline.
+
 ## Rollback
 
 If a run with a real vulnerability report artifact is neutralized because
@@ -92,3 +102,7 @@ https://docs.github.com/en/rest/models
 
 OpenAI. (n.d.). *API errors*. OpenAI Platform. Retrieved August 13, 2026,
 from https://platform.openai.com/docs/guides/error-codes
+
+Free Software Foundation. (n.d.). *3.6.6 Here documents*. Bash Reference
+Manual. Retrieved August 13, 2026, from
+https://www.gnu.org/software/bash/manual/html_node/Redirections.html#Here-Documents
