@@ -286,6 +286,9 @@ def list_recent_reviews(
     cutoff = parse_timestamp(since)
     recent: list[dict[str, Any]] = []
     for review in flatten_pages(response):
+        state = str(review.get("state") or "").casefold()
+        if state in {"pending", "dismissed"}:
+            continue
         submitted = review.get("submitted_at")
         if not submitted:
             continue

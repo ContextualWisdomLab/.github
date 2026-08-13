@@ -447,6 +447,12 @@ def test_parse_event_accepts_review_comments_and_submitted_reviews() -> None:
     assert module.parse_event({"comment": {"id": 1, "body": "@opencode-agent"}}) is None
     assert module.mention_source({}) is None
     assert module.mention_source({"comment": "not-an-object", "review": 1}) is None
+    pending = submitted_review_event()
+    pending["review"]["state"] = "PENDING"
+    assert module.parse_event(pending) is None
+    dismissed = submitted_review_event()
+    dismissed["review"]["state"] = "DISMISSED"
+    assert module.parse_event(dismissed) is None
 
 
 def test_parse_event_still_ignores_plain_issues_without_pull_request_marker() -> None:

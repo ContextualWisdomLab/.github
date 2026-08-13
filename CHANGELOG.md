@@ -14,6 +14,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Pending and dismissed pull-request reviews no longer dispatch `@cwl-noema-review` / `@opencode-agent` mentions; only submitted non-dismissed review bodies in the sweep lookback are requests.
 - OpenCode mention dispatch now nests review-only flags under one `review_contract` property so the `repository_dispatch` `client_payload` stays at GitHub's 10-key limit. Live router run 31672030631 queued Noema for ContextualWisdomLab/.github#956@0c253f0d and then failed OpenCode with HTTP 422 ("14 were supplied"). Invocation-key hashing is unchanged.
 - Trusted `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments and submitted review bodies now reach the mention router and organization sweep, including mixed-case handles; the local workflow hydrates the live PR from `issue.number` or `pull_request.number` and no longer depends on a case-sensitive conversation-comment body filter.
 - A 403 on the optional eyes reaction after a successful agent dispatch no longer fails the mention job; the local router now has `pull-requests: write` so pull-request receipt comments can be posted. The decision record now cites CWE-755 so an exceptional reaction response cannot be treated as a missed dispatch.
