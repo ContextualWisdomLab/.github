@@ -111,7 +111,16 @@ def test_github_publication_error_phrase_falls_back_to_http_line():
         github_publication_error_phrase("GitHub HTTP 422: already normalized\n")
         == "GitHub HTTP 422: already normalized"
     )
-    assert github_publication_error_phrase("status code 422 only") == "GitHub HTTP 422"
+    assert (
+        github_publication_error_phrase("status code 422 only")
+        == "GitHub review write failed"
+    )
+    assert (
+        github_publication_error_phrase(
+            "gh: HTTP 403 Forbidden sha=154a33d092422abc issue #422"
+        )
+        == "GitHub review write failed"
+    )
     assert (
         github_publication_error_phrase("https://api.github.example/HTTP 422")
         == "GitHub HTTP 422: 422"
@@ -579,6 +588,9 @@ def test_github_error_is_unprocessable_detects_real_422_bodies():
     assert github_error_is_unprocessable("gh: HTTP 422: Unprocessable Entity")
     assert not github_error_is_unprocessable("Resource not accessible by integration")
     assert not github_error_is_unprocessable("")
+    assert not github_error_is_unprocessable(
+        "gh: HTTP 403 Forbidden sha=154a33d092422abc issue #422"
+    )
 
 
 def test_iter_single_comment_payloads_keeps_only_safe_comments():
@@ -1590,6 +1602,21 @@ def test_applyable_ranges_parse_and_render_path_start_end():
             ]
         }
     ) == []
+    assert (
+        applyable_suggestion_ranges(
+            {
+                "comments": [
+                    {
+                        "path": "scripts/ci/removed.py",
+                        "line": 11,
+                        "side": "LEFT",
+                        "body": "```suggestion\nx\n```",
+                    }
+                ]
+            }
+        )
+        == []
+    )
 
 
 def test_overview_receipts_list_applyable_suggestion_ranges(tmp_path):
