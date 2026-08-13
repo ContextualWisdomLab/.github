@@ -106,8 +106,6 @@ def github_publication_error_phrase(text: str) -> str:
         if line.casefold().startswith("github http 422"):
             return line[:ERROR_PHRASE_MAX_CHARS]
         return f"GitHub HTTP 422: {line}".rstrip(": ")[:ERROR_PHRASE_MAX_CHARS]
-    if "422" in raw:
-        return "GitHub HTTP 422"
     return "GitHub review write failed"
 
 
