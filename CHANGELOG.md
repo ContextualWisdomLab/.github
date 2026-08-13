@@ -13,6 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Omitted leftover 422-fallback paths that contain `-->`, `<!--`, or a suggestion fence so a leftover cannot close `<!-- opencode-review-overview -->` or reopen an applyable GitHub suggestion block (CWE-116).
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Persisted leftover OpenCode `cannot-provide` and `LEFT` suggested-diff replacement text as a distinct overview “Manual edit (not a GitHub suggestion):” ```diff block, after the same HTML-comment sanitizer so leftover excerpt text cannot close `<!-- opencode-review-overview -->` (CWE-116).
 - Leftover OpenCode `path:line` receipt rows now drop HTML comment delimiters and `<`, `>`, `&` so a leftover path or reason cannot close `<!-- opencode-review-overview -->` (CWE-116).
