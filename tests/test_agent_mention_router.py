@@ -402,19 +402,23 @@ def submitted_review_event(
     body: str = "@opencode-agent review this head",
     *,
     association: str = "MEMBER",
+    node_id: str | None = None,
 ) -> dict:
     """Build a GitHub pull_request_review submitted webhook payload."""
 
+    review = {
+        "id": 49019778,
+        "body": body,
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-13T04:12:00Z",
+        "author_association": association,
+        "user": {"login": "maintainer", "type": "User"},
+    }
+    if node_id is not None:
+        review["node_id"] = node_id
     return {
         "action": "submitted",
-        "review": {
-            "id": 49019778,
-            "body": body,
-            "state": "COMMENTED",
-            "submitted_at": "2026-08-13T04:12:00Z",
-            "author_association": association,
-            "user": {"login": "maintainer", "type": "User"},
-        },
+        "review": review,
         "pull_request": {
             "number": 953,
             "state": "open",
@@ -442,6 +446,15 @@ def test_parse_event_accepts_review_comments_and_submitted_reviews() -> None:
     assert review.agents == ("opencode-agent",)
     assert review.comment_id == 49019778
     assert review.source_kind == module.SOURCE_KIND_REVIEW
+    assert review.review_node_id is None
+    cached = module.parse_event(
+        submitted_review_event(node_id="PRR_kwDOReviewBody")
+    )
+    assert cached is not None
+    assert cached.review_node_id == "PRR_kwDOReviewBody"
+    blank = submitted_review_event()
+    blank["review"]["node_id"] = "   "
+    assert module.parse_event(blank).review_node_id is None
 
     assert module.parse_event({}) is None
     assert module.parse_event({"comment": {"id": 1, "body": "@opencode-agent"}}) is None
@@ -646,6 +659,35 @@ def test_add_mention_reaction_targets_submitted_review_bodies() -> None:
 
     forbidden = ReactionForbiddenClient()
     assert module.add_mention_reaction(forbidden, review_request) is False
+
+
+def test_review_reaction_reuses_event_node_id_without_extra_get() -> None:
+    """Sweep and webhook review payloads already carry node_id."""
+
+    module = load_module()
+    request = module.parse_event(
+        submitted_review_event("@cwl-noema-review", node_id="PRR_kwDOCached")
+    )
+    assert request is not None
+    assert request.review_node_id == "PRR_kwDOCached"
+
+    class CachedNodeClient(FakeClient):
+        """Record GraphQL only; a GET would prove the cache was ignored."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail if the extra review GET happens."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                raise AssertionError("cached review node_id must skip REST GET")
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    client = CachedNodeClient()
+    assert module.add_mention_reaction(client, request) is True
+    assert [args[0] for args, _ in client.calls] == ["graphql"]
+    assert client.calls[0][1]["variables"]["id"] == "PRR_kwDOCached"
 
 
 def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
