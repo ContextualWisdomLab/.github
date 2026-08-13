@@ -10,6 +10,8 @@ fail closed or install an unreviewed stub wheel.
 
 ## Decision
 
+Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+
 Keep `types-requests==2.33.0.20260712` with both published SHA-256
 digests. The package is Apache-2.0 (permissive SPDX). Do not hand-edit
 the hashes file later: regenerate from `requirements-strix-ci.txt`.
