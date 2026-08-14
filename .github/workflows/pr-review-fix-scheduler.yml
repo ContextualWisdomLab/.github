@@ -26,7 +26,7 @@ on:
       retry_hours:
         description: Minimum hours before redispatching autofix for the same head
         required: false
-        default: "24"
+        default: "1"
         type: string
       autofix_workflow:
         description: Autofix workflow file to dispatch
@@ -51,7 +51,10 @@ on:
   repository_dispatch:
     types: [pr-review-fix-scheduler]
   schedule:
-    - cron: "23 */2 * * *"
+    # One bounded repair dispatch per hourly sweep. The head-scoped marker and
+    # single-flight concurrency contract prevent duplicate work while allowing
+    # a failed or incomplete repair to be retried on the next hourly cycle.
+    - cron: "23 * * * *"
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
@@ -80,7 +83,7 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
-      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
+      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
       CANONICAL_REF: main
