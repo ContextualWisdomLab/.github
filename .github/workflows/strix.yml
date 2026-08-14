@@ -923,6 +923,7 @@ jobs:
       - name: Validate Strix report provenance
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         env:
+          TARGET_REPOSITORY: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository || github.repository }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
         run: |
           set -euo pipefail
@@ -1011,19 +1012,24 @@ jobs:
             exit 1
           fi
 
-          run_id="$(jq -r '.run_id // empty' "$successful_run_file")"
-          if [ -z "$run_id" ]; then
-            echo "::error::Strix evidence run.json must contain a run_id."
+          if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+            echo "::error::GitHub Actions run ID is missing or malformed."
             exit 1
           fi
+          # The provider's run.json may contain an internal run identifier.
+          # Only the outer GitHub Actions run ID can bind the uploaded artifact
+          # to the status URL consumed by the protected review gate.
+          run_id="$GITHUB_RUN_ID"
           report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
           jq -n \
+            --arg repository "$TARGET_REPOSITORY" \
+            --arg artifact_name "strix-reports" \
             --arg head_sha "$evidence_head_sha" \
             --arg run_id "$run_id" \
             --arg run_json "${successful_run_file#"$GITHUB_WORKSPACE/strix_runs/"}" \
             --arg report "${report_file#"$GITHUB_WORKSPACE/strix_runs/"}" \
             --arg report_sha256 "$report_sha256" \
-            '{head_sha:$head_sha, run_id:$run_id, run_json:$run_json, report:$report, report_sha256:$report_sha256, scan_completed:true}' \
+            '{repository:$repository, artifact_name:$artifact_name, head_sha:$head_sha, run_id:$run_id, run_json:$run_json, report:$report, report_sha256:$report_sha256, scan_completed:true}' \
             > "$GITHUB_WORKSPACE/strix_runs/evidence-binding.json"
 
       - name: Upload Strix reports artifact

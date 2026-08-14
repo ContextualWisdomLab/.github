@@ -6240,6 +6240,8 @@ jobs:
             local run_id
             local expected_url
             local run_json
+            local artifact_json
+            local artifact_count
             local artifact_dir
             local binding_file
             local report_path
@@ -6291,6 +6293,15 @@ jobs:
               return 1
             fi
 
+            if ! artifact_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+              return 1
+            fi
+            artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"
+            if [ "$artifact_count" != "1" ]; then
+              return 1
+            fi
+
             artifact_dir="$(mktemp -d)"
             if ! timeout "$(check_lookup_api_timeout_seconds)s" \
               gh run download "$run_id" \
@@ -6302,9 +6313,12 @@ jobs:
             fi
             binding_file="$(find "$artifact_dir" -type f -name evidence-binding.json -print -quit)"
             if [ -z "$binding_file" ] || ! jq -e \
+              --arg repository "$GH_REPOSITORY" \
               --arg head_sha "$HEAD_SHA" \
               --arg run_id "$run_id" '
-                .head_sha == $head_sha
+                .repository == $repository
+                and .artifact_name == "strix-reports"
+                and .head_sha == $head_sha
                 and ((.run_id // "") | tostring) == $run_id
                 and .scan_completed == true
                 and ((.report // "") | type == "string")

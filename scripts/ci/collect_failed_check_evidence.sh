@@ -418,6 +418,8 @@ target_workflow_available() {
 manual_strix_run_has_structured_binding() {
 	local run_id="$1"
 	local artifact_dir
+	local artifact_json
+	local artifact_count
 	local binding_file
 	local report_path
 	local report_file
@@ -428,6 +430,15 @@ manual_strix_run_has_structured_binding() {
 		return 1
 	fi
 	artifact_dir="$(mktemp -d)"
+	if ! artifact_json="$(gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"
+	if [ "$artifact_count" != "1" ]; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
 	if ! gh run download "$run_id" \
 		--repo "$GH_REPOSITORY" \
 		--name strix-reports \
@@ -437,8 +448,10 @@ manual_strix_run_has_structured_binding() {
 	fi
 
 	binding_file="$(find "$artifact_dir" -type f -name evidence-binding.json -print -quit)"
-	if [ -z "$binding_file" ] || ! jq -e --arg head_sha "$HEAD_SHA" --arg run_id "$run_id" '
-		.head_sha == $head_sha
+	if [ -z "$binding_file" ] || ! jq -e --arg repository "$GH_REPOSITORY" --arg head_sha "$HEAD_SHA" --arg run_id "$run_id" '
+		.repository == $repository
+		and .artifact_name == "strix-reports"
+		and .head_sha == $head_sha
 		and ((.run_id // "") | tostring) == $run_id
 		and .scan_completed == true
 		and ((.report // "") | type == "string")

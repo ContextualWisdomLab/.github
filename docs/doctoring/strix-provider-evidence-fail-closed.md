@@ -211,6 +211,19 @@ Missing, mismatched, malformed, or digest-invalid artifacts leave the hold in
 place. The contract test covers missing binding, wrong head, wrong run ID,
 missing report, and wrong digest cases.
 
+## Artifact identity and outer-run binding (2026-08-14)
+
+The first version of this consumer checked only the artifact name and copied
+the provider's `run.json` identifier into `evidence-binding.json`. A provider
+run identifier is not the GitHub Actions run identifier in the status URL, and
+name-only download is ambiguous if a run exposes duplicate, expired, or stale
+artifacts. The workflow now records the target repository, the exact
+`strix-reports` artifact name, and the outer `$GITHUB_RUN_ID`; consumers first
+require exactly one non-expired artifact with that name, then require all three
+binding fields before accepting the report. The provider's internal identifier
+remains non-authoritative. Regression coverage rejects missing, duplicate, and
+expired artifact listings as well as repository/name mismatches.
+
 ## Current exact-head provider/content evidence (2026-08-14)
 
 Central PR #965 exact head

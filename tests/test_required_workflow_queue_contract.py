@@ -1108,6 +1108,9 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     """Do not treat base-workflow false green as proof for workflow PRs."""
     strix_workflow = workflow_text("strix.yml")
     opencode_workflow = workflow_text("opencode-review-dispatch.yml")
+    failed_check_evidence = (
+        REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
 
     assert "pull_request_target evaluates this workflow from the trusted base" in strix_workflow
     assert "Materializing a PR-head workflow above is data-only self-test" in strix_workflow
@@ -1115,6 +1118,10 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
         "Default-branch repository_dispatch Strix structured evidence binding passed"
         in strix_workflow
     )
+    assert "TARGET_REPOSITORY:" in strix_workflow
+    assert 'run_id="$GITHUB_RUN_ID"' in strix_workflow
+    assert "artifact_name:$artifact_name" in strix_workflow
+    assert "repository:$repository" in strix_workflow
     assert "self_modifying_strix_workflow_needs_structured_evidence" in opencode_workflow
     assert "WAITING_FOR_POST_MERGE_STRIX_EVIDENCE" in opencode_workflow
     assert (
@@ -1136,13 +1143,19 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     assert '(.description // "") == $description' in structured_function
     assert 'GITHUB_SERVER_URL%/' in structured_function
     assert 'actions/runs/${run_id}' in structured_function
+    assert 'actions/runs/${run_id}/artifacts?per_page=100' in structured_function
     assert '(.event // "") == "repository_dispatch"' in structured_function
     assert '(.path // "") == ".github/workflows/strix.yml"' in structured_function
     assert 'gh run download "$run_id"' in structured_function
     assert 'evidence-binding.json' in structured_function
+    assert '.repository == $repository' in structured_function
+    assert '.artifact_name == "strix-reports"' in structured_function
     assert '.head_sha == $head_sha' in structured_function
     assert '((.run_id // "") | tostring) == $run_id' in structured_function
     assert 'actual_report_sha256' in structured_function
+    assert "/actions/runs/${run_id}/artifacts?per_page=100" in failed_check_evidence
+    assert '.repository == $repository' in failed_check_evidence
+    assert '.artifact_name == "strix-reports"' in failed_check_evidence
 
 
 def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> None:
@@ -1170,6 +1183,10 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
         "  exit 0\n"
         "fi\n"
         "case \"$*\" in\n"
+        "  */actions/runs/*/artifacts*) cat \"$FAKE_ARTIFACTS\"; exit 0 ;;\n"
+        "  *) : ;;\n"
+        "esac\n"
+        "case \"$*\" in\n"
         "  */commits/*/status) cat \"$FAKE_STATUS\" ;;\n"
         "  */actions/runs/*) cat \"$FAKE_RUN\" ;;\n"
         "  *) exit 1 ;;\n"
@@ -1180,6 +1197,7 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
     (fake_bin / "gh").chmod(0o755)
     status_path = tmp_path / "status.json"
     run_path = tmp_path / "run.json"
+    artifacts_path = tmp_path / "artifacts.json"
     artifact_source = tmp_path / "artifact-source"
     runner = textwrap.dedent(
         f"""\
@@ -1198,6 +1216,7 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
         target_url: str,
         run: dict[str, object],
         binding_overrides: dict[str, object] | None = None,
+        artifact_records: list[dict[str, object]] | None = None,
     ):
         status_path.write_text(
             json.dumps(
@@ -1216,6 +1235,14 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
             encoding="utf-8",
         )
         run_path.write_text(json.dumps(run), encoding="utf-8")
+        artifacts_path.write_text(
+            json.dumps({
+                "artifacts": artifact_records
+                if artifact_records is not None
+                else [{"id": 456, "name": "strix-reports", "expired": False}]
+            }),
+            encoding="utf-8",
+        )
         shutil.rmtree(artifact_source, ignore_errors=True)
         binding_directory = artifact_source / "strix-reports"
         binding_directory.mkdir(parents=True)
@@ -1223,6 +1250,8 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
         report_name = "penetration_test_report.md"
         (binding_directory / report_name).write_bytes(report_content)
         binding = {
+            "repository": "ContextualWisdomLab/.github",
+            "artifact_name": "strix-reports",
             "head_sha": head_sha,
             "run_id": run.get("id", 123),
             "scan_completed": True,
@@ -1239,6 +1268,7 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
             {
                 "FAKE_STATUS": str(status_path),
                 "FAKE_RUN": str(run_path),
+                "FAKE_ARTIFACTS": str(artifacts_path),
                 "FAKE_ARTIFACT": str(artifact_source),
                 "PATH": f"{fake_bin}:{env['PATH']}",
             }
@@ -1294,6 +1324,24 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
     )
     for binding_overrides in invalid_artifacts:
         rejected = run_candidate(exact_description, expected_url, valid_run, binding_overrides)
+        assert rejected.returncode != 0
+        assert rejected.stdout == ""
+
+    invalid_artifact_sets = (
+        [],
+        [
+            {"id": 456, "name": "strix-reports", "expired": False},
+            {"id": 789, "name": "strix-reports", "expired": False},
+        ],
+        [{"id": 456, "name": "strix-reports", "expired": True}],
+    )
+    for artifact_records in invalid_artifact_sets:
+        rejected = run_candidate(
+            exact_description,
+            expected_url,
+            valid_run,
+            artifact_records=artifact_records,
+        )
         assert rejected.returncode != 0
         assert rejected.stdout == ""
 
