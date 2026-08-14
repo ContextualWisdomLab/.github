@@ -2247,6 +2247,112 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+
+def inspect_draft_pr_for_review(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    trigger_reviews: bool,
+    review_dispatch_allowed: bool,
+    workflow: str,
+    security_workflow: str,
+    stale_opencode_minutes: int,
+) -> Decision:
+    """Dispatch current-head review evidence without mutating a draft PR branch.
+
+    Draft pull requests remain excluded from branch updates, auto-merge,
+    direct merge, stale-review dismissal, and review-thread mutation. They
+    still need early Strix and OpenCode feedback so authors can finish the
+    implementation before marking the pull request ready for review.
+    """
+    number = pr["number"]
+    if has_current_head_changes_requested(pr):
+        return Decision(
+            number,
+            "skip",
+            "draft PR; current-head OpenCode review requested changes",
+        )
+    if has_current_head_approval(pr):
+        return Decision(
+            number,
+            "skip",
+            "draft PR; current-head OpenCode approval recorded",
+        )
+    if not trigger_reviews:
+        return Decision(number, "skip", "draft PR; review dispatch disabled")
+
+    opencode_state = opencode_progress_state(
+        pr,
+        stale_after_minutes=stale_opencode_minutes,
+    )
+    if opencode_state == "running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; OpenCode review is already in progress",
+        )
+    if not review_dispatch_allowed:
+        return Decision(number, "wait", "draft PR; review dispatch limit reached")
+
+    strix_state = strix_evidence_state(pr)
+    if strix_state == "missing":
+        wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return Decision(
+                number,
+                "wait",
+                "draft PR; current head has no completed Strix evidence; "
+                f"{wait_reason}",
+            )
+        dispatch_strix_evidence(
+            repo,
+            security_workflow,
+            pr,
+            dry_run=dry_run,
+        )
+        return Decision(
+            number,
+            "security_dispatch",
+            "draft PR; current head has no completed Strix evidence; "
+            "same-head Strix dispatched",
+        )
+    if strix_state == "running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; same-head Strix evidence is still running",
+        )
+
+    wait_reason = repository_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return Decision(
+            number,
+            "wait",
+            "draft PR; current head has completed Strix evidence; "
+            f"{wait_reason}",
+        )
+    dispatch_result = dispatch_opencode_review(
+        repo,
+        workflow,
+        pr,
+        dry_run=dry_run,
+    )
+    if dispatch_result == "already_running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; current head has completed Strix evidence; "
+            "same-head OpenCode workflow run is already active",
+        )
+    return Decision(
+        number,
+        "review_dispatch",
+        "draft PR; current head has completed Strix evidence; "
+        "same-head OpenCode dispatched",
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2269,7 +2375,16 @@ def inspect_pr(
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
-        return Decision(number, "skip", "draft PR")
+        return inspect_draft_pr_for_review(
+            repo,
+            pr,
+            dry_run=dry_run,
+            trigger_reviews=trigger_reviews,
+            review_dispatch_allowed=review_dispatch_allowed,
+            workflow=workflow,
+            security_workflow=security_workflow,
+            stale_opencode_minutes=stale_opencode_minutes,
+        )
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required

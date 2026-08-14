@@ -2911,8 +2911,188 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
     assert "- PR #5: `fork/repo` is external" in "\n".join(external_merge_lines)
 
 
+def test_draft_pr_review_path_never_mutates_branch_or_merge_state(monkeypatch):
+    mutations = []
+    dispatches = []
+    for name in ("update_branch", "enable_auto_merge", "merge_pr", "disable_auto_merge"):
+        monkeypatch.setattr(
+            sched,
+            name,
+            lambda *args, _name=name, **kwargs: mutations.append(_name),
+        )
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatches.append(
+            ("strix", pr["number"], dry_run)
+        )
+        or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatches.append(
+            ("opencode", pr["number"], dry_run)
+        )
+        or "dispatched",
+    )
+
+    missing_strix = inspect(make_pr(isDraft=True), dry_run=False)
+    assert missing_strix.action == "security_dispatch"
+    assert missing_strix.reason == (
+        "draft PR; current head has no completed Strix evidence; same-head Strix dispatched"
+    )
+
+    completed_strix = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+        dry_run=False,
+    )
+    assert completed_strix.action == "review_dispatch"
+    assert completed_strix.reason == (
+        "draft PR; current head has completed Strix evidence; same-head OpenCode dispatched"
+    )
+
+    approved = inspect(
+        make_pr(
+            isDraft=True,
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+        dry_run=False,
+    )
+    assert approved.action == "skip"
+    assert approved.reason == "draft PR; current-head OpenCode approval recorded"
+
+    changes_requested = inspect(
+        make_pr(
+            isDraft=True,
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+        ),
+        dry_run=False,
+    )
+    assert changes_requested.action == "skip"
+    assert changes_requested.reason == (
+        "draft PR; current-head OpenCode review requested changes"
+    )
+
+    assert dispatches == [("strix", 1, False), ("opencode", 1, False)]
+    assert mutations == []
+
+
+def test_draft_pr_review_wait_states_are_read_only(monkeypatch):
+    dispatches = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda *args, **kwargs: dispatches.append("strix") or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatches.append("opencode") or "dispatched",
+    )
+
+    disabled = inspect(make_pr(isDraft=True), trigger_reviews=False)
+    assert disabled.action == "skip"
+    assert disabled.reason == "draft PR; review dispatch disabled"
+
+    running = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={
+                "contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}
+            },
+        )
+    )
+    assert running.action == "wait"
+    assert running.reason == "draft PR; OpenCode review is already in progress"
+
+    limited = inspect(make_pr(isDraft=True), review_dispatch_allowed=False)
+    assert limited.action == "wait"
+    assert limited.reason == "draft PR; review dispatch limit reached"
+
+    strix_running = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [strix_check(status="IN_PROGRESS", conclusion=None)]
+                }
+            },
+        )
+    )
+    assert strix_running.action == "wait"
+    assert strix_running.reason == "draft PR; same-head Strix evidence is still running"
+    assert dispatches == []
+
+
+def test_draft_pr_review_dispatch_failures_are_wait_states(monkeypatch):
+    missing_reason = "central Strix dispatch workflow unavailable"
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: missing_reason
+        if workflow == "Strix Security Scan"
+        else "",
+    )
+    missing = inspect(make_pr(isDraft=True))
+    assert missing.action == "wait"
+    assert missing.reason == (
+        "draft PR; current head has no completed Strix evidence; " + missing_reason
+    )
+
+    opencode_reason = "central OpenCode dispatch workflow unavailable"
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: opencode_reason
+        if workflow == "OpenCode Review"
+        else "",
+    )
+    completed = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+    unavailable = inspect(completed)
+    assert unavailable.action == "wait"
+    assert unavailable.reason == (
+        "draft PR; current head has completed Strix evidence; " + opencode_reason
+    )
+
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: "already_running",
+    )
+    already_running = inspect(completed)
+    assert already_running.action == "wait"
+    assert already_running.reason == (
+        "draft PR; current head has completed Strix evidence; "
+        "same-head OpenCode workflow run is already active"
+    )
+
+
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
-    assert inspect(make_pr(isDraft=True)).action == "skip"
+    draft = inspect(make_pr(isDraft=True))
+    assert draft.action == "security_dispatch"
+    assert draft.reason == (
+        "draft PR; current head has no completed Strix evidence; same-head Strix dispatched"
+    )
     stacked = inspect(make_pr(baseRefName="develop"))
     assert stacked.action == "review_dispatch"
     assert stacked.reason == "stacked PR onto develop; OpenCode review dispatched"

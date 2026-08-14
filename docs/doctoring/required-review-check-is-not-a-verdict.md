@@ -30,6 +30,16 @@ Human `repository_dispatch` as `seonghobae` remains rejected; only
 verdict is posted, re-run the required `opencode-review` job so the
 fail-closed check can observe it.
 
+## Draft pull-request review contract
+
+Draft status is a merge-readiness signal, not a request to suppress early
+feedback. The central scheduler therefore dispatches same-head Strix first
+and then authenticated OpenCode review for draft pull requests. The draft
+path is deliberately review-only: it cannot update the head branch, enable
+or disable auto-merge, merge, dismiss reviews, or resolve review threads.
+Marking a pull request ready remains the explicit boundary for merge
+automation.
+
 ## Verification contract
 
 - `tests/test_opencode_required_verdict_gate.py` pins
