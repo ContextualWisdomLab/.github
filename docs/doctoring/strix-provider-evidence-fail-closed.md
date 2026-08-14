@@ -322,6 +322,15 @@ another exact-head Strix run; the current artifact has no `evidence-binding.json
 and `run.json` has null repository/head/commit metadata, so it is not a clean
 protected gate.
 
+The same `9891551586288ab09233f78e9e9be47771c39061` batch exposed one separate
+quality defect: `Trusted uv Materializer Quality CI` run `31850467540` executed
+the source tests successfully but failed the required branch-coverage gate at
+`99%` because the new non-sensitive JSON-string path at line 60 had no Python
+regression. The fix adds that regression to
+`tests/test_opencode_security_boundaries.py`; the local replacement run now
+reports `979 passed`, `16` subtests, and `100%` line/branch coverage. Treat this
+as a repaired test-coverage gap, not as a reason to weaken the coverage gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

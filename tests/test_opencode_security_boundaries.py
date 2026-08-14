@@ -43,6 +43,13 @@ def test_sensitive_log_redaction_handles_json_credentials_and_jwts() -> None:
     assert set(json.loads(cleaned)["nested"].values()) == {redactor.REDACTED}
 
 
+def test_sensitive_log_redaction_scrubs_non_sensitive_json_strings() -> None:
+    """Non-sensitive JSON strings still receive assignment and token redaction."""
+    cleaned = redactor.redact_text(json.dumps({"message": "token=fixture-value"}))
+
+    assert json.loads(cleaned)["message"] == f"token={redactor.REDACTED}"
+
+
 def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
     source = (
