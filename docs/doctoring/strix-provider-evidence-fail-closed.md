@@ -150,6 +150,20 @@ is provider/content evidence only. A protected-main integration followed by a
 default-branch run must still bind repository, full head, run/job, report path,
 and digest before any security result can satisfy a merge gate.
 
+## Dependabot alert reconciliation (2026-08-14)
+
+The repository default branch still reports open alerts #5--#9 for `aiohttp`
+and `cryptography`, although the manifests already carry the first patched
+versions: `aiohttp==3.14.3` and `cryptography==50.0.0` in both Strix
+requirements files. The current required Python supply-chain check passes.
+
+Keep the exact pins and hash lock, do not dismiss or suppress these alerts, and
+re-fetch the alert manifest and `first_patched_version` after dependency
+refreshes until GitHub recomputes the stale alert state. If a refreshed alert
+still overlaps an installed version, regenerate the lock and hashes from the
+project tooling and rerun the security workflow; never weaken the gate to make
+the warning disappear.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
