@@ -326,6 +326,13 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
         dispatch_client=central,
         opencode_allowlist=frozenset({mention_request.repository}),
     ) == ("@cwl-noema-review", "@opencode-agent")
+    acknowledgement_failing_target = ArtifactAwareClient(fail_target_call=2)
+    assert module.dispatch_request(
+        mention_request,
+        target_client=acknowledgement_failing_target,
+        dispatch_client=ArtifactAwareClient(),
+        opencode_allowlist=frozenset({mention_request.repository}),
+    ) == ("@cwl-noema-review", "@opencode-agent")
     assert dispatch_events(central) == [
         "agent-mention-noema",
         "agent-mention-opencode",
@@ -347,4 +354,4 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
         opencode_allowlist=frozenset({mention_request.repository}),
     ) == ()
     assert dispatch_events(retry) == []
-    assert len(retry_target.calls) == 2
+    assert retry_target.calls == []

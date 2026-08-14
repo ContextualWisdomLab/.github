@@ -80,6 +80,23 @@ def test_event_and_payloads_bind_exact_base_identity() -> None:
     ):
         assert payload["base_branch"] == "main"
         assert payload["pr_base_sha"] == "b" * 40
+        assert len(payload) <= router.MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES
+
+    opencode_payload = router.opencode_payload(request)["client_payload"]
+    assert len(opencode_payload) == 10
+    assert opencode_payload["control"] == {
+        "enable_auto_merge": False,
+        "merge_mode": "disabled",
+        "review_dispatch_limit": "1",
+        "trigger_reviews": True,
+        "update_branches": False,
+    }
+    with pytest.raises(ValueError, match="must be an object"):
+        router._validate_repository_dispatch_payload({"client_payload": []})
+    with pytest.raises(ValueError, match="at most 10"):
+        router._validate_repository_dispatch_payload(
+            {"client_payload": {str(index): index for index in range(11)}}
+        )
 
     malformed = _event()
     malformed["pull_request"]["base"]["sha"] = "not-a-sha"
@@ -172,6 +189,15 @@ def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
     assert 'ENABLE_AUTO_MERGE: "false"' in opencode
     assert 'UPDATE_BRANCHES: "false"' in opencode
     assert 'MERGE_MODE: "disabled"' in opencode
+
+    for field in (
+        "github.event.client_payload.control.trigger_reviews",
+        "github.event.client_payload.control.review_dispatch_limit",
+        "github.event.client_payload.control.enable_auto_merge",
+        "github.event.client_payload.control.update_branches",
+        "github.event.client_payload.control.merge_mode",
+    ):
+        assert field in opencode
 
     for field in (
         '"trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true"',
