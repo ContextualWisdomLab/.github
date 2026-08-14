@@ -56,15 +56,8 @@ and the `--no-deps` installer line on `strix.yml`. A `*-hashes.txt` name
 or a lone `--require-hashes` directive without `--hash=` is not treated
 as a complete lock. A mixed file with one hashed line beside unhashed
 packages also stays on the resolver path. Discovery skips `.venv` trees.
-Materialize accepts a requirements include only as a two-token
-``-r``/``--requirement`` form whose target is a normalized relative POSIX
-lock path with no ``.`` or ``..`` components, so a dotted include cannot
-enter the trusted build context (CWE-22; MITRE, 2026).
 
 ## References (APA 7th)
-
-MITRE. (2026). *CWE-22: Improper limitation of a pathname to a restricted
-directory ('Path Traversal')*. https://cwe.mitre.org/data/definitions/22.html
 
 GitHub. (2026). *Cryptography vulnerable to buffer overflow if
 non-contiguous buffers were passed to APIs (CVE-2026-39892,

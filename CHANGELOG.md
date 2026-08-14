@@ -13,7 +13,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Required every package line to carry a `--hash=` pin before pip-audit treats a requirements file as a complete hashed lock. A lone `--require-hashes` directive or a mixed hashed-plus-unhashed file no longer receives `--disable-pip`, which would otherwise audit an incomplete set as clean.
 - Landed `--require-hashes --no-deps` on the required Strix installer and taught pip-audit to audit hashed complete locks with `--disable-pip`, so a later strix-agent 1.5.3 + cryptography 50.0.0 lock can install under `pull_request_target` and pip-audit no longer labels pip `ResolutionImpossible` as a known vulnerability (ContextualWisdomLab/.github#961, #952). A `*-hashes.txt` name without hash evidence no longer receives `--disable-pip`, and discovery skips virtualenv trees.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
