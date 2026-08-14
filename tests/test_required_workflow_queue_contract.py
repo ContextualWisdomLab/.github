@@ -1154,6 +1154,7 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     assert '((.run_id // "") | tostring) == $run_id' in structured_function
     assert 'actual_report_sha256' in structured_function
     assert "/actions/runs/${run_id}/artifacts?per_page=100" in failed_check_evidence
+    assert "if ! artifact_count=\"$(jq -r" in failed_check_evidence
     assert '.repository == $repository' in failed_check_evidence
     assert '.artifact_name == "strix-reports"' in failed_check_evidence
 

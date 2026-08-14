@@ -434,7 +434,10 @@ manual_strix_run_has_structured_binding() {
 		rm -rf -- "$artifact_dir"
 		return 1
 	fi
-	artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"
+	if ! artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
 	if [ "$artifact_count" != "1" ]; then
 		rm -rf -- "$artifact_dir"
 		return 1

@@ -6297,7 +6297,9 @@ jobs:
               gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
               return 1
             fi
-            artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"
+            if ! artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"; then
+              return 1
+            fi
             if [ "$artifact_count" != "1" ]; then
               return 1
             fi
