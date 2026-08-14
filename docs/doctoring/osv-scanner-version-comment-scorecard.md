@@ -15,8 +15,6 @@ gate and could not tell which OSV scanner release actually ran.
 
 ## Decision
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 Correct the four trailing comments in-tree to `# v2.5.0`. Delete the
 one-shot writer. Do not grant `contents: write` to repair a comment.
 Keep the exact full SHA, scan arguments, reporter pin, timeouts, and
