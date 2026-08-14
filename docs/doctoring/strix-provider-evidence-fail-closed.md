@@ -246,6 +246,28 @@ as provider/content evidence only; do not promote it to a clean security gate
 until the hardened workflow is on protected `main` and a post-integration run
 verifies the exact repository, full head, run/job, report path, and digest.
 
+Central PR #1009 exact head
+`2833d8a1c2f2cbb02387a2af752db51298cc64c4` was rerun as Actions run
+`31813452739` attempt 2, Strix job `94912967996`, with artifact `9236314064`.
+The artifact's report SHA-256 is
+`8d35921b389a7a88d6b03240bfe7283d395318192028e75ddd626561fcc29982` and its
+run.json SHA-256 is
+`c7e7bd734cfe544d3b5ac4d9eb98572f304f9bdd56f2bcdf4ad974c75081664a`.
+The scan completed successfully and reported zero vulnerabilities, but
+run.json has null repository/head/commit metadata and the artifact has no
+`evidence-binding.json`. This exact result is therefore provider/content and
+changed-file-scope evidence only, not a clean protected gate.
+
+This run also confirms a workflow-bootstrap boundary: the
+`pull_request_target` job executes the trusted workflow from protected `main`,
+while PR #1009's new provenance-validation steps live on the PR branch and
+cannot validate that branch's own required run. Do not call the green rerun a
+clean self-proof, and do not bypass the boundary with status-only or manual
+approval. Keep the PR evidence requirement explicit: after the hardened
+workflow is accepted on protected `main`, run a default-branch trusted
+`repository_dispatch` scan for the exact target repository, PR head, job, and
+report digest, then repeat the independent review and terminal-check gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
