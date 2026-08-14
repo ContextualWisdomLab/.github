@@ -9,8 +9,6 @@ used the reviewed action.
 
 ## Decision
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 Pin both `scorecard-pr.yml` and `scorecard-analysis.yml` to
 `2d1146689b8cda280b9bc96326124645441f03bc` (v2.4.4). A contract test
 rejects a split.
