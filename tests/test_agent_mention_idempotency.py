@@ -319,24 +319,26 @@ def test_partial_failure_retries_only_the_missing_agent() -> None:
     assert dispatch_events(retry) == ["agent-mention-opencode"]
 
 
-def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
-    """Target-repository UX failure is separate from durable dispatch evidence."""
+def test_reaction_failure_cannot_redispatch_completed_agents() -> None:
+    """A cosmetic reaction failure preserves durable dispatch idempotency."""
 
     module = load_module()
     mention_request = request(module)
     central = ArtifactAwareClient()
     failing_target = ArtifactAwareClient(fail_target_call=1)
-    with pytest.raises(RuntimeError, match="target call"):
-        module.dispatch_request(
-            mention_request,
-            target_client=failing_target,
-            dispatch_client=central,
-            opencode_allowlist=frozenset({mention_request.repository}),
-        )
+    assert module.dispatch_request(
+        mention_request,
+        target_client=failing_target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({mention_request.repository}),
+    ) == ("@cwl-noema-review", "@opencode-agent")
     assert dispatch_events(central) == [
         "agent-mention-noema",
         "agent-mention-opencode",
     ]
+    assert len(failing_target.calls) == 2
+    assert failing_target.calls[0][0][0].endswith("/reactions")
+    assert failing_target.calls[1][0][0].endswith("/issues/65/comments")
 
     retry = ArtifactAwareClient(
         artifacts=artifact_inventory(
