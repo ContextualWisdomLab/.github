@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 
@@ -380,13 +381,36 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def codegraph_context_root() -> Path:
+    """Return the workspace root that may contain CodeGraph context files."""
+    raw = os.environ.get("GITHUB_WORKSPACE", "").strip() or os.getcwd()
+    return Path(raw).resolve()
+
+
+def confined_codegraph_context_path(path: str, root: Path) -> Path | None:
+    """Return the resolved path when it cannot escape the workspace root."""
+    candidate = Path(path)
+    if ".." in candidate.parts:
+        return None
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(root):
+        return None
+    return resolved
+
+
 def load_codegraph_context() -> str:
     """Load optional precomputed CodeGraph context for structural review evidence."""
     path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
     if not path:
         return ""
+    confined = confined_codegraph_context_path(path, codegraph_context_root())
+    if confined is None:
+        return "CodeGraph context unavailable: path escapes the workspace."
     try:
-        with open(path, encoding="utf-8") as handle:
+        with confined.open(encoding="utf-8") as handle:
             return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
     except OSError as exc:
         return f"CodeGraph context unavailable: {exc}"
