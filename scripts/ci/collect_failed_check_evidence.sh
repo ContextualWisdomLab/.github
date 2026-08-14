@@ -431,7 +431,7 @@ manual_strix_run_has_structured_binding() {
 	if ! gh run download "$run_id" \
 		--repo "$GH_REPOSITORY" \
 		--name strix-reports \
-		--dir "$artifact_dir" >/dev/null 2>&1; then
+		--dir "$artifact_dir" </dev/null >/dev/null 2>&1; then
 		rm -rf -- "$artifact_dir"
 		return 1
 	fi
@@ -475,6 +475,7 @@ manual_strix_run_has_structured_binding() {
 	fi
 
 	rm -rf -- "$artifact_dir"
+	return 0
 }
 
 manual_success_for_label() {

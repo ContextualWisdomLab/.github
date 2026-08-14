@@ -851,6 +851,7 @@ jobs:
           # The provider classifier retains the literal Nvidia_nimException
           # marker for the trusted pre-merge smoke contract.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
+          export STRIX_GATE_MARKER_PREFIX="CWL_STRIX_GATE_MARKER_${GITHUB_RUN_ID}:"
           strix_rc=0
           set +e
           bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_run_log"
@@ -864,7 +865,8 @@ jobs:
           # CWE-754: a zero exit is not complete evidence if the gate itself
           # printed fail-closed, incomplete-evidence, or neutral-skip text (IEEE,
           # 2008).
-          if grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip' "$strix_run_log"; then
+          if grep -F -- "$STRIX_GATE_MARKER_PREFIX" "$strix_run_log" |
+            grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'; then
             echo "::error title=Strix evidence incomplete::The trusted Strix gate printed a fail-closed, incomplete-evidence, or neutral-skip marker but exited 0; refusing to convert that into a successful required check. See the strix-reports artifact and the run log."
             exit 1
           fi
@@ -902,6 +904,21 @@ jobs:
               echo "head_sha=$summary_head_sha"
             } > "$GITHUB_WORKSPACE/strix_runs/scan-summary.txt"
           fi
+
+      - name: Redact Strix evidence before artifact publication
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        run: |
+          set -euo pipefail
+          redactor="$TRUSTED_STRIX_SOURCE/scripts/ci/redact_sensitive_log.py"
+          if [ ! -f "$redactor" ]; then
+            echo "::error::Trusted Strix evidence redactor is missing."
+            exit 1
+          fi
+          while IFS= read -r -d '' evidence_file; do
+            redacted_file="${evidence_file}.redacted"
+            python3 "$redactor" <"$evidence_file" >"$redacted_file"
+            mv -- "$redacted_file" "$evidence_file"
+          done < <(find "$GITHUB_WORKSPACE/strix_runs" -type f -print0)
 
       - name: Validate Strix report provenance
         if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
@@ -986,7 +1003,10 @@ jobs:
           fi
 
           gate_console="$GITHUB_WORKSPACE/strix_runs/gate-console.log"
-          if [ -f "$gate_console" ] && grep -Eiq 'Strix (report artifacts emitted|run emitted|scan failed|reported zero vulnerabilities).*failing closed|No Strix vulnerability report artifact was produced' "$gate_console"; then
+          marker_prefix="CWL_STRIX_GATE_MARKER_${GITHUB_RUN_ID}:"
+          if [ -f "$gate_console" ] &&
+            grep -F -- "$marker_prefix" "$gate_console" |
+            grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'; then
             echo "::error::Strix evidence contains a fail-closed/provider-infrastructure marker; it cannot be published as a successful scan."
             exit 1
           fi

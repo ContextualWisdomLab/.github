@@ -46,6 +46,7 @@ STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
+STRIX_GATE_MARKER_PREFIX="${STRIX_GATE_MARKER_PREFIX:-CWL_STRIX_GATE_MARKER:}"
 RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
@@ -68,6 +69,10 @@ NORMALIZED_CHANGED_FILES=()
 PULL_REQUEST_SCOPE_DIRS=()
 LAST_PULL_REQUEST_SCOPE_DIR=""
 TARGET_PATH_IS_INTERNAL_PR_SCOPE=0
+
+emit_strix_gate_marker() {
+	printf '%s %s\n' "$STRIX_GATE_MARKER_PREFIX" "$*" | tee -a "$STRIX_LOG" >&2
+}
 
 resolve_trusted_input_file() {
 	local label="$1"
@@ -483,7 +488,7 @@ is_valid_git_commit_sha() {
 
 invalid_pull_request_sha() {
 	local label="$1"
-	echo "ERROR: pull request $label commit SHA is invalid; failing closed." >&2
+	emit_strix_gate_marker "ERROR: pull request $label commit SHA is invalid; failing closed."
 	return 2
 }
 
@@ -550,11 +555,11 @@ changed_file_exists_for_scan() {
 			return 1
 			;;
 		3)
-			echo "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path"
 			return 2
 			;;
 		*)
-			echo "ERROR: pull request changed file could not be read from PR head; failing closed: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file could not be read from PR head; failing closed: $relative_path"
 			return 2
 			;;
 		esac
@@ -579,7 +584,7 @@ changed_file_exists_for_scan() {
 		return 1
 		;;
 	3)
-		echo "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path" >&2
+		emit_strix_gate_marker "ERROR: pull request changed file is not a regular PR-head file; failing closed: $relative_path"
 		return 2
 		;;
 	*)
@@ -1011,7 +1016,7 @@ PY
 	fi
 	if [ -z "$base_sha" ] || [ -z "$head_sha" ]; then
 		if pull_request_head_blob_required; then
-			echo "ERROR: pull request base/head metadata is unavailable; failing closed." >&2
+			emit_strix_gate_marker "ERROR: pull request base/head metadata is unavailable; failing closed."
 			return 2
 		fi
 		return 1
@@ -1032,14 +1037,14 @@ PY
 	fi
 	if ! git rev-parse --verify --quiet "$base_sha^{commit}" >/dev/null; then
 		if pull_request_head_blob_required; then
-			echo "ERROR: pull request base commit could not be read; failing closed: $base_sha" >&2
+			emit_strix_gate_marker "ERROR: pull request base commit could not be read; failing closed: $base_sha"
 			return 2
 		fi
 		return 1
 	fi
 	if ! git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
 		if pull_request_head_blob_required; then
-			echo "ERROR: pull request head commit could not be read; failing closed: $head_sha" >&2
+			emit_strix_gate_marker "ERROR: pull request head commit could not be read; failing closed: $head_sha"
 			return 2
 		fi
 		return 1
@@ -1056,14 +1061,14 @@ PY
 			if changed_files_output="$(git -c core.quotepath=false diff --name-only "$base_sha" "$head_sha" -- 2>/dev/null)"; then
 				echo "Using explicit base/head diff for workflow_dispatch PR-scope Strix evidence." >&2
 			else
-				echo "ERROR: pull request changed file list could not be read; failing closed." >&2
+				emit_strix_gate_marker "ERROR: pull request changed file list could not be read; failing closed."
 				return 2
 			fi
 		elif changed_files_output="$(git -c core.quotepath=false diff --name-only "$base_sha..$head_sha" -- 2>/dev/null)"; then
 			echo "INFO: Unable to compute PR merge base; falling back to direct base/head diff for changed file enumeration." >&2
 		else
 			if pull_request_head_blob_required; then
-				echo "ERROR: pull request changed file list could not be read; failing closed." >&2
+				emit_strix_gate_marker "ERROR: pull request changed file list could not be read; failing closed."
 				return 2
 			fi
 			return 1
@@ -1134,11 +1139,11 @@ is_scannable_changed_file() {
 			return 1
 			;;
 		3)
-			echo "ERROR: pull request changed file is not a regular PR-head file; failing closed: $normalized_changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file is not a regular PR-head file; failing closed: $normalized_changed_file"
 			return 2
 			;;
 		*)
-			echo "ERROR: pull request changed file could not be read from PR head; failing closed: $normalized_changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file could not be read from PR head; failing closed: $normalized_changed_file"
 			return 2
 			;;
 		esac
@@ -1337,7 +1342,7 @@ PY
 			return 0
 		fi
 		if pull_request_head_blob_required || [ "$copy_rc" -eq 2 ]; then
-			echo "ERROR: pull request changed file could not be read from PR head; failing closed: $changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file could not be read from PR head; failing closed: $changed_file"
 			return 2
 		fi
 		local src_path="$REPO_ROOT/$relative_path"
@@ -1386,7 +1391,7 @@ PY
 				return 0
 			fi
 			if pull_request_head_blob_required || [ "$copy_rc" -eq 2 ]; then
-				echo "ERROR: pull request changed context file could not be read from PR head; failing closed: $context_file" >&2
+				emit_strix_gate_marker "ERROR: pull request changed context file could not be read from PR head; failing closed: $context_file"
 				return 2
 			fi
 			;;
@@ -1482,17 +1487,17 @@ build_pull_request_head_tree_scope_dir() {
 	local head_sha
 	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
 	if [ -z "$head_sha" ] || ! is_valid_git_commit_sha "$head_sha"; then
-		echo "ERROR: pull request head commit SHA is invalid; failing closed." >&2
+		emit_strix_gate_marker "ERROR: pull request head commit SHA is invalid; failing closed."
 		return 2
 	fi
 	if ! git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
-		echo "ERROR: pull request head commit could not be read; failing closed: $head_sha" >&2
+		emit_strix_gate_marker "ERROR: pull request head commit could not be read; failing closed: $head_sha"
 		return 2
 	fi
 
 	local tree_output
 	if ! tree_output="$(git -c core.quotepath=false ls-tree -r --full-tree "$head_sha")"; then
-		echo "ERROR: pull request head tree could not be read; failing closed." >&2
+		emit_strix_gate_marker "ERROR: pull request head tree could not be read; failing closed."
 		return 2
 	fi
 
@@ -1512,14 +1517,14 @@ build_pull_request_head_tree_scope_dir() {
 			continue
 		fi
 		if [ "$object_type" != "blob" ]; then
-			echo "ERROR: pull request head tree entry is not a blob; failing closed: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request head tree entry is not a blob; failing closed: $relative_path"
 			return 2
 		fi
 		case "$mode" in
 		100644 | 100755)
 			;;
 		*)
-			echo "ERROR: pull request head tree entry has unsupported mode $mode; failing closed: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request head tree entry has unsupported mode $mode; failing closed: $relative_path"
 			return 2
 			;;
 		esac
@@ -1542,7 +1547,7 @@ PY
 		tmp_dst="$(mktemp "$(dirname -- "$dst_path")/.pr-head.XXXXXX")" || return 2
 		if ! git cat-file blob "$object_hash" >"$tmp_dst"; then
 			rm -f -- "$tmp_dst"
-			echo "ERROR: pull request head blob could not be copied; failing closed: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request head blob could not be copied; failing closed: $relative_path"
 			return 2
 		fi
 		if ! mv -- "$tmp_dst" "$dst_path"; then
@@ -1556,7 +1561,7 @@ PY
 	done <<<"$tree_output"
 
 	if [ "$copied_file_count" -eq 0 ]; then
-		echo "ERROR: pull request head tree contains no regular files to scan; failing closed." >&2
+		emit_strix_gate_marker "ERROR: pull request head tree contains no regular files to scan; failing closed."
 		return 2
 	fi
 
@@ -1975,7 +1980,7 @@ evaluate_pull_request_findings() {
 	fi
 	if ! load_pull_request_changed_files; then
 		PR_FINDINGS_DECISION="block_unmapped"
-		echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+		emit_strix_gate_marker "Unable to map Strix findings to changed files; failing closed for pull request."
 		return 1
 	fi
 
@@ -2009,7 +2014,7 @@ evaluate_pull_request_findings() {
 			rank="$(extract_max_severity_rank "$vuln_file")"
 			if [ "$rank" -lt 0 ]; then
 				PR_FINDINGS_DECISION="block_unmapped"
-				echo "Unrecognized Strix severity marker; failing closed for pull request." >&2
+				emit_strix_gate_marker "Unrecognized Strix severity marker; failing closed for pull request."
 				return 1
 			fi
 			if [ "$rank" -lt "$threshold_rank" ]; then
@@ -2019,7 +2024,7 @@ evaluate_pull_request_findings() {
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
 				PR_FINDINGS_DECISION="block_unmapped"
-				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+				emit_strix_gate_marker "Unable to map Strix findings to changed files; failing closed for pull request."
 				return 1
 			fi
 			if all_vulnerability_locations_are_dependency_manifests "${vulnerability_locations[@]}"; then
@@ -2071,7 +2076,7 @@ evaluate_pull_request_findings() {
 			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$STRIX_LOG")
 			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
 				PR_FINDINGS_DECISION="block_unmapped"
-				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+				emit_strix_gate_marker "Unable to map Strix findings to changed files; failing closed for pull request."
 				return 1
 			fi
 			if all_vulnerability_locations_are_dependency_manifests "${vulnerability_locations[@]}"; then
@@ -2116,7 +2121,7 @@ evaluate_pull_request_findings() {
 
 	if [ "$found_changed_manifest_only_threshold_finding" -eq 1 ]; then
 		PR_FINDINGS_DECISION="block_manifest_finding"
-		echo "Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed." >&2
+		emit_strix_gate_marker "Strix changed-manifest threshold finding requires package and CVE remediation; pull-request-controlled SCA workflow results cannot override model evidence, so the scan is failing closed."
 		return 1
 	fi
 
@@ -2163,7 +2168,7 @@ fail_unmapped_threshold_report() {
 		return 1
 	fi
 	PR_FINDINGS_DECISION="block_unmapped"
-	echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+	emit_strix_gate_marker "Unable to map Strix findings to changed files; failing closed for pull request."
 	echo "Strix quick scan failed with a non-recoverable error." >&2
 	return 0
 }
@@ -2587,13 +2592,13 @@ PY
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
-		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
+		emit_strix_gate_marker "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed."
 	fi
 
 	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error; then
 		INFRA_ERROR_DETECTED=1
 		if [ "$rc" -eq 0 ] && provider_signal_fail_closed_enabled; then
-			echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
+			emit_strix_gate_marker "Strix run emitted provider infrastructure or failure-signal output; failing closed."
 			return 1
 		fi
 	fi
@@ -2601,7 +2606,7 @@ PY
 	if [ "$rc" -eq 0 ]; then
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
-				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
+				emit_strix_gate_marker "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed."
 				return 1
 			fi
 		fi
@@ -3094,7 +3099,7 @@ has_only_below_threshold_vulnerabilities() {
 	done
 
 	if [ "$found_any_vuln_file" -eq 0 ]; then
-		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		emit_strix_gate_marker "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed."
 		return 1
 	fi
 
@@ -3111,7 +3116,7 @@ has_only_below_threshold_vulnerabilities() {
 	# failure — or even success — but the partial report's low-severity
 	# findings must not be treated as a clean scan result.
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
-		echo "Below-threshold findings detected, but infrastructure errors occurred during this pipeline run; refusing bypass due to potentially incomplete scan." >&2
+		emit_strix_gate_marker "Below-threshold findings detected, but infrastructure errors occurred during this pipeline run; refusing bypass due to potentially incomplete scan."
 		return 1
 	fi
 
@@ -3167,7 +3172,7 @@ fail_reported_vulnerabilities_before_fallback_success() {
 	esac
 
 	if has_blocking_vulnerability_reports; then
-		echo "Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." >&2
+		emit_strix_gate_marker "Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed."
 		echo "Strix quick scan failed with a non-recoverable error." >&2
 		return 0
 	fi
@@ -3238,7 +3243,7 @@ should_fail_pull_request_infra_zero_findings() {
 		return 1
 	fi
 
-	echo "Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence." >&2
+	emit_strix_gate_marker "Strix reported zero vulnerabilities before provider infrastructure failure; failing closed because provider infrastructure failures are not clean scan evidence."
 	return 0
 }
 
@@ -3918,7 +3923,7 @@ run_current_target_scan() {
 		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
-			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
+			emit_strix_gate_marker "Strix scan failed after provider infrastructure or failure-signal output; failing closed."
 			return 1
 		fi
 	fi

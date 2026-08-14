@@ -6235,18 +6235,56 @@ jobs:
           }
 
           current_head_manual_strix_structured_success_status() {
-            timeout "$(check_lookup_api_timeout_seconds)s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
-              --jq '
-                (.statuses // [])
-                | map(select((.context // "") == "strix"))
-                | sort_by(.created_at // "")
-                | last // empty
+            local status_json
+            local status_url
+            local run_id
+            local expected_url
+            local run_json
+            local description="Default-branch repository_dispatch Strix structured evidence binding passed"
+
+            if ! status_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status")"; then
+              return 1
+            fi
+            status_url="$(jq -r --arg description "$description" '
+              [.statuses // [] | .[]
+                | select((.context // "") == "strix")
                 | select((.state // "" | ascii_downcase) == "success")
-                | select((.description // "") | contains("Default-branch repository_dispatch Strix structured evidence binding passed"))
-                | select((.target_url // "") | test("/actions/runs/[0-9]+"))
-                | .target_url // empty
-              '
+                | select((.description // "") == $description)]
+              | sort_by(.created_at // "")
+              | last
+              | .target_url // empty
+            ' <<<"$status_json")"
+            if [ -z "$status_url" ]; then
+              return 1
+            fi
+            case "$status_url" in
+              "${GITHUB_SERVER_URL%/}/${GH_REPOSITORY}/actions/runs/"*) ;;
+              *) return 1 ;;
+            esac
+            run_id="${status_url##*/}"
+            if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+              return 1
+            fi
+            expected_url="${GITHUB_SERVER_URL%/}/${GH_REPOSITORY}/actions/runs/${run_id}"
+            if [ "$status_url" != "$expected_url" ]; then
+              return 1
+            fi
+            if ! run_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}")"; then
+              return 1
+            fi
+            if ! jq -e --arg head_sha "$HEAD_SHA" --arg run_id "$run_id" '
+              ((.id // "") | tostring) == $run_id
+              and (.head_sha // "") == $head_sha
+              and (.event // "") == "repository_dispatch"
+              and (.path // "") == ".github/workflows/strix.yml"
+              and (.status // "") == "completed"
+              and (.conclusion // "") == "success"
+            ' <<<"$run_json" >/dev/null; then
+              return 1
+            fi
+            printf '%s\n' "$status_url"
           }
 
           hold_for_unverified_strix_workflow_update() {

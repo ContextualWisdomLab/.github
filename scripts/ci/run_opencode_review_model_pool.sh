@@ -497,6 +497,56 @@ cap_model_run_timeout() {
 	fi
 }
 
+run_opencode_in_process_group() {
+	local run_timeout_seconds="$1"
+	local prompt_file="$2"
+	local agent="$3"
+	local model_candidate="$4"
+	local title="$5"
+
+	# Python is already required by the review runner.  os.setsid() is the
+	# portable macOS/Linux primitive available here; unlike timeout alone it
+	# gives every attempt a process group that cannot be the parent shell's.
+	python3 - "$run_timeout_seconds" "$prompt_file" "$agent" "$model_candidate" "$title" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+run_timeout_seconds, prompt_file, agent, model_candidate, title = sys.argv[1:]
+os.setsid()
+for name in (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "OPENCODE_APP_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+):
+    os.environ.pop(name, None)
+prompt = Path(prompt_file).read_text(encoding="utf-8")
+os.execvpe(
+    "timeout",
+    [
+        "timeout",
+        "--kill-after=30s",
+        f"{run_timeout_seconds}s",
+        "opencode",
+        "run",
+        prompt,
+        "--pure",
+        "--agent",
+        agent,
+        "--model",
+        model_candidate,
+        "--format",
+        "json",
+        "--title",
+        title,
+    ],
+    os.environ,
+)
+PY
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -516,15 +566,12 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" \
-		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
-		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-		opencode run "$(cat "$prompt_file")" \
-		--pure \
-		--agent "$agent" \
-		--model "$model_candidate" \
-		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+	run_opencode_in_process_group \
+		"$run_timeout_seconds" \
+		"$prompt_file" \
+		"$agent" \
+		"$model_candidate" \
+		"PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and

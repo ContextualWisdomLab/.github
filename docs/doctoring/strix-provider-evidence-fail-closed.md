@@ -164,6 +164,37 @@ still overlaps an installed version, regenerate the lock and hashes from the
 project tooling and rerun the security workflow; never weaken the gate to make
 the warning disappear.
 
+## Current-head review remediation (2026-08-14)
+
+The exact-head CodeRabbit review of central PR #965 identified four boundary
+issues that remain part of the acceptance contract:
+
+1. A structured `strix` commit status is usable only when its description is
+   an exact match, its URL is exactly the configured repository's Actions run
+   URL, and the referenced run API object is the same successful
+   `repository_dispatch` execution of `.github/workflows/strix.yml` with the
+   current head SHA. A description substring, external Actions URL, different
+   workflow, or different head is rejected.
+2. The gate emits a run-scoped marker prefix before fail-closed or incomplete
+   evidence messages. The wrapper matches only that prefix, so untrusted model,
+   scanner, or target-source text cannot manufacture a marker or cause a
+   false-negative guard.
+3. The retained `strix_runs/` tree is scrubbed by the trusted redactor before
+   provenance binding and artifact upload. Its minimum-disclosure allowlist
+   removes credential shapes, email addresses, phone numbers, IPv4 addresses,
+   and absolute runner paths while preserving repository-relative findings and
+   exact report digests.
+4. Each OpenCode model attempt is launched in a dedicated POSIX session and
+   process group. Cleanup therefore cannot skip a child because it inherited
+   the review shell's process group; the failed-check artifact download also
+   receives `/dev/null` on stdin and its cleanup function returns explicitly.
+
+The corresponding regressions cover the exact URL/run/head/workflow contract,
+run-scoped marker detection, evidence redaction, requirements include paths,
+and process-group cleanup. These fixes do not create approval authority:
+independent review, terminal current-head checks, structured same-head Strix
+evidence, resolved threads, and protected merge remain separate gates.
+
 ## Current exact-head provider/content evidence (2026-08-14)
 
 Central PR #965 exact head

@@ -1087,9 +1087,14 @@ def test_strix_provider_outage_without_findings_fails_closed() -> None:
     assert 'exit "$strix_rc"' in workflow
     assert "provider failures and missing reports remain fail-closed" in workflow
     assert (
+        'grep -F -- "$STRIX_GATE_MARKER_PREFIX" "$strix_run_log"'
+        in workflow
+    )
+    assert (
         "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'"
         in workflow
     )
+    assert 'export STRIX_GATE_MARKER_PREFIX="CWL_STRIX_GATE_MARKER_${GITHUB_RUN_ID}:"' in workflow
     assert "printed a fail-closed, incomplete-evidence, or neutral-skip marker but exited 0" in workflow
     assert "Treating as a neutral skip" not in workflow
     assert "backend_unavailable_signal" not in workflow
@@ -1124,6 +1129,14 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
         "Default-branch repository_dispatch Strix structured evidence binding passed"
         in success_function
     )
+    structured_function = opencode_workflow.split(
+        "current_head_manual_strix_structured_success_status()", 1
+    )[1].split("hold_for_unverified_strix_workflow_update()", 1)[0]
+    assert '(.description // "") == $description' in structured_function
+    assert 'GITHUB_SERVER_URL%/' in structured_function
+    assert 'actions/runs/${run_id}' in structured_function
+    assert '(.event // "") == "repository_dispatch"' in structured_function
+    assert '(.path // "") == ".github/workflows/strix.yml"' in structured_function
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:

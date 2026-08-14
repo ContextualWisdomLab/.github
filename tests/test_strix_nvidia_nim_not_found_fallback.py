@@ -226,6 +226,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            'grep -F -- "$STRIX_GATE_MARKER_PREFIX" "$strix_run_log"',
+            workflow,
+        )
+        self.assertIn(
             "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'",
             workflow,
         )
