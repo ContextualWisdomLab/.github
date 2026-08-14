@@ -164,6 +164,28 @@ still overlaps an installed version, regenerate the lock and hashes from the
 project tooling and rerun the security workflow; never weaken the gate to make
 the warning disappear.
 
+## Current exact-head provider/content evidence (2026-08-14)
+
+Central PR #965 exact head
+`3a2be84e983f44f4ad584a650f9721223621b52b` produced Strix run
+`31777570466`/job `94696182267` with a successful zero-finding report and
+artifact `9210803173`. The changed-file materializer retained seven CI/workflow
+files, and the report assessed the scanning infrastructure rather than an
+application target. The artifact contained no `evidence-binding.json` and the
+raw `run.json` had no repository, head, or digest metadata. This is bounded
+provider/content and scope evidence only, not proof of a clean PR-head security
+scan or merge eligibility. Protected-main integration and a matching structured
+binding remain required.
+
+The linked fast-mlsirm PR #816 exact head
+`03004b8ca54a6f821109afbc02bca5e7e3f94391` produced Strix run
+`31777428325`/job `94695759332` with a successful zero-finding report and
+artifact `9210847280`. Its raw `run.json` likewise had null repository/head/
+digest fields and the artifact had no `evidence-binding.json`. Preserve this
+as provider/content evidence only; do not promote it to a clean security gate
+until the hardened workflow is on protected `main` and a post-integration run
+verifies the exact repository, full head, run/job, report path, and digest.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
