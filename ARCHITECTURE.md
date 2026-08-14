@@ -75,7 +75,7 @@ repair, and delegates all privileged logic to the same sealed scheduler.
 ```mermaid
 flowchart TD
   Get["GET pinned GitHub Releases HTTPS archive"]
-  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 / 522 or temporary DNS, timeout, connection, host, or network failure?"}
+  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 / 522 or temporary DNS (EAI_AGAIN), timeout, connection reset/refused/aborted, host/network unreachable?"}
   Retry["At most three attempts; discard partial bytes"]
   Verify["SHA-256 then versioned executable"]
   Fail["Fail closed after one attempt"]
