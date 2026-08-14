@@ -87,7 +87,6 @@ def _is_candidate_lock_name(name: str) -> bool:
     )
 
 
-
 def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
     """Return whether one safe tracked path can name a pip requirements lock.
 
@@ -180,6 +179,8 @@ def _is_hash_pinned(content: bytes) -> bool:
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
+
+
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
     fields = re.split(r"\s+(?=--hash=)", line)
@@ -512,7 +513,7 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     for path, candidate in regular_blobs:
-        if _is_candidate_lock_name(candidate.name):
+        if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
             if _is_hash_pinned(content):
                 locks.append((path, content))
@@ -525,6 +526,41 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return sorted(locks, key=lambda item: item[0])
 
 
+def _rewrite_materialized_requirement_includes(
+    source_path: str,
+    content: bytes,
+    generated_by_source: dict[str, str],
+) -> bytes:
+    """Rewrite safe source-relative includes to deterministic generated lock names."""
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            f"tracked base requirements lock {source_path} is not valid UTF-8"
+        ) from exc
+
+    source_parent = pathlib.PurePosixPath(source_path).parent
+    rewritten: list[str] = []
+    for raw_line in text.splitlines(keepends=True):
+        line_without_ending = raw_line.rstrip("\r\n")
+        line_ending = raw_line[len(line_without_ending) :]
+        stripped = line_without_ending.strip()
+        if not _is_bounded_requirement_include(stripped):
+            rewritten.append(raw_line)
+            continue
+
+        directive, target = stripped.split()
+        target_source = (source_parent / pathlib.PurePosixPath(target)).as_posix()
+        generated_target = generated_by_source.get(target_source)
+        if generated_target is None:
+            raise RuntimeError(
+                "tracked base requirements include could not be materialized: "
+                f"{source_path} -> {target_source}"
+            )
+        rewritten.append(f"{directive} {generated_target}{line_ending}")
+    return "".join(rewritten).encode("utf-8")
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
@@ -535,13 +571,22 @@ def materialize(
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    locks = base_hash_locks(repo_root.resolve(), base_sha)
+    generated_by_source = {
+        source_path: f"requirements-{index:03d}.txt"
+        for index, (source_path, _content) in enumerate(locks)
+    }
     manifest: list[dict[str, str]] = []
-    for index, (source_path, content) in enumerate(
-        base_hash_locks(repo_root.resolve(), base_sha)
-    ):
-        generated_name = f"requirements-{index:03d}.txt"
+    for source_path, content in locks:
+        generated_name = generated_by_source[source_path]
         destination = output_dir / generated_name
-        destination.write_bytes(content)
+        destination.write_bytes(
+            _rewrite_materialized_requirement_includes(
+                source_path,
+                content,
+                generated_by_source,
+            )
+        )
         manifest.append({"file": generated_name, "source": source_path})
 
     (output_dir / "manifest.json").write_text(
