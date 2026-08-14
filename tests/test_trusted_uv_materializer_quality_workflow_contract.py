@@ -83,6 +83,7 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
 
     required_tests = (
         "tests/test_materialize_base_python_requirements.py",
+        "tests/test_materialized_requirement_includes.py",
         "tests/test_materialize_uv_export_hash_contract.py",
         "tests/test_trusted_uv_download_contract.py",
         "tests/test_trusted_uv_portability_and_streaming.py",
