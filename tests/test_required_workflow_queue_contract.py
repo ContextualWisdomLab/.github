@@ -1139,6 +1139,118 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     assert '(.path // "") == ".github/workflows/strix.yml"' in structured_function
 
 
+def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> None:
+    """Execute the status helper against URL, description, and run spoofing."""
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    start = workflow.index(
+        "          current_head_manual_strix_structured_success_status()"
+    )
+    end = workflow.index("          hold_for_unverified_strix_workflow_update()", start)
+    function_script = textwrap.dedent(workflow[start:end])
+    head_sha = "a" * 40
+    expected_url = (
+        "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "timeout").write_text(
+        "#!/bin/sh\nshift\nexec \"$@\"\n", encoding="utf-8"
+    )
+    (fake_bin / "gh").write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  */commits/*/status) cat \"$FAKE_STATUS\" ;;\n"
+        "  */actions/runs/*) cat \"$FAKE_RUN\" ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "timeout").chmod(0o755)
+    (fake_bin / "gh").chmod(0o755)
+    status_path = tmp_path / "status.json"
+    run_path = tmp_path / "run.json"
+    runner = textwrap.dedent(
+        f"""\
+        set -euo pipefail
+        HEAD_SHA='{head_sha}'
+        GH_REPOSITORY='ContextualWisdomLab/.github'
+        GITHUB_SERVER_URL='https://github.com'
+        check_lookup_api_timeout_seconds() {{ printf '5'; }}
+        {function_script}
+        current_head_manual_strix_structured_success_status
+        """
+    )
+
+    def run_candidate(description: str, target_url: str, run: dict[str, object]):
+        status_path.write_text(
+            json.dumps(
+                {
+                    "statuses": [
+                        {
+                            "context": "strix",
+                            "state": "success",
+                            "description": description,
+                            "target_url": target_url,
+                            "created_at": "2026-08-14T08:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+        env = os.environ.copy()
+        env.update(
+            {
+                "FAKE_STATUS": str(status_path),
+                "FAKE_RUN": str(run_path),
+                "PATH": f"{fake_bin}:{env['PATH']}",
+            }
+        )
+        return subprocess.run(
+            ["bash", "-c", runner],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    exact_description = (
+        "Default-branch repository_dispatch Strix structured evidence binding passed"
+    )
+    valid_run = {
+        "id": 123,
+        "head_sha": head_sha,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/strix.yml",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    valid = run_candidate(exact_description, expected_url, valid_run)
+    assert valid.returncode == 0, valid.stderr
+    assert valid.stdout.strip() == expected_url
+
+    invalid_cases = (
+        (exact_description + " suffix", expected_url, valid_run),
+        (exact_description, "https://evil.example/actions/runs/123", valid_run),
+        (
+            exact_description,
+            expected_url + "/artifacts/1",
+            valid_run,
+        ),
+        (
+            exact_description,
+            expected_url,
+            {**valid_run, "path": ".github/workflows/other.yml"},
+        ),
+        (exact_description, expected_url, {**valid_run, "head_sha": "b" * 40}),
+    )
+    for description, target_url, run in invalid_cases:
+        rejected = run_candidate(description, target_url, run)
+        assert rejected.returncode != 0
+        assert rejected.stdout == ""
+
+
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
     workflow = workflow_text("strix.yml")
     run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
