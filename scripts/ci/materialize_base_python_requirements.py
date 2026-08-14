@@ -42,6 +42,7 @@ TRUSTED_UV_ARCHIVE_URL = (
     "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
 )
+TRUSTED_UV_USER_AGENT = "ContextualWisdomLab-coverage/1.0"
 TRUSTED_UV_ARCHIVE_SHA256 = (
     "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 )
@@ -76,6 +77,7 @@ def _install_trusted_uv_url_opener() -> None:
         urllib.request.ProxyHandler({}),
         _RejectTrustedUvRedirects(),
     )
+    opener.addheaders = [("User-Agent", TRUSTED_UV_USER_AGENT)]
     urllib.request.install_opener(opener)
 
 

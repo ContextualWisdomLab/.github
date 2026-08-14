@@ -30,6 +30,13 @@ def _created_tool_directory(path: Path) -> str:
     return str(path)
 
 
+def _use_supported_trusted_uv_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make installer tests exercise the Linux x86_64 archive path on every host."""
+    materializer._install_trusted_uv.cache_clear()
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+
+
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
     """A PR-modified lock cannot enter the networked coverage image build context."""
     repo = tmp_path / "repo"
@@ -644,6 +651,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -690,6 +698,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -721,6 +730,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,
