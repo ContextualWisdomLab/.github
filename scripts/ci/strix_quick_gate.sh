@@ -68,6 +68,7 @@ NORMALIZED_CHANGED_FILES=()
 PULL_REQUEST_SCOPE_DIRS=()
 LAST_PULL_REQUEST_SCOPE_DIR=""
 TARGET_PATH_IS_INTERNAL_PR_SCOPE=0
+INTERNAL_PR_SCOPE_INSTRUCTION="This target is a deliberately bounded pull-request changed-file scope mounted by Strix under /workspace/<workspace_subdir>. The original GitHub Actions runner host path is intentionally absent inside the sandbox, and that absence is not a vulnerability. Treat the files in the current working directory as the complete authorized target for this quick changed-path scan. Inspect the available workflow, shell, Python, and configuration files for actionable content vulnerabilities. Do not report the missing host path or intentional scope bounding as a target-code vulnerability."
 
 resolve_trusted_input_file() {
 	local label="$1"
@@ -2328,6 +2329,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_instruction=""
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2354,6 +2356,9 @@ run_strix_once() {
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
+	if [ "$TARGET_PATH_IS_INTERNAL_PR_SCOPE" -eq 1 ]; then
+		child_instruction="$INTERNAL_PR_SCOPE_INSTRUCTION"
+	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
@@ -2375,6 +2380,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
+	STRIX_CHILD_INSTRUCTION="$child_instruction" \
 	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
 import hashlib
 import hmac
@@ -2529,6 +2535,9 @@ if any(ch in str(target_cwd) for ch in ("\x00", "\n", "\r")):
     raise SystemExit(2)
 
 command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]
+instruction = os.environ.get("STRIX_CHILD_INSTRUCTION", "").strip()
+if instruction:
+    command.extend(["--instruction", instruction])
 
 try:
     process = subprocess.Popen(
