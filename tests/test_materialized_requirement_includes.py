@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import materialize_base_python_requirements as materializer
 
 
@@ -73,3 +75,23 @@ def test_materialized_relative_include_resolves_after_flattening(tmp_path: Path)
         env={**os.environ, "TERM": "dumb"},
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_materialized_include_rewrite_rejects_missing_target() -> None:
+    """An accepted include cannot survive when its exact base target was not selected."""
+    with pytest.raises(RuntimeError, match="could not be materialized"):
+        materializer._rewrite_materialized_requirement_includes(
+            "service/requirements.txt",
+            b"-r requirements-missing.txt\n",
+            {"service/requirements.txt": "requirements-000.txt"},
+        )
+
+
+def test_materialized_include_rewrite_rejects_non_utf8_lock() -> None:
+    """Byte sequences that cannot be faithfully rewritten fail closed."""
+    with pytest.raises(RuntimeError, match="not valid UTF-8"):
+        materializer._rewrite_materialized_requirement_includes(
+            "requirements.txt",
+            b"\xff",
+            {"requirements.txt": "requirements-000.txt"},
+        )
