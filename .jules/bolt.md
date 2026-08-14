@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2024-05-25 - Avoid N+1 API blocking in Noema review gate
+**Learning:** In `scripts/ci/noema_review_gate.py`, the `changed_file_context` function was sequentially fetching changed file contents using `fetch_head_file_content` via the GitHub API. This N+1 network/CLI bottleneck significantly stalled the review process linearly for pull requests with many changed files.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch file contents concurrently for multiple changed paths, bounded by a `max_workers` limit to avoid overwhelming the API.
