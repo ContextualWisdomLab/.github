@@ -477,14 +477,20 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    target_client.request(
-        [
-            f"{target_api}/issues/comments/{request.comment_id}/reactions",
-            "-X",
-            "POST",
-        ],
-        input_payload={"content": "eyes"},
-    )
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/comments/{request.comment_id}/reactions",
+                "-X",
+                "POST",
+            ],
+            input_payload={"content": "eyes"},
+        )
+    except RuntimeError as exc:
+        print(
+            "::warning::Agent dispatch is durably queued, but the optional "
+            f"eyes reaction could not be recorded: {exc}"
+        )
     status_parts = [f"Queued {' and '.join(handles)}"]
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing
