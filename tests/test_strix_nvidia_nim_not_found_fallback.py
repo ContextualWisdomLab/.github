@@ -73,6 +73,36 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     return completed.returncode == 0
 
 
+def _classifies_as_model_tool_contract(log_text: str) -> bool:
+    """Execute the production Strix tool-contract classifier."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    function_source = _function_block(
+        gate_source,
+        "is_strix_model_tool_contract_error",
+    )
+    with tempfile.TemporaryDirectory(prefix="strix-tool-contract-") as temp_dir:
+        log_path = Path(temp_dir) / "strix.log"
+        log_path.write_text(log_text, encoding="utf-8")
+        script = "\n".join(
+            (
+                "set -euo pipefail",
+                'STRIX_LOG="$1"',
+                function_source,
+                "is_strix_model_tool_contract_error",
+            )
+        )
+        completed = subprocess.run(
+            ["bash", "-c", script, "strix-classifier", str(log_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if completed.returncode not in {0, 1}:
+        raise AssertionError(completed.stderr)
+    return completed.returncode == 0
+
+
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
     """Protect provider-scoped 404 fallback without weakening security gates."""
 
@@ -124,6 +154,38 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", infrastructure)
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
+
+    def test_unsupported_tool_contract_enters_cross_model_fallback(self) -> None:
+        """Treat the Strix agent/tool mismatch as a model failure, not a finding."""
+
+        log = (
+            "File strix/core/execution.py, line 355, in _run_cycle\n"
+            "agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix\n"
+        )
+        self.assertTrue(_classifies_as_model_tool_contract(log))
+
+        gate_source = STRIX_GATE.read_text(encoding="utf-8")
+        infrastructure = _function_block(
+            gate_source,
+            "has_detected_infrastructure_error",
+        )
+        retryable = _function_block(gate_source, "is_model_retryable_error")
+        same_model_retry = _function_block(
+            gate_source,
+            "is_transient_same_model_retry_error",
+        )
+        self.assertIn("is_strix_model_tool_contract_error", infrastructure)
+        self.assertIn("is_strix_model_tool_contract_error", retryable)
+        self.assertNotIn("is_strix_model_tool_contract_error", same_model_retry)
+
+    def test_target_text_cannot_spoof_tool_contract_fallback(self) -> None:
+        """Require the Strix traceback marker beside the exact exception."""
+
+        log = (
+            "source literal: agents.exceptions.ModelBehaviorError: Tool execute "
+            "not found in agent strix\n"
+        )
+        self.assertFalse(_classifies_as_model_tool_contract(log))
 
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
         """Prefer a documented hosted NIM and another NIM before GitHub."""

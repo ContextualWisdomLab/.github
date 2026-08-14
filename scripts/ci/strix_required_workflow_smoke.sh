@@ -162,6 +162,7 @@ assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a
 assert_file_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat" "Strix tries another NVIDIA hosted model before GitHub Models"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
+assert_file_contains "$gate_script" "is_strix_model_tool_contract_error" "Strix gate classifies unsupported provider tool contracts"
 
 if [ "$failures" -ne 0 ]; then
 	echo "Strix required workflow smoke test failed with $failures failure(s)." >&2

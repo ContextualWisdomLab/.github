@@ -2924,6 +2924,19 @@ is_midstream_fallback_error() {
 	return 1
 }
 
+is_strix_model_tool_contract_error() {
+	# Strix can fail before producing a report when a provider/model response
+	# requests a tool that the installed agent does not expose. Require both
+	# the exact agent exception and a Strix execution traceback so target-source
+	# text cannot manufacture a fallback signal.
+	if grep -Fq 'agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix' "$STRIX_LOG" &&
+		grep -Fq 'strix/core/execution.py' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 # Narrower variant: LLM providers only, excluding HTTP transport libraries
 # (httpx, httpcore, requests). Used for generic transport failures where
 # library names alone are insufficient to prove the timeout/connection error
@@ -2961,6 +2974,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_midstream_fallback_error; then
+		return 0
+	fi
+
+	if is_strix_model_tool_contract_error; then
 		return 0
 	fi
 
@@ -3854,6 +3871,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	if is_strix_model_tool_contract_error; then
 		return 0
 	fi
 
