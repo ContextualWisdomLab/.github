@@ -526,8 +526,12 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
 
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert calls == []
+
     cases = [
-        (make_pr(), "noema"),
         (make_pr(isDraft=True), "noema"),
         (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
         (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),

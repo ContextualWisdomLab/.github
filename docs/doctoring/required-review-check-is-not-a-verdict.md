@@ -1,0 +1,50 @@
+# Required OpenCode/Noema checks are not reviews
+
+검토 기준일: **2026-08-14**
+
+## Incident
+
+On ContextualWisdomLab/contextual-orchestrator#176 the required
+`opencode-review` and `noema-review` checks were green, but the Reviews
+API had no APPROVE or REQUEST_CHANGES. Authors treated the check name as
+a review verdict (GitHub, n.d.-a). That is weaker than the modern-review
+expectation that a review is an explicit, current-head judgment
+(Bacchelli & Bird, 2013).
+
+## Decision
+
+The required `opencode-review` job on
+`.github/workflows/opencode-review.yml` never runs the model. Privileged
+review stays in `opencode-review-dispatch.yml`. The required job now
+reads current-head reviews with `pull-requests: read` and **fails
+closed** unless `opencode-agent` / `opencode-agent[bot]` already posted
+`APPROVED` or `CHANGES_REQUESTED` on that SHA. A COMMENTED review, a
+review on an old SHA, or no review at all cannot make the check green.
+
+`scripts/ci/noema_review_gate.py` no longer returns 0 when the current
+head has no primary OpenCode approval. That skip was exit 0, so the
+required `noema-review` check looked like a successful review.
+
+Human `repository_dispatch` as `seonghobae` remains rejected; only
+`github-actions[bot]` may start the privileged dispatch. After a real
+verdict is posted, re-run the required `opencode-review` job so the
+fail-closed check can observe it.
+
+## Verification contract
+
+- `tests/test_opencode_required_verdict_gate.py` pins
+  `current_head_opencode_verdict` and `decide_required_verdict_check`.
+- `tests/test_noema_review_gate.py` requires exit 1 when there is no
+  primary OpenCode approval.
+- `tests/test_opencode_agent_contract.py` pins the required workflow
+  fail-closed error string.
+
+## References (APA 7th)
+
+Bacchelli, A., & Bird, C. (2013). Expectations, outcomes, and challenges of
+modern code review. In *Proceedings of the 35th International Conference on
+Software Engineering* (pp. 712–721). IEEE.
+https://doi.org/10.1109/ICSE.2013.6606617
+
+GitHub. (n.d.-a). *About status checks*. GitHub Docs. Retrieved
+August 14, 2026, from https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks

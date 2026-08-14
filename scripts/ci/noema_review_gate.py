@@ -598,8 +598,12 @@ def inspect_and_review(repo: str, number: int) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
-        return 0
+        print(
+            "Current head does not have a primary OpenCode approval; "
+            "Noema cannot skip as success because that made the required "
+            "check look like a review."
+        )
+        return 1
     if has_current_changes_requested(pr):
         print("Current head has requested changes; Noema review skipped.")
         return 0

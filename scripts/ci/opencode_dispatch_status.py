@@ -20,6 +20,58 @@ except ModuleNotFoundError:  # pragma: no cover - package import path
     )
 
 
+OPENCODE_VERDICT_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED"})
+MISSING_VERDICT_MESSAGE = (
+    "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. "
+    "This required check is not a review and must not succeed until the "
+    "authenticated dispatch posts a current-head verdict."
+)
+
+
+def current_head_opencode_verdict(
+    reviews: Sequence[dict[str, Any]], head_sha: str
+) -> str | None:
+    """Return the latest current-head OpenCode APPROVED or CHANGES_REQUESTED state."""
+    expected = (head_sha or "").lower()
+    if not expected:
+        return None
+    for review in reversed(reviews):
+        author = str((review.get("user") or {}).get("login") or "").casefold()
+        if author not in OPENCODE_APP_APPROVAL_AUTHORS:
+            continue
+        if str(review.get("commit_id") or "").lower() != expected:
+            continue
+        state = str(review.get("state") or "").upper()
+        if state in OPENCODE_VERDICT_STATES:
+            return state
+    return None
+
+
+def decide_required_verdict_check(
+    *,
+    expected_head: str,
+    pull_request: dict[str, Any],
+    reviews: Sequence[dict[str, Any]],
+) -> dict[str, str]:
+    """Fail closed unless OpenCode already published a current-head verdict."""
+    live_head = str((pull_request.get("head") or {}).get("sha") or "")
+    if not expected_head or live_head.lower() != expected_head.lower():
+        return {
+            "state": "failure",
+            "description": (
+                "OpenCode required-check target is stale or the live PR head "
+                "is unavailable."
+            ),
+        }
+    verdict = current_head_opencode_verdict(reviews, expected_head)
+    if verdict is None:
+        return {"state": "failure", "description": MISSING_VERDICT_MESSAGE}
+    return {
+        "state": "success",
+        "description": f"Current-head OpenCode verdict: {verdict}.",
+    }
+
+
 def _has_current_approval(reviews: Sequence[dict[str, Any]], head_sha: str) -> bool:
     """Return whether the latest OpenCode decision is a verified approval."""
     for review in reversed(reviews):
@@ -67,10 +119,15 @@ def decide_status(
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse commit-status evidence inputs."""
+    """Parse commit-status or required-verdict evidence inputs."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-outcome", required=True)
-    parser.add_argument("--coverage-result", required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("dispatch-status", "required-verdict"),
+        default="dispatch-status",
+    )
+    parser.add_argument("--model-outcome")
+    parser.add_argument("--coverage-result")
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--pull-request-file", required=True, type=Path)
     parser.add_argument("--reviews-file", required=True, type=Path)
@@ -78,12 +135,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Print one JSON commit-status decision."""
+    """Print one JSON decision and exit 1 when the required verdict is missing."""
     args = parse_args(argv)
     pull_request = json.loads(args.pull_request_file.read_text(encoding="utf-8"))
     reviews = json.loads(args.reviews_file.read_text(encoding="utf-8"))
     if not isinstance(pull_request, dict) or not isinstance(reviews, list):
         raise SystemExit("pull request evidence must be an object and reviews evidence an array")
+    if args.mode == "required-verdict":
+        decision = decide_required_verdict_check(
+            expected_head=args.expected_head,
+            pull_request=pull_request,
+            reviews=reviews,
+        )
+        print(json.dumps(decision, separators=(",", ":")))
+        return 0 if decision["state"] == "success" else 1
+    if not args.model_outcome or not args.coverage_result:
+        raise SystemExit("--model-outcome and --coverage-result are required")
     print(
         json.dumps(
             decide_status(

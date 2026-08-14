@@ -497,6 +497,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$bootstrap_file" "coverage-evidence:" "opencode required workflow preserves the stable coverage-evidence branch-protection context"
 	assert_file_contains "$bootstrap_file" "name: opencode-review" "opencode required workflow preserves the stable opencode-review branch-protection context"
 	assert_file_contains "$bootstrap_file" "authenticated default-branch OpenCode review dispatch" "opencode required workflow delegates real review execution to the protected dispatch path"
+	assert_file_contains "$bootstrap_file" "This required check is not a review" "opencode required workflow fails closed without a current-head OpenCode verdict"
 	assert_file_not_contains "$bootstrap_file" "repository_dispatch:" "opencode required workflow does not mix privileged dispatch execution with pull_request_target"
 	assert_file_not_contains "$bootstrap_file" "actions/checkout" "opencode required workflow never checks out pull-request content"
 	assert_file_not_contains "$bootstrap_file" '${{ secrets.' "opencode required workflow never binds repository secrets"
