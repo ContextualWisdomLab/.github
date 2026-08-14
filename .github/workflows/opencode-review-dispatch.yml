@@ -6240,6 +6240,12 @@ jobs:
             local run_id
             local expected_url
             local run_json
+            local artifact_dir
+            local binding_file
+            local report_path
+            local report_file
+            local expected_report_sha256
+            local actual_report_sha256
             local description="Default-branch repository_dispatch Strix structured evidence binding passed"
 
             if ! status_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
@@ -6284,6 +6290,55 @@ jobs:
             ' <<<"$run_json" >/dev/null; then
               return 1
             fi
+
+            artifact_dir="$(mktemp -d)"
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh run download "$run_id" \
+                --repo "$GH_REPOSITORY" \
+                --name strix-reports \
+                --dir "$artifact_dir" </dev/null >/dev/null 2>&1; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            binding_file="$(find "$artifact_dir" -type f -name evidence-binding.json -print -quit)"
+            if [ -z "$binding_file" ] || ! jq -e \
+              --arg head_sha "$HEAD_SHA" \
+              --arg run_id "$run_id" '
+                .head_sha == $head_sha
+                and ((.run_id // "") | tostring) == $run_id
+                and .scan_completed == true
+                and ((.report // "") | type == "string")
+              ' "$binding_file" >/dev/null 2>&1; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            report_path="$(jq -r '.report // empty' "$binding_file")"
+            case "$report_path" in
+              ""|/*|../*|*/../*|*"/../"*|*"/./"*|./*|*//*)
+                rm -rf -- "$artifact_dir"
+                return 1
+                ;;
+            esac
+            report_file="$(dirname -- "$binding_file")/$report_path"
+            if [ ! -s "$report_file" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            expected_report_sha256="$(jq -r '.report_sha256 // empty' "$binding_file")"
+            if [ -z "$expected_report_sha256" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual_report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
+            else
+              actual_report_sha256="$(shasum -a 256 "$report_file" | awk '{print $1}')"
+            fi
+            if [ "$actual_report_sha256" != "$expected_report_sha256" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            rm -rf -- "$artifact_dir"
             printf '%s\n' "$status_url"
           }
 

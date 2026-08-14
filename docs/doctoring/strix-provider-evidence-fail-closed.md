@@ -195,6 +195,22 @@ and process-group cleanup. These fixes do not create approval authority:
 independent review, terminal current-head checks, structured same-head Strix
 evidence, resolved threads, and protected merge remain separate gates.
 
+## Structured-status hold must validate the artifact (2026-08-14)
+
+The post-merge hold consumer had a narrower boundary than the failed-check
+collector: it verified the `strix` status description, Actions URL, and
+`repository_dispatch` run metadata, but it could have released
+`WAITING_FOR_POST_MERGE_STRIX_EVIDENCE` without downloading the run's
+`strix-reports` artifact. A successful status and run object alone do not prove
+that `evidence-binding.json`, the report path, or the report digest exists.
+
+The consumer now downloads the named `strix-reports` artifact and requires the
+same current head SHA, run ID, completed scan marker, safe report-relative path,
+nonempty report, and SHA-256 digest match used by failed-check supersession.
+Missing, mismatched, malformed, or digest-invalid artifacts leave the hold in
+place. The contract test covers missing binding, wrong head, wrong run ID,
+missing report, and wrong digest cases.
+
 ## Current exact-head provider/content evidence (2026-08-14)
 
 Central PR #965 exact head

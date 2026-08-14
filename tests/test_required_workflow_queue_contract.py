@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shlex
@@ -1137,6 +1138,11 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     assert 'actions/runs/${run_id}' in structured_function
     assert '(.event // "") == "repository_dispatch"' in structured_function
     assert '(.path // "") == ".github/workflows/strix.yml"' in structured_function
+    assert 'gh run download "$run_id"' in structured_function
+    assert 'evidence-binding.json' in structured_function
+    assert '.head_sha == $head_sha' in structured_function
+    assert '((.run_id // "") | tostring) == $run_id' in structured_function
+    assert 'actual_report_sha256' in structured_function
 
 
 def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> None:
@@ -1158,6 +1164,11 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
     )
     (fake_bin / "gh").write_text(
         "#!/bin/sh\n"
+        "if [ \"$1\" = run ] && [ \"$2\" = download ]; then\n"
+        "  mkdir -p \"$9\"\n"
+        "  cp -R \"$FAKE_ARTIFACT\"/. \"$9\"/\n"
+        "  exit 0\n"
+        "fi\n"
         "case \"$*\" in\n"
         "  */commits/*/status) cat \"$FAKE_STATUS\" ;;\n"
         "  */actions/runs/*) cat \"$FAKE_RUN\" ;;\n"
@@ -1169,6 +1180,7 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
     (fake_bin / "gh").chmod(0o755)
     status_path = tmp_path / "status.json"
     run_path = tmp_path / "run.json"
+    artifact_source = tmp_path / "artifact-source"
     runner = textwrap.dedent(
         f"""\
         set -euo pipefail
@@ -1181,7 +1193,12 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
         """
     )
 
-    def run_candidate(description: str, target_url: str, run: dict[str, object]):
+    def run_candidate(
+        description: str,
+        target_url: str,
+        run: dict[str, object],
+        binding_overrides: dict[str, object] | None = None,
+    ):
         status_path.write_text(
             json.dumps(
                 {
@@ -1199,11 +1216,30 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
             encoding="utf-8",
         )
         run_path.write_text(json.dumps(run), encoding="utf-8")
+        shutil.rmtree(artifact_source, ignore_errors=True)
+        binding_directory = artifact_source / "strix-reports"
+        binding_directory.mkdir(parents=True)
+        report_content = b"trusted strix report\n"
+        report_name = "penetration_test_report.md"
+        (binding_directory / report_name).write_bytes(report_content)
+        binding = {
+            "head_sha": head_sha,
+            "run_id": run.get("id", 123),
+            "scan_completed": True,
+            "report": report_name,
+            "report_sha256": hashlib.sha256(report_content).hexdigest(),
+        }
+        binding.update(binding_overrides or {})
+        (binding_directory / "evidence-binding.json").write_text(
+            json.dumps(binding),
+            encoding="utf-8",
+        )
         env = os.environ.copy()
         env.update(
             {
                 "FAKE_STATUS": str(status_path),
                 "FAKE_RUN": str(run_path),
+                "FAKE_ARTIFACT": str(artifact_source),
                 "PATH": f"{fake_bin}:{env['PATH']}",
             }
         )
@@ -1247,6 +1283,17 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
     )
     for description, target_url, run in invalid_cases:
         rejected = run_candidate(description, target_url, run)
+        assert rejected.returncode != 0
+        assert rejected.stdout == ""
+
+    invalid_artifacts = (
+        {"head_sha": "b" * 40},
+        {"run_id": 999},
+        {"report": "missing_report.md"},
+        {"report_sha256": "0" * 64},
+    )
+    for binding_overrides in invalid_artifacts:
+        rejected = run_candidate(exact_description, expected_url, valid_run, binding_overrides)
         assert rejected.returncode != 0
         assert rejected.stdout == ""
 
