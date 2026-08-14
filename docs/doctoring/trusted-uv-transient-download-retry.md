@@ -4,7 +4,7 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
-The central coverage materializer downloads one checksum-pinned uv archive from one literal Astral HTTPS URL. It performs at most **three total attempts**, separated by deterministic delays of one and two seconds, only for this closed availability set:
+The central coverage materializer downloads one checksum-pinned uv archive from one literal GitHub Releases HTTPS URL. It performs at most **three total attempts**, separated by deterministic delays of one and two seconds, only for this closed availability set:
 
 - HTTP `408`, `425`, `429`, `500`, `502`, `503`, `504`, and `522`;
 - temporary DNS resolution reported as `EAI_AGAIN`;
@@ -28,7 +28,7 @@ The following conditions are never retried:
 - permanent DNS failure;
 - a malformed or non-exception `URLError.reason`;
 - local permission failures and every unclassified `OSError`;
-- redirect attempts or a final origin or port outside the fixed Astral HTTPS origin;
+- redirect attempts or a final origin or port outside the fixed GitHub Releases HTTPS origin;
 - an oversized archive;
 - SHA-256 mismatch;
 - malformed archive members, incorrect executable size or type, unsupported runner architecture, or unexpected uv version; and

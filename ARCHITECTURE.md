@@ -75,7 +75,7 @@ repair, and delegates all privileged logic to the same sealed scheduler.
 ```mermaid
 flowchart TD
   Get["GET pinned GitHub Releases HTTPS archive"]
-  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 or EAI_AGAIN / timeout / reset?"}
+  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 / 522 or temporary DNS, timeout, connection, host, or network failure?"}
   Retry["At most three attempts; discard partial bytes"]
   Verify["SHA-256 then versioned executable"]
   Fail["Fail closed after one attempt"]
@@ -84,12 +84,15 @@ flowchart TD
   Status -->|"yes, attempts remain"| Retry
   Retry --> Get
   Status -->|"yes, exhausted"| Fail
-  Status -->|"TLS, 404, malformed, other"| Fail
+  Status -->|"TLS, permanent DNS, 404, malformed, unclassified"| Fail
   Status -->|"200 + exact size"| Verify
 ```
 
 A retry cannot change the origin, follow a redirect, or accept an
-unverified payload.
+unverified payload. Transport evidence is classified before retry: only the
+closed HTTP set and explicit temporary DNS, timeout, connection, host, or
+network failures receive another attempt; certificate verification, permanent
+DNS, malformed exception reasons, and other `OSError` classes fail immediately.
 
 ## Control-plane data flow
 
@@ -124,8 +127,13 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
-- Output directories are opened with `O_NOFOLLOW` and validated by
-  device/inode after `fsync`.
+- Generated output directories and files are opened descriptor-relative without
+  following symlinks. Pre-existing destinations use `O_NONBLOCK | O_NOFOLLOW`;
+  `ENXIO` and every non-regular destination fail closed before mutation. The
+  writer verifies regular-file type, device/inode identity, and a single link
+  before writing, synchronizes bytes, then revalidates the same properties after
+  `fsync` so pathname replacement, symlink, FIFO, and hard-link races cannot be
+  silently accepted.
 
 ## Quality gates
 
