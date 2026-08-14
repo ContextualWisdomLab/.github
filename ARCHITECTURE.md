@@ -52,6 +52,10 @@ The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
+Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
+fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
+repair, and delegates all privileged logic to the same sealed scheduler.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -102,3 +106,5 @@ tests pin workflow structure and governance prose so drift fails closed.
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
+  — product-specific psychometric repair heartbeat and scientific gates.
