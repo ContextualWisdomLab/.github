@@ -278,6 +278,27 @@ is integrated, rerun the dependency/security checks and verify the live alert
 state and lock hashes; if any alert remains open, investigate the resolved
 manifest before Merge.
 
+The next central PR #1009 exact-head run for
+`d22097a35eeba5dd306acce3ebe6b678ae6b75d6` failed closed as run
+`31847453432`, job `94916734763`, artifact `9236614384`. Strix reported one
+MEDIUM finding in `scripts/ci/redact_sensitive_log.py`; report SHA-256 is
+`7fbb058c226b0b70a722634363cb44eb499bb49b9f51adc3c371cf9d6fae7666`,
+run.json SHA-256 is
+`1cc7caa25946de9a6b5fbb7cef71e3f70e2989fd2403470f60135e1085aed80c`, and
+vulnerabilities.json SHA-256 is
+`ba714363cdd508a08db8c81b9b3001a18d2b8d293f370143cdc06b09c9323762`.
+The finding was reproducible against the PR-head source: JSON values under a
+non-sensitive key such as `result` were not passed through the known-token
+patterns, and `sk_live_...` was not covered by the provider-token patterns.
+The model report's prose saying the issue was already fixed was not accepted
+as evidence; the source and proof of concept controlled the decision.
+
+The remediation adds known provider-token patterns, runs the unstructured
+credential pass after JSON serialization, and adds exact JSON/assignment
+regressions to the trusted Strix contract test. A fresh exact-head Strix run is
+required after this source fix; the failed run remains a real security finding,
+not a provider flake or a reason to lower the gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

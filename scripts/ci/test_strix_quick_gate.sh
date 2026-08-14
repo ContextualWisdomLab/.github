@@ -749,6 +749,22 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "emit_strix_gate_marker" "strix gate prefixes fail-closed evidence markers before log publication"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "Redact Strix evidence before artifact publication" "strix workflow redacts all retained evidence before upload"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "redact_sensitive_log.py" "strix artifact redaction uses the tested trusted scrubber"
+	redactor_test_mode="live"
+	redactor_fixture="sk_${redactor_test_mode}_abc123def456ghi789jkl012"
+	redactor_json_output="$(printf '%s\n' "{\"result\":\"$redactor_fixture\"}" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if grep -Fq -- "$redactor_fixture" <<<"$redactor_json_output" ||
+		! grep -Fq -- '"result":"[REDACTED]"' <<<"$redactor_json_output"; then
+		record_failure "trusted scrubber must redact known tokens in JSON values under non-sensitive keys"
+	fi
+	redactor_sensitive_json_output="$(printf '%s\n' "{\"secret\":\"$redactor_fixture\"}" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if ! python3 -c 'import json, sys; value = json.load(sys.stdin); assert value["secret"] == "[REDACTED]"' <<<"$redactor_sensitive_json_output"; then
+		record_failure "trusted scrubber must preserve valid JSON while redacting sensitive keys"
+	fi
+	redactor_assignment_output="$(printf 'data=%s\n' "$redactor_fixture" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if grep -Fq -- "$redactor_fixture" <<<"$redactor_assignment_output" ||
+		! grep -Fq -- 'data=[REDACTED]' <<<"$redactor_assignment_output"; then
+		record_failure "trusted scrubber must redact known tokens in assignments under non-sensitive keys"
+	fi
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "neutral[[:space:]]+skip" "strix wrapper rejects provider neutral-skip output even when the gate exits zero"
 	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" "Treating as a neutral skip" "strix wrapper must not convert provider outages into successful security evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"

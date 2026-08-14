@@ -26,6 +26,9 @@ BEARER_RE = re.compile(
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
@@ -103,7 +106,10 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             cursor += 1
     if cursor == value_start:
         return None
-    return text[start:value_start] + REDACTED, cursor
+    replacement = REDACTED
+    if text[value_start] in "\"'":
+        replacement = f"{text[value_start]}{REDACTED}{text[value_start]}"
+    return text[start:value_start] + replacement, cursor
 
 
 def _redact_assignments(text: str) -> str:
@@ -148,7 +154,7 @@ def _redact_line(line: str) -> str:
         value = json.loads(line)
     except json.JSONDecodeError:
         return _redact_unstructured(line)
-    return _redact_operational_identifiers(
+    return _redact_unstructured(
         json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
     )
 
