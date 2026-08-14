@@ -3371,7 +3371,7 @@ jobs:
           test files. Never approve material workflow, script, source, config, package, or test changes with a
           reason or summary that says simple typo fix, string-only change, no verification needed, or no tests
           needed. If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker
-          until diagnosed. A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed
+          until diagnosed. A successful same-head default-branch repository_dispatch Strix run with a structured evidence binding may supersede a stale failed
           PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded
           failed checks with the exact target URL. Multiple Strix model reports must not be collapsed; preserve
           model name, report title, severity, endpoint, and Code Locations/path:line evidence. Full failed-check
@@ -3385,7 +3385,7 @@ jobs:
           Exact gate phrases: Coverage and Docstring coverage labels must cite Coverage execution evidence showing supported repository test suites passed.
           Exact gate phrases: or explicitly cite Coverage execution evidence as not applicable because no supported source files or package manifests were found.
           Exact gate phrases: If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed.
-          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
+          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run with the exact structured evidence-binding status may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
           Exact gate phrases: Full failed-check evidence, when collected, is available as failed-check-evidence.md.
           Exact gate phrases: Do not request changes with only a check URL, workflow name, or generic failure summary.
           Exact gate phrases: Failed-check findings must be line-specific and concrete.
@@ -3518,7 +3518,7 @@ jobs:
           test files. Never approve material workflow, script, source, config, package, or test changes with a
           reason or summary that says simple typo fix, string-only change, no verification needed, or no tests
           needed. If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker
-          until diagnosed. A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed
+          until diagnosed. A successful same-head default-branch repository_dispatch Strix run with a structured evidence binding may supersede a stale failed
           PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded
           failed checks with the exact target URL. Multiple Strix model reports must not be collapsed; preserve
           model name, report title, severity, endpoint, and Code Locations/path:line evidence. Full failed-check
@@ -3532,7 +3532,7 @@ jobs:
           Exact gate phrases: Coverage and Docstring coverage labels must cite Coverage execution evidence showing supported repository test suites passed.
           Exact gate phrases: or explicitly cite Coverage execution evidence as not applicable because no supported source files or package manifests were found.
           Exact gate phrases: If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed.
-          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
+          Exact gate phrases: A successful same-head default-branch repository_dispatch Strix run with the exact structured evidence-binding status may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL.
           Exact gate phrases: Full failed-check evidence, when collected, is available as failed-check-evidence.md.
           Exact gate phrases: Do not request changes with only a check URL, workflow name, or generic failure summary.
           Exact gate phrases: Failed-check findings must be line-specific and concrete.
@@ -6230,6 +6230,164 @@ jobs:
             return 0
           }
 
+          self_modifying_strix_workflow_needs_structured_evidence() {
+            pr_changes_path ".github/workflows/strix.yml"
+          }
+
+          current_head_manual_strix_structured_success_status() {
+            local status_json
+            local status_url
+            local run_id
+            local expected_url
+            local run_json
+            local artifact_json
+            local artifact_count
+            local artifact_dir
+            local binding_file
+            local report_path
+            local report_file
+            local expected_report_sha256
+            local actual_report_sha256
+            local description="Default-branch repository_dispatch Strix structured evidence binding passed"
+
+            if ! status_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status")"; then
+              return 1
+            fi
+            status_url="$(jq -r --arg description "$description" '
+              [.statuses // [] | .[]
+                | select((.context // "") == "strix")
+                | select((.state // "" | ascii_downcase) == "success")
+                | select((.description // "") == $description)]
+              | sort_by(.created_at // "")
+              | last
+              | .target_url // empty
+            ' <<<"$status_json")"
+            if [ -z "$status_url" ]; then
+              return 1
+            fi
+            case "$status_url" in
+              "${GITHUB_SERVER_URL%/}/${GH_REPOSITORY}/actions/runs/"*) ;;
+              *) return 1 ;;
+            esac
+            run_id="${status_url##*/}"
+            if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+              return 1
+            fi
+            expected_url="${GITHUB_SERVER_URL%/}/${GH_REPOSITORY}/actions/runs/${run_id}"
+            if [ "$status_url" != "$expected_url" ]; then
+              return 1
+            fi
+            if ! run_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}")"; then
+              return 1
+            fi
+            if ! jq -e --arg head_sha "$HEAD_SHA" --arg run_id "$run_id" '
+              ((.id // "") | tostring) == $run_id
+              and (.head_sha // "") == $head_sha
+              and (.event // "") == "repository_dispatch"
+              and (.path // "") == ".github/workflows/strix.yml"
+              and (.status // "") == "completed"
+              and (.conclusion // "") == "success"
+            ' <<<"$run_json" >/dev/null; then
+              return 1
+            fi
+
+            if ! artifact_json="$(timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+              return 1
+            fi
+            if ! artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"; then
+              return 1
+            fi
+            if [ "$artifact_count" != "1" ]; then
+              return 1
+            fi
+
+            artifact_dir="$(mktemp -d)"
+            if ! timeout "$(check_lookup_api_timeout_seconds)s" \
+              gh run download "$run_id" \
+                --repo "$GH_REPOSITORY" \
+                --name strix-reports \
+                --dir "$artifact_dir" </dev/null >/dev/null 2>&1; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            binding_file="$(find "$artifact_dir" -type f -name evidence-binding.json -print -quit)"
+            if [ -z "$binding_file" ] || ! jq -e \
+              --arg repository "$GH_REPOSITORY" \
+              --arg head_sha "$HEAD_SHA" \
+              --arg run_id "$run_id" '
+                .repository == $repository
+                and .artifact_name == "strix-reports"
+                and .head_sha == $head_sha
+                and ((.run_id // "") | tostring) == $run_id
+                and .scan_completed == true
+                and ((.report // "") | type == "string")
+              ' "$binding_file" >/dev/null 2>&1; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            report_path="$(jq -r '.report // empty' "$binding_file")"
+            case "$report_path" in
+              ""|/*|../*|*/../*|*"/../"*|*"/./"*|./*|*//*)
+                rm -rf -- "$artifact_dir"
+                return 1
+                ;;
+            esac
+            report_file="$(dirname -- "$binding_file")/$report_path"
+            if [ ! -s "$report_file" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            expected_report_sha256="$(jq -r '.report_sha256 // empty' "$binding_file")"
+            if [ -z "$expected_report_sha256" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual_report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
+            else
+              actual_report_sha256="$(shasum -a 256 "$report_file" | awk '{print $1}')"
+            fi
+            if [ "$actual_report_sha256" != "$expected_report_sha256" ]; then
+              rm -rf -- "$artifact_dir"
+              return 1
+            fi
+            rm -rf -- "$artifact_dir"
+            printf '%s\n' "$status_url"
+          }
+
+          hold_for_unverified_strix_workflow_update() {
+            local structured_status
+
+            if ! self_modifying_strix_workflow_needs_structured_evidence; then
+              return 1
+            fi
+            structured_status="$(current_head_manual_strix_structured_success_status || true)"
+            if [ -n "$structured_status" ]; then
+              return 1
+            fi
+            body="$(printf '%s\n' \
+              "## Pull request overview" \
+              "" \
+              "OpenCode did not approve because this PR changes the trusted Strix workflow, but no structured same-head default-branch evidence binding is available." \
+              "" \
+              "## Approval hold" \
+              "" \
+              "### The active pull_request_target workflow is base-branch code" \
+              "- Problem: pull_request_target evaluates the required workflow from the trusted base branch; PR-head workflow materialization is data-only self-test input and cannot prove the new wrapper ran." \
+              "- Root cause: A workflow-changing PR can otherwise receive a false-green result from the previous base workflow before its new provenance validator is active." \
+              "- Fix: merge only after independent review and protected checks, then rerun same-head repository_dispatch Strix evidence and require the structured evidence-binding status." \
+              "- Regression test: Keep the Strix status description and this approval hold tied to structured evidence binding, not to a generic success context." \
+              "" \
+              "- Result: WAITING_FOR_POST_MERGE_STRIX_EVIDENCE" \
+              "- Head SHA: \`${HEAD_SHA}\`" \
+              "- Required evidence: \`Default-branch repository_dispatch Strix structured evidence binding passed\`"
+            )"
+            hold_approval_without_review "WAITING_FOR_POST_MERGE_STRIX_EVIDENCE" "$body"
+          }
+
           build_pending_check_body() {
             local pending_checks_file="$1"
             local body_file="$2"
@@ -6558,13 +6716,6 @@ jobs:
           }
 
           current_head_manual_strix_success_status() {
-            local status_target
-            local manual_run_line
-            local manual_run_status
-            local manual_run_conclusion
-            local manual_run_url
-
-            status_target="$(
             timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
               --jq '
@@ -6573,73 +6724,9 @@ jobs:
                 | sort_by(.created_at // "")
                 | last // empty
                 | select((.state // "" | ascii_downcase) == "success")
-                | select((.description // "") | contains("Default-branch repository_dispatch Strix evidence passed"))
+                | select((.description // "") | contains("Default-branch repository_dispatch Strix structured evidence binding passed"))
                 | select((.target_url // "") | test("/actions/runs/[0-9]+"))
                 | .target_url
-              '
-            )"
-            if [ -n "$status_target" ]; then
-              printf '%s\n' "$status_target"
-              return 0
-            fi
-
-            manual_run_line="$(latest_current_head_manual_strix_run || true)"
-            IFS="$(printf '\t')" read -r manual_run_status manual_run_conclusion manual_run_url <<<"$manual_run_line" || true
-            if [ "$manual_run_status" = "completed" ] &&
-              [ "$manual_run_conclusion" = "success" ] &&
-              [ -n "$manual_run_url" ]; then
-              printf '%s\n' "$manual_run_url"
-            fi
-          }
-
-          current_head_successful_strix_check_run() {
-            local owner="${GH_REPOSITORY%%/*}"
-            local name="${GH_REPOSITORY#*/}"
-
-            timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
-              -f owner="$owner" \
-              -f name="$name" \
-              -F number="$PR_NUMBER" \
-              -f query='
-                query($owner:String!,$name:String!,$number:Int!) {
-                  repository(owner:$owner,name:$name) {
-                    pullRequest(number:$number) {
-                      statusCheckRollup {
-                        contexts(first: 100) {
-                          nodes {
-                            __typename
-                            ... on CheckRun {
-                              name
-                              status
-                              conclusion
-                              completedAt
-                              detailsUrl
-                              checkSuite {
-                                workflowRun {
-                                  workflow {
-                                    name
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              ' \
-              --jq '
-                (.data.repository.pullRequest.statusCheckRollup.contexts.nodes // [])
-                | map(
-                    select(.__typename == "CheckRun")
-                    | select((.status // "") == "COMPLETED")
-                    | select((.conclusion // "" | ascii_upcase) == "SUCCESS")
-                    | select((.name // "" | ascii_downcase) == "strix")
-                    | select((.checkSuite.workflowRun.workflow.name // "") == "Strix Security Scan" or (.checkSuite.workflowRun.workflow.name // "") == "Strix")
-                  )
-                | sort_by(.completedAt // "")
-                | last.detailsUrl // empty
               '
           }
 
@@ -6692,25 +6779,9 @@ jobs:
             local output_file="$2"
             local manual_strix_success_target
             local manual_strix_success_run_id
-            local manual_strix_run_info
-            local manual_strix_status
-            local manual_strix_conclusion
-            local manual_strix_url
             local failed_strix_run_id
 
             manual_strix_success_target="$(current_head_manual_strix_success_status || true)"
-            if [ -z "$manual_strix_success_target" ]; then
-              manual_strix_success_target="$(current_head_successful_strix_check_run || true)"
-            fi
-            if [ -z "$manual_strix_success_target" ]; then
-              manual_strix_run_info="$(latest_current_head_manual_strix_run || true)"
-              IFS=$'\t' read -r manual_strix_status manual_strix_conclusion manual_strix_url <<<"$manual_strix_run_info" || true
-              if [ "$manual_strix_status" = "completed" ] &&
-                [ "$manual_strix_conclusion" = "success" ] &&
-                [ -n "$manual_strix_url" ]; then
-                manual_strix_success_target="$manual_strix_url"
-              fi
-            fi
             if [ -n "$manual_strix_success_target" ]; then
               manual_strix_success_run_id="$(printf '%s' "$manual_strix_success_target" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')"
               while IFS= read -r rollup_line; do
@@ -7657,6 +7728,9 @@ jobs:
                 else
                   stop_failed_check_fallback_unavailable
                 fi
+              fi
+              if hold_for_unverified_strix_workflow_update; then
+                :
               fi
               if ! require_r_cmd_check_for_deferred_coverage; then
                 body="$(printf '%s\n' \

@@ -139,6 +139,9 @@ assert_file_contains "$workflow_file" "requirements-strix-ci-hashes.txt" "Strix 
 assert_file_contains "$workflow_file" "Materialize target workspace" "Strix workflow separates target workspace from trusted source"
 assert_file_contains "$workflow_file" 'STRIX_REPO_ROOT:' "Strix workflow passes target root explicitly"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workflow executes central Strix gate"
+assert_file_contains "$workflow_file" "Validate Strix report provenance" "Strix workflow validates structured report provenance before upload"
+assert_file_contains "$workflow_file" "evidence-binding.json" "Strix workflow binds uploaded evidence to the scanned head"
+assert_file_contains "$workflow_file" "Default-branch repository_dispatch Strix structured evidence binding passed" "Strix workflow publishes only structured same-head evidence success"
 assert_file_contains "$workflow_file" "Self-test Strix required workflow contract" "Strix workflow uses bounded required-path smoke test"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_REQUIRED_SMOKE"' "Strix workflow executes bounded smoke test"
 assert_file_contains "$workflow_file" "timeout-minutes: 2" "Strix required-path smoke test has a short timeout"
@@ -159,6 +162,7 @@ assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a
 assert_file_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat" "Strix tries another NVIDIA hosted model before GitHub Models"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
+assert_file_contains "$gate_script" "is_strix_model_tool_contract_error" "Strix gate classifies unsupported provider tool contracts"
 
 if [ "$failures" -ne 0 ]; then
 	echo "Strix required workflow smoke test failed with $failures failure(s)." >&2

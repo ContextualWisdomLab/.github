@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Redact credentials from CI log text before it becomes review evidence."""
 
 from __future__ import annotations
@@ -29,6 +28,18 @@ PROVIDER_TOKEN_RES = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
+EMAIL_RE = re.compile(
+    r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])"
+)
+PHONE_RE = re.compile(
+    r"(?<!\w)(?:\+\d[\d(). -]{7,}\d|\d{2,4}[-. ]\d{3,4}[-. ]\d{3,4})(?!\w)"
+)
+IPV4_RE = re.compile(
+    r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"
+)
+RUNNER_PATH_RE = re.compile(
+    r"(?<![\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
 )
 
 
@@ -114,13 +125,21 @@ def _redact_assignments(text: str) -> str:
 
 
 def _redact_unstructured(text: str) -> str:
-    """Redact credential-shaped values from non-JSON diagnostic text."""
+    """Redact credential-shaped and allowlisted operational identifiers."""
     cleaned = _redact_assignments(text)
     cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
     cleaned = JWT_RE.sub(REDACTED, cleaned)
     for pattern in PROVIDER_TOKEN_RES:
         cleaned = pattern.sub(REDACTED, cleaned)
-    return cleaned
+    return _redact_operational_identifiers(cleaned)
+
+
+def _redact_operational_identifiers(text: str) -> str:
+    """Apply the minimum-disclosure allowlist to common operational PII."""
+    cleaned = EMAIL_RE.sub("[REDACTED_EMAIL]", text)
+    cleaned = PHONE_RE.sub("[REDACTED_PHONE]", cleaned)
+    cleaned = IPV4_RE.sub("[REDACTED_IP]", cleaned)
+    return RUNNER_PATH_RE.sub("[REDACTED_PATH]", cleaned)
 
 
 def _redact_line(line: str) -> str:
@@ -129,7 +148,9 @@ def _redact_line(line: str) -> str:
         value = json.loads(line)
     except json.JSONDecodeError:
         return _redact_unstructured(line)
-    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+    return _redact_operational_identifiers(
+        json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def redact_text(text: str) -> str:
