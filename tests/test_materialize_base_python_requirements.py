@@ -644,6 +644,8 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -690,6 +692,8 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -721,6 +725,8 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

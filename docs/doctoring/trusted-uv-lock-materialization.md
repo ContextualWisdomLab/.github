@@ -169,6 +169,16 @@ This prerequisite repair is intentionally test-only for production behavior. It
 changes neither the trusted uv download boundary nor the dependency closure
 accepted by the coverage sandbox.
 
+## Local-host platform contract (2026-08-14)
+
+The pinned archive is intentionally Linux x86_64-only. macOS is a supported
+development host but is not a supported runtime for this exporter, so installer
+regression tests must explicitly pin the mocked platform to Linux x86_64 when
+they exercise download, executable verification, or cleanup behavior. The
+unsupported-runner test remains separate and proves that Darwin and non-x86_64
+inputs fail before any download. This keeps local full-suite runs truthful
+without widening the trusted binary supply-chain boundary.
+
 ## References
 
 Astral Software, Inc. (n.d.). *Exporting a lockfile*. uv documentation. Retrieved

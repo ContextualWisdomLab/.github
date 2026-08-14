@@ -1583,6 +1583,20 @@ def head_already_restamped_for_last_push_approval(pr: dict[str, Any]) -> bool:
     return latest_commit_headline(pr) == LAST_PUSH_APPROVAL_RESTAMP_MESSAGE
 
 
+def aggregate_review_approved(pr: dict[str, Any]) -> bool:
+    """Return whether GitHub's aggregate review decision permits merging."""
+    return str(pr.get("reviewDecision") or "").upper() == "APPROVED"
+
+
+def aggregate_review_gate_reason(pr: dict[str, Any]) -> str:
+    """Explain why an OpenCode approval cannot substitute for aggregate review approval."""
+    review_decision = str(pr.get("reviewDecision") or "").upper() or "MISSING"
+    return (
+        "current-head OpenCode approval exists, but GitHub reviewDecision is "
+        f"{review_decision}; require aggregate APPROVED before merge or re-enabling auto-merge"
+    )
+
+
 def should_restamp_for_last_push_approval(
     repo: str,
     pr: dict[str, Any],
@@ -1598,7 +1612,7 @@ def should_restamp_for_last_push_approval(
         return False
     if not same_repository_head(repo, pr):
         return False
-    if str(pr.get("reviewDecision") or "").upper() != "APPROVED":
+    if not aggregate_review_approved(pr):
         return False
     if strix_evidence_state(pr) != "complete":
         return False
@@ -2400,13 +2414,25 @@ def inspect_pr(
         return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
+    auto_merge_enabled = bool(pr.get("autoMergeRequest"))
+    if current_head_approved and not aggregate_review_approved(pr):
+        review_gate_reason = aggregate_review_gate_reason(pr)
+        if auto_merge_enabled:
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=review_gate_reason,
+                )
+            )
+        return decide("block", review_gate_reason)
     if current_head_approved:
         stale_review_cleanup_count = dismiss_stale_opencode_change_requests(
             repo,
             pr,
             dry_run=dry_run,
         )
-    auto_merge_enabled = bool(pr.get("autoMergeRequest"))
     if merge_state in {"DIRTY", "CONFLICTING"}:
         conflict_reason = merge_conflict_guidance(pr, merge_state)
         if current_head_approved:
@@ -3189,7 +3215,7 @@ def self_test() -> None:
         "isCrossRepository": False,
         "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
-        "reviewDecision": "REVIEW_REQUIRED",
+        "reviewDecision": "APPROVED",
         "commits": {
             "nodes": [
                 {

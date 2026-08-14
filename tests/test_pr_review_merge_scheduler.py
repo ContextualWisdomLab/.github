@@ -38,7 +38,9 @@ def make_pr(**overrides):
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "CLEAN",
         "restMergeableState": "",
-        "reviewDecision": "REVIEW_REQUIRED",
+        # Merge-ready fixtures model GitHub's aggregate approval separately from
+        # the current-head OpenCode review; negative review-policy cases opt in.
+        "reviewDecision": "APPROVED",
         "baseRefName": "main",
         "baseRefOid": "base",
         "headRefName": "feature",
@@ -3037,16 +3039,17 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "auto-merge is already enabled" in dirty_auto_reason
     assert "conflict repair is required before GitHub can merge it" in dirty_auto_reason
     blocked_auto = make_pr(
+        reviewDecision="REVIEW_REQUIRED",
         restMergeableState="blocked",
         autoMergeRequest={"enabledAt": "now"},
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
     blocked_auto_decision = inspect(blocked_auto)
-    assert blocked_auto_decision.action == "wait"
-    assert "GitHub mergeability is BLOCKED" in blocked_auto_decision.reason
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
-    assert "required approving review" in blocked_auto_decision.reason
-    assert "rerun the scheduler" in blocked_auto_decision.reason
+    assert blocked_auto_decision.action == "disable_auto_merge"
+    assert blocked_auto_decision.reason == (
+        "auto-merge disabled; current-head OpenCode approval exists, but GitHub reviewDecision is "
+        "REVIEW_REQUIRED; require aggregate APPROVED before merge or re-enabling auto-merge"
+    )
 
     assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
     restamp_candidate = last_push_restamp_candidate()
@@ -3055,6 +3058,13 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert sched.should_restamp_for_last_push_approval(
         "owner/repo",
         restamp_candidate,
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
+    assert not sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        last_push_restamp_candidate(reviewDecision="REVIEW_REQUIRED"),
         "BLOCKED",
         current_head_approved=True,
         auto_merge_enabled=True,
@@ -3839,6 +3849,45 @@ def test_update_branch_summary_includes_followup_notes():
     assert "PR #12: updated head abc123 observed after update-branch" in summary
 
 
+@pytest.mark.parametrize("review_decision", [None, "", "CHANGES_REQUESTED", "REVIEW_REQUIRED"])
+def test_inspect_pr_requires_aggregate_review_approval_before_merge_or_auto_merge(
+    monkeypatch,
+    review_decision,
+):
+    enabled = []
+    disabled = []
+    monkeypatch.setattr(
+        sched,
+        "enable_auto_merge",
+        lambda repo, pr, dry_run: enabled.append((repo, pr["number"], dry_run)),
+    )
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+
+    review_required = make_pr(
+        reviewDecision=review_decision,
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    blocked = inspect(review_required)
+    assert blocked.action == "block"
+    assert "require aggregate APPROVED before merge or re-enabling auto-merge" in blocked.reason
+    assert enabled == []
+
+    queued = inspect(
+        make_pr(
+            reviewDecision=review_decision,
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        )
+    )
+    assert queued.action == "disable_auto_merge"
+    assert "require aggregate APPROVED before merge or re-enabling auto-merge" in queued.reason
+    assert disabled == [("owner/repo", 1, True)]
+
+
 def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     approved = make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
     failed = make_pr(
@@ -4013,19 +4062,31 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         ("owner/repo", 1, True),
     ]
     assert auto_merges == [("owner/repo", 1, True)]
+    blocked_already_auto_approved = inspect(
+        make_pr(
+            mergeStateStatus="BLOCKED",
+            autoMergeRequest={"enabledAt": "now"},
+            statusCheckRollup={"contexts": {"nodes": []}},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        ),
+        merge_mode="direct_or_auto",
+    )
+    assert blocked_already_auto_approved.action == "wait"
+    assert "auto-merge is already enabled" in blocked_already_auto_approved.reason
     blocked_already_auto = inspect(
         make_pr(
             mergeStateStatus="BLOCKED",
+            reviewDecision="REVIEW_REQUIRED",
             autoMergeRequest={"enabledAt": "now"},
             reviews={"nodes": [opencode_review("APPROVED", "head")]},
         ),
         merge_mode="direct_or_auto",
     )
-    assert blocked_already_auto.action == "wait"
-    assert "auto-merge is already enabled" in blocked_already_auto.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_already_auto.reason
-    assert "required approving review" in blocked_already_auto.reason
+    assert blocked_already_auto.action == "disable_auto_merge"
+    assert blocked_already_auto.reason == (
+        "auto-merge disabled; current-head OpenCode approval exists, but GitHub reviewDecision is "
+        "REVIEW_REQUIRED; require aggregate APPROVED before merge or re-enabling auto-merge"
+    )
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
