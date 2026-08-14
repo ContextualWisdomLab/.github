@@ -299,6 +299,29 @@ regressions to the trusted Strix contract test. A fresh exact-head Strix run is
 required after this source fix; the failed run remains a real security finding,
 not a provider flake or a reason to lower the gate.
 
+The next exact-head run for `532c71a274556330e71af17c3ec9d3b0bd5066b2`
+completed as Actions run `31848903301`, Strix job `94920766095`, with artifact
+`9237022791`. It reported one HIGH finding in
+`scripts/ci/redact_sensitive_log.py`; the report, run metadata, and
+`vulnerabilities.json` SHA-256 values are respectively
+`d9326532f099633ffbd653926abd71f6406682213aeedc2ed2bc0c67b83d0ee8`,
+`3aa25c423e74c897b77581095aebf8f89bc1f4bf23fe9e715576a98d23bff543`, and
+`784b83d624e1b21a26eb356e15aefe5073aa2ddd4708734feb5fd4877f8a43fa`.
+The report's narrative repeated the old lookaround patterns, while the source
+review also found a concrete hot path: `_redact_assignments` attempted to parse
+the same long non-assignment `KEY_CHARS` run from every character. Both are
+treated as real hardening work; model prose claiming that the patterns were
+already fixed is not evidence.
+
+The follow-up remediation removes operational-identifier lookarounds while
+retaining the preceding boundary character in the replacement, skips each
+non-assignment key-character run once, and adds boundary plus adversarial-input
+regressions to `test_strix_quick_gate.sh`. A local probe after the change kept
+the 3,000-character email/IP cases below 2 ms each. This commit still requires
+another exact-head Strix run; the current artifact has no `evidence-binding.json`
+and `run.json` has null repository/head/commit metadata, so it is not a clean
+protected gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional

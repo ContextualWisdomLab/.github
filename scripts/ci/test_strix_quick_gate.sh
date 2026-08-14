@@ -765,6 +765,39 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 		! grep -Fq -- 'data=[REDACTED]' <<<"$redactor_assignment_output"; then
 		record_failure "trusted scrubber must redact known tokens in assignments under non-sensitive keys"
 	fi
+	if grep -Eq -- '\(\?<\![^)]*\)|\(\?![^)]*\)' "$REPO_ROOT/scripts/ci/redact_sensitive_log.py"; then
+		record_failure "trusted scrubber operational identifier patterns must avoid lookaround backtracking"
+	fi
+	redactor_boundary_output="$(printf '%s\n' 'mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret' | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if ! grep -Fq -- 'mail=[REDACTED_EMAIL]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'ip=[REDACTED_IP]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'phone=[REDACTED_PHONE]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'path=[REDACTED_PATH]' <<<"$redactor_boundary_output"; then
+		record_failure "trusted scrubber must preserve operational identifier redaction after boundary hardening"
+	fi
+	if ! python3 - "$REPO_ROOT/scripts/ci/redact_sensitive_log.py" <<'PY'
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+module_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("trusted_redactor", module_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+for sample in (
+    "Email: test" + "." * 3000 + "@example.com",
+    "IP: " + "1." * 3000 + "1",
+):
+    started = time.perf_counter()
+    module._redact_line(sample)
+    if time.perf_counter() - started >= 1.0:
+        raise SystemExit("redactor exceeded the one-second adversarial-input budget")
+PY
+	then
+		record_failure "trusted scrubber must not repeatedly rescan long non-assignment runs"
+	fi
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "neutral[[:space:]]+skip" "strix wrapper rejects provider neutral-skip output even when the gate exits zero"
 	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" "Treating as a neutral skip" "strix wrapper must not convert provider outages into successful security evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
