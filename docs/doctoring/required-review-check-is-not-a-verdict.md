@@ -23,7 +23,10 @@ review on an old SHA, or no review at all cannot make the check green.
 
 `scripts/ci/noema_review_gate.py` no longer returns 0 when the current
 head has no primary OpenCode approval. That skip was exit 0, so the
-required `noema-review` check looked like a successful review.
+required `noema-review` check looked like a successful review. The gate
+also validates the primary approval before accepting an existing Noema
+review; a secondary verdict cannot independently turn the required gate
+green.
 
 Human `repository_dispatch` as `seonghobae` remains rejected; only
 `github-actions[bot]` may start the privileged dispatch. After a real
@@ -45,17 +48,20 @@ automation.
 - `tests/test_opencode_required_verdict_gate.py` pins
   `current_head_opencode_verdict` and `decide_required_verdict_check`.
 - `tests/test_noema_review_gate.py` requires exit 1 when there is no
-  primary OpenCode approval.
+  primary OpenCode approval, even when the current head already has a Noema
+  review, while retaining the idempotent success path after a valid primary
+  approval exists.
 - `tests/test_opencode_agent_contract.py` pins the required workflow
   fail-closed error string.
 - `tests/test_pr_review_merge_scheduler.py` proves that a draft pull request
   receives same-head Strix and OpenCode dispatch while branch updates,
   auto-merge mutation, direct merge, review dismissal, and thread cleanup
   remain unreachable.
-- The repair was exercised test-first: the new draft contract failed against
-  the old unconditional skip, then passed after the implementation change.
-  The exact repaired source passed 987 tests, 7,056 production statements,
-  2,834 production branches, and the public-docstring gate at 100%.
+- Both repairs were exercised test-first: the draft-dispatch contract failed
+  against the old unconditional skip, and the Noema ordering contract failed
+  against the old secondary-review-first branch. The exact repaired source
+  then passed 988 tests, 7,056 production statements, 2,834 production
+  branches, and the public-docstring gate at 100%.
 
 ## References (APA 7th)
 
