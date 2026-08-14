@@ -268,6 +268,16 @@ workflow is accepted on protected `main`, run a default-branch trusted
 `repository_dispatch` scan for the exact target repository, PR head, job, and
 report digest, then repeat the independent review and terminal-check gate.
 
+The push response also reported five open Dependabot alerts on the protected
+default branch: two high `cryptography` alerts and three medium/high `aiohttp`
+alerts. The live alert metadata identifies fixed versions `cryptography 50.0.0`
+and `aiohttp 3.14.2`/`3.14.3`, and the PR branch already pins
+`cryptography==50.0.0` and `aiohttp==3.14.3` in both Strix requirement files.
+Do not dismiss these alerts as stale by assumption: after the dependency fix
+is integrated, rerun the dependency/security checks and verify the live alert
+state and lock hashes; if any alert remains open, investigate the resolved
+manifest before Merge.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
