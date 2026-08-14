@@ -14,13 +14,6 @@ from scripts.ci import materialize_base_python_requirements as materializer
 from tests.conftest import FakeHttpResponse
 
 
-def _simulate_linux_x86_64_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Let installer verification tests run on a non-Linux developer host."""
-    monkeypatch.setattr(materializer.sys, "platform", "linux")
-    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
-    materializer._install_trusted_uv.cache_clear()
-
-
 def git(repo: Path, *args: str) -> str:
     """Run git in a temporary fixture repository."""
     return subprocess.run(
