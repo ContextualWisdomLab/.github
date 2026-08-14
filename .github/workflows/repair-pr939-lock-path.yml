@@ -93,7 +93,7 @@ jobs:
               unittest.main()
           PY
 
-          if python3 tests/test_materialize_base_python_requirement_paths.py; then
+          if PYTHONPATH=. python3 tests/test_materialize_base_python_requirement_paths.py; then
             echo "ERROR: nested requirements path contract unexpectedly passed before the fix." >&2
             exit 1
           fi
@@ -117,7 +117,7 @@ jobs:
       - name: Verify the focused repair
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python3 tests/test_materialize_base_python_requirement_paths.py
+          PYTHONPATH=. python3 tests/test_materialize_base_python_requirement_paths.py
           python3 -m compileall -q \
             scripts/ci/materialize_base_python_requirements.py \
             tests/test_materialize_base_python_requirement_paths.py
