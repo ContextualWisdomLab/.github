@@ -126,6 +126,30 @@ three repository runner APIs reported `0 total / 0 online / 0 busy`. This is
 CI-capacity evidence, not a code or security conclusion; no cancelled run may
 supersede the required checks or structured-evidence gate.
 
+## Model tool-contract failures (2026-08-14)
+
+Contextual-orchestrator PR #109 exact head
+`27aa4ad3dcfbd94ec85fbce40a77955361b877c4` produced a failed Strix run
+`31775265809`/job `94689345852` after 884 seconds. NVIDIA NIM Nemotron returned
+an agent tool request that the installed Strix agent could not execute:
+`agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix`,
+with the trusted traceback in `strix/core/execution.py`. No vulnerability
+report was produced and publication was skipped.
+
+The trusted gate must preserve this as provider/model execution failure and
+incomplete evidence. Central PR #965 adds a bounded classifier requiring both
+the exact agent exception and the Strix execution traceback, routes only to a
+distinct fallback model, and deliberately does not retry the same model. The
+classifier rejects target-source text that merely copies the error wording.
+This is not a LibreSSL/TLS diagnosis, a target vulnerability, or a clean scan.
+
+Central run `31776384905` later produced a zero-finding report, but artifact
+`9210207198` still lacked `evidence-binding.json` because the
+`pull_request_target` execution used the protected base workflow. That result
+is provider/content evidence only. A protected-main integration followed by a
+default-branch run must still bind repository, full head, run/job, report path,
+and digest before any security result can satisfy a merge gate.
+
 ## References
 
 MITRE. (2026). *CWE-754: Improper check for unusual or exceptional
