@@ -576,7 +576,6 @@ def test_inspect_and_review_skip_paths(monkeypatch):
 
     cases = [
         (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
         (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
@@ -588,6 +587,37 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7) == 0
         assert calls == []
+
+
+
+def test_existing_noema_review_cannot_bypass_primary_approval(monkeypatch):
+    """A Noema verdict is never sufficient without current-head OpenCode approval."""
+    noema_review = review(
+        login="noema",
+        body="<!-- noema-review-gate head_sha=head -->",
+    )
+    pr = make_pr(reviews={"nodes": [noema_review]})
+    submitted = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: submitted.append(args),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert submitted == []
+
+    primary_review = review(
+        body=(
+            "OpenCode reviewed the current-head bounded evidence and found "
+            "no blocking issues."
+        )
+    )
+    pr = make_pr(reviews={"nodes": [primary_review, noema_review]})
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert submitted == []
 
 
 def test_parse_args_and_main(monkeypatch):
