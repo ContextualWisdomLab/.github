@@ -48,6 +48,14 @@ automation.
   primary OpenCode approval.
 - `tests/test_opencode_agent_contract.py` pins the required workflow
   fail-closed error string.
+- `tests/test_pr_review_merge_scheduler.py` proves that a draft pull request
+  receives same-head Strix and OpenCode dispatch while branch updates,
+  auto-merge mutation, direct merge, review dismissal, and thread cleanup
+  remain unreachable.
+- The repair was exercised test-first: the new draft contract failed against
+  the old unconditional skip, then passed after the implementation change.
+  The exact repaired source passed 987 tests, 7,056 production statements,
+  2,834 production branches, and the public-docstring gate at 100%.
 
 ## References (APA 7th)
 
