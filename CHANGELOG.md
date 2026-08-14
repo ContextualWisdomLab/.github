@@ -13,7 +13,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - A REQUEST_CHANGES finding now also names a current-head file when its suggested diff carries matching `--- a/X` and `+++ b/X` headers, even if the `diff --git` line is missing. A mismatched pair still names neither path (IEEE 1028; CWE-1288).
 - A REQUEST_CHANGES finding now also names a current-head file when its suggested diff carries an identical `diff --git a/X b/X` header. A mismatched `a/` and `b/` pair does not dispose either path (IEEE 1028).
 - OpenCode REQUEST_CHANGES now fails closed when the review omits any current-head changed file. A finding path or a named no-blocker disposition counts; a single-file blocker that never mentions the rest of the diff is not a file-by-file walk (IEEE 1028).

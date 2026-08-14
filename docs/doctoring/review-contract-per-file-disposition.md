@@ -12,8 +12,6 @@ CodeRabbit” gap.
 
 ## Decision
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 `unnamed_changed_files(reason, summary, findings=None)` returns every path
 from `current_changed_files()` that is not named as a whole path token,
 is not a REQUEST_CHANGES finding path, and is not cited by an identical
