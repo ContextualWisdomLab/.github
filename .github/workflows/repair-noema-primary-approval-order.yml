@@ -1,0 +1,168 @@
+name: One-shot Noema primary approval repair
+
+on:
+  push:
+    branches:
+      - fix/required-review-fail-closed-without-verdict
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-shot-noema-primary-approval-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: Repair Noema approval order
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fix/required-review-fail-closed-without-verdict
+          fetch-depth: 0
+
+      - name: Install test tooling
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            'pytest>=8.0.0' \
+            'pytest-cov>=7.1.0' \
+            'coverage[toml]>=7.8.0' \
+            'interrogate>=1.7.0'
+
+      - name: Add the approval-order regression contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+          stale_case = '''        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+          '''
+          if stale_case not in text:
+              raise SystemExit("Noema skip-case marker changed; refusing an unreviewed patch")
+          text = text.replace(stale_case, "", 1)
+          marker = "\ndef test_parse_args_and_main(monkeypatch):\n"
+          test = '''
+          def test_existing_noema_review_cannot_bypass_primary_approval(monkeypatch):
+              """A Noema verdict is never sufficient without current-head OpenCode approval."""
+              noema_review = review(
+                  login="noema",
+                  body="<!-- noema-review-gate head_sha=head -->",
+              )
+              pr = make_pr(reviews={"nodes": [noema_review]})
+              submitted = []
+              monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+              monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+              monkeypatch.setattr(
+                  noema,
+                  "submit_review",
+                  lambda *args, **kwargs: submitted.append(args),
+              )
+
+              assert noema.inspect_and_review("owner/repo", 7) == 1
+              assert submitted == []
+
+
+          '''
+          if marker not in text:
+              raise SystemExit("Noema parse-args marker changed; refusing an unreviewed patch")
+          path.write_text(text.replace(marker, "\n" + test + "def test_parse_args_and_main(monkeypatch):\n", 1), encoding="utf-8")
+          PY
+
+      - name: Prove the new contract is RED
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest \
+            tests/test_noema_review_gate.py::test_existing_noema_review_cannot_bypass_primary_approval \
+            >/tmp/noema-order-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/noema-order-red.log
+          if [ "$status" -eq 0 ]; then
+            echo "::error::The approval-order regression unexpectedly passed before the implementation change."
+            exit 1
+          fi
+
+      - name: Enforce primary approval before an existing Noema review
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    if existing_noema_review(pr, actor):
+                  print("Current head already has a Noema review; nothing to do.")
+                  return 0
+              if not current_primary_approval(pr):
+                  print(
+                      "Current head does not have a primary OpenCode approval; "
+                      "Noema cannot skip as success because that made the required "
+                      "check look like a review."
+                  )
+                  return 1
+          '''
+          new = '''    if not current_primary_approval(pr):
+                  print(
+                      "Current head does not have a primary OpenCode approval; "
+                      "Noema cannot skip as success because that made the required "
+                      "check look like a review."
+                  )
+                  return 1
+              if existing_noema_review(pr, actor):
+                  print("Current head already has a Noema review; nothing to do.")
+                  return 0
+          '''
+          if old not in text:
+              raise SystemExit("Noema approval-order implementation changed; refusing an unreviewed patch")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          marker = "### Fixed\n\n"
+          entry = (
+              "- Noema now validates the current-head primary OpenCode approval before "
+              "accepting an existing Noema verdict, preventing a secondary review from "
+              "making the required gate look successful on its own.\n"
+          )
+          if marker not in changelog:
+              raise SystemExit("CHANGELOG Fixed marker changed; refusing an unreviewed patch")
+          if entry not in changelog:
+              changelog = changelog.replace(marker, marker + entry, 1)
+          changelog_path.write_text(changelog, encoding="utf-8")
+          PY
+
+      - name: Verify focused and repository-wide quality gates
+        run: |
+          set -euo pipefail
+          python -m pytest \
+            tests/test_noema_review_gate.py::test_existing_noema_review_cannot_bypass_primary_approval \
+            tests/test_noema_review_gate.py::test_inspect_and_review_skip_paths
+          python -m coverage erase
+          python -m coverage run -m pytest tests
+          python -m coverage report --show-missing
+          python -m interrogate -c pyproject.toml scripts/ci
+          python -m compileall -q scripts tests
+
+      - name: Remove one-shot workflow and publish verified repair
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-noema-primary-approval-order.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_review_gate.py \
+            CHANGELOG.md \
+            .github/workflows/repair-noema-primary-approval-order.yml
+          git diff --cached --check
+          git commit -m "fix(noema): require primary approval before existing verdict"
+          git push origin HEAD:fix/required-review-fail-closed-without-verdict
