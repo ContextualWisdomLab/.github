@@ -1,0 +1,328 @@
+name: Repair agent mention dispatch payload limit v2
+
+on:
+  push:
+    branches: [fix/agent-mention-payload-limit]
+
+concurrency:
+  group: repair-agent-mention-payload-limit-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/agent-mention-payload-limit
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply bounded nested payload repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import textwrap
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              occurrences = text.count(old)
+              if occurrences != 1:
+                  raise SystemExit(
+                      f'{path}: expected one replacement target, found {occurrences}'
+                  )
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          def github_expression(value: str) -> str:
+              return '$' + '{{ ' + value + ' }}'
+
+          router_old = textwrap.dedent('''
+              def opencode_payload(request: MentionRequest) -> dict[str, Any]:
+                  """Return the durable review-only OpenCode wrapper dispatch body."""
+
+                  agent = "opencode-agent"
+                  claim = agent_invocation_claim(request, agent)
+                  return {
+                      "event_type": "agent-mention-opencode",
+                      "client_payload": {
+                          "target_repository": request.repository,
+                          "pr_number": request.pull_request_number,
+                          "pr_head_sha": request.pull_request_head_sha,
+                          "pr_base_sha": request.pull_request_base_sha,
+                          "base_branch": request.pull_request_base_branch,
+                          "trigger_reviews": claim["trigger_reviews"],
+                          "review_dispatch_limit": claim["review_dispatch_limit"],
+                          "enable_auto_merge": claim["enable_auto_merge"],
+                          "update_branches": claim["update_branches"],
+                          "merge_mode": claim["merge_mode"],
+                          "requested_agent": agent,
+                          "agent_invocation_key": agent_invocation_key(request, agent),
+                          "requested_by": request.actor,
+                          "source_comment_id": request.comment_id,
+                      },
+                  }
+              ''').lstrip()
+          router_new = textwrap.dedent('''
+              def opencode_payload(request: MentionRequest) -> dict[str, Any]:
+                  """Return a bounded, completely bound OpenCode dispatch body.
+
+                  GitHub limits ``client_payload`` to ten top-level properties. The
+                  immutable PR identity remains flat for routing, while review controls
+                  and invocation provenance are grouped into two validated nested
+                  objects. The invocation key still binds every nested value through
+                  :func:`agent_invocation_claim`.
+                  """
+
+                  agent = "opencode-agent"
+                  claim = agent_invocation_claim(request, agent)
+                  return {
+                      "event_type": "agent-mention-opencode",
+                      "client_payload": {
+                          "target_repository": request.repository,
+                          "pr_number": request.pull_request_number,
+                          "pr_head_sha": request.pull_request_head_sha,
+                          "pr_base_sha": request.pull_request_base_sha,
+                          "base_branch": request.pull_request_base_branch,
+                          "review_contract": {
+                              "trigger_reviews": claim["trigger_reviews"],
+                              "review_dispatch_limit": claim["review_dispatch_limit"],
+                              "enable_auto_merge": claim["enable_auto_merge"],
+                              "update_branches": claim["update_branches"],
+                              "merge_mode": claim["merge_mode"],
+                          },
+                          "invocation": {
+                              "requested_agent": agent,
+                              "agent_invocation_key": agent_invocation_key(
+                                  request, agent
+                              ),
+                              "requested_by": request.actor,
+                              "source_comment_id": request.comment_id,
+                          },
+                      },
+                  }
+              ''').lstrip()
+          replace_once(
+              'scripts/ci/agent_mention_router.py',
+              router_old,
+              router_new,
+          )
+
+          flat = {
+              'PAYLOAD_AGENT': 'github.event.client_payload.requested_agent || \'\'',
+              'INVOCATION_KEY': (
+                  'github.event.client_payload.agent_invocation_key || \'\''
+              ),
+              'REQUESTED_BY': 'github.event.client_payload.requested_by || \'\'',
+              'SOURCE_COMMENT_ID': (
+                  'github.event.client_payload.source_comment_id || \'\''
+              ),
+              'TRIGGER_REVIEWS': 'github.event.client_payload.trigger_reviews',
+              'REVIEW_DISPATCH_LIMIT': (
+                  'github.event.client_payload.review_dispatch_limit || \'\''
+              ),
+              'ENABLE_AUTO_MERGE': (
+                  'github.event.client_payload.enable_auto_merge'
+              ),
+              'UPDATE_BRANCHES': 'github.event.client_payload.update_branches',
+              'MERGE_MODE': 'github.event.client_payload.merge_mode || \'\'',
+          }
+          nested = {
+              'PAYLOAD_AGENT': (
+                  'github.event.client_payload.invocation.requested_agent || \'\''
+              ),
+              'INVOCATION_KEY': (
+                  'github.event.client_payload.invocation.agent_invocation_key '
+                  '|| \'\''
+              ),
+              'REQUESTED_BY': (
+                  'github.event.client_payload.invocation.requested_by || \'\''
+              ),
+              'SOURCE_COMMENT_ID': (
+                  'github.event.client_payload.invocation.source_comment_id || \'\''
+              ),
+              'TRIGGER_REVIEWS': (
+                  'github.event.client_payload.review_contract.trigger_reviews'
+              ),
+              'REVIEW_DISPATCH_LIMIT': (
+                  'github.event.client_payload.review_contract.'
+                  'review_dispatch_limit || \'\''
+              ),
+              'ENABLE_AUTO_MERGE': (
+                  'github.event.client_payload.review_contract.enable_auto_merge'
+              ),
+              'UPDATE_BRANCHES': (
+                  'github.event.client_payload.review_contract.update_branches'
+              ),
+              'MERGE_MODE': (
+                  'github.event.client_payload.review_contract.merge_mode || \'\''
+              ),
+          }
+          workflow_path = Path(
+              '.github/workflows/agent-mention-opencode-dispatch.yml'
+          )
+          workflow = workflow_path.read_text(encoding='utf-8')
+          for variable, flat_expression in flat.items():
+              old = f'{variable}: {github_expression(flat_expression)}'
+              new = f'{variable}: {github_expression(nested[variable])}'
+              occurrences = workflow.count(old)
+              if occurrences != 1:
+                  raise SystemExit(
+                      f'{workflow_path}: expected one {variable} source, '
+                      f'found {occurrences}'
+                  )
+              workflow = workflow.replace(old, new, 1)
+
+          forwarding_fragments = (
+              '            --arg requested_agent "$REQUESTED_AGENT" \\\n',
+              '            --arg agent_invocation_key "$INVOCATION_KEY" \\\n',
+              '            --arg requested_by "$REQUESTED_BY" \\\n',
+              '            --argjson source_comment_id "$SOURCE_COMMENT_ID" \\\n',
+              '                requested_agent: $requested_agent,\n',
+              '                agent_invocation_key: $agent_invocation_key,\n',
+              '                requested_by: $requested_by,\n',
+              '                source_comment_id: $source_comment_id\n',
+          )
+          for fragment in forwarding_fragments:
+              occurrences = workflow.count(fragment)
+              if occurrences != 1:
+                  raise SystemExit(
+                      f'{workflow_path}: expected one forwarding fragment '
+                      f'{fragment!r}, found {occurrences}'
+                  )
+              workflow = workflow.replace(fragment, '', 1)
+          replace_target = (
+              '                update_branches: false,\n'
+              '                merge_mode: "disabled",\n'
+          )
+          replace_value = (
+              '                update_branches: false,\n'
+              '                merge_mode: "disabled"\n'
+          )
+          if workflow.count(replace_target) != 1:
+              raise SystemExit('forwarded merge-mode trailing comma changed')
+          workflow_path.write_text(
+              workflow.replace(replace_target, replace_value, 1),
+              encoding='utf-8',
+          )
+
+          replace_once(
+              'tests/test_agent_mention_router.py',
+              '''    assert opencode["client_payload"]["merge_mode"] == "disabled"\n    assert opencode["client_payload"]["enable_auto_merge"] is False\n    assert opencode["client_payload"]["update_branches"] is False\n''',
+              '''    review_contract = opencode["client_payload"]["review_contract"]\n    assert review_contract["merge_mode"] == "disabled"\n    assert review_contract["enable_auto_merge"] is False\n    assert review_contract["update_branches"] is False\n    assert len(opencode["client_payload"]) <= 10\n''',
+          )
+          replace_once(
+              'tests/test_agent_mention_idempotency.py',
+              '''    assert opencode["requested_agent"] == "opencode-agent"\n    assert opencode["agent_invocation_key"] == module.agent_invocation_key(\n        mention_request, "opencode-agent"\n    )\n    for payload in (noema, opencode):\n        assert payload["target_repository"] == mention_request.repository\n        assert payload["pr_number"] == mention_request.pull_request_number\n        assert payload["pr_head_sha"] == mention_request.pull_request_head_sha\n        assert payload["source_comment_id"] == mention_request.comment_id\n''',
+              '''    invocation = opencode["invocation"]\n    assert invocation["requested_agent"] == "opencode-agent"\n    assert invocation["agent_invocation_key"] == module.agent_invocation_key(\n        mention_request, "opencode-agent"\n    )\n    for payload in (noema, opencode):\n        assert payload["target_repository"] == mention_request.repository\n        assert payload["pr_number"] == mention_request.pull_request_number\n        assert payload["pr_head_sha"] == mention_request.pull_request_head_sha\n    assert noema["source_comment_id"] == mention_request.comment_id\n    assert invocation["source_comment_id"] == mention_request.comment_id\n''',
+          )
+          replace_once(
+              'tests/test_agent_mention_downstream_idempotency.py',
+              '''    for text in (noema, opencode):\n        assert "github.event.client_payload.agent_invocation_key" in text\n''',
+              '''    assert "github.event.client_payload.agent_invocation_key" in noema\n    assert (\n        "github.event.client_payload.invocation.agent_invocation_key"\n        in opencode\n    )\n    for text in (noema, opencode):\n''',
+          )
+
+          documentation_path = Path(
+              'docs/automation/review-agent-comment-invocation.md'
+          )
+          documentation = documentation_path.read_text(encoding='utf-8')
+          paragraph = (
+              'Each requested agent receives a deterministic invocation key containing '
+              'the target repository, PR number, exact head SHA, base branch, requested '
+              'agent, source comment ID, and requesting actor. Each agent-specific '
+              'wrapper reconstructs the same canonical JSON from its validated payload, '
+              'hashes it with SHA-256, and compares the result in constant time with the '
+              'supplied key. Altering any bound field while retaining a syntactically '
+              'valid key therefore fails closed.\n'
+          )
+          addition = (
+              '\nOpenCode groups its five immutable review controls and four invocation '
+              'provenance fields into two nested objects so the initial GitHub '
+              '`repository_dispatch` stays below the API limit of ten top-level '
+              '`client_payload` properties. The wrapper validates and records the '
+              'complete nested claim, then forwards only the ten fields consumed by '
+              'the authoritative merge scheduler.\n'
+          )
+          if documentation.count(paragraph) != 1:
+              raise SystemExit('documentation insertion point changed')
+          documentation_path.write_text(
+              documentation.replace(paragraph, paragraph + addition, 1),
+              encoding='utf-8',
+          )
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          heading = '### Fixed\n\n'
+          entry = (
+              '- Kept trusted OpenCode mention dispatches within GitHub\'s '
+              'ten-property `repository_dispatch` limit by grouping review controls '
+              'and invocation provenance into validated nested objects, while '
+              'preserving complete SHA-256 payload binding and forwarding only '
+              'scheduler-required fields.\n'
+          )
+          if changelog.count(heading) != 1:
+              raise SystemExit('CHANGELOG Fixed heading changed')
+          changelog_path.write_text(
+              changelog.replace(heading, heading + entry, 1),
+              encoding='utf-8',
+          )
+          PYTHON
+
+      - name: Verify complete router quality contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/agent-mention-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_mention_router.py
+              scripts/ci/agent_mention_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-mention-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest -q
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_mention_router.py \
+            scripts/ci/agent_mention_sweep.py
+          python -m compileall -q scripts/ci tests
+          git diff --check
+
+      - name: Publish verified repair and remove one-shot workflow
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm .github/workflows/repair-agent-mention-payload-limit-v2.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No repair changes remain.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(review): respect repository dispatch payload limit'
+          git push origin HEAD:fix/agent-mention-payload-limit
