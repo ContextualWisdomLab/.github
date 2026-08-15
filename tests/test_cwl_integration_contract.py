@@ -20,6 +20,10 @@ EVENT_EXAMPLE = ROOT / "schemas" / "examples" / "cwl-event-envelope-v1.example.j
 COMMAND_EXAMPLE = ROOT / "schemas" / "examples" / "cwl-command-envelope-v1.example.json"
 CONTRACT = ROOT / "docs" / "integration" / "CWL_ECOSYSTEM_INTEGRATION_CONTRACT.md"
 DOCTORING = ROOT / "docs" / "doctoring" / "ecosystem-integration-standards.md"
+RFC3339_DATE_TIME = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 def _load(path: Path) -> dict:
@@ -37,8 +41,9 @@ def _assert_uri_reference(value: str, path: str) -> None:
 
 
 def _assert_date_time(value: str, path: str) -> None:
-    """Assert that *value* is an offset-aware RFC 3339-compatible timestamp."""
+    """Assert strict RFC 3339 lexical form plus a real offset-aware instant."""
 
+    assert RFC3339_DATE_TIME.fullmatch(value), path
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     parsed = datetime.fromisoformat(normalized)
     assert parsed.tzinfo is not None, path
@@ -202,6 +207,33 @@ def test_profiles_reject_unknown_properties_and_invalid_trace_context() -> None:
         "00-00000000000000000000000000000000-00f067aa0ba902b7-01"
     )
     _assert_invalid(command, command_schema)
+
+
+def test_date_time_profile_rejects_non_rfc3339_lexical_forms() -> None:
+    """All event and command timestamps reject broad ISO 8601 alternatives."""
+
+    event_schema = _load(EVENT_SCHEMA)
+    command_schema = _load(COMMAND_SCHEMA)
+
+    event = copy.deepcopy(_load(EVENT_EXAMPLE))
+    event["time"] = "2026-08-15 10:00:00+00:00"
+    _assert_invalid(event, event_schema)
+
+    metadata_fields = ("occurred_at", "recorded_at", "available_at")
+    for field_name in metadata_fields:
+        candidate = copy.deepcopy(_load(EVENT_EXAMPLE))
+        candidate["data"]["metadata"][field_name] = "2026-08-15 10:00:00+00:00"
+        _assert_invalid(candidate, event_schema)
+
+    command = copy.deepcopy(_load(COMMAND_EXAMPLE))
+    command["requested_at"] = "2026-08-15 10:00:00+00:00"
+    _assert_invalid(command, command_schema)
+
+    for value in (
+        "2026-08-15T10:00:00Z",
+        "2026-08-15T10:00:00.123456789+09:00",
+    ):
+        _assert_date_time(value, "$.timestamp")
 
 
 def test_documented_external_contract_baselines_are_present() -> None:
