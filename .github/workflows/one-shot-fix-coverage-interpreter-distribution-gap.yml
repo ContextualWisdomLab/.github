@@ -1,0 +1,306 @@
+name: One-shot coverage interpreter distribution gap repair
+
+on:
+  push:
+    branches:
+      - fix/coverage-interpreter-distribution-gap
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-coverage-interpreter-distribution-gap
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/coverage-interpreter-distribution-gap
+          fetch-depth: 0
+
+      - name: Write regression tests and prove RED
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          cat > tests/test_install_base_python_locks.py <<'PY'
+          """Regression tests for trusted base Python lock preflight classification."""
+
+          from __future__ import annotations
+
+          import importlib.util
+          import io
+          import json
+          import subprocess
+          import sys
+          import tempfile
+          import unittest
+          from pathlib import Path
+
+
+          MODULE_NAME = "_install_base_python_locks_under_test"
+          MODULE_PATH = Path("scripts/ci/install_base_python_locks.py")
+          SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
+          if SPEC is None or SPEC.loader is None:  # pragma: no cover - import guard
+              raise RuntimeError(f"Could not load {MODULE_PATH}")
+          LOCKS = importlib.util.module_from_spec(SPEC)
+          sys.modules[MODULE_NAME] = LOCKS
+          SPEC.loader.exec_module(LOCKS)
+
+          ATHERIS_DISTRIBUTION_GAP = """\
+          ERROR: Could not find a version that satisfies the requirement atheris==3.0.0 (from versions: 3.1.0)
+          ERROR: No matching distribution found for atheris==3.0.0
+          """
+
+
+          class DistributionGapClassificationTests(unittest.TestCase):
+              """Cover pip diagnostics that distinguish safe deferral from outages."""
+
+              def test_index_resolved_distribution_gap_is_deferable(self) -> None:
+                  """A pinned package with visible alternative versions may be skipped."""
+                  self.assertTrue(
+                      LOCKS._is_deferable_preflight_failure(ATHERIS_DISTRIBUTION_GAP)
+                  )
+
+              def test_network_failure_remains_fatal(self) -> None:
+                  """A registry outage must not masquerade as interpreter incompatibility."""
+                  output = (
+                      "WARNING: Retrying after connection broken by "
+                      "'Temporary failure in name resolution'.\n"
+                      + ATHERIS_DISTRIBUTION_GAP
+                  )
+                  self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+              def test_empty_available_version_set_remains_fatal(self) -> None:
+                  """An index response without alternatives is not compatibility evidence."""
+                  output = """\
+                  ERROR: Could not find a version that satisfies the requirement missing==9.9.9 (from versions: none)
+                  ERROR: No matching distribution found for missing==9.9.9
+                  """
+                  self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+              def test_mismatched_requirements_remain_fatal(self) -> None:
+                  """The two pip diagnostics must describe the same exact requirement."""
+                  output = """\
+                  ERROR: Could not find a version that satisfies the requirement first==1.0 (from versions: 2.0)
+                  ERROR: No matching distribution found for second==1.0
+                  """
+                  self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+              def test_unexplained_no_matching_distribution_remains_fatal(self) -> None:
+                  """A lone resolver failure cannot be silently skipped."""
+                  self.assertFalse(
+                      LOCKS._is_deferable_preflight_failure(
+                          "ERROR: No matching distribution found for unknown==1.0"
+                      )
+                  )
+
+              def test_install_skips_index_resolved_distribution_gap(self) -> None:
+                  """Coverage image construction continues past an optional foreign wheel."""
+                  with tempfile.TemporaryDirectory() as temp_directory:
+                      root = Path(temp_directory)
+                      (root / "manifest.json").write_text(
+                          json.dumps(
+                              [
+                                  {
+                                      "file": "requirements-000.txt",
+                                      "source": "fuzz/requirements-atheris.txt",
+                                  }
+                              ]
+                          ),
+                          encoding="utf-8",
+                      )
+                      (root / "requirements-000.txt").write_text(
+                          "atheris==3.0.0 --hash=sha256:" + "0" * 64 + "\n",
+                          encoding="utf-8",
+                      )
+                      calls: list[list[str]] = []
+
+                      def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                          calls.append(command)
+                          if "--dry-run" not in command:
+                              raise AssertionError("a deferred candidate must not be installed")
+                          return subprocess.CompletedProcess(
+                              command,
+                              1,
+                              stdout=ATHERIS_DISTRIBUTION_GAP,
+                          )
+
+                      stdout = io.StringIO()
+                      stderr = io.StringIO()
+                      result = LOCKS.install_materialized_locks(
+                          root,
+                          runner=runner,
+                          stdout=stdout,
+                          stderr=stderr,
+                      )
+
+                  self.assertEqual(result, 0)
+                  self.assertEqual(len(calls), 1)
+                  self.assertIn("installed=0 skipped=1", stdout.getvalue())
+                  self.assertIn("Skipping trusted base Python requirement candidate", stderr.getvalue())
+
+
+          if __name__ == "__main__":  # pragma: no cover
+              unittest.main()
+          PY
+
+          set +e
+          python3 -m unittest tests.test_install_base_python_locks -v > /tmp/coverage-lock-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/coverage-lock-red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo "::error::Regression test unexpectedly passed before the production fix."
+            exit 1
+          fi
+          grep -q "test_index_resolved_distribution_gap_is_deferable" /tmp/coverage-lock-red.log
+          grep -q "FAILED" /tmp/coverage-lock-red.log
+
+      - name: Implement the bounded pip compatibility classification
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/install_base_python_locks.py")
+          text = path.read_text(encoding="utf-8")
+
+          constants_marker = ")\nRunner = Callable[..., subprocess.CompletedProcess[str]]\n"
+          constants_replacement = """\
+          )
+          PIP_AVAILABLE_VERSIONS_RE = re.compile(
+              r"Could not find a version that satisfies the requirement "
+              r"(?P<requirement>[A-Za-z0-9_.-]+==[^\\s,;]+)\\s+"
+              r"\\(from versions:\\s*(?P<versions>[^)]*)\\)",
+              re.IGNORECASE,
+          )
+          PIP_NO_MATCH_RE = re.compile(
+              r"No matching distribution found for "
+              r"(?P<requirement>[A-Za-z0-9_.-]+==[^\\s,;]+)",
+              re.IGNORECASE,
+          )
+          PIP_NETWORK_FAILURE_MARKERS = (
+              "could not fetch url",
+              "temporary failure in name resolution",
+              "connectionerror",
+              "readtimeouterror",
+              "sslerror",
+              "max retries exceeded",
+          )
+          Runner = Callable[..., subprocess.CompletedProcess[str]]
+          """
+          if constants_marker not in text:
+              raise SystemExit("constants insertion marker was not found")
+          text = text.replace(constants_marker, constants_replacement, 1)
+
+          helper_marker = "def _is_deferable_preflight_failure(output: str) -> bool:\n"
+          helper = """\
+          def _is_index_resolved_distribution_gap(output: str) -> bool:
+              \"\"\"Return whether pip proved an exact pin lacks this platform's wheel.
+
+              Pip emits both an available-version diagnostic and a final no-match
+              diagnostic when the package index answered successfully but the
+              selected interpreter/platform cannot install the pinned release.
+              The central coverage image may defer that optional base lock because
+              exact-head language-specific peer checks remain authoritative. Network
+              and registry failures remain fatal.
+              \"\"\"
+              normalized_output = output.casefold()
+              if any(
+                  marker in normalized_output for marker in PIP_NETWORK_FAILURE_MARKERS
+              ):
+                  return False
+              available = PIP_AVAILABLE_VERSIONS_RE.search(output)
+              missing = PIP_NO_MATCH_RE.search(output)
+              if available is None or missing is None:
+                  return False
+              versions = available.group("versions").strip().casefold()
+              if not versions or versions == "none":
+                  return False
+              return available.group("requirement").casefold() == missing.group(
+                  "requirement"
+              ).casefold()
+
+
+          def _is_deferable_preflight_failure(output: str) -> bool:
+          """
+          if helper_marker not in text:
+              raise SystemExit("helper insertion marker was not found")
+          text = text.replace(helper_marker, helper, 1)
+
+          old_return = """\
+              return bool(output.strip()) and any(
+                  pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
+              )
+          """
+          new_return = """\
+              return bool(output.strip()) and (
+                  any(pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES)
+                  or _is_index_resolved_distribution_gap(output)
+              )
+          """
+          if old_return not in text:
+              raise SystemExit("deferable return marker was not found")
+          text = text.replace(old_return, new_return, 1)
+
+          text = text.replace(
+              "and a base lock can explicitly\\n    reject the pinned coverage-image interpreter. Those states are safe to",
+              "and a base lock can explicitly\\n    reject the pinned coverage-image interpreter or expose an exact pin whose\\n    alternative versions prove the package index answered for another supported\\n    interpreter/platform. Those states are safe to",
+              1,
+          )
+          text = text.replace(
+              "only incomplete hash closures or explicit Python \\n        \"interpreter incompatibility may be deferred.\"",
+              "only incomplete hash closures or explicit interpreter/distribution \\n        \"incompatibility may be deferred.\"",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          fixed_marker = "### Fixed\n\n"
+          fixed_entry = (
+              "- Deferred a trusted base Python lock only when pip proves the package "
+              "index answered with alternative versions for the same exact pin but no "
+              "compatible distribution exists for the coverage interpreter/platform; "
+              "registry outages, empty version sets, mismatched diagnostics, and "
+              "unexplained resolver failures remain fatal.\n"
+          )
+          if fixed_entry not in changelog_text:
+              if fixed_marker not in changelog_text:
+                  raise SystemExit("CHANGELOG Fixed marker was not found")
+              changelog_text = changelog_text.replace(
+                  fixed_marker, fixed_marker + fixed_entry, 1
+              )
+              changelog.write_text(changelog_text, encoding="utf-8")
+          PY
+
+      - name: Prove GREEN and compile the changed contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests.test_install_base_python_locks -v
+          python3 -m compileall -q \
+            scripts/ci/install_base_python_locks.py \
+            tests/test_install_base_python_locks.py
+
+      - name: Commit verified repair and remove this one-shot workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-fix-coverage-interpreter-distribution-gap.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            scripts/ci/install_base_python_locks.py \
+            tests/test_install_base_python_locks.py \
+            CHANGELOG.md \
+            .github/workflows/one-shot-fix-coverage-interpreter-distribution-gap.yml
+          git diff --cached --check
+          git commit -m "fix(coverage): defer interpreter-specific wheel gaps"
+          git push origin HEAD:fix/coverage-interpreter-distribution-gap
