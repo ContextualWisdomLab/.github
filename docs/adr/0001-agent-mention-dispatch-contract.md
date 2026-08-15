@@ -151,6 +151,14 @@ reaction. The durable central dispatch had already succeeded in that case.
   infrastructure evidence, retry only after the trusted Strix/provider
   contract is healthy, and never bypass the gate or substitute an unbound
   zero-finding report.
+- Request-only review attempts for the later exact head
+  `7123bee37a32e05b5e04c9298b01ed0174a4d199` reproduced the same protected
+  main bootstrap boundaries: router runs `31859383105` and `31859383242`
+  failed with target mutation `HTTP 403` and dispatch payload `HTTP 422`
+  (`No more than 10 properties are allowed; 14 were supplied`), respectively.
+  They produced no current-head approval or repository-dispatch review; keep
+  the failure evidence visible and require the normal post-merge router fix to
+  run before treating any review or merge state as complete.
 
 ## Consequences
 
