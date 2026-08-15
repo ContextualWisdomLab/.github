@@ -33,6 +33,20 @@ class SweepMetrics:
     failures: int = 0
 
 
+class SweepRateLimitExhausted(RuntimeError):
+    """Signal that shared GitHub API capacity is unavailable for this sweep."""
+
+
+def is_rate_limit_exhaustion(error: Exception) -> bool:
+    """Return whether an API error says the shared primary/secondary budget is exhausted."""
+
+    message = " ".join(str(error).split()).casefold()
+    return (
+        "api rate limit exceeded" in message
+        or "secondary rate limit" in message
+    )
+
+
 def parse_timestamp(value: str) -> datetime:
     """Parse one GitHub ISO-8601 timestamp into timezone-aware UTC."""
 
@@ -328,13 +342,18 @@ def sweep(
     dispatched = 0
 
     def record_failure(scope: str, error: Exception) -> None:
-        """Record one isolated error and preserve the remaining sweep."""
+        """Record isolated errors but stop when the shared API budget is exhausted."""
 
         counters.failures += 1
         message = " ".join(str(error).split()) or error.__class__.__name__
         print(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
+        if is_rate_limit_exhaustion(error):
+            raise SweepRateLimitExhausted(
+                "GitHub API rate limit exhausted; stopping organization sweep "
+                "to preserve the shared installation budget"
+            ) from error
 
     for issue in list_recent_pull_requests(
         target_client,
