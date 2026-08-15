@@ -13,11 +13,6 @@ GitHub Actions documents that a concurrency group permits one running member. Wi
 
 This is a queue-configuration defect, not evidence that the model, credential, allowlist, or review result is invalid.
 
-CWE-362 classifies concurrent use of a shared resource without proper
-synchronization (MITRE, 2026). One workflow-level concurrency group is
-that shared resource: a later sweep can replace a pending trusted
-comment before dispatch.
-
 ## Fail-first evidence
 
 Direct-main replacement PR #825 starts from protected `main` `1131b1bbafb24e455fc8619cdf316813e8721861`. Exact RED head `a319d513a2f67b707737651a9eb7fdbfe4bc23c4` changed only `tests/test_agent_mention_workflow_contract.py` and required separate job-scoped queue contracts while the inherited workflow still had one shared workflow-level group.
@@ -25,8 +20,6 @@ Direct-main replacement PR #825 starts from protected `main` `1131b1bbafb24e455f
 This replacement does not reuse predecessor PR #815 or stacked development PR #824 checks, reviews, approvals, or mergeability evidence.
 
 ## Decision
-
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
 Move concurrency from the workflow to the two jobs and give each event class a separate group.
 
@@ -114,14 +107,6 @@ After protected merge:
 6. alert immediately on a queue-limit rejection, unexpected cancellation of an interactive route, or when the interactive queue approaches the documented 100-pending limit;
 7. keep metrics finite-cardinality and exclude comment text, source diffs, tokens, and model responses.
 
-NIST SP 800-53 Rev. 5 AU-6 requires review of audit records and SC-5 requires
-protection against resource exhaustion (National Institute of Standards and
-Technology, 2020). The 10-minute receipt alert and the 100-pending overflow
-signal are those controls: they distinguish a bounded wait from a dropped
-trusted mention. GitHub documents that `queue: max` holds at most 100 pending
-members and rejects overflow rather than replacing the oldest pending run
-(GitHub, n.d.-a).
-
 A downstream reviewer may still fail closed because credentials, providers, checks, or exact-head evidence are unavailable. That remains distinct from a routing queue failure.
 
 ## Rollback
@@ -130,10 +115,6 @@ Rollback must preserve interactive requests. Restoring the shared workflow-level
 
 ## References (APA 7th)
 
-MITRE. (2026). *CWE-362: Concurrent execution using shared resource with
-improper synchronization ('race condition')*.
-https://cwe.mitre.org/data/definitions/362.html
-
 GitHub. (n.d.). *Concurrency*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency
 
 GitHub. (n.d.). *Control the concurrency of workflows and jobs*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
@@ -141,11 +122,3 @@ GitHub. (n.d.). *Control the concurrency of workflows and jobs*. GitHub Docs. Re
 GitHub. (n.d.). *REST API endpoints for GitHub Actions artifacts*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/rest/actions/artifacts
 
 GitHub. (n.d.). *Store and share data with workflow artifacts*. GitHub Docs. Retrieved August 7, 2026, from https://docs.github.com/en/actions/tutorials/store-and-share-data
-
-GitHub. (n.d.-a). *Usage limits, billing, and administration*. GitHub Docs.
-Retrieved August 13, 2026, from
-https://docs.github.com/en/actions/reference/limits
-
-National Institute of Standards and Technology. (2020). *Security and
-privacy controls for information systems and organizations* (NIST SP
-800-53 Rev. 5). https://doi.org/10.6028/NIST.SP.800-53r5
