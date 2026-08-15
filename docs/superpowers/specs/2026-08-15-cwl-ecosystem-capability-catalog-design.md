@@ -17,10 +17,10 @@ The organization-level event and command envelopes define how CWL products may e
 Publish two closed JSON Schema Draft 2020-12 contracts and one reviewed catalogue:
 
 1. `cwl-service-capability-v1.schema.json` describes one product boundary.
-2. `cwl-ecosystem-catalog-v1.schema.json` describes services and purpose-bound relationships.
+2. `cwl-ecosystem-catalog-v1.schema.json` describes service-manifest references and purpose-bound relationships.
 3. `cwl-ecosystem-catalog-v1.example.json` records the initial high-leverage CWL ecosystem without promoting planned or active-PR work to protected-main truth.
 
-A standard-library validator enforces semantic invariants not expressible or intentionally not duplicated in JSON Schema. The validator is also the release-pipeline reference implementation; published schemas remain the interoperable contract and must still be validated by a conforming Draft 2020-12 implementation before release.
+The catalogue references one bounded manifest per repository so product records remain independently reviewable. A modular standard-library validator enforces semantic invariants not expressible or intentionally not duplicated in JSON Schema. The validator is also the release-pipeline reference implementation; published schemas remain the interoperable contract and must still be validated by a conforming Draft 2020-12 implementation before release.
 
 ## Product boundary
 
@@ -118,7 +118,8 @@ The CLI accepts one catalogue path and:
 - limits structural depth, collection cardinality, and string length;
 - rejects unknown top-level or nested properties;
 - validates schema/constants alignment;
-- validates unique service IDs, repositories, relationship IDs, and released artifact IDs;
+- resolves normalized `services/*.json` manifests without symlink or path escape;
+- validates unique service IDs, manifest paths, repositories, relationship IDs, and released artifact IDs;
 - rejects unknown service references and self-edges;
 - applies the semantic security, ownership, and maturity invariants;
 - emits one bounded operator-readable error and a non-zero exit status.
@@ -136,7 +137,7 @@ The reviewed initial catalogue covers:
 - mhtml-etl-gateway, mightyETL, pg-erd-cloud;
 - EmbedRelay, appguardrail, life-os, bandscope.
 
-Entries remain deliberately conservative. Most cross-product integrations are `accepted_architecture` or `planned`; Orgmetra and the central catalogue is `active_pr` until protected integration.
+Entries remain deliberately conservative. Most cross-product integrations are `accepted_architecture` or `planned`; Orgmetra and the central catalogue are `active_pr` until protected integration.
 
 ## Quality contract
 

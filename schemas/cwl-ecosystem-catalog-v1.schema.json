@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextualwisdomlab.github.io/schemas/cwl-ecosystem-catalog-v1.schema.json",
+  "title": "CWL Ecosystem Capability Catalogue v1",
+  "description": "A reviewed graph of CWL service manifests and purpose-bound integrations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "catalog_id",
+    "catalog_version",
+    "maturity",
+    "service_manifests",
+    "relationships"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "catalog_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+    "catalog_version": {"type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$", "maxLength": 32},
+    "maturity": {"$ref": "#/$defs/maturity"},
+    "service_manifests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/manifest_reference"}
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 2048,
+      "items": {"$ref": "#/$defs/relationship"}
+    }
+  },
+  "$defs": {
+    "maturity": {
+      "type": "string",
+      "enum": ["planned", "accepted_architecture", "active_pr", "implemented_on_protected_main", "released", "deprecated", "superseded"]
+    },
+    "manifest_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_id", "manifest_path"],
+      "properties": {
+        "service_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "manifest_path": {"type": "string", "pattern": "^services/[a-z][a-z0-9]*(?:_[a-z0-9]+)+\\.json$", "maxLength": 256}
+      }
+    },
+    "next_actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "rejection", "timeout", "duplicate", "rollback"],
+      "properties": {
+        "success": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "rejection": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "timeout": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "duplicate": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "rollback": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relationship_id", "provider_service_id", "consumer_service_id",
+        "authoritative_data_owner_service_id", "contract_kind", "contract_version",
+        "immutable_reference", "purpose_code", "data_classification",
+        "data_flow_class", "evidence_class", "maturity", "credential_flow",
+        "direct_cross_repository_sql", "credential_copying", "raw_pii_broadcast",
+        "may_update_authoritative_fact", "next_actions"
+      ],
+      "properties": {
+        "relationship_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "provider_service_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "consumer_service_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "authoritative_data_owner_service_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "contract_kind": {"type": "string", "enum": ["openapi", "asyncapi_event", "package", "artifact_handoff", "scientific_job", "build_control", "oauth_oidc", "database_migration", "schema_contract"]},
+        "contract_version": {"type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$", "maxLength": 32},
+        "immutable_reference": {"type": "string", "minLength": 8, "maxLength": 512},
+        "purpose_code": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$", "maxLength": 128},
+        "data_classification": {"type": "string", "enum": ["public", "internal", "confidential", "restricted_identity", "restricted_hr", "security_metadata", "no_business_data"]},
+        "data_flow_class": {"type": "string", "enum": ["reference_only", "purpose_bound_projection", "aggregate_artifact", "schema_contract", "no_business_data", "explicit_opt_in_projection"]},
+        "evidence_class": {"type": "string", "enum": ["authoritative_fact", "authoritative_reference", "derived_artifact", "inferred_relationship", "control_evidence", "no_business_data"]},
+        "maturity": {"$ref": "#/$defs/maturity"},
+        "credential_flow": {"type": "string", "enum": ["none", "workload_identity", "delegated_user_token"]},
+        "direct_cross_repository_sql": {"const": false},
+        "credential_copying": {"const": false},
+        "raw_pii_broadcast": {"const": false},
+        "may_update_authoritative_fact": {"type": "boolean"},
+        "next_actions": {"$ref": "#/$defs/next_actions"}
+      }
+    }
+  }
+}
