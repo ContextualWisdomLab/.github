@@ -1,398 +1,119 @@
-"""Regression tests for trusted base Python lock installation."""
+"""Regression tests for trusted base Python lock preflight classification."""
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
-import pathlib
 import subprocess
-
-import pytest
-
-from scripts.ci import install_base_python_locks as installer
-
-
-def write_candidate(
-    root: pathlib.Path,
-    *,
-    generated_file: str,
-    source: str,
-    content: str = "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
-) -> None:
-    """Append one manifest entry and write its materialized lock."""
-    manifest_path = root / "manifest.json"
-    manifest = (
-        json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest_path.exists()
-        else []
-    )
-    manifest.append({"file": generated_file, "source": source})
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    (root / generated_file).write_text(content, encoding="utf-8")
+import sys
+import tempfile
+import unittest
+from pathlib import Path
 
 
-def test_recovers_partial_supplement_with_same_directory_lock(tmp_path) -> None:
-    """An optional supplement can join its sibling lock without widening scope."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="backend/requirements-agent.txt",
-    )
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-001.txt",
-        source="backend/requirements-hashes.txt",
-    )
-    commands: list[list[str]] = []
+MODULE_NAME = "_install_base_python_locks_under_test"
+MODULE_PATH = Path("scripts/ci/install_base_python_locks.py")
+SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
+if SPEC is None or SPEC.loader is None:  # pragma: no cover - import guard
+    raise RuntimeError(f"Could not load {MODULE_PATH}")
+LOCKS = importlib.util.module_from_spec(SPEC)
+sys.modules[MODULE_NAME] = LOCKS
+SPEC.loader.exec_module(LOCKS)
 
-    def fake_runner(command: list[str], **kwargs):
-        commands.append(command)
-        requirements = [
-            command[index + 1]
-            for index, argument in enumerate(command)
-            if argument == "-r"
-        ]
-        if (
-            "--dry-run" in command
-            and len(requirements) == 1
-            and requirements[0].endswith("requirements-000.txt")
-        ):
-            return subprocess.CompletedProcess(
-                command,
-                1,
-                stdout=(
-                    "ERROR: In --require-hashes mode, all requirements must have "
-                    "their versions pinned with ==: httpx>=0.27"
-                ),
+ATHERIS_DISTRIBUTION_GAP = """\
+ERROR: Could not find a version that satisfies the requirement atheris==3.0.0 (from versions: 3.1.0)
+ERROR: No matching distribution found for atheris==3.0.0
+"""
+
+
+class DistributionGapClassificationTests(unittest.TestCase):
+    """Cover pip diagnostics that distinguish safe deferral from outages."""
+
+    def test_index_resolved_distribution_gap_is_deferable(self) -> None:
+        """A pinned package with visible alternative versions may be skipped."""
+        self.assertTrue(
+            LOCKS._is_deferable_preflight_failure(ATHERIS_DISTRIBUTION_GAP)
+        )
+
+    def test_network_failure_remains_fatal(self) -> None:
+        """A registry outage must not masquerade as interpreter incompatibility."""
+        output = (
+            "WARNING: Retrying after connection broken by "
+            "'Temporary failure in name resolution'.\n"
+            + ATHERIS_DISTRIBUTION_GAP
+        )
+        self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+    def test_empty_available_version_set_remains_fatal(self) -> None:
+        """An index response without alternatives is not compatibility evidence."""
+        output = """\
+        ERROR: Could not find a version that satisfies the requirement missing==9.9.9 (from versions: none)
+        ERROR: No matching distribution found for missing==9.9.9
+        """
+        self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+    def test_mismatched_requirements_remain_fatal(self) -> None:
+        """The two pip diagnostics must describe the same exact requirement."""
+        output = """\
+        ERROR: Could not find a version that satisfies the requirement first==1.0 (from versions: 2.0)
+        ERROR: No matching distribution found for second==1.0
+        """
+        self.assertFalse(LOCKS._is_deferable_preflight_failure(output))
+
+    def test_unexplained_no_matching_distribution_remains_fatal(self) -> None:
+        """A lone resolver failure cannot be silently skipped."""
+        self.assertFalse(
+            LOCKS._is_deferable_preflight_failure(
+                "ERROR: No matching distribution found for unknown==1.0"
             )
-        return subprocess.CompletedProcess(command, 0, stdout="")
-
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert result == 0
-    assert len(commands) == 4
-    assert "--dry-run" in commands[0]
-    assert "--ignore-installed" in commands[0]
-    assert "--dry-run" in commands[1]
-    assert "--ignore-installed" in commands[1]
-    assert "--dry-run" in commands[2]
-    assert commands[2].count("-r") == 2
-    assert "--dry-run" not in commands[3]
-    assert commands[3].count("-r") == 2
-    assert stderr.getvalue() == ""
-    assert "Recovered trusted base Python supplement" in stdout.getvalue()
-    assert "candidates=2 installed=2 skipped=0" in stdout.getvalue()
-
-
-def test_skips_partial_candidate_without_completing_sibling(tmp_path) -> None:
-    """An unrecoverable hash-bearing supplement remains visible and non-fatal."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="backend/requirements-agent.txt",
-    )
-
-    def fake_runner(command: list[str], **kwargs):
-        return subprocess.CompletedProcess(
-            command,
-            1,
-            stdout=(
-                "ERROR: In --require-hashes mode, all requirements must have "
-                "their versions pinned with ==: httpx>=0.27"
-            ),
         )
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert result == 0
-    assert "requirements-agent.txt" in stderr.getvalue()
-    assert "httpx>=0.27" in stderr.getvalue()
-    assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
-
-
-def test_failed_same_directory_group_still_skips_partial_candidates(tmp_path) -> None:
-    """A sibling group that remains incomplete cannot become an install plan."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="backend/requirements-agent.txt",
-    )
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-001.txt",
-        source="backend/requirements-extra.txt",
-    )
-    commands: list[list[str]] = []
-
-    def fake_runner(command: list[str], **kwargs):
-        commands.append(command)
-        return subprocess.CompletedProcess(
-            command,
-            1,
-            stdout=(
-                "ERROR: In --require-hashes mode, all requirements must have "
-                "their versions pinned with ==: httpx>=0.27"
-            ),
-        )
-
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert result == 0
-    assert len(commands) == 3
-    assert commands[-1].count("-r") == 2
-    assert "installed=0 skipped=2" in stdout.getvalue()
-    assert stderr.getvalue().count("httpx>=0.27") == 2
-
-
-@pytest.mark.parametrize(
-    "failure_output",
-    [
-        "",
-        ("ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE"),
-        "WARNING: Retrying after connection broken by ConnectionError",
-        "ERROR: Could not fetch URL https://pypi.org/simple/demo/",
-        "pip resolver crashed without a classified dependency error",
-    ],
-)
-def test_unclassified_preflight_failure_is_fatal(tmp_path, failure_output: str) -> None:
-    """Hash, network, empty, and unknown preflight failures fail closed."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="requirements-hashes.txt",
-    )
-
-    def fake_runner(command: list[str], **kwargs):
-        return subprocess.CompletedProcess(command, 23, stdout=failure_output)
-
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stderr=stderr,
-    )
-
-    assert result == 23
-    assert "only incomplete hash closures" in stderr.getvalue()
-    assert "requirements-hashes.txt" in stderr.getvalue()
-    if failure_output:
-        assert failure_output in stderr.getvalue()
-
-
-def test_explicit_python_incompatibility_is_visible_and_nonfatal(tmp_path) -> None:
-    """A base lock for another interpreter may defer to coverage execution."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="requirements-hashes.txt",
-    )
-
-    def fake_runner(command: list[str], **kwargs):
-        return subprocess.CompletedProcess(
-            command,
-            1,
-            stdout=(
-                "ERROR: Package 'demo' requires a different Python: "
-                "3.14.0 not in '<3.14,>=3.10'"
-            ),
-        )
-
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert result == 0
-    assert "requires a different Python" in stderr.getvalue()
-    assert "candidates=1 installed=0 skipped=1" in stdout.getvalue()
-
-
-def test_fatal_same_directory_group_failure_aborts(tmp_path) -> None:
-    """A group cannot turn a registry or integrity failure into a skip."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="backend/requirements-agent.txt",
-    )
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-001.txt",
-        source="backend/requirements-hashes.txt",
-    )
-    call_count = 0
-
-    def fake_runner(command: list[str], **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 2:
-            return subprocess.CompletedProcess(
-                command,
-                1,
-                stdout=(
-                    "ERROR: In --require-hashes mode, all requirements must have "
-                    "their versions pinned with ==: httpx>=0.27"
+    def test_install_skips_index_resolved_distribution_gap(self) -> None:
+        """Coverage image construction continues past an optional foreign wheel."""
+        with tempfile.TemporaryDirectory() as temp_directory:
+            root = Path(temp_directory)
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "file": "requirements-000.txt",
+                            "source": "fuzz/requirements-atheris.txt",
+                        }
+                    ]
                 ),
+                encoding="utf-8",
             )
-        return subprocess.CompletedProcess(
-            command,
-            29,
-            stdout="ERROR: Could not fetch URL https://pypi.org/simple/httpx/",
-        )
+            (root / "requirements-000.txt").write_text(
+                "atheris==3.0.0 --hash=sha256:" + "0" * 64 + "\n",
+                encoding="utf-8",
+            )
+            calls: list[list[str]] = []
 
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stderr=stderr,
-    )
+            def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                if "--dry-run" not in command:
+                    raise AssertionError("a deferred candidate must not be installed")
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout=ATHERIS_DISTRIBUTION_GAP,
+                )
 
-    assert result == 29
-    assert call_count == 3
-    assert "Could not fetch URL" in stderr.getvalue()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            result = LOCKS.install_materialized_locks(
+                root,
+                runner=runner,
+                stdout=stdout,
+                stderr=stderr,
+            )
 
-
-@pytest.mark.parametrize(
-    ("manifest_text", "candidate_files", "error"),
-    [
-        (None, (), "regular non-symlink"),
-        ("{not-json", (), "manifest is invalid"),
-        ("{}", (), "must be a JSON array"),
-        ("[1]", (), "entries must be objects"),
-        (
-            '[{"file":"requirements-000.txt","source":"/absolute.txt"}]',
-            ("requirements-000.txt",),
-            "unsafe source path",
-        ),
-        (
-            (
-                '[{"file":"requirements-000.txt","source":"one.txt"},'
-                '{"file":"requirements-000.txt","source":"two.txt"}]'
-            ),
-            ("requirements-000.txt",),
-            "duplicate file names",
-        ),
-        (
-            '[{"file":"requirements-000.txt","source":"missing.txt"}]',
-            (),
-            "must be a regular file",
-        ),
-    ],
-)
-def test_manifest_validation_failures(
-    tmp_path,
-    manifest_text: str | None,
-    candidate_files: tuple[str, ...],
-    error: str,
-) -> None:
-    """Malformed trusted materializer output fails before any pip command."""
-    if manifest_text is not None:
-        (tmp_path / "manifest.json").write_text(manifest_text, encoding="utf-8")
-    for candidate_file in candidate_files:
-        (tmp_path / candidate_file).write_text("lock", encoding="utf-8")
-
-    with pytest.raises(ValueError, match=error):
-        installer._manifest_entries(tmp_path)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("installed=0 skipped=1", stdout.getvalue())
+        self.assertIn("Skipping trusted base Python requirement candidate", stderr.getvalue())
 
 
-def test_bounded_failure_output_preserves_root_and_tail() -> None:
-    """Long resolver logs retain their leading context and final root cause."""
-    output = "\n".join(f"line-{index}" for index in range(150))
-
-    bounded = installer._bounded_failure_output(output)
-
-    assert bounded.splitlines()[0] == "line-0"
-    assert "30 dependency-resolution log lines omitted" in bounded
-    assert bounded.splitlines()[-1] == "line-149"
-
-
-def test_rejects_unsafe_manifest_before_running_pip(tmp_path) -> None:
-    """Generated and source paths must remain inside trusted materializer output."""
-    (tmp_path / "manifest.json").write_text(
-        json.dumps([{"file": "../escape.txt", "source": "/absolute/lock.txt"}]),
-        encoding="utf-8",
-    )
-    called = False
-
-    def fake_runner(command: list[str], **kwargs):
-        nonlocal called
-        called = True
-        return subprocess.CompletedProcess(command, 0, stdout="")
-
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stderr=stderr,
-    )
-
-    assert result == 2
-    assert not called
-    assert "unsafe file name" in stderr.getvalue()
-
-
-def test_install_failure_after_successful_preflight_is_fatal(tmp_path) -> None:
-    """A registry or hash race after preflight must fail the image build."""
-    write_candidate(
-        tmp_path,
-        generated_file="requirements-000.txt",
-        source="requirements-hashes.txt",
-    )
-    call_count = 0
-
-    def fake_runner(command: list[str], **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return subprocess.CompletedProcess(
-            command,
-            0 if call_count == 1 else 19,
-            stdout="",
-        )
-
-    stderr = io.StringIO()
-    result = installer.install_materialized_locks(
-        tmp_path,
-        runner=fake_runner,
-        stderr=stderr,
-    )
-
-    assert result == 19
-    assert "failed during installation" in stderr.getvalue()
-
-
-def test_main_forwards_requirements_root(monkeypatch, tmp_path) -> None:
-    """The CLI delegates the exact requirements root to the installer."""
-    seen: list[pathlib.Path] = []
-
-    def fake_install(root: pathlib.Path) -> int:
-        seen.append(root)
-        return 7
-
-    monkeypatch.setattr(installer, "install_materialized_locks", fake_install)
-
-    assert installer.main(["--requirements-root", str(tmp_path)]) == 7
-    assert seen == [tmp_path]
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

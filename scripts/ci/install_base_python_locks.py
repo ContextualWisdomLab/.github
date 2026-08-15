@@ -39,6 +39,25 @@ DEFERABLE_PREFLIGHT_FAILURES = (
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
 )
+PIP_AVAILABLE_VERSIONS_RE = re.compile(
+    r"Could not find a version that satisfies the requirement "
+    r"(?P<requirement>[A-Za-z0-9_.-]+==[^\s,;]+)\s+"
+    r"\(from versions:\s*(?P<versions>[^)]*)\)",
+    re.IGNORECASE,
+)
+PIP_NO_MATCH_RE = re.compile(
+    r"No matching distribution found for "
+    r"(?P<requirement>[A-Za-z0-9_.-]+==[^\s,;]+)",
+    re.IGNORECASE,
+)
+PIP_NETWORK_FAILURE_MARKERS = (
+    "could not fetch url",
+    "temporary failure in name resolution",
+    "connectionerror",
+    "readtimeouterror",
+    "sslerror",
+    "max retries exceeded",
+)
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -146,6 +165,33 @@ def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     )
 
 
+def _is_index_resolved_distribution_gap(output: str) -> bool:
+    """Return whether pip proved an exact pin lacks this platform's wheel.
+
+    Pip emits both an available-version diagnostic and a final no-match
+    diagnostic when the package index answered successfully but the
+    selected interpreter/platform cannot install the pinned release.
+    The central coverage image may defer that optional base lock because
+    exact-head language-specific peer checks remain authoritative. Network
+    and registry failures remain fatal.
+    """
+    normalized_output = output.casefold()
+    if any(
+        marker in normalized_output for marker in PIP_NETWORK_FAILURE_MARKERS
+    ):
+        return False
+    available = PIP_AVAILABLE_VERSIONS_RE.search(output)
+    missing = PIP_NO_MATCH_RE.search(output)
+    if available is None or missing is None:
+        return False
+    versions = available.group("versions").strip().casefold()
+    if not versions or versions == "none":
+        return False
+    return available.group("requirement").casefold() == missing.group(
+        "requirement"
+    ).casefold()
+
+
 def _is_deferable_preflight_failure(output: str) -> bool:
     """Return whether a failed candidate may be grouped or safely skipped.
 
@@ -157,8 +203,9 @@ def _is_deferable_preflight_failure(output: str) -> bool:
     registry/network failures remain fatal so a broken trusted build cannot be
     mistaken for an optional lock.
     """
-    return bool(output.strip()) and any(
-        pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES
+    return bool(output.strip()) and (
+        any(pattern.search(output) for pattern in DEFERABLE_PREFLIGHT_FAILURES)
+        or _is_index_resolved_distribution_gap(output)
     )
 
 
