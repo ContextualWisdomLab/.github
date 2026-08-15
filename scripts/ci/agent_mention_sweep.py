@@ -160,6 +160,8 @@ def list_recent_pull_requests(
         return
 
     def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
+        """Fetch open pull requests for one repository."""
+
         repo_pulls = []
         page = 1
         while True:
@@ -222,7 +224,8 @@ def list_recent_pull_requests(
             on_error(repositories[0], exc)
         return
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    executor = ThreadPoolExecutor(max_workers=10)
+    try:
         future_to_repo = {
             executor.submit(fetch_repo_pulls, repo): repo
             for repo in repositories
@@ -235,6 +238,8 @@ def list_recent_pull_requests(
                 if on_error is None:  # pragma: no cover
                     raise
                 on_error(repo, exc)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def list_recent_comments(
