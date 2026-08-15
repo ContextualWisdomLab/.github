@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextualwisdomlab.github.io/schemas/cwl-event-envelope-v1.schema.json",
+  "title": "CWL Event Envelope v1",
+  "description": "ContextualWisdomLab profile for CloudEvents 1.0 domain events.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "subject",
+    "time",
+    "datacontenttype",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "source": {
+      "type": "string",
+      "format": "uri-reference",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^org\\.contextualwisdomlab\\.[a-z0-9_.-]+\\.v[1-9][0-9]*$",
+      "maxLength": 255
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "datacontenttype": {
+      "const": "application/json"
+    },
+    "dataschema": {
+      "type": "string",
+      "format": "uri-reference",
+      "maxLength": 2048
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata",
+        "payload"
+      ],
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event_version",
+            "tenant_id",
+            "subject_reference",
+            "purpose_code",
+            "occurred_at",
+            "recorded_at",
+            "correlation_id",
+            "provenance_reference",
+            "data_classification"
+          ],
+          "properties": {
+            "event_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+              "maxLength": 32
+            },
+            "tenant_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "subject_reference": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "purpose_code": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+            },
+            "occurred_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "recorded_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "available_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "correlation_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "causation_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "decision_reference": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "actor_reference": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "provenance_reference": {
+              "type": "string",
+              "format": "uri-reference",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "data_classification": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+            },
+            "traceparent": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+            }
+          }
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
