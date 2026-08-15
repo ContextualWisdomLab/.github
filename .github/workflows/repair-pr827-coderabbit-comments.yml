@@ -51,6 +51,17 @@ jobs:
       - name: Apply verified review repairs
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          repair = Path('scripts/ci/repair_pr827_coderabbit_comments.py')
+          repair_text = repair.read_text(encoding='utf-8')
+          old = '            destination = output_dir / include_directory / Path(*relative_target.parts)\n'
+          new = '            destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)\n'
+          if repair_text.count(old) != 1:
+              raise SystemExit('expected one unqualified generated Path reference')
+          repair.write_text(repair_text.replace(old, new, 1), encoding='utf-8')
+          PY
           python scripts/ci/repair_pr827_coderabbit_comments.py
           python - <<'PY'
           from pathlib import Path
