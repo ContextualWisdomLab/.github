@@ -131,6 +131,26 @@ reaction. The durable central dispatch had already succeeded in that case.
   current PR-head fix as untrusted until the normal post-merge default-branch
   router executes and publishes bound evidence. Do not replace this path with
   direct repository dispatch, self-approval, or protection bypass.
+- For current head `48973815a48be963f79681d34398d393a679adba`, trusted-base
+  Strix run `31858860791`/job `94948463735`/artifact `9240014805` completed
+  with zero findings. Its report SHA-256 is
+  `063739a6c30bcade1395331fbf289636d317b6f7976e1b712c4a67cb1ea9fbde`,
+  `run.json` SHA-256 is
+  `e106d7fc0766a4cb38e830e16566812a084f60e663aa432d75527e35bce67916`, and
+  gate-console SHA-256 is
+  `7474cf177533bd8a7de07078fb20ed131dc7338b4c5d1c9699b5c2fb07f06433`.
+  The artifact has no `evidence-binding.json` and its run metadata contains
+  only an ephemeral target path, so retain it as provider/content evidence,
+  not a clean exact-head security gate.
+- The paired default-branch repository-dispatch Strix run
+  `31858873824`/job `94948457916` for the same head failed closed after the
+  provider emitted `Tool agent_finish not found in agent strix`; no
+  vulnerability report artifact was produced. The follow-up status publisher
+  also recorded target status mutation `HTTP 403`, but correctly did not turn
+  the provider failure into a green status. Treat this as provider/tooling
+  infrastructure evidence, retry only after the trusted Strix/provider
+  contract is healthy, and never bypass the gate or substitute an unbound
+  zero-finding report.
 
 ## Consequences
 
