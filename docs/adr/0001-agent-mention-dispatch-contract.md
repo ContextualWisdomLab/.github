@@ -209,6 +209,16 @@ reaction. The durable central dispatch had already succeeded in that case.
   working-tree verification passed with `989 passed`, 16 subtests, 100%
   statement/branch coverage, 100% public-docstring coverage, compileall, and
   the full quick gate.
+- Exact implementation checkpoint: commit
+  `0cc2a8edb8f9af022225aa65c1d153ebce615974` passed `uv run pytest -q`
+  (`989 passed`, 16 subtests) and
+  `uv run coverage erase && uv run coverage run -m pytest -q && uv run
+  coverage report --fail-under=100 && uv run interrogate --fail-under=100
+  scripts/ci && uv run python -m compileall -q scripts/ci tests` (100%
+  statement/branch and public-docstring coverage). The same checkpoint passed
+  `STRIX_TEST_PROCESS_TIMEOUT_SECONDS=1 STRIX_TEST_FAKE_SLEEP_SECONDS=2 bash
+  scripts/ci/test_strix_quick_gate.sh`, scheduler `--self-test`, and YAML
+  parsing. Subsequent documentation-only commits must rerun these checks.
 
 ## Consequences
 
