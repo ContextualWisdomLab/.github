@@ -39,12 +39,12 @@ Adopt `docs/integration/CWL_ECOSYSTEM_INTEGRATION_CONTRACT.md` and the v1 JSON S
 The profile uses:
 
 - OpenAPI 3.2.0 for new shared synchronous APIs;
-- AsyncAPI 3.0.0 for published asynchronous channel contracts;
+- AsyncAPI 3.1.0 for published asynchronous channel contracts;
 - CloudEvents 1.0 for domain-event transport;
 - JSON Schema Draft 2020-12 for JSON payload contracts;
 - RFC 9457 for HTTP problem details;
 - RFC 9562 UUIDv7 for organization-level time-ordered identifiers where appropriate;
-- W3C Trace Context for trace propagation;
+- W3C Trace Context Recommendation version `00` grammar for the v1 envelope, rejecting forbidden all-zero trace and parent identifiers;
 - W3C PROV-O as the provenance semantic reference.
 
 CWL-specific metadata is placed inside `data.metadata` for domain events rather than inventing unrestricted top-level CloudEvents extensions.
@@ -86,13 +86,15 @@ Direct cross-service application-database access is prohibited.
 The central repository includes stdlib-only contract tests that validate:
 
 - required profile artifacts exist and are parseable;
+- complete positive examples satisfy the supported JSON Schema subset used by the v1 profiles;
+- unknown top-level properties and invalid trace identifiers fail closed;
 - CloudEvents `specversion` is pinned to `1.0`;
 - JSON Schemas use Draft 2020-12;
 - examples contain the required CWL metadata;
-- UUIDv7 and W3C trace-context patterns are present;
-- documentation names the authoritative external standards.
+- UUIDv7, bounded event/command type names, and W3C Trace Context version `00` constraints are enforced;
+- documentation names the current authoritative external standards.
 
-Leaf repositories add producer/consumer contract tests when they adopt the profile.
+Leaf repositories add producer/consumer contract tests when they adopt the profile. Before release, published schemas are also checked with a conforming JSON Schema Draft 2020-12 implementation in the release pipeline.
 
 ## Supersession
 
