@@ -48,7 +48,7 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply verified review repairs
+      - name: Apply bounded non-workflow repairs
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -63,35 +63,10 @@ jobs:
           repair.write_text(repair_text.replace(old, new, 1), encoding='utf-8')
           PY
           python scripts/ci/repair_pr827_coderabbit_comments.py
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('.github/workflows/opencode-review-dispatch.yml')
-          text = path.read_text(encoding='utf-8')
-          broken = (
-              '              r-cran-testthat \\\n'
-              '              # llvm-19 / llvm-toolchain-19: Apache-2.0 WITH LLVM-exception. \\\n'
-              '              # See docs/doctoring/opencode-rust-coverage-runtime-boundary.md. \\\n'
-              '              llvm-19 \\\n'
-          )
-          restored = (
-              '              r-cran-testthat \\\n'
-              '              llvm-19 \\\n'
-          )
-          if text.count(broken) != 1:
-              raise SystemExit('expected one generated package-list license marker')
-          text = text.replace(broken, restored, 1)
-          marker = '          RUN apt-get update \\\n'
-          documented = (
-              '          # Debian llvm-19 / llvm-toolchain-19 license: '
-              'Apache-2.0 WITH LLVM-exception.\n'
-              '          # Source: docs/doctoring/opencode-rust-coverage-runtime-boundary.md.\n'
-              + marker
-          )
-          if text.count(marker) != 1:
-              raise SystemExit('expected one trusted coverage apt marker')
-          path.write_text(text.replace(marker, documented, 1), encoding='utf-8')
-          PY
+          # The ordinary Actions token cannot update workflow files. The license
+          # basis is already recorded in the doctoring document, so retain the
+          # reviewed workflow source and publish the non-workflow repair only.
+          git checkout -- .github/workflows/opencode-review-dispatch.yml
           rm -f scripts/ci/repair_pr827_coderabbit_comments.py
 
       - name: Verify materialization, coverage, docs, and syntax
@@ -106,14 +81,20 @@ jobs:
           python -m compileall -q scripts tests
           git diff --check
 
-      - name: Commit verified repair and remove one-shot files
+      - name: Commit verified non-workflow repair
         run: |
           set -euo pipefail
-          rm -f .github/workflows/repair-pr827-coderabbit-comments.yml
-          rm -f scripts/ci/repair_pr827_coderabbit_comments.py
+          # Restore the temporary repair driver so this commit contains only
+          # the reviewed product/test/doctoring changes. It is removed through
+          # the connector immediately after the verified push.
+          git checkout -- scripts/ci/repair_pr827_coderabbit_comments.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_materialize_base_python_requirements.py \
+            CHANGELOG.md \
+            docs/doctoring/opencode-rust-coverage-runtime-boundary.md
           git diff --cached --check
           git commit -m 'fix(coverage): preserve bounded requirement includes'
           git push origin HEAD:fix/opencode-rust-coverage-runtime-boundary-main
