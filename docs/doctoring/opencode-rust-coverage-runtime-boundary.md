@@ -22,10 +22,12 @@ binary. Missing, changed, or non-executable reviewed paths are coverage-evidence
 failures rather than reasons to measure a different toolchain.
 
 NIST SP 800-218 PW.4.1 requires third-party software to come from expected,
-trusted sources with integrity verification (Souppaya et al., 2022). Binding
-coverage to the reviewed `/usr/bin/llvm-cov-19` and
-`/usr/bin/llvm-profdata-19` executables is that verification; an ambient
-`PATH` lookup would treat a runner-image change as a new producer.
+trusted sources with integrity verification (Souppaya et al., 2022). The exact
+`/usr/bin/llvm-cov-19` and `/usr/bin/llvm-profdata-19` bindings are
+producer-selection controls: they select reviewed paths and `test -x` verifies
+executability. They do not hash or signature-verify the Debian package or binary.
+Package/image hashes, signatures, repository metadata, and attestations are
+separate integrity controls and must not be inferred from path equality.
 
 ## Why the boundary exists
 
@@ -36,11 +38,12 @@ with the LLVM version used by `rustc`. Allowing ambient `PATH` discovery would
 therefore make a runner-image change capable of silently changing the coverage
 producer.
 
-Debian bookworm currently publishes the versioned `llvm-19` package from
-`llvm-toolchain-19`; Debian package file inventories expose versioned LLVM 19
-tool entry points including `llvm-cov-19`. Pinning the reviewed executable names
-inside the image converts that mutable ambient dependency into an explicit
-contract that can be checked before source execution.
+Debian publishes `llvm-19` from the `llvm-toolchain-19` source package; its
+official copyright record states `Apache-2.0 WITH LLVM-exception`. Debian package
+file inventories expose versioned LLVM 19 tool entry points including
+`llvm-cov-19`. Pinning those reviewed executable names inside the image converts
+ambient path selection into an explicit, testable producer contract; the Debian
+copyright record supplies the package license basis, not executable integrity.
 
 ## Trust-boundary sequence
 
@@ -114,6 +117,10 @@ https://packages.debian.org/bookworm/llvm-19
 Debian Project. (2026). *File list of package llvm-19*. Debian Packages.
 Retrieved August 10, 2026, from
 https://packages.debian.org/bookworm/amd64/llvm-19/filelist
+
+Debian Project. (2026). *Copyright file for llvm-toolchain-19 19.1.7-20*.
+Debian FTP Masters. Retrieved August 15, 2026, from
+https://metadata.ftp-master.debian.org/changelogs/main/l/llvm-toolchain-19/llvm-toolchain-19_19.1.7-20_copyright
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure Software Development
 Framework (SSDF) version 1.1: Recommendations for mitigating the risk of
