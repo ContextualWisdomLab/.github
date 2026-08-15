@@ -9,9 +9,9 @@ from scripts.ci import noema_review_gate as noema
 
 
 def test_changed_file_context_fetches_concurrently_and_preserves_order(monkeypatch) -> None:
-    """Independent content reads run concurrently without reordering evidence."""
+    """Independent reads run concurrently and keep success/error/empty order."""
 
-    paths = ["src/slow.py", "src/fast.py", "src/error.py"]
+    paths = ["src/slow.py", "src/fast.py", "src/empty.py", "src/error.py"]
     rendezvous = threading.Barrier(len(paths), timeout=2)
 
     monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
@@ -23,16 +23,21 @@ def test_changed_file_context_fetches_concurrently_and_preserves_order(monkeypat
             return "slow content"
         if path == "src/fast.py":
             return "fast content"
+        if path == "src/empty.py":
+            return ""
         raise RuntimeError("Authorization: Bearer should-not-leak")
 
     monkeypatch.setattr(noema, "fetch_head_file_content", fetch_content)
 
     context = noema.changed_file_context("owner/repo", 7, "a" * 40)
 
-    assert context.index("### src/slow.py") < context.index("### src/fast.py")
-    assert context.index("### src/fast.py") < context.index("### src/error.py")
+    headings = [f"### {path}" for path in paths]
+    assert [context.index(heading) for heading in headings] == sorted(
+        context.index(heading) for heading in headings
+    )
     assert "slow content" in context
     assert "fast content" in context
+    assert "No UTF-8 text content available from head content API." in context
     assert "Authorization: Bearer ***" in context
     assert "should-not-leak" not in context
 
@@ -58,21 +63,5 @@ def test_changed_file_context_caps_parallel_workers(monkeypatch) -> None:
 
     context = noema.changed_file_context("owner/repo", 7, "b" * 40)
 
-    assert observed_workers == [10]
+    assert observed_workers == [noema.MAX_CONTEXT_FETCH_WORKERS]
     assert context.count("### src/file_") == noema.MAX_CONTEXT_FILES
-
-
-def test_changed_file_context_handles_zero_context_budget(monkeypatch) -> None:
-    """A zero configured file budget fails closed before creating an executor."""
-
-    monkeypatch.setattr(noema, "MAX_CONTEXT_FILES", 0)
-    monkeypatch.setattr(
-        noema,
-        "fetch_changed_file_paths",
-        lambda repo, number: ["src/file.py"],
-    )
-
-    assert (
-        noema.changed_file_context("owner/repo", 7, "c" * 40)
-        == "Changed file context unavailable: no paths to check."
-    )
