@@ -83,6 +83,12 @@ reaction. The durable central dispatch had already succeeded in that case.
   evidence of the pre-merge default-branch defect only; it is not a review or
   approval of the PR head. After merge, the canonical review request must be
   repeated and bound to the exact PR head.
+- A second fresh request for the same exact head, `31856496239`, reached the
+  default-branch router's target-repository mutation and failed with
+  `Resource not accessible by integration (HTTP 403)`. This confirms the
+  target-reaction/acknowledgement boundary is independently permission-limited;
+  it must remain best-effort after durable central dispatch and must never be
+  interpreted as a successful review or merge authorization.
 
 ## Consequences
 
