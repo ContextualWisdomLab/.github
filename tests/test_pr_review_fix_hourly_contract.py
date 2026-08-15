@@ -247,6 +247,13 @@ def test_contract_workflow_tracks_the_product_caller() -> None:
     assert text.count(".github/workflows/clearfolio-hourly-review-repair.yml") == 2
 
 
+def test_contract_workflow_tracks_scheduler_implementation() -> None:
+    """Scheduler source changes always rerun the focused contract gate."""
+    text = _read(_CONTRACT_WORKFLOW)
+
+    assert text.count("scripts/ci/pr_review_fix_scheduler.py") == 2
+
+
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:
     """The writer must diagnose the exact-head cause before it edits the tree."""
     text = _read(_AUTOFIX_WORKFLOW)
