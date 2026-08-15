@@ -6,6 +6,12 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
+concurrency:
+  # Do not let the long organization sweep evict a queued local comment route
+  # at the next five-minute tick. Each event class has one bounded queue.
+  group: review-agent-mention-router-${{ github.repository }}-${{ github.event_name }}
+  cancel-in-progress: false
+
 # Organization required-workflow rules do not propagate issue_comment events
 # into sibling repositories. Keep the workflow default read-only; each bounded
 # job declares only the writes it actually needs.

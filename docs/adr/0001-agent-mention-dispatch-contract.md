@@ -27,6 +27,9 @@ reaction. The durable central dispatch had already succeeded in that case.
    remain fail-closed.
 4. Review-agent invocations remain review-only: automatic merge, branch
    updates, and direct merge stay disabled.
+5. The router's long scheduled organization sweep and immediate local comment
+   route use separate concurrency groups, so a five-minute sweep cannot evict
+   a pending current-head review request.
 
 ## Evidence
 
@@ -34,6 +37,9 @@ reaction. The durable central dispatch had already succeeded in that case.
   properties are allowed; 14 were supplied`.
 - Failed run `31851168323`: GitHub returned `Resource not accessible by
   integration` at the optional target reaction boundary.
+- Run `31852135609` was cancelled when the next scheduled sweep entered the
+  shared router concurrency group, demonstrating why event classes need
+  separate queues.
 - Local validation after the change: `979 passed`, 16 subtests, 100% statement
   and branch coverage, 100% public-docstring coverage, and
   `test_strix_quick_gate: PASS`.
