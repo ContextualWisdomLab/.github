@@ -513,7 +513,10 @@ import os
 import sys
 
 run_timeout_seconds, prompt_file, agent, model_candidate, title = sys.argv[1:]
-os.setsid()
+try:
+    os.setsid()
+except PermissionError as exc:
+    print(f"warning: could not create an OpenCode process session: {exc}", file=sys.stderr)
 for name in (
     "GH_TOKEN",
     "GITHUB_TOKEN",

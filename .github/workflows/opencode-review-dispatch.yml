@@ -6360,6 +6360,7 @@ jobs:
 
           hold_for_unverified_strix_workflow_update() {
             local structured_status
+            local body
 
             if ! self_modifying_strix_workflow_needs_structured_evidence; then
               return 1
@@ -6724,7 +6725,7 @@ jobs:
                 | sort_by(.created_at // "")
                 | last // empty
                 | select((.state // "" | ascii_downcase) == "success")
-                | select((.description // "") | contains("Default-branch repository_dispatch Strix structured evidence binding passed"))
+                | select((.description // "") == "Default-branch repository_dispatch Strix structured evidence binding passed")
                 | select((.target_url // "") | test("/actions/runs/[0-9]+"))
                 | .target_url
               '

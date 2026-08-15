@@ -16,7 +16,7 @@ SENSITIVE_KEY_RE = re.compile(
 )
 JWT_RE = re.compile(
     r"(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\."
-    r"[A-Za-z0-9_-]{3,}(?=$|[^A-Za-z0-9_-])"
+    r"[A-Za-z0-9_-]{3,}($|[^A-Za-z0-9_-])"
 )
 BEARER_RE = re.compile(
     r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
@@ -33,14 +33,14 @@ PROVIDER_TOKEN_RES = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 EMAIL_RE = re.compile(
-    r"(^|[^\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?=$|[^\w.-])"
+    r"(^|[^\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}($|[^\w.-])"
 )
 PHONE_RE = re.compile(
     r"(^|[^\w])(?:\+\d[\d(). -]{7,}\d|\d{2,4}[-. ]\d{3,4}[-. ]\d{3,4})"
-    r"(?=$|[^\w])"
+    r"($|[^\w])"
 )
 IPV4_RE = re.compile(
-    r"(^|[^\d.])(?:\d{1,3}\.){3}\d{1,3}(?=$|[^\d.])"
+    r"(^|[^\d.])(?:\d{1,3}\.){3}\d{1,3}($|[^\d.])"
 )
 RUNNER_PATH_RE = re.compile(
     r"(^|[^\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
@@ -138,7 +138,9 @@ def _redact_unstructured(text: str, *, redact_assignments: bool = True) -> str:
     """Redact credential-shaped and allowlisted operational identifiers."""
     cleaned = _redact_assignments(text) if redact_assignments else text
     cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
-    cleaned = JWT_RE.sub(REDACTED, cleaned)
+    cleaned = JWT_RE.sub(
+        lambda match: f"{match.group(1)}{REDACTED}{match.group(2)}", cleaned
+    )
     for pattern in PROVIDER_TOKEN_RES:
         cleaned = pattern.sub(REDACTED, cleaned)
     return _redact_operational_identifiers(cleaned)
@@ -146,9 +148,15 @@ def _redact_unstructured(text: str, *, redact_assignments: bool = True) -> str:
 
 def _redact_operational_identifiers(text: str) -> str:
     """Apply the minimum-disclosure allowlist to common operational PII."""
-    cleaned = EMAIL_RE.sub(r"\1[REDACTED_EMAIL]", text)
-    cleaned = PHONE_RE.sub(r"\1[REDACTED_PHONE]", cleaned)
-    cleaned = IPV4_RE.sub(r"\1[REDACTED_IP]", cleaned)
+    cleaned = EMAIL_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED_EMAIL]{match.group(2)}", text
+    )
+    cleaned = PHONE_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED_PHONE]{match.group(2)}", cleaned
+    )
+    cleaned = IPV4_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED_IP]{match.group(2)}", cleaned
+    )
     return RUNNER_PATH_RE.sub(r"\1[REDACTED_PATH]", cleaned)
 
 

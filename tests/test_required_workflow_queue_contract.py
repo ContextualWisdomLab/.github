@@ -1091,6 +1091,9 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert "skipping optional manual Strix run lookup" in workflow
     assert "Optional workflow %s is not installed" in failed_check_evidence
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
+    assert "STRIX_BINDING_VALIDATION_CACHE" in failed_check_evidence
+    assert 'timeout -- "${timeout_seconds}s" gh api' in failed_check_evidence
+    assert 'timeout -- "${timeout_seconds}s" gh run download' in failed_check_evidence
 
 
 def test_strix_provider_outage_without_findings_fails_closed() -> None:
@@ -1150,6 +1153,12 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
         "Default-branch repository_dispatch Strix structured evidence binding passed"
         in success_function
     )
+    assert (
+        '| select((.description // "") == "Default-branch repository_dispatch '
+        'Strix structured evidence binding passed")'
+        in success_function
+    )
+    assert "contains(\"Default-branch repository_dispatch" not in success_function
     structured_function = opencode_workflow.split(
         "current_head_manual_strix_structured_success_status()", 1
     )[1].split("hold_for_unverified_strix_workflow_update()", 1)[0]
@@ -1166,10 +1175,19 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
     assert '.head_sha == $head_sha' in structured_function
     assert '((.run_id // "") | tostring) == $run_id' in structured_function
     assert 'actual_report_sha256' in structured_function
+    for forbidden_report_path in ('*"/../"*', '*"/./"*', './*', '*//*'):
+        assert forbidden_report_path in failed_check_evidence
+        assert forbidden_report_path in structured_function
     assert "/actions/runs/${run_id}/artifacts?per_page=100" in failed_check_evidence
     assert "if ! artifact_count=\"$(jq -r" in failed_check_evidence
     assert '.repository == $repository' in failed_check_evidence
     assert '.artifact_name == "strix-reports"' in failed_check_evidence
+    redaction_step = workflow_step(
+        workflow_text("strix.yml"),
+        "Redact Strix evidence before artifact publication",
+    )
+    assert 'read_bytes().decode("utf-8")' in redaction_step
+    assert 'cp -- "$evidence_file" "$redacted_file"' in redaction_step
 
 
 def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> None:

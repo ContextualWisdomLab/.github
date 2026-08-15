@@ -765,7 +765,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 		! grep -Fq -- 'data=[REDACTED]' <<<"$redactor_assignment_output"; then
 		record_failure "trusted scrubber must redact known tokens in assignments under non-sensitive keys"
 	fi
-	if grep -Eq -- '\(\?<\![^)]*\)|\(\?![^)]*\)' "$REPO_ROOT/scripts/ci/redact_sensitive_log.py"; then
+	if grep -Eq -- '\(\?([=!]|<[=!])' "$REPO_ROOT/scripts/ci/redact_sensitive_log.py"; then
 		record_failure "trusted scrubber operational identifier patterns must avoid lookaround backtracking"
 	fi
 	redactor_boundary_output="$(printf '%s\n' 'mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret' | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"

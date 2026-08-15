@@ -65,6 +65,29 @@ def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     assert cleaned.count(redactor.REDACTED) >= 2
 
 
+def test_sensitive_log_redaction_preserves_jwt_boundaries_and_operational_markers() -> None:
+    """JWT delimiters and allowlisted identifiers remain structurally readable."""
+    operational = (
+        "mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret"
+    )
+    assert redactor.redact_text("(header.payload.signature)") == (
+        f"({redactor.REDACTED})"
+    )
+    cleaned = redactor.redact_text(operational)
+    assert "mail=[REDACTED_EMAIL]" in cleaned
+    assert "ip=[REDACTED_IP]" in cleaned
+    assert "phone=[REDACTED_PHONE]" in cleaned
+    assert "path=[REDACTED_PATH]" in cleaned
+
+    json_cleaned = redactor._redact_unstructured(
+        json.dumps({"message": operational}), redact_assignments=False
+    )
+    assert json.loads(json_cleaned)["message"] == (
+        "mail=[REDACTED_EMAIL] ip=[REDACTED_IP] "
+        "phone=[REDACTED_PHONE] path=[REDACTED_PATH]"
+    )
+
+
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
     """Quoted sensitive assignments are parsed linearly even with many escapes."""
     source = "_jwt:\"" + "\\!" * 5000

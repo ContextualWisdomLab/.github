@@ -30,6 +30,20 @@ reaction. The durable central dispatch had already succeeded in that case.
 5. The router's long scheduled organization sweep and immediate local comment
    route use separate concurrency groups, so a five-minute sweep cannot evict
    a pending current-head review request.
+6. Evidence publication decodes candidate files as UTF-8 before redaction and
+   copies non-text files unchanged. Binding lookup calls have a bounded
+   timeout, reuse the result for a run ID, and reject the same traversal and
+   absolute-path patterns in both consumers.
+7. Redaction preserves JWT and operational-identifier boundaries without
+   lookaround expressions. The trusted OpenCode process launcher continues
+   after a `setsid` permission failure, and exact structured-status descriptions
+   are required before a Strix status can be used as evidence.
+8. The default-branch router remains the only dispatch authority. A PR that
+   changes that router cannot self-route its own OpenCode review from the PR
+   branch; no direct repository-dispatch call, self-approval, or protection
+   bypass is permitted. The normal path is to obtain an independent review
+   through the configured default-branch service and then re-run the exact-head
+   merge gate.
 
 ## Evidence
 
@@ -40,9 +54,16 @@ reaction. The durable central dispatch had already succeeded in that case.
 - Run `31852135609` was cancelled when the next scheduled sweep entered the
   shared router concurrency group, demonstrating why event classes need
   separate queues.
-- Local validation after the change: `979 passed`, 16 subtests, 100% statement
-  and branch coverage, 100% public-docstring coverage, and
-  `test_strix_quick_gate: PASS`.
+- Local validation after the follow-up: `981 passed`, 16 subtests, 100%
+  statement and branch coverage, 100% public-docstring coverage, and
+  `test_strix_quick_gate: PASS` with the timeout fixture shortened to 1/2s
+  locally (the production contract remains bounded and unchanged).
+- CodeRabbit's exact-head review of `320e999714849740d2b497e7c717d5c1384bd9af`
+  identified eight unresolved threads covering binary redaction, bounded
+  Strix binding lookup/cache, report-path parity, JWT boundaries, operational
+  marker coverage, `setsid` handling, and lookaround detection. The follow-up
+  changes address those findings; the full suite, coverage, docstring gate,
+  and quick gate passed before the follow-up commit.
 
 ## Consequences
 

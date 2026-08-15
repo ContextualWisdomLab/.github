@@ -573,6 +573,14 @@ def test_runner_never_cats_rejected_provider_artifacts() -> None:
         assert f'cat "${variable}"' not in runner
 
 
+def test_process_group_launcher_tolerates_setsid_permission_error() -> None:
+    """A pre-existing process group cannot prevent the provider attempt from starting."""
+    runner = RUNNER.read_text(encoding="utf-8")
+
+    assert "try:\n    os.setsid()\nexcept PermissionError as exc:" in runner
+    assert "could not create an OpenCode process session" in runner
+
+
 @pytest.mark.parametrize(
     "json_line",
     [

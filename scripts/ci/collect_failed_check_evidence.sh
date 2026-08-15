@@ -389,6 +389,7 @@ tmp_files=(
 	"$manual_success_run_candidates"
 	"$superseded_failed_contexts"
 )
+declare -A STRIX_BINDING_VALIDATION_CACHE=()
 cleanup() {
 	rm -f "${tmp_files[@]}"
 }
@@ -415,8 +416,9 @@ target_workflow_available() {
 	return 1
 }
 
-manual_strix_run_has_structured_binding() {
+manual_strix_run_has_structured_binding_uncached() {
 	local run_id="$1"
+	local timeout_seconds="${STRIX_BINDING_LOOKUP_TIMEOUT_SECONDS:-10}"
 	local artifact_dir
 	local artifact_json
 	local artifact_count
@@ -426,11 +428,14 @@ manual_strix_run_has_structured_binding() {
 	local expected_report_sha256
 	local actual_report_sha256
 
-	if [ -z "$run_id" ]; then
+	if [ -z "$run_id" ] || ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
 		return 1
 	fi
+	if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		timeout_seconds=10
+	fi
 	artifact_dir="$(mktemp -d)"
-	if ! artifact_json="$(gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+	if ! artifact_json="$(timeout -- "${timeout_seconds}s" gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
 		rm -rf -- "$artifact_dir"
 		return 1
 	fi
@@ -442,7 +447,7 @@ manual_strix_run_has_structured_binding() {
 		rm -rf -- "$artifact_dir"
 		return 1
 	fi
-	if ! gh run download "$run_id" \
+	if ! timeout -- "${timeout_seconds}s" gh run download "$run_id" \
 		--repo "$GH_REPOSITORY" \
 		--name strix-reports \
 		--dir "$artifact_dir" </dev/null >/dev/null 2>&1; then
@@ -465,7 +470,7 @@ manual_strix_run_has_structured_binding() {
 
 	report_path="$(jq -r '.report // empty' "$binding_file")"
 	case "$report_path" in
-		""|/*|../*|*/../*)
+		""|/*|../*|*/../*|*"/../"*|*"/./"*|./*|*//*)
 			rm -rf -- "$artifact_dir"
 			return 1
 			;;
@@ -492,6 +497,25 @@ manual_strix_run_has_structured_binding() {
 
 	rm -rf -- "$artifact_dir"
 	return 0
+}
+
+manual_strix_run_has_structured_binding() {
+    local run_id="$1"
+    local cached_result
+
+    if [ -z "$run_id" ] || ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ ${STRIX_BINDING_VALIDATION_CACHE[$run_id]+present} ]]; then
+        cached_result="${STRIX_BINDING_VALIDATION_CACHE[$run_id]}"
+        return "$cached_result"
+	fi
+	if manual_strix_run_has_structured_binding_uncached "$run_id"; then
+		STRIX_BINDING_VALIDATION_CACHE[$run_id]=0
+		return 0
+	fi
+	STRIX_BINDING_VALIDATION_CACHE[$run_id]=1
+	return 1
 }
 
 manual_success_for_label() {

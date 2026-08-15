@@ -921,7 +921,20 @@ jobs:
           fi
           while IFS= read -r -d '' evidence_file; do
             redacted_file="${evidence_file}.redacted"
-            python3 "$redactor" <"$evidence_file" >"$redacted_file"
+            if python3 - "$evidence_file" <<'PY'
+          from pathlib import Path
+          import sys
+
+          try:
+              Path(sys.argv[1]).read_bytes().decode("utf-8")
+          except UnicodeDecodeError:
+              raise SystemExit(1)
+          PY
+            then
+              python3 "$redactor" <"$evidence_file" >"$redacted_file"
+            else
+              cp -- "$evidence_file" "$redacted_file"
+            fi
             mv -- "$redacted_file" "$evidence_file"
           done < <(find "$GITHUB_WORKSPACE/strix_runs" -type f -print0)
 

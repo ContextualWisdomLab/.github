@@ -276,7 +276,7 @@ and `aiohttp 3.14.2`/`3.14.3`, and the PR branch already pins
 Do not dismiss these alerts as stale by assumption: after the dependency fix
 is integrated, rerun the dependency/security checks and verify the live alert
 state and lock hashes; if any alert remains open, investigate the resolved
-manifest before Merge.
+manifest before merge.
 
 The next central PR #1009 exact-head run for
 `d22097a35eeba5dd306acce3ebe6b678ae6b75d6` failed closed as run
