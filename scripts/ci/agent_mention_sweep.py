@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Iterator, Sequence
 
 from agent_mention_router import (
@@ -155,62 +156,85 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    for repository in repositories:
+    if not repositories:  # pragma: no cover
+        return
+
+    def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
+        repo_pulls = []
+        page = 1
+        while True:
+            response = client.request(
+                [
+                    f"repos/{repository}/pulls",
+                    "-X",
+                    "GET",
+                    "-f",
+                    "state=open",
+                    "-f",
+                    "sort=updated",
+                    "-f",
+                    "direction=desc",
+                    "-f",
+                    "per_page=100",
+                    "-f",
+                    f"page={page}",
+                ]
+            )
+            pull_requests = flatten_pages(response)
+            if not pull_requests:
+                break
+            reached_cutoff = False
+            for pull_request in pull_requests:
+                if (
+                    parse_timestamp(
+                        str(pull_request.get("updated_at") or "")
+                    )
+                    < cutoff
+                ):
+                    reached_cutoff = True
+                    break
+                number = pull_request.get("number")
+                if not isinstance(number, int) or number < 1:
+                    raise ValueError(
+                        "GitHub returned an invalid pull request number"
+                    )
+                repo_pulls.append({
+                    "number": number,
+                    "repository": repository,
+                    "pull_request": {
+                        "url": (
+                            "https://api.github.com/repos/"
+                            f"{repository}/pulls/{number}"
+                        )
+                    },
+                })
+            if reached_cutoff or len(pull_requests) < 100:
+                break
+            page += 1
+        return repo_pulls
+
+    if len(repositories) == 1:
         try:
-            page = 1
-            while True:
-                response = client.request(
-                    [
-                        f"repos/{repository}/pulls",
-                        "-X",
-                        "GET",
-                        "-f",
-                        "state=open",
-                        "-f",
-                        "sort=updated",
-                        "-f",
-                        "direction=desc",
-                        "-f",
-                        "per_page=100",
-                        "-f",
-                        f"page={page}",
-                    ]
-                )
-                pull_requests = flatten_pages(response)
-                if not pull_requests:
-                    break
-                reached_cutoff = False
-                for pull_request in pull_requests:
-                    if (
-                        parse_timestamp(
-                            str(pull_request.get("updated_at") or "")
-                        )
-                        < cutoff
-                    ):
-                        reached_cutoff = True
-                        break
-                    number = pull_request.get("number")
-                    if not isinstance(number, int) or number < 1:
-                        raise ValueError(
-                            "GitHub returned an invalid pull request number"
-                        )
-                    yield {
-                        "number": number,
-                        "repository": repository,
-                        "pull_request": {
-                            "url": (
-                                "https://api.github.com/repos/"
-                                f"{repository}/pulls/{number}"
-                            )
-                        },
-                    }
-                if reached_cutoff or len(pull_requests) < 100:
-                    break
-                page += 1
+            yield from fetch_repo_pulls(repositories[0])
         except Exception as exc:  # noqa: BLE001 - repository isolation boundary
-            if on_error is None:
+            if on_error is None:  # pragma: no cover
                 raise
-            on_error(repository, exc)
+            on_error(repositories[0], exc)
+        return
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_repo = {
+            executor.submit(fetch_repo_pulls, repo): repo
+            for repo in repositories
+        }
+        for future in as_completed(future_to_repo):
+            repo = future_to_repo[future]
+            try:
+                yield from future.result()
+            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+                if on_error is None:  # pragma: no cover
+                    raise
+                on_error(repo, exc)
 
 
 def list_recent_comments(
