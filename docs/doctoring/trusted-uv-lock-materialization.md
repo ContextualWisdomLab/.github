@@ -6,9 +6,7 @@ Central coverage automation may translate a tracked `uv.lock` from the exact
 validated pull-request base revision into a pip-compatible, hash-pinned
 requirements closure. The translation must not depend on a mutable runner tool,
 repository-head dependency metadata, ambient runner configuration, or network
-access during export. Materialize accepts only exact SHA-256 pins or a
-bounded relative `-r` include; a lone `--require-hashes` line is not lock
-evidence.
+access during export.
 
 The implementation therefore:
 
@@ -124,10 +122,7 @@ Regression coverage must prove:
 - installer verification tests pin `sys.platform` to `linux` and
   `platform.machine()` to `x86_64` through pytest monkeypatch so version,
   cache, and cleanup paths execute on a non-Linux developer host, while the
-  portability contract still fail-closes unsupported runners before any download;
-- the installer treats Linux `amd64` / `AMD64` / padded `x86_64` labels as the
-  same ISA as the pinned `uv-x86_64-unknown-linux-gnu` archive (CWE-20;
-  MITRE, n.d.) and still fail-closes Darwin, aarch64, and arm64 before download.
+  portability contract still fail-closes unsupported runners before any download.
 
 ## Exact-head quality evidence
 
@@ -178,25 +173,7 @@ This prerequisite repair is intentionally test-only for production behavior. It
 changes neither the trusted uv download boundary nor the dependency closure
 accepted by the coverage sandbox.
 
-CWE-670 forbids a control-flow result that is always wrong for the current
-inputs (MITRE, 2026). The installer is process-cached, so the Linux x86_64
-simulation must clear that cache or a prior host-architecture miss would
-skip version verification even after the monkeypatch.
-
-CWE-20 requires the runner identity to be validated as the ISA the archive
-was built for, not as a single unnormalized `platform.machine()` spelling
-(MITRE, n.d.). Debian and some container images report `amd64` or `AMD64`
-for the same x86_64 Linux userspace the pinned `uv-x86_64-unknown-linux-gnu`
-binary targets. Those labels must pass the gate; `aarch64` / `arm64` must
-not.
-
 ## References
-
-MITRE. (n.d.). *CWE-20: Improper input validation*. Retrieved August 13,
-2026, from https://cwe.mitre.org/data/definitions/20.html
-
-MITRE. (2026). *CWE-670: Always-incorrect control flow implementation*.
-https://cwe.mitre.org/data/definitions/670.html
 
 Python Software Foundation. (n.d.). *sys — System-specific parameters and functions*.
 Python 3 documentation. Retrieved August 13, 2026, from
