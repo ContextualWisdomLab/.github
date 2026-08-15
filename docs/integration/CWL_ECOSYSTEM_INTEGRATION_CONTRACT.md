@@ -231,7 +231,7 @@ The provenance record must distinguish authoritative facts, inferred relationshi
 - Synchronous APIs use **OpenAPI 3.2.0** for new shared contracts unless a consumer compatibility constraint is documented.
 - HTTP error payloads use **RFC 9457**.
 - New organization-level event/command/correlation identifiers use **RFC 9562 UUIDv7** where time-ordered globally unique identifiers are beneficial.
-- Stable distributed-trace propagation follows the W3C Trace Context Recommendation. The v1 JSON envelopes deliberately accept version `00` traceparents only and reject all-zero trace IDs, all-zero parent IDs, and forbidden version `ff`; future Trace Context versions require a new profile revision rather than silent widening.
+- Stable distributed-trace propagation follows the W3C Trace Context Recommendation. The v1 JSON envelopes deliberately accept version `00` traceparents only, reject all-zero trace IDs and all-zero parent IDs, and accept only flags `00` or `01` because senders MUST set every reserved flag bit to zero. Future Trace Context versions require a new profile revision rather than silent widening.
 - Breaking contracts require a new major version or a parallel endpoint/channel/schema; consumers are not silently migrated.
 - Producers and consumers both maintain contract tests for interfaces they depend on.
 - A producer does not declare a breaking interface safe solely because its own tests pass.
