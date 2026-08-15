@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added the CWL Ecosystem Integration Contract v1 with CloudEvents-profiled event and command envelopes, OpenAPI/AsyncAPI/JSON Schema compatibility rules, UUIDv7 identifiers, temporal and provenance semantics, purpose-bound PII dereferencing, and stdlib-only contract tests for cross-repository adoption.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 
