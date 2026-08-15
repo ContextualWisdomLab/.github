@@ -151,14 +151,16 @@ def test_command_example_contains_required_control_context() -> None:
         assert re.fullmatch(schema["properties"][name]["pattern"], example[name])
 
 
-def test_traceparent_profile_rejects_forbidden_identifiers() -> None:
-    """Trace Context v1 must reject ff and all-zero trace or parent identifiers."""
+def test_traceparent_profile_rejects_forbidden_identifiers_and_flags() -> None:
+    """Trace Context v1 must reject invalid IDs and nonzero reserved flag bits."""
 
     valid = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     invalid = (
         "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
         "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-02",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-ff",
     )
 
     for schema_path in (EVENT_SCHEMA, COMMAND_SCHEMA):
