@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextualwisdomlab.github.io/schemas/cwl-command-envelope-v1.schema.json",
+  "title": "CWL Command Envelope v1",
+  "description": "ContextualWisdomLab profile for asynchronous commands.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "command_id",
+    "command_type",
+    "command_version",
+    "tenant_id",
+    "actor_reference",
+    "subject_reference",
+    "purpose_code",
+    "requested_at",
+    "idempotency_key",
+    "correlation_id",
+    "provenance_reference",
+    "data_classification",
+    "payload"
+  ],
+  "properties": {
+    "command_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "command_type": {
+      "type": "string",
+      "pattern": "^org\\.contextualwisdomlab\\.[a-z0-9_.-]+\\.v[1-9][0-9]*$",
+      "maxLength": 255
+    },
+    "command_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "maxLength": 32
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "actor_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "subject_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "purpose_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 256
+    },
+    "correlation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "causation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "decision_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "provenance_reference": {
+      "type": "string",
+      "format": "uri-reference",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "data_classification": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+    },
+    "traceparent": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}
