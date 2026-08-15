@@ -70,22 +70,23 @@ def test_sensitive_log_redaction_preserves_jwt_boundaries_and_operational_marker
     operational = (
         "mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret"
     )
+    expected_operational = (
+        "mail=[REDACTED_EMAIL] ip=[REDACTED_IP] "
+        "phone=[REDACTED_PHONE] path=[REDACTED_PATH]"
+    )
     assert redactor.redact_text("(header.payload.signature)") == (
         f"({redactor.REDACTED})"
     )
+    assert redactor._redact_operational_identifiers(operational) == (
+        expected_operational
+    )
     cleaned = redactor.redact_text(operational)
-    assert "mail=[REDACTED_EMAIL]" in cleaned
-    assert "ip=[REDACTED_IP]" in cleaned
-    assert "phone=[REDACTED_PHONE]" in cleaned
-    assert "path=[REDACTED_PATH]" in cleaned
+    assert cleaned == expected_operational
 
     json_cleaned = redactor._redact_unstructured(
         json.dumps({"message": operational}), redact_assignments=False
     )
-    assert json.loads(json_cleaned)["message"] == (
-        "mail=[REDACTED_EMAIL] ip=[REDACTED_IP] "
-        "phone=[REDACTED_PHONE] path=[REDACTED_PATH]"
-    )
+    assert json.loads(json_cleaned)["message"] == expected_operational
 
 
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
