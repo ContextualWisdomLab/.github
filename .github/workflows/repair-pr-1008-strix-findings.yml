@@ -1,0 +1,424 @@
+name: Repair PR 1008 Strix findings
+
+on:
+  push:
+    branches: [codex/coverage-uv-retry]
+    paths:
+      - ".github/workflows/repair-pr-1008-strix-findings.yml"
+
+concurrency:
+  group: repair-pr-1008-strix-findings
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: codex/coverage-uv-retry
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked test tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Configure repair commit identity
+        run: |
+          git config user.name "Seongho Bae"
+          git config user.email "me@seonghobae.me"
+
+      - name: Add fail-first security regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workspace_path = Path("tests/test_uv_workspace_fail_closed.py")
+          workspace = workspace_path.read_text(encoding="utf-8")
+          old_workspace_toml = '''[tool.uv.workspace]
+          members = ["packages/*"]
+          """,
+          '''
+          # Keep the replacement literal separate from Python indentation in this patcher.
+          old_workspace_toml = '''[tool.uv.workspace]
+members = ["packages/*"]
+""",
+'''
+          new_workspace_toml = '''[tool.uv.workspace]
+members = ["packages/*"]
+credential = "sk_live_should_not_be_logged"
+""",
+'''
+          if workspace.count(old_workspace_toml) != 1:
+              raise SystemExit("expected one uv workspace fixture")
+          workspace = workspace.replace(old_workspace_toml, new_workspace_toml)
+
+          old_expectation = '''    with pytest.raises(
+        RuntimeError,
+        match=r"uv workspace.*packages/\\*.*not supported",
+    ):
+        materializer.materialize(repo, base_sha, tmp_path / "output")
+
+    assert not bootstrap_called
+'''
+          new_expectation = '''    with pytest.raises(
+        RuntimeError,
+        match=r"uv workspace.*not supported",
+    ) as raised:
+        materializer.materialize(repo, base_sha, tmp_path / "output")
+
+    error_message = str(raised.value)
+    assert "packages/*" not in error_message
+    assert "sk_live_should_not_be_logged" not in error_message
+    assert not bootstrap_called
+'''
+          if workspace.count(old_expectation) != 1:
+              raise SystemExit("expected one workspace rejection assertion")
+          workspace_path.write_text(
+              workspace.replace(old_expectation, new_expectation),
+              encoding="utf-8",
+          )
+
+          tests_path = Path("tests/test_materialize_base_python_requirements.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          old_symlink_expectation = '''    with pytest.raises(ValueError, match="must not be a symlink"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+'''
+          new_symlink_expectation = '''    with pytest.raises(ValueError, match="non-symlink directory"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+'''
+          if tests.count(old_symlink_expectation) != 1:
+              raise SystemExit("expected one output symlink assertion")
+          tests = tests.replace(old_symlink_expectation, new_symlink_expectation)
+
+          marker = "def test_materialize_rejects_symlink_substitution_during_creation("
+          if marker not in tests:
+              tests += '''
+
+
+def test_materialize_accepts_an_existing_empty_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing empty real directory remains a supported trusted destination."""
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    assert materializer.materialize(tmp_path, "a" * 40, output) == []
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\\n"
+    assert (output / "manifest.txt").read_text(encoding="utf-8") == ""
+
+
+def test_materialize_rejects_symlink_substitution_during_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path swapped to a symlink during creation cannot receive trusted files."""
+    output = tmp_path / "output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    original_mkdir = Path.mkdir
+
+    def substitute_symlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == output:
+            path.symlink_to(attacker_directory, target_is_directory=True)
+            return
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", substitute_symlink)
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+
+
+def test_materialize_detects_output_path_replacement_after_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory-descriptor writes never follow a replacement output path."""
+    output = tmp_path / "output"
+    detached_output = tmp_path / "detached-output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+    original_write = getattr(materializer, "_write_output_file", None)
+    swapped = False
+
+    def replace_path_then_write(
+        output_descriptor: int,
+        file_name: str,
+        content: bytes,
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            output.rename(detached_output)
+            output.symlink_to(attacker_directory, target_is_directory=True)
+            swapped = True
+        assert original_write is not None
+        original_write(output_descriptor, file_name, content)
+
+    monkeypatch.setattr(
+        materializer,
+        "_write_output_file",
+        replace_path_then_write,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="changed during materialization"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+    assert (detached_output / "manifest.json").read_text(encoding="utf-8") == "[]\\n"
+'''
+          tests_path.write_text(tests, encoding="utf-8")
+          PY
+
+      - name: Prove the regressions fail before production changes
+        run: |
+          set +e
+          python -m pytest \
+            tests/test_uv_workspace_fail_closed.py::test_true_uv_workspace_fails_before_exporter_bootstrap \
+            tests/test_materialize_base_python_requirements.py::test_rejects_symlink_output_directory \
+            tests/test_materialize_base_python_requirements.py::test_materialize_rejects_symlink_substitution_during_creation \
+            tests/test_materialize_base_python_requirements.py::test_materialize_detects_output_path_replacement_after_open \
+            -q
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Security regressions unexpectedly passed before the fix."
+            exit 1
+          fi
+
+      - name: Record RED security evidence
+        run: |
+          git add \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_materialize_base_python_requirements.py
+          git commit -m "test(ci): reproduce trusted materializer output boundaries"
+
+      - name: Apply bounded production hardening
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path("scripts/ci/materialize_base_python_requirements.py")
+          source = source_path.read_text(encoding="utf-8")
+
+          old_workspace = '''    try:
+        workspace = metadata["tool"]["uv"]["workspace"]
+    except (KeyError, TypeError):
+        return
+
+    raise RuntimeError(
+        f"tracked base uv workspace in {pyproject_path} {workspace!r} is not "
+        "supported by isolated lock materialization"
+    )
+'''
+          new_workspace = '''    try:
+        metadata["tool"]["uv"]["workspace"]
+    except (KeyError, TypeError):
+        return
+
+    raise RuntimeError(
+        f"tracked base uv workspace in {pyproject_path} is not supported by "
+        "isolated lock materialization"
+    )
+'''
+          if source.count(old_workspace) != 1:
+              raise SystemExit("expected one unredacted workspace rejection")
+          source = source.replace(old_workspace, new_workspace)
+
+          materialize_start = '''def materialize(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    output_dir: pathlib.Path,
+) -> list[dict[str, str]]:
+    """Write base lock blobs under generated names safe for a Docker build context."""
+    if output_dir.exists() and output_dir.is_symlink():
+        raise ValueError("output directory must not be a symlink")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest: list[dict[str, str]] = []
+    for index, (source_path, content) in enumerate(
+        base_hash_locks(repo_root.resolve(), base_sha)
+    ):
+        generated_name = f"requirements-{index:03d}.txt"
+        destination = output_dir / generated_name
+        destination.write_bytes(content)
+        manifest.append({"file": generated_name, "source": source_path})
+
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\\n",
+        encoding="utf-8",
+    )
+    (output_dir / "manifest.txt").write_text(
+        "".join(f"{entry['file']}\\n" for entry in manifest),
+        encoding="utf-8",
+    )
+    return manifest
+'''
+          hardened = '''def _open_output_directory(
+    output_dir: pathlib.Path,
+) -> tuple[int, os.stat_result]:
+    """Atomically create or securely open one non-symlink output directory."""
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    try:
+        descriptor = os.open(
+            output_dir,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise ValueError(
+            "output directory must be a non-symlink directory"
+        ) from exc
+    return descriptor, os.fstat(descriptor)
+
+
+def _write_output_file(
+    output_descriptor: int,
+    file_name: str,
+    content: bytes,
+) -> None:
+    """Atomically create one regular output file relative to an open directory."""
+    descriptor = os.open(
+        file_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=output_descriptor,
+    )
+    with os.fdopen(descriptor, "wb") as destination:
+        destination.write(content)
+
+
+def _verify_output_directory(
+    output_dir: pathlib.Path,
+    expected_identity: os.stat_result,
+) -> None:
+    """Reject replacement of the published output path during materialization."""
+    current_identity = output_dir.stat(follow_symlinks=False)
+    if not os.path.samestat(expected_identity, current_identity):
+        raise ValueError("output directory changed during materialization")
+
+
+def materialize(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    output_dir: pathlib.Path,
+) -> list[dict[str, str]]:
+    """Write base lock blobs without following mutable output path entries."""
+    output_descriptor, output_identity = _open_output_directory(output_dir)
+    try:
+        manifest: list[dict[str, str]] = []
+        for index, (source_path, content) in enumerate(
+            base_hash_locks(repo_root.resolve(), base_sha)
+        ):
+            generated_name = f"requirements-{index:03d}.txt"
+            _write_output_file(output_descriptor, generated_name, content)
+            manifest.append({"file": generated_name, "source": source_path})
+
+        _write_output_file(
+            output_descriptor,
+            "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\\n").encode(
+                "utf-8"
+            ),
+        )
+        _write_output_file(
+            output_descriptor,
+            "manifest.txt",
+            "".join(f"{entry['file']}\\n" for entry in manifest).encode("utf-8"),
+        )
+        _verify_output_directory(output_dir, output_identity)
+        return manifest
+    finally:
+        os.close(output_descriptor)
+'''
+          if source.count(materialize_start) != 1:
+              raise SystemExit("expected one original materialize implementation")
+          source_path.write_text(
+              source.replace(materialize_start, hardened),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run focused security regressions
+        run: |
+          python -m pytest \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_uv_redirect_boundary.py \
+            -q
+
+      - name: Run trusted materializer suite with complete branch coverage
+        run: |
+          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/materialize_base_python_requirements.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/trusted-uv-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest \
+            tests/test_materialize_base_python_requirements.py \
+            tests/test_materialize_uv_export_hash_contract.py \
+            tests/test_trusted_uv_download_contract.py \
+            tests/test_trusted_uv_portability_and_streaming.py \
+            tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_redirect_and_coverage_contract.py \
+            tests/test_uv_redirect_boundary.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            -q
+          python -m coverage report
+
+      - name: Run complete central quality gate
+        run: |
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+          python -m interrogate --fail-under 100 scripts/ci/materialize_base_python_requirements.py
+          python -m compileall -q scripts/ci/materialize_base_python_requirements.py tests
+          git diff --check
+
+      - name: Commit verified repair and remove one-shot workflow
+        run: |
+          rm .github/workflows/repair-pr-1008-strix-findings.yml
+          git add \
+            scripts/ci/materialize_base_python_requirements.py \
+            tests/test_uv_workspace_fail_closed.py \
+            tests/test_materialize_base_python_requirements.py \
+            .github/workflows/repair-pr-1008-strix-findings.yml
+          git commit -m "fix(ci): harden trusted materializer output boundary"
+          git push origin HEAD:codex/coverage-uv-retry
