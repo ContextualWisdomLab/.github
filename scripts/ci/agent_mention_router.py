@@ -115,7 +115,7 @@ def exact_mentions(body: str) -> tuple[str, ...]:
 def receipt_marker(comment_id: int) -> str:
     """Return the hidden target-comment acknowledgement marker."""
 
-    if comment_id < 1:
+    if type(comment_id) is not int or comment_id < 1:
         raise ValueError("comment id must be positive")
     return f"<!-- cwl-agent-mention-receipt:{comment_id} -->"
 
@@ -174,9 +174,9 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError(
             "agent mentions are limited to ContextualWisdomLab repositories"
         )
-    if not isinstance(number, int) or number < 1:
+    if type(number) is not int or number < 1:
         raise ValueError("pull request number is missing or invalid")
-    if not isinstance(comment_id, int) or comment_id < 1:
+    if type(comment_id) is not int or comment_id < 1:
         raise ValueError("comment id is missing or invalid")
     if comment_id in processed_comment_ids(event.get("conversation_comments") or ()):
         return None

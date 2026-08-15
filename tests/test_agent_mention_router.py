@@ -151,7 +151,9 @@ def test_untrusted_receipt_marker_cannot_suppress_invocation() -> None:
     [
         (("repository", "full_name"), "outside/example", "limited"),
         (("issue", "number"), 0, "number"),
+        (("issue", "number"), True, "number"),
         (("comment", "id"), 0, "comment id"),
+        (("comment", "id"), True, "comment id"),
         (("pull_request", "head", "sha"), "bad", "head SHA"),
         (("pull_request", "base", "ref"), "-bad", "base branch"),
         (("pull_request", "base", "sha"), "bad", "base SHA"),
@@ -181,6 +183,8 @@ def test_receipt_and_allowlist_helpers() -> None:
     assert module.receipt_marker(91) == "<!-- cwl-agent-mention-receipt:91 -->"
     with pytest.raises(ValueError, match="positive"):
         module.receipt_marker(0)
+    with pytest.raises(ValueError, match="positive"):
+        module.receipt_marker(True)
     comments = [
         receipt(91),
         {

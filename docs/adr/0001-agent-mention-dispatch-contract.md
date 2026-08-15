@@ -46,6 +46,10 @@ reaction. The durable central dispatch had already succeeded in that case.
    merge gate. Until this PR is merged, the default branch may still contain the
    pre-fix router and must be treated as a bootstrap dependency, not as evidence
    that the PR-head router has executed.
+9. Webhook-derived pull-request numbers, comment IDs, and receipt-marker IDs
+   require exact built-in integers; Python booleans are rejected even though
+   `bool` subclasses `int`. This keeps JSON types, receipt parsing, and
+   idempotency keys stable at the trust boundary.
 
 ## Evidence
 
@@ -89,6 +93,18 @@ reaction. The durable central dispatch had already succeeded in that case.
   target-reaction/acknowledgement boundary is independently permission-limited;
   it must remain best-effort after durable central dispatch and must never be
   interpreted as a successful review or merge authorization.
+- Central exact-head Strix run `31856556623`, job `94942344498`, artifact
+  `9239425223`, found a real MEDIUM type-confusion issue in
+  `agent_mention_router.py`: `isinstance(value, int)` accepted JSON booleans
+  for PR/comment IDs and could emit unparseable `True`/`False` receipt markers.
+  The report digest was
+  `8c03038e7defe06249107db995515770eb6a2232d15ada30baf9c04244538fac`, and
+  the gate-console digest was
+  `39ffcc3c7a47efdae294d496930b11040079f4c610928c3686f3dc2791fbed35`.
+  The source-backed fix changes the trust-boundary and receipt checks to exact
+  integer validation and adds boolean regressions; the predecessor terminal
+  failure remains a real finding until a fresh exact-head Strix run verifies
+  the fix.
 
 ## Consequences
 
