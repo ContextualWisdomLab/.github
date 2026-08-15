@@ -121,6 +121,16 @@ reaction. The durable central dispatch had already succeeded in that case.
   because the `pull_request_target` run used the protected base workflow, so
   the result remains non-clean until the post-merge default-branch structured
   binding run succeeds.
+- Fresh request-only reviews for exact current head
+  `1676c45b21d1ba96972b503addfbc26d40657cc0` reproduced both pre-merge
+  default-branch boundaries: router run `31858797545` failed before dispatch
+  with `Invalid request. No more than 10 properties are allowed; 14 were
+  supplied. (HTTP 422)`, and the second request `31858798815` reached the
+  target mutation boundary and failed with `Resource not accessible by
+  integration (HTTP 403)`. Neither run is a review or approval; keep the
+  current PR-head fix as untrusted until the normal post-merge default-branch
+  router executes and publishes bound evidence. Do not replace this path with
+  direct repository dispatch, self-approval, or protection bypass.
 
 ## Consequences
 
