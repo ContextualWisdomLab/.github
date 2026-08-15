@@ -19,8 +19,8 @@ from agent_mention_router import (
     parse_repository_allowlist,
 )
 
-ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
+ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 
 
