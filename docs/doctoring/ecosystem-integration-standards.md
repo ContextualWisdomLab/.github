@@ -10,7 +10,7 @@ This record supports the organization-level integration profile. Product-domain 
 - **JSON Schema Draft 2020-12** is the baseline for shared JSON contracts.
 - **RFC 9457** defines Problem Details for HTTP APIs and supersedes RFC 7807.
 - **RFC 9562** defines UUIDs; UUIDv7 supplies a time-ordered Unix-millisecond layout appropriate for organization-level event/command/correlation identifiers when time-ordering is useful.
-- **W3C Trace Context** defines stable cross-service tracing headers. The 2021 Recommendation is used as the production baseline rather than making a draft-level successor a hard dependency. The CWL v1 envelope profile pins traceparent version `00` and rejects the Recommendation's forbidden all-zero trace and parent identifiers.
+- **W3C Trace Context** defines stable cross-service tracing headers. The 2021 Recommendation is used as the production baseline rather than making a draft-level successor a hard dependency. The CWL v1 envelope profile pins `traceparent` version `00`, rejects the Recommendation's forbidden all-zero trace and parent identifiers, and accepts only flags `00` or `01` because senders MUST leave every reserved flag bit unset.
 - **W3C PROV-O** supplies a standard vocabulary for provenance entities, activities, and agents when products expose provenance graphs.
 
 ## APA 7th references
