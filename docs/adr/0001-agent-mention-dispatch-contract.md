@@ -43,7 +43,9 @@ reaction. The durable central dispatch had already succeeded in that case.
    branch; no direct repository-dispatch call, self-approval, or protection
    bypass is permitted. The normal path is to obtain an independent review
    through the configured default-branch service and then re-run the exact-head
-   merge gate.
+   merge gate. Until this PR is merged, the default branch may still contain the
+   pre-fix router and must be treated as a bootstrap dependency, not as evidence
+   that the PR-head router has executed.
 
 ## Evidence
 
@@ -72,6 +74,15 @@ reaction. The durable central dispatch had already succeeded in that case.
   removal. The focused runner suite passed (`30 passed`), and the full suite
   remained `981 passed` with 100% statement/branch coverage and 100%
   public-docstring coverage.
+- Fresh exact-head review request `@opencode-agent review` on
+  `25b619fc65112b1d41e28a528f5d26529e9c80cd` reproduced the bootstrap boundary
+  before the PR fix was active: workflow run `31856400747` executed the
+  default-branch `agent_mention_router.py` and failed with
+  `gh: Invalid request. No more than 10 properties are allowed; 14 were
+  supplied. (HTTP 422)`. No repository dispatch was created, so this run is
+  evidence of the pre-merge default-branch defect only; it is not a review or
+  approval of the PR head. After merge, the canonical review request must be
+  repeated and bound to the exact PR head.
 
 ## Consequences
 
