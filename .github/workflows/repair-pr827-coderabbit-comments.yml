@@ -92,6 +92,7 @@ jobs:
               raise SystemExit('expected one trusted coverage apt marker')
           path.write_text(text.replace(marker, documented, 1), encoding='utf-8')
           PY
+          rm -f scripts/ci/repair_pr827_coderabbit_comments.py
 
       - name: Verify materialization, coverage, docs, and syntax
         run: |
