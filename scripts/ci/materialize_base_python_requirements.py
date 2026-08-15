@@ -222,26 +222,23 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether content carries only trusted pins or bounded includes.
+    """Return whether content carries hash pins and is safe to preflight.
 
-    Discovery is content-based rather than name-based so exact hash-pinned locks
-    in service subdirectories and role-specific requirements files can be
-    considered for offline coverage. Candidate syntax is deliberately stricter
-    than a substring search: each package line must be an exact ``==`` pin with
-    one or more complete SHA-256 hashes, or a bounded relative requirements
-    include. A global ``--require-hashes`` directive is not trust evidence by
-    itself. The downstream installer separately preflights every candidate as an
-    independent ``pip --require-hashes`` closure, so syntax eligibility never
-    substitutes for dependency-closure proof.
+    Discovery is content-based rather than name-based so hash-pinned locks in any
+    location (a service subdirectory, ``requirements-dev.txt``,
+    ``requirements-test.txt``) can be considered for offline coverage, while an
+    unpinned or PR-mutable requirements file is still excluded from the networked
+    build context. Hash syntax cannot prove that a file includes every transitive
+    dependency, so the trusted image installer separately preflights every
+    candidate as an independent ``--require-hashes`` closure. An empty file
+    carries no installable dependency and is not materialized.
     """
     lines = _requirement_lines(content)
-    requirement_lines = [line for line in lines if line != "--require-hashes"]
-    if not requirement_lines:
+    if not lines:
         return False
-    return all(
-        _is_fully_hash_pinned_requirement(line)
-        or _is_bounded_requirement_include(line)
-        for line in requirement_lines
+    return any(line == "--require-hashes" for line in lines) or all(
+        "--hash=" in line or line.startswith(("-r ", "--requirement "))
+        for line in lines
     )
 
 
