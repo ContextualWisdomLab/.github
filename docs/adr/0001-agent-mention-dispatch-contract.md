@@ -105,6 +105,22 @@ reaction. The durable central dispatch had already succeeded in that case.
   integer validation and adds boolean regressions; the predecessor terminal
   failure remains a real finding until a fresh exact-head Strix run verifies
   the fix.
+- Fresh central Strix run `31857507595`, job `94944941166`, artifact
+  `9239605933`, completed successfully with a zero-finding security report
+  (report SHA-256
+  `0f82cd4c71969d1882e15898fbfa995d5694d6e145ee799c2cbe74dae11588c5`,
+  `run.json` SHA-256
+  `f7d894edb9ce44fa91e40406f58b9664803ac6bb12df413ec708c7251448499e`,
+  gate-console SHA-256
+  `3787da4c7a08966a6e3e6c6727b10af32075ada2fee144b449e4ea3556ba83bc`).
+  The report suggested a `redact_sensitive_log.py` deduplication bug using
+  `comment.get("login")`, but exact-source inspection found no such expression
+  (the cited line is a function boundary and `agent_mention_router.py` already
+  reads `user.get("login")`). This is a provider/content false positive, not a
+  source fix to apply. The artifact still had no `evidence-binding.json`
+  because the `pull_request_target` run used the protected base workflow, so
+  the result remains non-clean until the post-merge default-branch structured
+  binding run succeeds.
 
 ## Consequences
 
