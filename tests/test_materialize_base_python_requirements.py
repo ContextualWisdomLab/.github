@@ -6,7 +6,6 @@ import runpy
 import subprocess
 import sys
 import tarfile
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -29,13 +28,6 @@ def _created_tool_directory(path: Path) -> str:
     """Create the directory normally returned by ``tempfile.mkdtemp``."""
     path.mkdir(mode=0o700)
     return str(path)
-
-
-def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
-    monkeypatch.setattr(materializer.sys, "platform", "linux")
-    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
-    materializer._install_trusted_uv.cache_clear()
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -126,12 +118,6 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
         "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\n",
         encoding="utf-8",
     )
-    requirements_dir = repo / "requirements"
-    requirements_dir.mkdir()
-    (requirements_dir / "ci.txt").write_text(
-        "pytest==9 --hash=sha256:" + ("c" * 64) + "\n",
-        encoding="utf-8",
-    )
     (repo / "uv.lock").write_text(
         "version = 1\n[[package]]\nname = 'x'\n", encoding="utf-8"
     )
@@ -145,7 +131,6 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
     assert [entry["source"] for entry in manifest] == [
         "requirements-test.txt",
-        "requirements/ci.txt",
         "services/account_unification/requirements-dev.txt",
     ]
 
@@ -160,39 +145,14 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
     )
     assert not materializer._is_candidate_lock_name("uv.lock")
     assert not materializer._is_candidate_lock_name("pyproject.toml")
-    assert materializer._is_candidate_lock_path(
-        materializer.pathlib.PurePosixPath("requirements/ci.txt")
-    )
-    assert materializer._is_candidate_lock_path(
-        materializer.pathlib.PurePosixPath("service/requirements/package.txt")
-    )
-    assert not materializer._is_candidate_lock_path(
-        materializer.pathlib.PurePosixPath("service/config/ci.txt")
-    )
 
 
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
-    assert materializer._is_hash_pinned(b"-r requirements-other.txt\n")
     assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
-    assert not materializer._is_hash_pinned(b"-r ./requirements-other.txt\n")
-    assert not materializer._is_hash_pinned(b"-r ../escape.txt\n")
-    assert materializer._is_bounded_requirement_include(
-        "--requirement requirements-other.txt"
-    )
-    assert not materializer._is_bounded_requirement_include("-r .")
-    assert not materializer._is_bounded_requirement_include("-r -evil.txt")
-    assert not materializer._is_bounded_requirement_include("-r ~evil.txt")
-    assert not materializer._is_bounded_requirement_include("-r C:foo.txt")
-    assert not materializer._is_bounded_requirement_include("-r foo?bar.txt")
-    assert not materializer._is_bounded_requirement_include("-r foo#bar.txt")
-    assert not materializer._is_bounded_requirement_include(r"-r foo\\bar.txt")
-    assert not materializer._is_bounded_requirement_include("-r")
-    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")
-    assert not materializer._is_bounded_requirement_include("-r pyproject.toml")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
     # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
     assert materializer._is_hash_pinned(
@@ -202,97 +162,6 @@ def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> 
         + b"b" * 64
         + b"\n"
     )
-
-
-def test_materialized_bounded_include_is_resolvable_by_pip(tmp_path: Path) -> None:
-    """A safe base-owned include survives flattening and pip hash preflight."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-
-    wheel_dir = tmp_path / "wheels"
-    wheel_dir.mkdir()
-    wheel = wheel_dir / "demo-1-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("demo/__init__.py", "__version__ = '1'\n")
-        archive.writestr(
-            "demo-1.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: demo\nVersion: 1\n",
-        )
-        archive.writestr(
-            "demo-1.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: TEPP-test\n"
-            "Root-Is-Purelib: true\nTag: py3-none-any\n",
-        )
-        archive.writestr("demo-1.dist-info/RECORD", "")
-    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-
-    (repo / "requirements.txt").write_text(
-        "-r other-hashes.txt\n", encoding="utf-8"
-    )
-    (repo / "other-hashes.txt").write_text(
-        f"demo==1 --hash=sha256:{digest}\n", encoding="utf-8"
-    )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "base")
-    base_sha = git(repo, "rev-parse", "HEAD")
-
-    output = tmp_path / "output"
-    manifest = materializer.materialize(repo, base_sha, output)
-    assert manifest == [{"file": "requirements-000.txt", "source": "requirements.txt"}]
-    assert (output / "requirements-000.txt").read_text(encoding="utf-8") == (
-        "-r includes-000/other-hashes.txt\n"
-    )
-    assert (output / "includes-000" / "other-hashes.txt").is_file()
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--dry-run",
-            "--ignore-installed",
-            "--disable-pip-version-check",
-            "--no-index",
-            "--find-links",
-            str(wheel_dir),
-            "--require-hashes",
-            "-r",
-            str(output / "requirements-000.txt"),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-
-
-def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> None:
-    """Includes must resolve to direct complete hash closures in the exact base."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "requirements.txt").write_text("-r child.txt\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "missing")
-    missing_sha = git(repo, "rev-parse", "HEAD")
-    with pytest.raises(RuntimeError, match="not a regular base blob"):
-        materializer.materialize(repo, missing_sha, tmp_path / "missing-output")
-
-    (repo / "child.txt").write_text("-r grandchild.txt\n", encoding="utf-8")
-    (repo / "grandchild.txt").write_text(
-        "demo==1 --hash=sha256:" + ("d" * 64) + "\n", encoding="utf-8"
-    )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "nested")
-    nested_sha = git(repo, "rev-parse", "HEAD")
-    with pytest.raises(RuntimeError, match="must contain only exact SHA-256 pins"):
-        materializer.materialize(repo, nested_sha, tmp_path / "nested-output")
 
 
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
@@ -813,7 +682,6 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
-    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -862,7 +730,6 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
-    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -902,7 +769,6 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
-    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

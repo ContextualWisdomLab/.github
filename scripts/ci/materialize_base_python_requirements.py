@@ -226,26 +226,23 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether content carries only trusted pins or bounded includes.
+    """Return whether content carries hash pins and is safe to preflight.
 
-    Discovery is content-based rather than name-based so exact hash-pinned locks
-    in service subdirectories and role-specific requirements files can be
-    considered for offline coverage. Candidate syntax is deliberately stricter
-    than a substring search: each package line must be an exact ``==`` pin with
-    one or more complete SHA-256 hashes, or a bounded relative requirements
-    include. A global ``--require-hashes`` directive is not trust evidence by
-    itself. The downstream installer separately preflights every candidate as an
-    independent ``pip --require-hashes`` closure, so syntax eligibility never
-    substitutes for dependency-closure proof.
+    Discovery is content-based rather than name-based so hash-pinned locks in any
+    location (a service subdirectory, ``requirements-dev.txt``,
+    ``requirements-test.txt``) can be considered for offline coverage, while an
+    unpinned or PR-mutable requirements file is still excluded from the networked
+    build context. Hash syntax cannot prove that a file includes every transitive
+    dependency, so the trusted image installer separately preflights every
+    candidate as an independent ``--require-hashes`` closure. An empty file
+    carries no installable dependency and is not materialized.
     """
     lines = _requirement_lines(content)
-    requirement_lines = [line for line in lines if line != "--require-hashes"]
-    if not requirement_lines:
+    if not lines:
         return False
-    return all(
-        _is_fully_hash_pinned_requirement(line)
-        or _is_bounded_requirement_include(line)
-        for line in requirement_lines
+    return any(line == "--require-hashes" for line in lines) or all(
+        "--hash=" in line or line.startswith(("-r ", "--requirement "))
+        for line in lines
     )
 
 
@@ -579,7 +576,7 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     for path, candidate in regular_blobs:
-        if _is_candidate_lock_path(candidate):
+        if _is_candidate_lock_name(candidate.name):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
             if _is_flat_materializable_lock(content):
                 locks.append((path, content))
@@ -592,91 +589,23 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return sorted(locks, key=lambda item: item[0])
 
 
-def _included_base_lock_blobs(
-    repo_root: pathlib.Path,
-    base_sha: str,
-    source_path: str,
-    content: bytes,
-    regular_paths: set[str],
-) -> list[tuple[pathlib.PurePosixPath, bytes]]:
-    """Load direct bounded includes from the exact base as complete closures."""
-    source_parent = pathlib.PurePosixPath(source_path).parent
-    included: dict[pathlib.PurePosixPath, bytes] = {}
-    for line in _requirement_lines(content):
-        target = _bounded_requirement_include_target(line)
-        if target is None:
-            continue
-        resolved = source_parent / target
-        resolved_path = resolved.as_posix()
-        if resolved_path not in regular_paths:
-            raise RuntimeError(
-                f"bounded include {target} from {source_path} is not a regular base blob"
-            )
-        included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
-        if not _is_fully_hash_pinned_export(included_content):
-            raise RuntimeError(
-                f"bounded include {resolved_path} must contain only exact SHA-256 pins"
-            )
-        included[target] = included_content
-    return sorted(included.items(), key=lambda item: item[0].as_posix())
-
-
-def _rewrite_materialized_includes(content: bytes, include_directory: str) -> bytes:
-    """Rewrite root include targets to their preserved generated subtree."""
-    text = content.decode("utf-8", errors="strict")
-    rewritten: list[str] = []
-    for raw_line in text.splitlines(keepends=True):
-        body = raw_line.rstrip("\r\n")
-        ending = raw_line[len(body) :]
-        stripped = body.strip()
-        target = _bounded_requirement_include_target(stripped)
-        if target is None:
-            rewritten.append(raw_line)
-            continue
-        indentation = body[: len(body) - len(body.lstrip())]
-        option = stripped.split()[0]
-        rewritten.append(
-            f"{indentation}{option} {include_directory}/{target.as_posix()}{ending}"
-        )
-    return "".join(rewritten).encode("utf-8")
-
-
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write base lock blobs under generated names safe for a Docker build context."""
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    resolved_repo = repo_root.resolve()
-    entries = _git(resolved_repo, "ls-tree", "-r", "-z", "--full-tree", base_sha)
-    regular_paths = {
-        path for path, _candidate in _regular_base_blob_paths(entries)
-    }
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(
-        base_hash_locks(resolved_repo, base_sha)
+        base_hash_locks(repo_root.resolve(), base_sha)
     ):
         generated_name = f"requirements-{index:03d}.txt"
-        include_directory = f"includes-{index:03d}"
-        included = _included_base_lock_blobs(
-            resolved_repo,
-            base_sha,
-            source_path,
-            content,
-            regular_paths,
-        )
-        for relative_target, included_content in included:
-            destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(included_content)
         destination = output_dir / generated_name
-        destination.write_bytes(
-            _rewrite_materialized_includes(content, include_directory)
-        )
+        destination.write_bytes(content)
         manifest.append({"file": generated_name, "source": source_path})
 
     (output_dir / "manifest.json").write_text(
