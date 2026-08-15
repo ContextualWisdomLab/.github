@@ -64,6 +64,14 @@ reaction. The durable central dispatch had already succeeded in that case.
   marker coverage, `setsid` handling, and lookaround detection. The follow-up
   changes address those findings; the full suite, coverage, docstring gate,
   and quick gate passed before the follow-up commit.
+- A subsequent exact-head review of `6c0316b46fc54da64c8bf239ea592fbb742cef6f`
+  correctly identified that the initial `setsid` regression only inspected
+  source text. The test now runs the extracted launcher in an isolated
+  `sitecustomize` harness, forces `os.setsid()` to raise `PermissionError`, and
+  records the continuing `os.execvpe("timeout", ...)` call plus credential
+  removal. The focused runner suite passed (`30 passed`), and the full suite
+  remained `981 passed` with 100% statement/branch coverage and 100%
+  public-docstring coverage.
 
 ## Consequences
 
