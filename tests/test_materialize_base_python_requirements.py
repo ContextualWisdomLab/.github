@@ -217,7 +217,7 @@ def test_rejects_symlink_output_directory(
     output.symlink_to(target, target_is_directory=True)
     monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
 
-    with pytest.raises(ValueError, match="must not be a symlink"):
+    with pytest.raises(ValueError, match="non-symlink directory"):
         materializer.materialize(tmp_path, "a" * 40, output)
 
 
@@ -798,3 +798,80 @@ def test_uv_export_process_failures_fail_closed(
 
     with pytest.raises(RuntimeError, match="could not run trusted uv export"):
         materializer.materialize(repo, base_sha, tmp_path / "output")
+
+
+
+def test_materialize_accepts_an_existing_empty_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing empty real directory remains a supported trusted destination."""
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    assert materializer.materialize(tmp_path, "a" * 40, output) == []
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
+    assert (output / "manifest.txt").read_text(encoding="utf-8") == ""
+
+
+def test_materialize_rejects_symlink_substitution_during_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path swapped to a symlink during creation cannot receive trusted files."""
+    output = tmp_path / "output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    original_mkdir = Path.mkdir
+
+    def substitute_symlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == output:
+            path.symlink_to(attacker_directory, target_is_directory=True)
+            return
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", substitute_symlink)
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+
+
+def test_materialize_detects_output_path_replacement_after_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory-descriptor writes never follow a replacement output path."""
+    output = tmp_path / "output"
+    detached_output = tmp_path / "detached-output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+    original_write = getattr(materializer, "_write_output_file", None)
+    swapped = False
+
+    def replace_path_then_write(
+        output_descriptor: int,
+        file_name: str,
+        content: bytes,
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            output.rename(detached_output)
+            output.symlink_to(attacker_directory, target_is_directory=True)
+            swapped = True
+        assert original_write is not None
+        original_write(output_descriptor, file_name, content)
+
+    monkeypatch.setattr(
+        materializer,
+        "_write_output_file",
+        replace_path_then_write,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="changed during materialization"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+    assert (detached_output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
