@@ -13,7 +13,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. Includes such as `-r other-hashes.txt` remain allowed when the exact base-tree target is a regular, complete SHA-256-pinned closure; a lone `--require-hashes` directive, dotted `./lock.txt`, traversal, absolute, URL, and option-like targets fail closed.
 - Bound OpenCode Rust coverage to the reviewed Debian `llvm-cov-19` and `llvm-profdata-19` executables across image build and the networkless sandbox runtime, failing closed instead of measuring an ambient or unversioned LLVM producer. The decision record now cites NIST SP 800-218 PW.4.1 so a runner `PATH` change cannot silently replace the coverage toolchain.
 - Recorded the org control-plane architecture, including the LLVM 19 Rust coverage boundary, so agents reconstruct the measurement trust boundary from the repo instead of private memory.
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
