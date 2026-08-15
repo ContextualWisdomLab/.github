@@ -44,7 +44,7 @@ The profile uses:
 - JSON Schema Draft 2020-12 for JSON payload contracts;
 - RFC 9457 for HTTP problem details;
 - RFC 9562 UUIDv7 for organization-level time-ordered identifiers where appropriate;
-- W3C Trace Context Recommendation version `00` grammar for the v1 envelope, rejecting forbidden all-zero trace and parent identifiers;
+- W3C Trace Context Recommendation version `00` grammar for the v1 envelope, rejecting forbidden all-zero trace and parent identifiers and requiring every reserved trace-flag bit to remain zero;
 - W3C PROV-O as the provenance semantic reference.
 
 CWL-specific metadata is placed inside `data.metadata` for domain events rather than inventing unrestricted top-level CloudEvents extensions.
@@ -87,7 +87,7 @@ The central repository includes stdlib-only contract tests that validate:
 
 - required profile artifacts exist and are parseable;
 - complete positive examples satisfy the supported JSON Schema subset used by the v1 profiles;
-- unknown top-level properties and invalid trace identifiers fail closed;
+- unknown top-level properties, invalid trace identifiers, and nonzero reserved trace flags fail closed;
 - CloudEvents `specversion` is pinned to `1.0`;
 - JSON Schemas use Draft 2020-12;
 - examples contain the required CWL metadata;
