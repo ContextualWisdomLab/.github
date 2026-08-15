@@ -227,11 +227,11 @@ The provenance record must distinguish authoritative facts, inferred relationshi
 
 - JSON contracts use **JSON Schema Draft 2020-12**.
 - Event transport follows CloudEvents **specversion `1.0`**.
-- Async channel descriptions use **AsyncAPI 3.0.0** when a repository publishes asynchronous interfaces.
+- Async channel descriptions use **AsyncAPI 3.1.0** when a repository publishes asynchronous interfaces.
 - Synchronous APIs use **OpenAPI 3.2.0** for new shared contracts unless a consumer compatibility constraint is documented.
 - HTTP error payloads use **RFC 9457**.
 - New organization-level event/command/correlation identifiers use **RFC 9562 UUIDv7** where time-ordered globally unique identifiers are beneficial.
-- Stable distributed-trace propagation follows the W3C Trace Context Recommendation.
+- Stable distributed-trace propagation follows the W3C Trace Context Recommendation. The v1 JSON envelopes deliberately accept version `00` traceparents only and reject all-zero trace IDs, all-zero parent IDs, and forbidden version `ff`; future Trace Context versions require a new profile revision rather than silent widening.
 - Breaking contracts require a new major version or a parallel endpoint/channel/schema; consumers are not silently migrated.
 - Producers and consumers both maintain contract tests for interfaces they depend on.
 - A producer does not declare a breaking interface safe solely because its own tests pass.
@@ -262,6 +262,8 @@ Example:
 ```text
 org.contextualwisdomlab.identity.account.provision.v1
 ```
+
+Each segment after `org.contextualwisdomlab` uses lowercase `snake_case`; empty segments, hyphenated segments, and version zero are invalid.
 
 Event names describe facts that have happened. Command names describe requested actions.
 
