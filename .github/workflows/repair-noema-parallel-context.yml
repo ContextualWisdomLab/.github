@@ -1,0 +1,100 @@
+name: Repair Noema parallel changed-file context
+
+on:
+  push:
+    paths:
+      - .github/workflows/repair-noema-parallel-context.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-noema-parallel-context-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+          disable-file-monitoring: true
+
+      - name: Check out repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: bolt-noema-review-api-batching-3009201169551405394
+          persist-credentials: true
+
+      - name: Apply bounded production repair
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/noema_review_gate.py")
+          source = path.read_text(encoding="utf-8")
+
+          old_constant = "MAX_CONTEXT_FILES = 12\nMAX_FILE_CONTEXT_CHARS = 4000"
+          new_constant = (
+              "MAX_CONTEXT_FILES = 12\n"
+              "MAX_CONTEXT_FETCH_WORKERS = 10\n"
+              "MAX_FILE_CONTEXT_CHARS = 4000"
+          )
+          if source.count(old_constant) != 1:
+              raise SystemExit("Noema context constant anchor did not match exactly once")
+          source = source.replace(old_constant, new_constant)
+
+          old_target_block = (
+              "    target_paths = paths[:MAX_CONTEXT_FILES]\n"
+              "    if not target_paths:\n"
+              "        return \"Changed file context unavailable: no paths to check.\"\n\n"
+              "    def _fetch_file_content(path: str) -> tuple[str, str | None, str | None]:\n"
+              "        try:\n"
+          )
+          new_target_block = (
+              "    target_paths = paths[:MAX_CONTEXT_FILES]\n\n"
+              "    def _fetch_file_content(path: str) -> tuple[str, str | None, str | None]:\n"
+              "        \"\"\"Return head text or a scrubbed RuntimeError for one changed path.\"\"\"\n\n"
+              "        try:\n"
+          )
+          if source.count(old_target_block) != 1:
+              raise SystemExit("Noema target-path helper anchor did not match exactly once")
+          source = source.replace(old_target_block, new_target_block)
+
+          old_workers = "    max_workers = min(10, len(target_paths))"
+          new_workers = (
+              "    max_workers = min(MAX_CONTEXT_FETCH_WORKERS, len(target_paths))"
+          )
+          if source.count(old_workers) != 1:
+              raise SystemExit("Noema worker-limit anchor did not match exactly once")
+          source = source.replace(old_workers, new_workers)
+
+          path.write_text(source, encoding="utf-8")
+          PY
+
+      - name: Run focused regression evidence
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts/ci/noema_review_gate.py tests/test_noema_parallel_changed_file_context.py
+          python3 -m pytest -q \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_parallel_changed_file_context.py
+
+      - name: Commit verified repair and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-noema-parallel-context.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_parallel_changed_file_context.py \
+            .github/workflows/repair-noema-parallel-context.yml
+          git diff --cached --check
+          git commit -m "perf(noema): bound parallel changed-file context"
+          git push origin HEAD:bolt-noema-review-api-batching-3009201169551405394
