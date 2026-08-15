@@ -159,7 +159,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Treat the Strix agent/tool mismatch as a model failure, not a finding."""
 
         log = (
-            "File strix/core/execution.py, line 355, in _run_cycle\n"
+            "Traceback (most recent call last):\n"
+            '  File "/site-packages/strix/core/execution.py", line 355, in _run_cycle\n'
+            '  File "/site-packages/agents/run_internal/turn_resolution.py", '
+            'line 1828, in process_model_response\n'
             "agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix\n"
         )
         self.assertTrue(_classifies_as_model_tool_contract(log))

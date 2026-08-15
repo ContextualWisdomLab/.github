@@ -3376,6 +3376,18 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
+	emit_strix_model_tool_contract_error() {
+	local tool_name="$1"
+	cat <<CONTRACT_EOF
+Traceback (most recent call last):
+  File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/strix/core/execution.py", line 355, in _run_cycle
+    async for event in stream.stream_events():
+  File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/agents/run_internal/turn_resolution.py", line 1828, in process_model_response
+    raise ModelBehaviorError(error)
+agents.exceptions.ModelBehaviorError: Tool ${tool_name} not found in agent strix
+CONTRACT_EOF
+}
+
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
@@ -3464,6 +3476,35 @@ REPORT
 			exit 9
 			;;
 		esac
+		;;
+	strix-tool-contract-fallback-success|strix-tool-contract-execute-fallback-success|strix-tool-contract-exec-cmd-fallback-success|strix-tool-contract-agent-finish-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/contract-execute-primary)
+			emit_strix_model_tool_contract_error "execute"
+			exit 1
+			;;
+		vertex_ai/contract-exec-cmd-primary)
+			emit_strix_model_tool_contract_error "exec_cmd"
+			exit 1
+			;;
+		vertex_ai/contract-agent-finish-primary)
+			emit_strix_model_tool_contract_error "agent_finish"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after Strix tool-contract fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: Strix tool-contract fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 26
+			;;
+		esac
+		;;
+	strix-tool-contract-source-spoof)
+		echo "target source text: agents.exceptions.ModelBehaviorError: Tool exec_cmd not found in agent strix"
+		echo "target source text: strix/core/execution.py"
+		exit 1
 		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
@@ -5977,6 +6018,46 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/openai/o3"
+		;;
+	strix-tool-contract-execute-fallback-success)
+		run_gate_case "strix-tool-contract-execute-fallback-success" \
+			"vertex_ai/contract-execute-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-execute-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-exec-cmd-fallback-success)
+		run_gate_case "strix-tool-contract-exec-cmd-fallback-success" \
+			"vertex_ai/contract-exec-cmd-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-exec-cmd-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-agent-finish-fallback-success)
+		run_gate_case "strix-tool-contract-agent-finish-fallback-success" \
+			"vertex_ai/contract-agent-finish-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-agent-finish-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-source-spoof)
+		run_gate_case "strix-tool-contract-source-spoof" \
+			"vertex_ai/contract-spoof-primary" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"vertex_ai/contract-spoof-primary" \
+			"<unset>"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -9260,6 +9341,47 @@ run_gate_case "nonrecoverable" \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid"
+
+# Provider/model responses have used several tool names across Strix agent
+# versions. Each observed name must be retryable only with a real Python
+# traceback, so a healthy fallback can complete the scan.
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-execute-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-execute-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-exec-cmd-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-exec-cmd-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-agent-finish-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-agent-finish-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+# Target output that merely quotes the exception and source path must remain
+# non-retryable and fail closed.
+run_gate_case "strix-tool-contract-source-spoof" \
+	"vertex_ai/contract-spoof-primary" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/contract-spoof-primary" \
+	"<unset>"
 
 run_gate_case "provider-prefix-required" \
 	"gemini-2.5-pro" \

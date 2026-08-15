@@ -2931,11 +2931,15 @@ is_midstream_fallback_error() {
 
 is_strix_model_tool_contract_error() {
 	# Strix can fail before producing a report when a provider/model response
-	# requests a tool that the installed agent does not expose. Require both
-	# the exact agent exception and a Strix execution traceback so target-source
-	# text cannot manufacture a fallback signal.
-	if grep -Fq 'agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix' "$STRIX_LOG" &&
-		grep -Fq 'strix/core/execution.py' "$STRIX_LOG"; then
+	# requests a tool that the installed agent does not expose. Keep the
+	# accepted tool names explicit: new names must be observed in a real Strix
+	# traceback before they become fallback signals. Require the Python
+	# traceback shape as well as the exact exception so ordinary target output
+	# cannot manufacture a provider fallback.
+	if grep -Eq '^agents\.exceptions\.ModelBehaviorError: Tool (execute|exec_cmd|agent_finish) not found in agent strix$' "$STRIX_LOG" &&
+		grep -Eq '^Traceback \(most recent call last\):$' "$STRIX_LOG" &&
+		grep -Eq '^[[:space:]]+File "[^"]*/site-packages/strix/core/(runner|execution)\.py", line [0-9]+,' "$STRIX_LOG" &&
+		grep -Eq '^[[:space:]]+File "[^"]*/site-packages/agents/run_internal/turn_resolution\.py", line [0-9]+,' "$STRIX_LOG"; then
 		return 0
 	fi
 

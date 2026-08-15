@@ -50,6 +50,14 @@ reaction. The durable central dispatch had already succeeded in that case.
    require exact built-in integers; Python booleans are rejected even though
    `bool` subclasses `int`. This keeps JSON types, receipt parsing, and
    idempotency keys stable at the trust boundary.
+10. Strix provider/model tool-contract failures may move to a distinct
+    fallback model only when the log contains an exact observed tool name
+    (`execute`, `exec_cmd`, or `agent_finish`), the exact
+    `ModelBehaviorError` line, and both Strix execution and Agents resolution
+    traceback frames. A quoted exception or source-text imitation is not a
+    fallback signal. If no fallback produces a complete report, the gate stays
+    fail-closed; future tool names require a real traceback and a regression
+    test before being admitted.
 
 ## Evidence
 
@@ -159,6 +167,15 @@ reaction. The durable central dispatch had already succeeded in that case.
   They produced no current-head approval or repository-dispatch review; keep
   the failure evidence visible and require the normal post-merge router fix to
   run before treating any review or merge state as complete.
+- Provider logs exposed two additional real Strix tool-contract variants that
+  the former classifier missed: fast-mlsirm run `31859274416` emitted
+  `Tool exec_cmd not found in agent strix`, while central dispatch run
+  `31858873824` emitted `Tool agent_finish not found in agent strix`. The gate
+  now admits only these observed aliases plus the previously supported
+  `execute` form, and only with the complete traceback shape. The focused
+  classifier suite passed (`9 passed`), the full central quick gate passed
+  with its documented local 1/2-second timeout fixture, and the Python suite
+  passed (`983 passed`, 16 subtests).
 
 ## Consequences
 
