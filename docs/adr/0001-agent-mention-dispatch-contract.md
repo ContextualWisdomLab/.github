@@ -58,6 +58,31 @@ reaction. The durable central dispatch had already succeeded in that case.
     fallback signal. If no fallback produces a complete report, the gate stays
     fail-closed; future tool names require a real traceback and a regression
     test before being admitted.
+11. Every `repository_dispatch` body is validated against GitHub's complete
+    boundary before network mutation: `event_type` is a non-empty string of at
+    most 100 characters, `client_payload` is JSON-serializable, has at most 10
+    direct properties, and is strictly below 64 KiB when compactly encoded as
+    UTF-8. Noema and OpenCode payload builders use this same validator, so a
+    new dispatch producer cannot silently bypass one of the limits.
+12. Strix evidence publication captures both the trusted gate status and the
+    `tee` log-capture status. Candidate evidence is collected rather than
+    accepted at the first matching file; a present `expires_at` must be a
+    valid future timestamp, and exactly one eligible completed successful
+    `run.json` plus its non-empty report must remain. Legacy run metadata that
+    omits `expires_at` remains eligible for backward compatibility, but two
+    eligible candidates are always ambiguous and fail closed.
+13. The scheduler has a distinct post-merge Strix dispatch path. It validates
+    the closed PR's live base repository/ref, original head SHA, `merged_at`,
+    and merge-commit SHA, then dispatches immutable metadata. The receiver
+    rechecks those fields against the live PR, checks out the merge commit,
+    and scans the merged target tree. It does not compare a pre-merge base SHA
+    after merge; the open-PR path retains the existing exact base/head binding.
+14. Redaction keeps structured JSON valid by applying unstructured scrubbing
+    only to JSON string leaves, while non-JSON lines retain the existing
+    assignment and operational-identifier scrubber. IPv4 matching is bounded
+    to valid octets, and all fail-closed Strix PR-scope error paths emit the
+    run-scoped gate marker before exiting. These are behavior contracts with
+    focused regressions, not source-text-only assurances.
 
 ## Evidence
 
@@ -176,6 +201,14 @@ reaction. The durable central dispatch had already succeeded in that case.
   classifier suite passed (`9 passed`), the full central quick gate passed
   with its documented local 1/2-second timeout fixture, and the Python suite
   passed (`983 passed`, 16 subtests).
+- The follow-up hardening adds regression coverage for dispatch event and
+  payload-size limits, merged-target Strix metadata, tee failure propagation,
+  expired/duplicate evidence candidates, bounded IPv4 redaction, valid JSON
+  redaction, fail-closed gate markers, and shared test fixtures. The focused
+  suite passed after the implementation change (`273 passed`); the final
+  working-tree verification passed with `989 passed`, 16 subtests, 100%
+  statement/branch coverage, 100% public-docstring coverage, compileall, and
+  the full quick gate.
 
 ## Consequences
 

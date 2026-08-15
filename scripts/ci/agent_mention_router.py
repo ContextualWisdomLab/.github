@@ -35,6 +35,9 @@ ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
+MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES = 10
+MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH = 100
+MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -296,6 +299,48 @@ def agent_ledger_artifact_name(request: MentionRequest, agent: str) -> str:
 
     return f"{LEDGER_ARTIFACT_PREFIX}{agent_invocation_key(request, agent)}"
 
+
+def _validate_repository_dispatch_payload(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Reject repository-dispatch bodies GitHub will refuse at the API boundary."""
+
+    client_payload = payload.get("client_payload")
+    if not isinstance(client_payload, dict):
+        raise ValueError("repository-dispatch client_payload must be an object")
+    property_count = len(client_payload)
+    if property_count > MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES:
+        raise ValueError(
+            "repository-dispatch client_payload has "
+            f"{property_count} properties; GitHub permits at most "
+            f"{MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES}"
+        )
+    try:
+        payload_bytes = len(
+            json.dumps(
+                client_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("repository-dispatch client_payload must be JSON serializable") from exc
+    if payload_bytes >= MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES:
+        raise ValueError(
+            "repository-dispatch client_payload must be under "
+            f"{MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES} bytes"
+        )
+    event_type = payload.get("event_type")
+    if (
+        not isinstance(event_type, str)
+        or not event_type
+        or len(event_type) > MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH
+    ):
+        raise ValueError(
+            "repository-dispatch event_type must be a non-empty string of at most "
+            f"{MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH} characters"
+        )
+    return payload
 
 def _artifact_records(
     value: Any,

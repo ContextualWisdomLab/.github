@@ -1928,6 +1928,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
         "client_payload": {
             "target_repository": "owner/repo",
             "pr_number": 1,
+            "merge_state": "open",
             "pr_base_ref": "develop",
             "pr_base_sha": base_sha,
             "pr_head_sha": head_sha,
@@ -1954,6 +1955,116 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             "pr_head_sha": head_sha,
         },
     }
+
+
+def test_post_merge_strix_dispatch_binds_merged_target_tree(monkeypatch) -> None:
+    """Merged evidence uses the live merge commit without pre-merge base binding."""
+
+    calls = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(sched, "force_cancel_workflow_run_refs", lambda _refs: None)
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, *, stdin=None: calls.append((args, stdin)),
+    )
+    pr = make_pr(
+        state="CLOSED",
+        mergedAt="2026-08-15T04:05:06Z",
+        mergeCommit={"oid": "c" * 40},
+        baseRefName="main",
+        headRefOid="a" * 40,
+    )
+
+    assert (
+        sched.dispatch_post_merge_strix_evidence(
+            "owner/repo",
+            "Strix Security Scan",
+            pr,
+            dry_run=False,
+        )
+        == "dispatched"
+    )
+    payload = json.loads(calls[0][1])
+    assert payload == {
+        "event_type": "strix-scan",
+        "client_payload": {
+            "target_repository": "owner/repo",
+            "pr_number": 1,
+            "merge_state": "merged",
+            "target_branch": "main",
+            "pr_head_sha": "a" * 40,
+            "merged_at": "2026-08-15T04:05:06Z",
+            "merged_commit_sha": "c" * 40,
+        },
+    }
+
+
+def test_post_merge_dispatch_rejects_unmerged_metadata() -> None:
+    """A closed-looking but unmerged PR cannot create post-merge evidence."""
+
+    with pytest.raises(ValueError, match="closed pull request"):
+        sched.validated_post_merge_dispatch_fields(make_pr())
+
+    with pytest.raises(ValueError, match="valid mergedAt"):
+        sched.validated_post_merge_dispatch_fields(
+            make_pr(
+                state="CLOSED",
+                mergedAt="not-a-timestamp",
+                mergeCommitOid="c" * 40,
+                headRefOid="a" * 40,
+            )
+        )
+
+    assert sched.validated_post_merge_dispatch_fields(
+        make_pr(
+            state="CLOSED",
+            mergedAt="2026-08-15T04:05:06Z",
+            mergeCommitOid=None,
+            mergeCommit={"oid": "d" * 40},
+            headRefOid="a" * 40,
+        )
+    ) == ("main", "a" * 40, "2026-08-15T04:05:06Z", "d" * 40)
+
+
+def test_post_merge_strix_dispatch_dry_run_and_active_run(monkeypatch, capsys) -> None:
+    """Post-merge dispatch remains bounded by dry-run and active-run guards."""
+
+    pr = make_pr(
+        state="CLOSED",
+        mergedAt="2026-08-15T04:05:06Z",
+        mergeCommitOid="c" * 40,
+        headRefOid="a" * 40,
+    )
+    assert (
+        sched.dispatch_post_merge_strix_evidence(
+            "owner/repo", "Strix Security Scan", pr, dry_run=True
+        )
+        == "dry_run"
+    )
+
+    cancelled = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_review_run_refs",
+        lambda *_args, **_kwargs: ([ ("ContextualWisdomLab/.github", "123") ], [("ContextualWisdomLab/.github", "122")]),
+    )
+    monkeypatch.setattr(sched, "force_cancel_workflow_run_refs", cancelled.extend)
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda *_args, **_kwargs: pytest.fail("active post-merge run must not dispatch again"),
+    )
+    assert (
+        sched.dispatch_post_merge_strix_evidence(
+            "owner/repo", "Strix Security Scan", pr, dry_run=False
+        )
+        == "already_running"
+    )
+    assert cancelled == [("ContextualWisdomLab/.github", "122")]
+    assert "Post-merge Strix dispatch skipped" in capsys.readouterr().out
 
 
 def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
@@ -4507,6 +4618,59 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     assert exact_fetches == [("owner/repo", 7)]
     with pytest.raises(SystemExit, match="--pr-number must not be negative"):
         sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
+
+
+def test_main_post_merge_dispatch_contract(monkeypatch, capsys):
+    """The post-merge CLI rejects ambiguity and publishes bounded outcomes."""
+
+    base_args = [
+        "--repo",
+        "owner/repo",
+        "--base-branch",
+        "main",
+        "--project-flow",
+        "github",
+        "--post-merge",
+    ]
+    with pytest.raises(SystemExit, match="--post-merge requires --pr-number"):
+        sched.main(base_args)
+
+    args = [*base_args, "--pr-number", "7"]
+    monkeypatch.setattr(sched, "fetch_pr", lambda _repo, _number: [])
+    with pytest.raises(SystemExit, match="exactly one pull request"):
+        sched.main(args)
+
+    monkeypatch.setattr(sched, "fetch_pr", lambda _repo, _number: [make_pr(number=7)])
+    monkeypatch.setattr(
+        sched,
+        "dispatch_post_merge_strix_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("provider unavailable")),
+    )
+    assert sched.main(args) == 1
+    assert "failed closed: provider unavailable" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_post_merge_strix_evidence",
+        lambda *_args, **_kwargs: "dry_run",
+    )
+    assert sched.main(args) == 0
+    dry_run_output = capsys.readouterr().out
+    assert "post-merge target-tree Strix evidence dry_run" in dry_run_output
+    assert json.loads(dry_run_output.strip().splitlines()[-1])["counts"] == {
+        "security_dispatch": 1
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_post_merge_strix_evidence",
+        lambda *_args, **_kwargs: "already_running",
+    )
+    assert sched.main(args) == 0
+    already_running_output = capsys.readouterr().out
+    assert json.loads(already_running_output.strip().splitlines()[-1])["counts"] == {
+        "wait": 1
+    }
 
 
 def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):

@@ -86,6 +86,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '--repo "$TARGET_REPOSITORY"' in inspect
     assert '--base-branch "$TARGET_DEFAULT_BRANCH"' in inspect
     assert 'args+=(--pr-number "$PULL_REQUEST_NUMBER")' in inspect
+    assert "POST_MERGE:" in workflow
+    assert "args+=(--post-merge)" in inspect
     assert (
         "github.event_name == 'repository_dispatch' && "
         "github.event.client_payload.target_repository != '' && "
@@ -1135,6 +1137,12 @@ def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None
         in strix_workflow
     )
     assert "TARGET_REPOSITORY:" in strix_workflow
+    assert "MERGE_STATE:" in strix_workflow
+    assert "SUPPLIED_TARGET_BRANCH:" in strix_workflow
+    assert "SUPPLIED_MERGED_COMMIT_SHA:" in strix_workflow
+    assert "post-merge repository_dispatch Strix metadata" in strix_workflow
+    assert 'trusted_workspace_sha="$live_merge_commit_sha"' in strix_workflow
+    assert "github.event.client_payload.merge_state != 'merged'" in strix_workflow
     assert 'run_id="$GITHUB_RUN_ID"' in strix_workflow
     assert "artifact_name:$artifact_name" in strix_workflow
     assert "repository:$repository" in strix_workflow
@@ -1249,7 +1257,8 @@ def test_strix_structured_status_rejects_unbound_candidates(tmp_path: Path) -> N
         run: dict[str, object],
         binding_overrides: dict[str, object] | None = None,
         artifact_records: list[dict[str, object]] | None = None,
-    ):
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the extracted status helper against one spoofed evidence candidate."""
         status_path.write_text(
             json.dumps(
                 {

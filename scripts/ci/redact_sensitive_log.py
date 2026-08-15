@@ -39,8 +39,9 @@ PHONE_RE = re.compile(
     r"(^|[^\w])(?:\+\d[\d(). -]{7,}\d|\d{2,4}[-. ]\d{3,4}[-. ]\d{3,4})"
     r"($|[^\w])"
 )
+IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 IPV4_RE = re.compile(
-    r"(^|[^\d.])(?:\d{1,3}\.){3}\d{1,3}($|[^\d.])"
+    rf"(^|[^\d.])(?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET}($|[^\d.])"
 )
 RUNNER_PATH_RE = re.compile(
     r"(^|[^\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
@@ -166,10 +167,7 @@ def _redact_line(line: str) -> str:
         value = json.loads(line)
     except json.JSONDecodeError:
         return _redact_unstructured(line)
-    return _redact_unstructured(
-        json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":")),
-        redact_assignments=False,
-    )
+    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
 
 
 def redact_text(text: str) -> str:

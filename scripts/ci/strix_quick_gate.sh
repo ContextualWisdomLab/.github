@@ -452,7 +452,7 @@ normalize_changed_files_cache() {
 	for changed_file in "${CHANGED_FILES[@]}"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || {
 			if pull_request_head_blob_required; then
-				echo "ERROR: pull request changed file path is unsafe: $changed_file" >&2
+				emit_strix_gate_marker "ERROR: pull request changed file path is unsafe; failing closed: $changed_file"
 				return 2
 			fi
 			continue
@@ -1120,7 +1120,7 @@ is_scannable_changed_file() {
 	fi
 	if ! normalized_changed_file="$(normalize_changed_file_path "$changed_file")"; then
 		if pull_request_head_blob_required; then
-			echo "ERROR: pull request changed file path is unsafe: $changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file path is unsafe; failing closed: $changed_file"
 			return 2
 		fi
 		return 1
@@ -1315,7 +1315,7 @@ build_pull_request_scope_dir() {
 		local changed_file="$1"
 		local relative_path
 		relative_path="$(normalize_changed_file_path "$changed_file")" || {
-			echo "ERROR: pull request changed file path is unsafe: $changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file path is unsafe; failing closed: $changed_file"
 			return 2
 		}
 		local dst_path
@@ -1347,7 +1347,7 @@ PY
 		fi
 		local src_path="$REPO_ROOT/$relative_path"
 		if [ ! -f "$src_path" ] || [ -L "$src_path" ]; then
-			echo "ERROR: pull request changed file is unavailable in both PR head and checkout: $changed_file" >&2
+			emit_strix_gate_marker "ERROR: pull request changed file is unavailable in both PR head and checkout; failing closed: $changed_file"
 			return 2
 		fi
 		cp -- "$src_path" "$dst_path"
@@ -1357,7 +1357,7 @@ PY
 		local context_file="$1"
 		local relative_path
 		relative_path="$(normalize_changed_file_path "$context_file")" || {
-			echo "ERROR: pull request context file path is unsafe: $context_file" >&2
+			emit_strix_gate_marker "ERROR: pull request context file path is unsafe; failing closed: $context_file"
 			return 2
 		}
 		local dst_path
@@ -1404,7 +1404,7 @@ PY
 			return 0
 		fi
 		if [ ! -f "$src_path" ] || [ -L "$src_path" ]; then
-			echo "ERROR: pull request trusted context file is not a regular checkout file: $context_file" >&2
+			emit_strix_gate_marker "ERROR: pull request trusted context file is not a regular checkout file; failing closed: $context_file"
 			return 2
 		fi
 		mkdir -p -- "$(dirname -- "$dst_path")"
@@ -1430,7 +1430,7 @@ PY
 		fi
 		local src_path="$REPO_ROOT/$relative_path"
 		if [ ! -f "$src_path" ] || [ -L "$src_path" ]; then
-			echo "ERROR: pull request scan support file is unavailable: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request scan support file is unavailable; failing closed: $relative_path"
 			return 2
 		fi
 		mkdir -p -- "$(dirname -- "$dst_path")"
@@ -1529,7 +1529,7 @@ build_pull_request_head_tree_scope_dir() {
 			;;
 		esac
 		relative_path="$(normalize_changed_file_path "$relative_path")" || {
-			echo "ERROR: pull request head tree path is unsafe: $relative_path" >&2
+			emit_strix_gate_marker "ERROR: pull request head tree path is unsafe; failing closed: $relative_path"
 			return 2
 		}
 		dst_path="$(

@@ -43,15 +43,12 @@ def _function_block(source: str, function_name: str) -> str:
     return match.group(0)
 
 
-def _classifies_as_nvidia_not_found(log_text: str) -> bool:
-    """Execute the production classifier against a bounded synthetic log."""
+def _classifies_with(function_name: str, log_text: str) -> bool:
+    """Execute one production Strix classifier against a bounded synthetic log."""
 
     gate_source = STRIX_GATE.read_text(encoding="utf-8")
-    function_source = _function_block(
-        gate_source,
-        "is_nvidia_nim_not_found_error",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-nvidia-404-") as temp_dir:
+    function_source = _function_block(gate_source, function_name)
+    with tempfile.TemporaryDirectory(prefix="strix-classifier-") as temp_dir:
         log_path = Path(temp_dir) / "strix.log"
         log_path.write_text(log_text, encoding="utf-8")
         script = "\n".join(
@@ -59,7 +56,7 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
                 "set -euo pipefail",
                 'STRIX_LOG="$1"',
                 function_source,
-                "is_nvidia_nim_not_found_error",
+                function_name,
             )
         )
         completed = subprocess.run(
@@ -71,36 +68,18 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     if completed.returncode not in {0, 1}:
         raise AssertionError(completed.stderr)
     return completed.returncode == 0
+
+
+def _classifies_as_nvidia_not_found(log_text: str) -> bool:
+    """Execute the production NVIDIA 404 classifier."""
+
+    return _classifies_with("is_nvidia_nim_not_found_error", log_text)
 
 
 def _classifies_as_model_tool_contract(log_text: str) -> bool:
     """Execute the production Strix tool-contract classifier."""
 
-    gate_source = STRIX_GATE.read_text(encoding="utf-8")
-    function_source = _function_block(
-        gate_source,
-        "is_strix_model_tool_contract_error",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-tool-contract-") as temp_dir:
-        log_path = Path(temp_dir) / "strix.log"
-        log_path.write_text(log_text, encoding="utf-8")
-        script = "\n".join(
-            (
-                "set -euo pipefail",
-                'STRIX_LOG="$1"',
-                function_source,
-                "is_strix_model_tool_contract_error",
-            )
-        )
-        completed = subprocess.run(
-            ["bash", "-c", script, "strix-classifier", str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    if completed.returncode not in {0, 1}:
-        raise AssertionError(completed.stderr)
-    return completed.returncode == 0
+    return _classifies_with("is_strix_model_tool_contract_error", log_text)
 
 
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):

@@ -30,11 +30,19 @@ def _created_tool_directory(path: Path) -> str:
     return str(path)
 
 
+<<<<<<< HEAD
 def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
     monkeypatch.setattr(materializer.sys, "platform", "linux")
     monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     materializer._install_trusted_uv.cache_clear()
+=======
+@pytest.fixture
+def linux_x86_64(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin trusted-uv installer tests to the deterministic Linux target."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+>>>>>>> 0cc2a8ed (fix: bind merged Strix evidence and dispatch limits)
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -701,7 +709,7 @@ def test_verified_uv_binary_rejects_truncated_member(
 
 
 def test_install_trusted_uv_verifies_version_and_caches_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, linux_x86_64: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
     _force_linux_x86_64_installer(monkeypatch)
@@ -749,6 +757,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
 )
 def test_install_trusted_uv_rejects_version_process_failures(
     tmp_path: Path,
+    linux_x86_64: None,
     monkeypatch: pytest.MonkeyPatch,
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
@@ -789,6 +798,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
 )
 def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     tmp_path: Path,
+    linux_x86_64: None,
     monkeypatch: pytest.MonkeyPatch,
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
