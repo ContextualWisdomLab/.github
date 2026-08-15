@@ -64,10 +64,7 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
-  `scorecard-governance.md`, SBOM inventory. Doctoring records live under
-  `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
-  diagram for line-anchored REQUEST_CHANGES findings and merge trust
-  boundaries.
+  `scorecard-governance.md`, SBOM inventory.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
@@ -129,7 +126,3 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
-
-`finding_location_error` rejects line `0` and `True` so the EOF probe
-cannot treat `0 > line_count` as an anchor. See `ARCHITECTURE.md` and
-`docs/doctoring/review-line-anchored-findings.md`.
