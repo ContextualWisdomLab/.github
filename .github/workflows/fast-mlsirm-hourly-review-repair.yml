@@ -1,0 +1,28 @@
+name: fast-mlsirm Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 49 avoids minute-zero pressure and the existing product callers.
+    - cron: "49 * * * *"
+
+concurrency:
+  group: fast-mlsirm-hourly-review-repair
+  # Preserve bounded RCA when a later hourly heartbeat arrives.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/fast-mlsirm
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      # Central OpenCode/NVIDIA NIM review and psychometric CI can approach two hours.
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}

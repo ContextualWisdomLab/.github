@@ -15,6 +15,8 @@ import runpy
 import sys
 from typing import Any
 
+import pytest
+
 
 MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -321,3 +323,90 @@ def test_module_main_guard_executes(tmp_path: pathlib.Path, monkeypatch: Any) ->
         assert exc.code == 0
     else:
         raise AssertionError("expected SystemExit from the module main guard")
+
+
+def test_require_regular_file_rejects_missing_and_directory(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A missing path or a directory cannot be treated as a requirements lock."""
+
+    module = load_module()
+    with pytest.raises(module.AuditConfigurationError, match="could not be inspected"):
+        module._require_regular_file(tmp_path / "missing.txt")
+    with pytest.raises(module.AuditConfigurationError, match="regular non-symlink"):
+        module._require_regular_file(tmp_path)
+
+
+def test_discover_rejects_paths_that_escape_the_audit_root(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """A glob hit that is not under the audit root is fail-closed."""
+
+    module = load_module()
+    lock = tmp_path / "requirements-ci.txt"
+    lock.write_text("demo==1\n", encoding="utf-8")
+    original = pathlib.Path.relative_to
+
+    def escape(self: pathlib.Path, other: pathlib.Path) -> pathlib.PurePath:
+        if self.name == "requirements-ci.txt":
+            raise ValueError("escaped")
+        return original(self, other)
+
+    monkeypatch.setattr(pathlib.Path, "relative_to", escape)
+    with pytest.raises(module.AuditConfigurationError, match="escaped the audit root"):
+        module.discover_requirement_files(tmp_path)
+
+
+def test_discover_rejects_unstatable_requirement_hits(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """A requirements path that cannot be lstat'd cannot enter the audit set."""
+
+    module = load_module()
+    lock = tmp_path / "requirements-ci.txt"
+    lock.write_text("demo==1\n", encoding="utf-8")
+    original = pathlib.Path.lstat
+
+    def boom(self: pathlib.Path) -> Any:
+        if self.name == "requirements-ci.txt":
+            raise OSError("gone")
+        return original(self)
+
+    monkeypatch.setattr(pathlib.Path, "lstat", boom)
+    with pytest.raises(module.AuditConfigurationError, match="could not be inspected"):
+        module.discover_requirement_files(tmp_path)
+
+
+def test_should_audit_skips_unstatable_children_and_accepts_pylock(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """Unstatable children are skipped; a pylock.*.toml file is a real manifest."""
+
+    module = load_module()
+    vanished = tmp_path / "vanished"
+    vanished.mkdir()
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pylock.alias.toml").symlink_to(service / "missing.toml")
+    (service / "pylock.ci.toml").write_text("[tool]\n", encoding="utf-8")
+    original = pathlib.Path.lstat
+
+    def flaky(self: pathlib.Path) -> Any:
+        if self.name == "vanished":
+            raise OSError("race")
+        return original(self)
+
+    monkeypatch.setattr(pathlib.Path, "lstat", flaky)
+    assert module.should_audit_project_manifest(tmp_path) is True
+
+
+def test_display_path_falls_back_to_name_outside_the_root(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A path outside the audit root is logged by file name only."""
+
+    module = load_module()
+    outside = tmp_path.parent / "outside-requirements.txt"
+    rendered = module._display_path(tmp_path, outside)
+    assert "outside-requirements.txt" in rendered
+    assert ".." not in rendered
