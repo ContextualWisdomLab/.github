@@ -109,9 +109,9 @@ sequenceDiagram
 The central `Security Scan` job treats GitHub's exact `BASE_SHA...HEAD_SHA`
 comparison as a hard supply-chain evidence boundary. Only transport exit `0`
 plus HTTP `200` may reach the immutably pinned dependency-review action. A
-`403`, `404`, timeout, truncated transfer, or malformed status fails closed
-and records allowlisted repository visibility with the exact revisions. Other
-scanners are complementary; they are not substitutes.
+`403`, `404`, timeout, truncated transfer, curl `000` sentinel, or malformed
+status fails closed and records allowlisted repository visibility with the
+exact revisions. Other scanners are complementary; they are not substitutes.
 
 ```mermaid
 flowchart TD
