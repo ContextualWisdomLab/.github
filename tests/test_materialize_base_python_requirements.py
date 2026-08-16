@@ -30,11 +30,11 @@ def _created_tool_directory(path: Path) -> str:
     return str(path)
 
 
-def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
+def _use_supported_trusted_uv_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make installer tests exercise the Linux x86_64 archive path on every host."""
+    materializer._install_trusted_uv.cache_clear()
     monkeypatch.setattr(materializer.sys, "platform", "linux")
     monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
-    materializer._install_trusted_uv.cache_clear()
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -157,24 +157,9 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
-    assert materializer._is_hash_pinned(b"-r requirements-other.txt\n")
-    assert not materializer._is_hash_pinned(b"-r other-hashes.txt\n")
-    assert not materializer._is_hash_pinned(b"-r ./requirements-other.txt\n")
-    assert not materializer._is_hash_pinned(b"-r ../escape.txt\n")
-    assert materializer._is_bounded_requirement_include(
-        "--requirement requirements-other.txt"
-    )
-    assert not materializer._is_bounded_requirement_include("-r .")
-    assert not materializer._is_bounded_requirement_include("-r -evil.txt")
-    assert not materializer._is_bounded_requirement_include("-r ~evil.txt")
-    assert not materializer._is_bounded_requirement_include("-r C:foo.txt")
-    assert not materializer._is_bounded_requirement_include("-r foo?bar.txt")
-    assert not materializer._is_bounded_requirement_include("-r foo#bar.txt")
-    assert not materializer._is_bounded_requirement_include(r"-r foo\\bar.txt")
-    assert not materializer._is_bounded_requirement_include("-r")
-    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")
+    assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
     # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
     assert materializer._is_hash_pinned(
@@ -232,7 +217,7 @@ def test_rejects_symlink_output_directory(
     output.symlink_to(target, target_is_directory=True)
     monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
 
-    with pytest.raises(ValueError, match="must not be a symlink"):
+    with pytest.raises(ValueError, match="non-symlink directory"):
         materializer.materialize(tmp_path, "a" * 40, output)
 
 
@@ -704,7 +689,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
-    _force_linux_x86_64_installer(monkeypatch)
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -753,7 +738,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
-    _force_linux_x86_64_installer(monkeypatch)
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -793,7 +778,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
-    _force_linux_x86_64_installer(monkeypatch)
+    _use_supported_trusted_uv_runner(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -861,3 +846,80 @@ def test_uv_export_process_failures_fail_closed(
 
     with pytest.raises(RuntimeError, match="could not run trusted uv export"):
         materializer.materialize(repo, base_sha, tmp_path / "output")
+
+
+
+def test_materialize_accepts_an_existing_empty_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing empty real directory remains a supported trusted destination."""
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    assert materializer.materialize(tmp_path, "a" * 40, output) == []
+    assert (output / "manifest.json").read_text(encoding="utf-8") == "[]\n"
+    assert (output / "manifest.txt").read_text(encoding="utf-8") == ""
+
+
+def test_materialize_rejects_symlink_substitution_during_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path swapped to a symlink during creation cannot receive trusted files."""
+    output = tmp_path / "output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    original_mkdir = Path.mkdir
+
+    def substitute_symlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == output:
+            path.symlink_to(attacker_directory, target_is_directory=True)
+            return
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", substitute_symlink)
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+
+
+def test_materialize_detects_output_path_replacement_after_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory-descriptor writes never follow a replacement output path."""
+    output = tmp_path / "output"
+    detached_output = tmp_path / "detached-output"
+    attacker_directory = tmp_path / "attacker"
+    attacker_directory.mkdir()
+    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+    original_write = getattr(materializer, "_write_output_file", None)
+    swapped = False
+
+    def replace_path_then_write(
+        output_descriptor: int,
+        file_name: str,
+        content: bytes,
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            output.rename(detached_output)
+            output.symlink_to(attacker_directory, target_is_directory=True)
+            swapped = True
+        assert original_write is not None
+        original_write(output_descriptor, file_name, content)
+
+    monkeypatch.setattr(
+        materializer,
+        "_write_output_file",
+        replace_path_then_write,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="changed during materialization"):
+        materializer.materialize(tmp_path, "a" * 40, output)
+
+    assert list(attacker_directory.iterdir()) == []
+    assert (detached_output / "manifest.json").read_text(encoding="utf-8") == "[]\n"

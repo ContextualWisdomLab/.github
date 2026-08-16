@@ -155,7 +155,11 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
 ) -> None:
     """The dedicated process installs one no-proxy GitHub-origin opener."""
     captured: dict[str, object] = {"builds": 0, "installs": 0}
-    sentinel = object()
+
+    class _Opener:
+        """Accept the fixed headers configured on a real urllib opener."""
+
+    sentinel = _Opener()
 
     def fake_build_opener(*handlers: object) -> object:
         captured["builds"] = int(captured["builds"]) + 1
@@ -181,3 +185,4 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
     assert isinstance(handlers[0], urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], materializer._TrustedUvReleaseAssetRedirects)
+    assert sentinel.addheaders == [("User-Agent", materializer.TRUSTED_UV_USER_AGENT)]
