@@ -18,12 +18,16 @@
     "rollback",
     "observability",
     "database_object_names",
+    "tenant_purpose_bound",
     "assurance_posture"
   ],
   "properties": {
     "schema_version": { "const": "1" },
     "capability": { "const": "object_storage" },
-    "repository": { "type": "string", "minLength": 1 },
+    "repository": {
+      "type": "string",
+      "pattern": "^ContextualWisdomLab/[A-Za-z0-9._-]*[A-Za-z0-9_-]$"
+    },
     "provider_class": { "enum": ["aws_s3", "s3_compatible"] },
     "endpoint_policy": {
       "type": "object",
@@ -40,6 +44,7 @@
         "host_allowlist": {
           "type": "array",
           "minItems": 1,
+          "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
         "allow_wildcards": { "const": false },
@@ -47,7 +52,7 @@
         "private_network_trust": {
           "enum": ["explicit_allowlist", "denied"]
         },
-        "custom_endpoint": { "type": "string", "minLength": 1 }
+        "custom_endpoint": { "type": "string", "pattern": "^https://" }
       }
     },
     "credentials": {
@@ -109,6 +114,14 @@
         "states": {
           "type": "array",
           "minItems": 5,
+          "uniqueItems": true,
+          "allOf": [
+            { "contains": { "const": "pending" } },
+            { "contains": { "const": "available" } },
+            { "contains": { "const": "consumed" } },
+            { "contains": { "const": "archived" } },
+            { "contains": { "const": "held" } }
+          ],
           "items": { "type": "string", "minLength": 1 }
         },
         "consumed_implies_immediate_delete": { "type": "boolean" },
@@ -132,11 +145,19 @@
         "high_cardinality_labels_forbid": {
           "type": "array",
           "minItems": 4,
+          "uniqueItems": true,
+          "allOf": [
+            { "contains": { "const": "bucket" } },
+            { "contains": { "const": "object_key" } },
+            { "contains": { "const": "credential" } },
+            { "contains": { "const": "raw_pii" } }
+          ],
           "items": { "type": "string", "minLength": 1 }
         }
       }
     },
     "database_object_names": { "const": "multiword_snake_case" },
+    "tenant_purpose_bound": { "const": true },
     "assurance_posture": { "const": "design_constraints_only" }
   }
 }

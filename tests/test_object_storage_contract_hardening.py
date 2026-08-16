@@ -135,3 +135,112 @@ def test_observability_labels_fail_closed_without_type_errors() -> None:
     contract["observability"]["high_cardinality_labels_forbid"].append("bucket")
     with pytest.raises(validator.ObjectStorageContractError, match="duplicate"):
         validator.validate_contract(contract)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "s3.internal",
+        "objects.corp",
+        "minio.lan",
+        "storage.home",
+        "minio.intranet",
+        "objects.private",
+    ],
+)
+def test_denied_private_network_rejects_special_use_internal_suffixes(
+    host: str,
+) -> None:
+    """A denied private-network policy cannot admit RFC 6761/6762 internal names."""
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "denied"
+    contract["endpoint_policy"]["host_allowlist"] = [host]
+    contract["endpoint_policy"].pop("custom_endpoint", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="private-network"):
+        validator.validate_contract(contract)
+
+
+def test_mdns_local_suffix_is_never_an_exact_allowlist_member() -> None:
+    """Multicast .local names are not unicast object-storage endpoints."""
+    assert validator.is_exact_dns_host("local") is False
+    assert validator.is_exact_dns_host("minio.local") is False
+    assert validator.is_denied_private_network_host("objects.example.example") is False
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
+    contract["endpoint_policy"]["host_allowlist"] = ["minio.local"]
+    contract["endpoint_policy"].pop("custom_endpoint", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="exact DNS"):
+        validator.validate_contract(contract)
+
+
+def test_explicit_allowlist_still_admits_a_named_internal_host() -> None:
+    """Operators may name one private DNS host after an explicit trust decision."""
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
+    contract["endpoint_policy"]["host_allowlist"] = ["minio.internal"]
+    contract["endpoint_policy"]["custom_endpoint"] = "https://minio.internal"
+    validator.validate_contract(contract)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "instance-data",
+        "instance-data.ec2.internal",
+        "kubernetes.default.svc",
+        "::1",
+        "[::1]",
+    ],
+)
+def test_metadata_cluster_and_ipv6_literals_are_never_exact_hosts(host: str) -> None:
+    """Metadata, cluster-local, and IPv6 literals stay off the exact allowlist."""
+    assert validator.is_exact_dns_host(host) is False
+
+
+def test_tenant_purpose_bound_selection_is_mandatory() -> None:
+    """Provider selection must stay tenant- and purpose-bound."""
+    contract = _valid_contract()
+    contract["tenant_purpose_bound"] = False
+    with pytest.raises(
+        validator.ObjectStorageContractError, match="tenant_purpose_bound must be true"
+    ):
+        validator.validate_contract(contract)
+    contract = _valid_contract()
+    contract.pop("tenant_purpose_bound", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="missing keys"):
+        validator.validate_contract(contract)
+
+
+def test_schema_encodes_value_level_closed_controls() -> None:
+    """Portable schema consumers must see the same closed values as the validator."""
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    repository = schema["properties"]["repository"]
+    assert repository["pattern"] == r"^ContextualWisdomLab/[A-Za-z0-9._-]*[A-Za-z0-9_-]$"
+    hosts = schema["properties"]["endpoint_policy"]["properties"]["host_allowlist"]
+    assert hosts["uniqueItems"] is True
+    custom = schema["properties"]["endpoint_policy"]["properties"]["custom_endpoint"]
+    assert custom["pattern"] == r"^https://"
+    states = schema["properties"]["lifecycle"]["properties"]["states"]
+    assert states["uniqueItems"] is True
+    assert {item["contains"]["const"] for item in states["allOf"]} == set(
+        validator.REQUIRED_LIFECYCLE_STATES
+    )
+    labels = schema["properties"]["observability"]["properties"][
+        "high_cardinality_labels_forbid"
+    ]
+    assert labels["uniqueItems"] is True
+    assert {item["contains"]["const"] for item in labels["allOf"]} == set(
+        validator.FORBIDDEN_HIGH_CARDINALITY_LABELS
+    )
+    assert schema["properties"]["tenant_purpose_bound"]["const"] is True
+
+
+def test_product_acceptance_template_names_the_consumer_failure_lane() -> None:
+    """Product repositories need the next write/read/delete proof, not more prose."""
+    template = (
+        ROOT / "docs" / "object-storage" / "PRODUCT_ACCEPTANCE_TEMPLATE.md"
+    ).read_text(encoding="utf-8")
+    assert "ContextualWisdomLab/naruon#1364" in template
+    assert "write/read/delete" in template
+    assert "partial" in template.lower()
+    assert "timeout" in template.lower()

@@ -95,10 +95,13 @@ sequenceDiagram
 Central `.github` publishes a provider-neutral `object_storage` contract.
 Naruon and other products keep their own adapters. The executable check is
 `scripts/ci/validate_object_storage_contract.py`. HTTPS, exact-host
-allowlists, server-side encryption, SHA-256-or-stronger integrity, distinct
-lifecycle states, and non-destructive rollback are required. CSAP and SOC 2
-remain design constraints, not certification claims. Operational PII is not
-blanket-masked.
+allowlists, tenant-purpose binding, server-side encryption, SHA-256-or-stronger
+integrity, distinct lifecycle states, and non-destructive rollback are
+required. Denied private-network trust also rejects special-use internal
+suffixes. CSAP and SOC 2 remain design constraints, not certification claims.
+Operational PII is not blanket-masked. Product adapters prove write/read/delete
+timeout and partial-upload behavior with
+`docs/object-storage/PRODUCT_ACCEPTANCE_TEMPLATE.md`.
 
 ## Quality gates
 
