@@ -92,6 +92,9 @@ or merge gates.
 Preconfigured anonymous candidates are not themselves authorization. The wrapper
 first needs positive visibility evidence:
 
+- the live OpenCode review runner must pass the trusted
+  `validate-pr-metadata.outputs.is_private` value as
+  `OPENCODE_REPOSITORY_IS_PRIVATE`;
 - a trusted caller may provide `OPENCODE_REPOSITORY_IS_PRIVATE=false`; or
 - when that signal is absent, the wrapper may prove only the **public** case by
   performing a credential-free `git ls-remote` against a strictly validated
@@ -217,7 +220,8 @@ truncated and extra `ls-tree -z` records, provider-specific credential retention
 anonymous free credential removal, short and long model selectors, option
 termination, export isolation, unknown-provider fail-safe behavior, private
 preconfigured-free bypass rejection, catalog filtering, visibility fail-closed
-behavior, runtime integer controls, and wrapper ordering.
+behavior, trusted live-runner visibility wiring, hook-level public/private
+candidate mutation, runtime integer controls, and wrapper ordering.
 
 Operational acceptance remains separate from code-level tests. Issue #833 tracks
 the required protected-base private canary, negative control, credential-absence
@@ -237,5 +241,5 @@ https://docs.github.com/en/code-security/how-tos/secure-your-secrets/detect-secr
 GitHub. (n.d.-b). *Secrets*. GitHub Docs. Retrieved August 8, 2026, from
 https://docs.github.com/en/actions/concepts/security/secrets
 
-OpenCode. (n.d.). *Zen*. Retrieved August 9, 2026, from
+OpenCode. (n.d.). *Zen*. Retrieved August 16, 2026, from
 https://opencode.ai/docs/zen

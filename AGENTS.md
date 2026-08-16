@@ -7,3 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+Private OpenCode free-model egress requires an unchanged trusted-base `.github/opencode-private-free-models.json`; the live runner must pass `OPENCODE_REPOSITORY_IS_PRIVATE` from validated PR metadata. See [`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md).

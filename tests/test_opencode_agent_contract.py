@@ -1278,6 +1278,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Run OpenCode PR Review model pool" in workflow
     assert "opencode_review_model_pool" in workflow
     assert "run_opencode_review_model_pool.sh" in workflow
+    assert (
+        "OPENCODE_REPOSITORY_IS_PRIVATE: "
+        "${{ needs.validate-pr-metadata.outputs.is_private }}"
+    ) in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
