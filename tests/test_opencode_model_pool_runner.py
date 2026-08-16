@@ -194,6 +194,7 @@ def run_failed_model(
             "OPENCODE_MODEL_CANDIDATES": model_candidates,
             "OPENCODE_OUTPUT_FILE": bash_path(tmp_path / "selected-output.md"),
             "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_REPOSITORY_IS_PRIVATE": "false",
             "OPENCODE_REVIEW_WORKDIR": bash_path(review_dir),
             "OPENCODE_RUN_TIMEOUT_SECONDS": "10",
             "OPENCODE_SOURCE_WORKDIR": bash_path(source_dir),

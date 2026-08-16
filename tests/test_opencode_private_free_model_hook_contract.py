@@ -214,6 +214,16 @@ def test_unchanged_eligible_base_policy_prepends_governed_catalog(
     assert "opencode-free/deepseek-v4-flash-free" in candidates
 
 
+def test_missing_visibility_and_base_sha_strips_free_aliases(tmp_path: Path) -> None:
+    """Missing visibility and base SHA are not a unit-test exemption."""
+    result = run_hook(tmp_path, extra_env={})
+    assert result.returncode == 0, result.stderr
+    candidates = candidate_list(result)
+    assert candidates == [KEYED]
+    assert GOVERNED not in candidates
+    assert STALE_FREE not in candidates
+
+
 def test_malformed_visibility_fails_closed_to_policy_path(tmp_path: Path) -> None:
     """Malformed visibility is not public and requires the trusted-base policy."""
     repo = tmp_path / "malformed-repo"

@@ -74,6 +74,34 @@ sequenceDiagram
   MS->>PR: merge only on current-head approval + green checks
 ```
 
+## Private free-model opt-in
+
+```mermaid
+flowchart TD
+  Vis{"Trusted OPENCODE_REPOSITORY_IS_PRIVATE?"}
+  Public["Keep only the governed zero-cost catalog"]
+  Strip["Strip every opencode-free alias"]
+  Policy{"Unchanged trusted-base policy?"}
+  Enable["Prepend governed free catalog"]
+  Keyed["Keep keyed fallbacks only"]
+  Guard["Provider guard: one credential, never COPILOT_GITHUB_TOKEN"]
+
+  Vis -->|"false"| Public
+  Vis -->|"true / missing / invalid"| Strip
+  Strip --> Policy
+  Policy -->|"yes"| Enable
+  Policy -->|"no"| Keyed
+  Public --> Guard
+  Enable --> Guard
+  Keyed --> Guard
+```
+
+A private sibling repository may use anonymous `opencode-free/*` reviewers only
+after its protected base already contains
+`.github/opencode-private-free-models.json` and the reviewed head does not
+change that file. Missing visibility and missing base SHA fail closed. See
+[`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md).
+
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
@@ -104,6 +132,8 @@ tests pin workflow structure and governance prose so drift fails closed.
   — Project #1 operation.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
+- [`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md)
+  — trusted-base private free-model opt-in and provider-scoped credentials.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)

@@ -190,14 +190,6 @@ apply_private_free_model_policy() {
   provider_guard="$hook_dir/opencode_provider_guard.sh"
   [ -f "$policy_checker" ] || die "OpenCode private free-model policy checker is missing."
   [ -f "$provider_guard" ] || die "OpenCode provider credential guard is missing."
-  # Unit tests pass OPENCODE_MODEL_CANDIDATES directly. Do not strip free
-  # aliases unless the review workflow supplied visibility or a base SHA.
-  if [ -z "${OPENCODE_REPOSITORY_IS_PRIVATE:-}" ] &&
-    [ -z "${PR_BASE_SHA:-}" ]; then
-    trap cleanup_provider_guard EXIT INT TERM
-    install_provider_guard
-    return 0
-  fi
   maybe_enable_private_free_models
   trap cleanup_provider_guard EXIT INT TERM
   install_provider_guard

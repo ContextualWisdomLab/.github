@@ -104,10 +104,12 @@ first needs positive visibility evidence:
 
 `true`, malformed visibility input, private/auth-required Git access, timeout,
 transport failure, missing remote metadata, or any other indeterminate outcome is
-fail-closed. The wrapper removes every preconfigured anonymous candidate and the
-unchanged trusted-base policy becomes the sole re-enable path. The public probe
-runs with GitHub, Actions, model-provider, and OIDC credentials removed and with
-Git credential helpers disabled.
+fail-closed. Missing both `OPENCODE_REPOSITORY_IS_PRIVATE` and `PR_BASE_SHA` is
+the same fail-closed case: the wrapper strips every preconfigured anonymous
+candidate rather than treating a unit-test convenience as production
+authorization. The unchanged trusted-base policy becomes the sole re-enable
+path. The public probe runs with GitHub, Actions, model-provider, and OIDC
+credentials removed and with Git credential helpers disabled.
 
 This preserves public-repository behavior without treating an untrusted candidate
 list as visibility evidence and prevents a private caller from bypassing policy
@@ -119,7 +121,8 @@ Each OpenCode subprocess receives only the credential for its selected provider.
 In particular, an anonymous `opencode-free/*` process receives none of these
 values:
 
-- GitHub tokens
+- GitHub tokens, including `GITHUB_TOKEN`, `GH_TOKEN`, and
+  `COPILOT_GITHUB_TOKEN`
 - GitHub Actions OIDC request credentials
 - GitHub Actions runtime, cache, or results credentials
 - OpenCode application tokens
@@ -198,6 +201,12 @@ review evidence may be confidential even when no Actions secret is configured.
 Rejected because untrusted code could authorize its own external disclosure.
 The marker must already exist on the base and remain unchanged in the head.
 
+### Skip policy evaluation when unit tests omit visibility and base SHA
+
+Rejected because a missing production export must not keep preconfigured
+anonymous candidates. Local runner fixtures that need the public catalog must
+set `OPENCODE_REPOSITORY_IS_PRIVATE=false` explicitly.
+
 ### Trust a preconfigured `opencode-free/*` candidate as proof of eligibility
 
 Rejected because candidate text is not a data-classification or visibility
@@ -219,10 +228,11 @@ The implementation includes tests for valid base policy activation, missing and
 self-added policies, head mutations, unknown and weaker declarations, duplicate
 JSON keys, symlinks, oversized blobs, malformed UTF-8 and JSON, Git failures,
 truncated and extra `ls-tree -z` records, provider-specific credential retention,
-anonymous free credential removal, short and long model selectors, option
-termination, export isolation, unknown-provider fail-safe behavior, private
-preconfigured-free bypass rejection, catalog filtering, visibility fail-closed
-behavior, runtime integer controls, and wrapper ordering.
+anonymous free credential removal including `COPILOT_GITHUB_TOKEN`, short and
+long model selectors, option termination, export isolation, unknown-provider
+fail-safe behavior, private preconfigured-free bypass rejection, catalog
+filtering, visibility fail-closed behavior, missing visibility and base SHA
+fail-closed stripping, runtime integer controls, and wrapper ordering.
 
 Operational acceptance remains separate from code-level tests. Issue #833 tracks
 the required protected-base private canary, negative control, credential-absence
