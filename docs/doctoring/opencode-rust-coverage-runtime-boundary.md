@@ -9,12 +9,11 @@ The trusted OpenCode coverage sandbox binds Rust coverage to the reviewed LLVM
 - `LLVM_PROFDATA=/usr/bin/llvm-profdata-19`
 
 These are compatibility and trust-boundary constants, not caller-selectable
-configuration. The coverage image installs `llvm-19`, declares both exact paths,
-and fails the image build unless both are executable before the pinned
-`cargo-llvm-cov` archive is admitted. The isolated `docker run` passes the same
-literal values through the networkless runtime boundary. Inside the container,
-`ensure_rust_toolchain()` requires exact string equality and executable files
-before the first `cargo llvm-cov` invocation.
+configuration. The reviewed helper `scripts/ci/ensure_rust_llvm19.sh` binds both
+exact paths and fails closed unless the live `LLVM_COV` / `LLVM_PROFDATA`
+values match and are executable before Rust coverage evidence is admitted. The
+independent OpenCode review-dispatch workflow stays byte-for-byte so the
+review-agent key system is not rewritten to carry this runtime check.
 
 The runtime MUST NOT fall back to unversioned `llvm-cov` or `llvm-profdata`, a
 host-runner tool, a pull-request-selected path, or a dynamically downloaded LLVM
@@ -49,13 +48,11 @@ copyright record supplies the package license basis, not executable integrity.
 
 ```mermaid
 flowchart LR
-  A["Digest-pinned coverage base image"] --> B["Install Debian llvm-19"]
-  B --> C["ENV exact LLVM_COV / LLVM_PROFDATA paths"]
-  C --> D["Build-time test -x for both executables"]
-  D --> E["Verify pinned cargo-llvm-cov archive"]
-  E --> F["docker run --network=none with literal LLVM env values"]
-  F --> G["ensure_rust_toolchain exact-value + executable checks"]
-  G --> H["cargo llvm-cov"]
+  A["Reviewed helper scripts/ci/ensure_rust_llvm19.sh"] --> B["Default LLVM_COV_PATH / LLVM_PROFDATA_PATH"]
+  B --> C["Require live LLVM_COV and LLVM_PROFDATA equality"]
+  C --> D["Require both paths executable"]
+  D --> E["Fail closed before cargo llvm-cov"]
+  F["Hashed opencode-review-dispatch.yml"] --> G["Unchanged review-agent key blob"]
 ```
 
 Each arrow is fail-closed. A later stage does not repair or broaden an earlier
@@ -93,16 +90,15 @@ compatibility evidence and the same RED→GREEN exact-head verification sequence
 
 `tests/test_opencode_rust_coverage_toolchain_contract.py` proves that:
 
-1. `llvm-19` is provisioned before the pinned `cargo-llvm-cov` archive;
-2. the image binds the two exact LLVM 19 executable paths;
-3. image construction verifies both executables;
-4. the isolated `docker run` receives both literal values before the coverage
-   image argument;
-5. `ensure_rust_toolchain()` revalidates exact values and executability before
-   Rust coverage; and
-6. every exact path named by the permanent quality workflow's
-   `pull_request.paths` filter resolves to a repository file, preventing a
-   dangling documentation trigger from becoming invisible debt.
+1. the helper defaults both reviewed LLVM 19 executable paths;
+2. the helper requires live `LLVM_COV` / `LLVM_PROFDATA` equality with those
+   paths;
+3. the helper requires both paths to be executable and exits `1` on mismatch;
+4. the helper does not mention unversioned `llvm-cov` / `llvm-profdata`; and
+5. every exact path named by the permanent quality workflow's
+   `pull_request.paths` filter resolves to a repository file, including the
+   helper, preventing a dangling documentation trigger from becoming
+   invisible debt.
 
 The permanent quality workflow runs on Python 3.14, checks out the exact PR head,
 executes the focused contract, compiles the test, and applies `git diff --check`.
