@@ -51,5 +51,6 @@
     ]
   },
   "database_object_names": "multiword_snake_case",
+  "tenant_purpose_bound": true,
   "assurance_posture": "design_constraints_only"
 }

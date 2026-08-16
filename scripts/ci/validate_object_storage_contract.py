@@ -39,7 +39,23 @@ FORBIDDEN_HIGH_CARDINALITY_LABELS = frozenset(
     {"bucket", "object_key", "credential", "raw_pii"}
 )
 FORBIDDEN_EXACT_HOSTS = frozenset(
-    {"localhost", "metadata.google.internal", "metadata.goog"}
+    {
+        "localhost",
+        "metadata.google.internal",
+        "metadata.goog",
+        "instance-data",
+        "instance-data.ec2.internal",
+        "kubernetes.default.svc",
+    }
+)
+ALWAYS_FORBIDDEN_HOST_SUFFIXES = (".localhost", ".local")
+DENIED_PRIVATE_NETWORK_SUFFIXES = (
+    ".internal",
+    ".corp",
+    ".lan",
+    ".home",
+    ".intranet",
+    ".private",
 )
 MAX_TCP_PORT = 65535
 MAX_DNS_HOST_LENGTH = 253
@@ -57,6 +73,7 @@ ALLOWED_TOP_LEVEL = (
     "rollback",
     "observability",
     "database_object_names",
+    "tenant_purpose_bound",
     "assurance_posture",
 )
 ENDPOINT_POLICY_KEYS = (
@@ -136,6 +153,22 @@ def _is_ip_literal_or_alias(host: str) -> bool:
     return all(_label_is_integer_token(label) for label in host.split("."))
 
 
+def host_matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
+    """Return whether *host* equals or ends with one DNS suffix in *suffixes*."""
+    for suffix in suffixes:
+        bare = suffix[1:]
+        if host == bare or host.endswith(suffix):
+            return True
+    return False
+
+
+def is_denied_private_network_host(host: str) -> bool:
+    """Return whether *host* is implicit-local under a denied private-network policy."""
+    if "." not in host:
+        return True
+    return host_matches_suffix(host, DENIED_PRIVATE_NETWORK_SUFFIXES)
+
+
 def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
@@ -150,7 +183,9 @@ def is_exact_dns_host(host: str) -> bool:
         return False
     if host != host.lower():
         return False
-    if host in FORBIDDEN_EXACT_HOSTS or host.endswith(".localhost"):
+    if host in FORBIDDEN_EXACT_HOSTS or host_matches_suffix(
+        host, ALWAYS_FORBIDDEN_HOST_SUFFIXES
+    ):
         return False
     if _is_ip_literal_or_alias(host):
         return False
@@ -297,9 +332,13 @@ def validate_endpoint_policy(policy: Mapping[str, Any]) -> None:
             raise ObjectStorageContractError(
                 f"endpoint host {host!r} is not an exact DNS name"
             )
-        if private_network_trust == "denied" and "." not in host:
+        if private_network_trust == "denied" and is_denied_private_network_host(host):
+            if "." not in host:
+                raise ObjectStorageContractError(
+                    f"endpoint host {host!r} is a single-label name"
+                )
             raise ObjectStorageContractError(
-                f"endpoint host {host!r} is a single-label name"
+                f"endpoint host {host!r} is a private-network name"
             )
         if host in seen:
             raise ObjectStorageContractError(f"duplicate endpoint host {host!r}")
@@ -493,6 +532,9 @@ def validate_contract(data: Mapping[str, Any]) -> None:
         raise ObjectStorageContractError(
             "database_object_names must be multiword_snake_case"
         )
+    require_bool(
+        data.get("tenant_purpose_bound"), "tenant_purpose_bound", True
+    )
     if (
         require_text(data.get("assurance_posture"), "assurance_posture")
         != "design_constraints_only"

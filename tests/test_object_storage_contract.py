@@ -131,6 +131,7 @@ def test_validate_contract_rejects_policy_regressions() -> None:
         ("repository", "other/naruon", "ContextualWisdomLab"),
         ("provider_class", "gcs", "provider_class"),
         ("database_object_names", "camelCase", "multiword_snake_case"),
+        ("tenant_purpose_bound", False, "tenant_purpose_bound"),
         ("assurance_posture", "certified", "design_constraints_only"),
     ]
     for field, value, needle in cases:
@@ -336,6 +337,8 @@ def test_policy_and_doctoring_record_buyer_visible_controls() -> None:
     assert "scripts/ci/validate_object_storage_contract.py" in policy
     assert "design constraints" in policy.lower()
     assert "not a blanket PII mask" in policy
+    assert "tenant- and purpose-bound" in policy
+    assert "PRODUCT_ACCEPTANCE_TEMPLATE.md" in policy
     assert "APA 7" in doctoring or "References (APA 7th)" in doctoring
     assert "Amazon Web Services" in doctoring
     assert "CWE-918" in doctoring

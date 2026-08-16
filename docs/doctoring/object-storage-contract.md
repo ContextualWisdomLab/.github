@@ -20,8 +20,11 @@ policy and the fail-closed check that leaf repositories can cite.
    capability.
 2. Require HTTPS, exact-host allowlists, no wildcards, and no automatic
    redirects (CWE-918).
-3. Require explicit private-network trust. Implicit RFC1918 or metadata-service
-   access is not authorized by this contract.
+3. Require explicit private-network trust. Implicit RFC1918, metadata-service,
+   multicast `.local` (Cheshire & Krochmal, 2013b), or special-use internal
+   suffixes (Cheshire & Krochmal, 2013a) are not authorized unless the exact
+   host is named after an explicit trust decision. Multicast `.local` names
+   are never unicast endpoints.
 4. Require least-privilege object permissions and prohibit public ACLs, public
    buckets, and browser-exposed long-lived credentials (CWE-798; CWE-200).
 5. Require server-side encryption and fail-closed content-length plus SHA-256
@@ -35,8 +38,10 @@ policy and the fail-closed check that leaf repositories can cite.
    telemetry labels. This is not a blanket operational PII mask.
 9. Record CSAP and SOC 2 only as design constraints. The contract must not
    claim certification.
-10. Ship an executable validator. Prose alone does not close
-    ContextualWisdomLab/.github#1019.
+10. Require tenant- and purpose-bound provider selection so one credential or
+    bucket cannot serve unrelated tenants or jobs.
+11. Ship an executable validator and a product acceptance template. Prose
+    alone does not close ContextualWisdomLab/.github#1019.
 
 ## Trust boundary
 
@@ -53,10 +58,12 @@ policy and the fail-closed check that leaf repositories can cite.
 the schema keys match production constants, and each fail-closed control has a
 unique rejection. `tests/test_object_storage_contract_hardening.py` proves
 nested schema objects stay closed, NaN/Infinity are rejected, exact-host
-allowlists exclude localhost, metadata, IPv4 literals, decimal or hexadecimal
-IP aliases, Unicode, and case aliases, a
-denied private-network policy rejects single-label hosts, custom endpoints
-reject ports above 65535, and malformed observability labels raise policy
+allowlists exclude localhost, metadata, cluster-local names, IPv4 and IPv6
+literals, decimal or hexadecimal IP aliases, Unicode, case aliases, and
+multicast `.local` names, a denied private-network policy rejects
+single-label and special-use internal hosts, custom endpoints reject ports
+above 65535, schema value constraints match the validator, tenant-purpose
+binding is mandatory, and malformed observability labels raise policy
 errors instead of TypeError. Local quality remains 100% statement/branch
 coverage and 100% docstrings.
 
@@ -66,6 +73,12 @@ Revert the validator, schema, example, policy, and this record together. Do
 not keep a schema that the executable check no longer enforces.
 
 ## References (APA 7th)
+
+Cheshire, S., & Krochmal, M. (2013a). *Special-use domain names* (RFC 6761).
+Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc6761
+
+Cheshire, S., & Krochmal, M. (2013b). *Multicast DNS* (RFC 6762). Internet
+Engineering Task Force. https://www.rfc-editor.org/rfc/rfc6762
 
 Amazon Web Services. (2024a). *Checking object integrity for data uploads in
 Amazon S3*. Amazon Simple Storage Service User Guide.

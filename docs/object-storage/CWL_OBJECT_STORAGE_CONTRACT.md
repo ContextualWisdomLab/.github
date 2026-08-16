@@ -17,8 +17,8 @@ A contract JSON document is valid only when every control below is true.
 | Control | Required value |
 |---|---|
 | Transport | `https` only |
-| Hosts | exact-host allowlist; no wildcards; no automatic redirects |
-| Private networks | `explicit_allowlist` or `denied`; never implicit RFC1918 access |
+| Hosts | exact-host allowlist; no wildcards; no automatic redirects; no multicast `.local` or metadata names |
+| Private networks | `explicit_allowlist` or `denied`; never implicit RFC1918, RFC 6761/6762, or `.internal` access |
 | Credentials | scoped secret registry or workload identity; never broadcast, browser-exposed, or ambient process-wide |
 | Permissions | least privilege; public ACLs and public buckets prohibited |
 | Encryption | server-side encryption `required` |
@@ -26,6 +26,7 @@ A contract JSON document is valid only when every control below is true.
 | Lifecycle | `pending`, `available`, `consumed`, `archived`, and `held` are distinct; `consumed` does not delete unless zero retention is explicit |
 | Rollback | a partial migration must not delete customer data |
 | Names | persisted metadata uses multiword `snake_case` |
+| Tenant binding | provider selection is tenant- and purpose-bound |
 | Telemetry | bucket names, object keys, credentials, and raw PII are forbidden high-cardinality labels |
 | Assurance | CSAP and SOC 2 are design constraints, not certifications |
 
@@ -40,7 +41,10 @@ high-cardinality labels is not a blanket PII mask.
    `s3_compatible` and every host is an exact public DNS name.
 3. **Authorized private-network endpoints** — `private_network_trust` is
    `explicit_allowlist` and each private host is named. Implicit RFC1918,
-   link-local, or metadata-service access is rejected.
+   link-local, metadata-service, multicast `.local`, or special-use
+   `.internal` / `.corp` / `.lan` access is rejected unless that exact host
+   is named after an explicit trust decision. Multicast `.local` names are
+   never valid unicast endpoints.
 
 Workload-identity and instance-metadata access require their own SSRF review.
 This contract does not grant that access.
@@ -51,7 +55,9 @@ On success the consumer persists or reads the object under its own schema and
 records a purpose-bound audit event without bucket, key, credential, or raw PII
 labels. On rejection, timeout, duplicate, or partial upload the consumer leaves
 the previous durable object in place. Rollback never deletes customer data
-because a backfill step only partly succeeded.
+because a backfill step only partly succeeded. Product repositories then run
+the write/read/delete failure-injection lane in
+`docs/object-storage/PRODUCT_ACCEPTANCE_TEMPLATE.md`.
 
 ## Verification
 
