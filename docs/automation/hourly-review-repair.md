@@ -49,15 +49,16 @@ The naruon caller is a thin consumer of the same reusable scheduler:
 
 ```yaml
 target_repository: ContextualWisdomLab/naruon
-base_branch: main
+base_branch: develop
 max_prs: "50"
 max_dispatches: "1"
 retry_hours: "1"
 ```
 
 It runs at `11 * * * *`, uses its own non-cancelling single-flight group, and
-passes only the two established scheduler credentials. Before activation on
-protected `main`, `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must include the exact
+passes only the two established scheduler credentials. naruon change
+requests land on protected `develop`; the caller must not scan `main`.
+Before activation of this control-plane caller, `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must include the exact
 naruon repository. A missing target mapping fails before any mutation
 credential is materialized; it never falls back to a broader repository scope.
 

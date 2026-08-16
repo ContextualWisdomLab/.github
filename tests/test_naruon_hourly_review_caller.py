@@ -23,7 +23,8 @@ def test_naruon_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
     assert "target_repository: ContextualWisdomLab/naruon" in caller
-    assert "base_branch: main" in caller
+    assert "base_branch: develop" in caller
+    assert "base_branch: main" not in caller
     assert 'max_prs: "50"' in caller
     assert 'max_dispatches: "1"' in caller
     assert 'retry_hours: "1"' in caller
@@ -63,6 +64,7 @@ def test_naruon_doctoring_records_fail_closed_activation() -> None:
 
     for phrase in (
         "ContextualWisdomLab/naruon",
+        "protected develop",
         "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
         "independent non-author approval",
         "NVIDIA_NIM_API_KEY",

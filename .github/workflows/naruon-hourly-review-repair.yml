@@ -18,7 +18,7 @@ jobs:
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
       target_repository: ContextualWisdomLab/naruon
-      base_branch: main
+      base_branch: develop
       max_prs: "50"
       max_dispatches: "1"
       retry_hours: "1"

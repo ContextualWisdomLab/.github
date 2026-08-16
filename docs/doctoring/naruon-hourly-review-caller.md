@@ -6,8 +6,10 @@ The central repository owns a thin scheduled caller for
 `ContextualWisdomLab/naruon`, the platform product. It runs at minute 11
 each hour so it does not share a runner burst with Clearfolio (23),
 DiskSage (37), or Inkspan (47). It calls the product-neutral
-`pr-review-fix-scheduler.yml` with protected base `main`, a one-dispatch
-budget, and a one-hour same-head retry floor.
+`pr-review-fix-scheduler.yml` with naruon's protected `develop` base, a
+one-dispatch budget, and a one-hour same-head retry floor. Live naruon
+change requests target `develop`, not `main`; a `main` caller would scan
+an empty or wrong queue while buyer-facing platform PRs sat unrepaired.
 
 The caller contains product identity, cadence, and explicit reusable-workflow
 inputs only. Queue classification, exact-head binding, root-cause analysis,
@@ -23,10 +25,11 @@ The caller keeps `GITHUB_TOKEN` at `contents: read` and maps only
 write or model privileges (MITRE, 2026). Model credentials remain scoped
 to the separately reviewed repair worker.
 
-Before protected-main activation, the repository variable
-`OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain the exact
-`ContextualWisdomLab/naruon` target. Missing or mismatched configuration fails
-before mutation credential materialization.
+Before protected-main activation of this control-plane caller, the
+repository variable `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain
+the exact `ContextualWisdomLab/naruon` target. Missing or mismatched
+configuration fails before mutation credential materialization. The
+scanned naruon branch remains protected develop.
 
 ## Failure and recovery
 
