@@ -30,16 +30,11 @@ def _created_tool_directory(path: Path) -> str:
     return str(path)
 
 
-def _simulate_linux_x86_64_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Let installer verification tests run on a non-Linux developer host.
-
-    Production still fail-closes unless ``sys.platform`` is Linux and
-    ``platform.machine()`` is ``x86_64``. These unit tests pin both values so
-    they measure version verification, caching, and cleanup instead of the
-    host architecture gate already covered by the portability contract.
-    """
+def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
     monkeypatch.setattr(materializer.sys, "platform", "linux")
     monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    materializer._install_trusted_uv.cache_clear()
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -671,7 +666,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
-    _simulate_linux_x86_64_runner(monkeypatch)
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -718,7 +713,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
-    _simulate_linux_x86_64_runner(monkeypatch)
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -750,7 +745,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
-    _simulate_linux_x86_64_runner(monkeypatch)
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

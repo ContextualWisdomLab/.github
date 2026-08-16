@@ -179,8 +179,6 @@ def _is_hash_pinned(content: bytes) -> bool:
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
-
-
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
     fields = re.split(r"\s+(?=--hash=)", line)

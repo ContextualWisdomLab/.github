@@ -1,63 +1,136 @@
-# Architecture — ContextualWisdomLab/.github
+# Architecture — ContextualWisdomLab `.github`
 
-This repository is the organization-wide GitHub special repository: profile
-page, central PR governance / required workflows, and Cloudflare IaC. It is
-not naruon itself. naruon remains the email-workspace platform described in
-`docs/CWL-MASTER-CONTEXT.md`.
+This repository is the organization control plane. It is not naruon and it
+does not own product data. Sibling products remain standalone modules; this
+repo publishes org profile assets, reusable required workflows, and the
+review/merge schedulers those products consume.
+
+## System context
 
 ```mermaid
 flowchart LR
-  subgraph Buyers["Sibling products"]
-    NAR[naruon]
-    ORCH[contextual-orchestrator]
-    BAND[bandscope]
-  end
-  subgraph Central["This repo"]
-    REV[OpenCode / Noema review]
-    STRIX[Required Strix]
-    SCH[Merge / autofix schedulers]
-  end
-  Buyers --> REV
-  Buyers --> STRIX
-  REV --> SCH
-  STRIX --> SCH
+  Buyer["Commercial buyer / reviewer"]
+  Agents["Agents on AGENTS.md"]
+  Project["GitHub Project #1"]
+  Hub["This repo: org .github"]
+  Products["Owned products<br/>naruon · orchestrator · engines"]
+  Runner["Required workflows in each repo context"]
+
+  Buyer --> Hub
+  Agents --> Project
+  Agents --> Hub
+  Project --> Hub
+  Hub --> Runner
+  Runner --> Products
+  Products -->|"standalone or as module"| Buyer
 ```
+
+## Hourly NVIDIA NIM repair gate
+
+```mermaid
+flowchart TD
+  Hour["Hourly product caller"]
+  Sched["Central reusable scheduler"]
+  Bind{"Exact-head, same-repo, writer authority, sealed paths?"}
+  Worker["repository_dispatch worker at github.sha"]
+  NIM["NVIDIA NIM repair model"]
+  Recheck{"Post-edit exact-head revalidation?"}
+  Push["Push same-repository head"]
+  Hold["Leave the tree unchanged"]
+
+  Hour --> Sched
+  Sched --> Bind
+  Bind -->|"no"| Hold
+  Bind -->|"yes"| Worker
+  Worker --> NIM
+  NIM --> Recheck
+  Recheck -->|"no"| Hold
+  Recheck -->|"yes"| Push
+```
+
+The worker checks out helpers at `${{ github.sha }}` so a later default-branch
+push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
+`NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
+
+Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
+fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
+repair, and delegates all privileged logic to the same sealed scheduler.
+
+## Control-plane data flow
+
+```mermaid
+sequenceDiagram
+  participant PR as Pull request
+  participant RW as Required workflows
+  participant OC as OpenCode reviewer
+  participant SV as sandboxed_verify / web E2E
+  participant MS as Merge scheduler
+
+  PR->>RW: pull_request_target on trusted base
+  RW->>OC: bounded evidence + NVIDIA NIM / OpenCode
+  OC->>SV: PoC command in isolated copy
+  SV-->>OC: redacted stdout/stderr + command metadata
+  OC-->>PR: APPROVE or request changes
+  MS->>PR: merge only on current-head approval + green checks
+```
+
+## Trust boundaries
+
+- Required review workflows execute **base-branch** scripts. A PR that edits
+  those workflows cannot widen its own `pull_request_target` token.
+- Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- Sandbox helpers copy the workspace, drop secret environment values unless
+  explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
+- Logs and review receipts redact credential shapes (tokens, bearer values,
+  known provider prefixes). They do not mask operational PII that the
+  control plane must process.
+- LLM and scheduled agents bind `NVIDIA_NIM_API_KEY` (env may be
+  `NVIDIA_API_KEY`). They never use `COPILOT_GITHUB_TOKEN`. Existing
+  review-agent key schemes stay unchanged.
+- Rust remains the psychometric arithmetic owner. Repair never substitutes
+  Python for scoring math.
+
+## Quality gates
+
+`scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
+CI installs Python tools only with `pip install --require-hashes`. Contract
+tests pin workflow structure and governance prose so drift fails closed.
 
 ## PR automation loop cadence (2026-08-15)
 
-Scheduler cadence is now `*/30 * * * *` for per-repository queue scans, plus an
-hourly `0 * * * *` organization sweep that reconciles late approvals/checks
-arriving after the last event-driven run. The scheduler now also ignores the
-control-plane `scan-pr-queue` check in merge blocking logic so transient control
-workflow churn does not stall current-head merge transitions. If check metadata is
-temporarily unavailable, scheduler summaries now surface the next UTC heartbeat
-timestamp so manual operators can confirm the next autonomous reconciliation
-cycle without external tooling.
+Scheduler cadence is `*/30 * * * *` for per-repository queue scans, `*/15 * * * *`
+for the organization sweep, plus an hourly `0 * * * *` heartbeat. The scheduler
+ignores the control-plane `scan-pr-queue` check in merge blocking so transient
+control-workflow churn does not stall current-head merge. Summaries emit the next
+UTC heartbeat timestamp.
 
 ## Bounded requirement includes (2026-08-14)
 
 Coverage materialize treats a lone `--require-hashes` line as non-evidence.
 Only exact SHA-256 package pins or a bounded relative `-r`/`--requirement`
 include (`target == PurePosixPath.as_posix()`, no `.`/`..` parts, candidate
-lock path only) enter the trusted image. Dotted includes such as
-`./lock.txt` and `-r other-hashes.txt` stay outside the build context
-(CWE-22; CWE-1288).
+lock path only) enter the trusted image (CWE-22; CWE-1288).
 
 ## Strix scanner pin (2026-08-13)
 
-Required Strix used `strix-agent==1.0.4`, which printed a finished
-penetration-test report and then exited before writing the artifact. The
-fail-closed gate (ContextualWisdomLab/.github#891) then failed the required
-check even when the console already listed real findings. That is a buyer-felt
-security-dashboard miss on every ruleset consumer, including
-`contextual-orchestrator`.
+Required Strix is `strix-agent==1.5.3` with `cryptography==50.0.0`. Compile uses
+`requirements-strix-ci-overrides.txt`; install uses
+`pip install --require-hashes --no-deps` on the complete lock. Decision record:
+`docs/doctoring/strix-agent-cryptography-override.md`.
 
-The shipped pin is `strix-agent==1.5.3` (atomic report writes; quit after
-scan) together with `cryptography==50.0.0` (CVE-2026-39892 floor plus
-CVE-2026-69247 PKCS#7 timing-oracle fix). Upstream still declares
-`cryptography<49`, so compile uses `requirements-strix-ci-overrides.txt` and
-install uses `pip install --require-hashes --no-deps` on the complete lock.
-Decision record: `docs/doctoring/strix-agent-cryptography-override.md`.
+## Related durable documents
 
-Do not treat leftover TUI severity lines as a report, and do not drop
-cryptography 50.0.0 to satisfy the stale metadata bound.
+- [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) — mission and
+  ecosystem.
+- [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
+  — Project #1 operation.
+- [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
+  contract.
+- [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
+  — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
+  — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md)
+  — Strix 1.5.3 plus cryptography 50.0.0 pin.
+- [`docs/doctoring/trusted-uv-lock-materialization.md`](docs/doctoring/trusted-uv-lock-materialization.md)
+  — bounded requirement includes.
