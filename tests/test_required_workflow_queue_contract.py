@@ -940,6 +940,13 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert support_probe.index("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") < support_probe.index(
         "curl -sS"
     )
+    assert 'repository_owner="${REPOSITORY%%/*}"' in support_probe
+    assert 'repository_name="${REPOSITORY#*/}"' in support_probe
+    assert '[ "${repository_owner}" = "." ]' in support_probe
+    assert '[ "${repository_name}" = ".." ]' in support_probe
+    assert support_probe.index('repository_owner="${REPOSITORY%%/*}"') < (
+        support_probe.index("curl -sS")
+    )
     assert "continue-on-error:" not in support_probe
     action_lines = []
     for line in workflow.split("      - name: Dependency review\n", 1)[1].splitlines():
@@ -1267,6 +1274,60 @@ def test_dependency_review_rejects_repository_path_injection(
     assert raw_repository not in combined
     assert "../evil" not in combined
     assert PROBE_TOKEN not in combined
+
+
+@pytest.mark.parametrize(
+    "raw_repository",
+    [
+        "../.github",
+        "ContextualWisdomLab/..",
+        "ContextualWisdomLab/.",
+        "./.github",
+    ],
+)
+def test_dependency_review_rejects_dot_path_components(
+    tmp_path: Path,
+    raw_repository: str,
+) -> None:
+    """A single-slash owner/name whose owner or name is ``.`` or ``..`` is still injection.
+
+    RFC 3986 remove-dot-segments would turn ``/repos/../.github/...`` into
+    ``/.github/...`` (Berners-Lee et al., 2005). The ``.github`` product
+    repository must remain legal; only the path-segment sentinels are refused.
+    """
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        repository=raw_repository,
+    )
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert not (tmp_path / "curl-invoked").exists()
+    assert not (tmp_path / "github-output").exists()
+    assert "owner/name repository identity" in result.stdout
+    assert "Dot or parent-directory path components" in result.stdout
+    assert raw_repository not in combined
+    assert PROBE_TOKEN not in combined
+
+
+def test_dependency_review_allows_dot_github_repository_name(
+    tmp_path: Path,
+) -> None:
+    """The organization ``.github`` special repository remains a legal compare target."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        repository="ContextualWisdomLab/.github",
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "curl-invoked").exists()
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:

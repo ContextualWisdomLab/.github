@@ -290,6 +290,12 @@ jobs:
             echo "::error::Dependency review evidence unavailable (visibility ${visibility}): owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
             exit 1
           fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable (visibility ${visibility}): owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \
