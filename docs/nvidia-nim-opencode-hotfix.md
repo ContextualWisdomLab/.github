@@ -45,9 +45,22 @@ catalog reliability is restored.
 Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env `NVIDIA_API_KEY`
 (fallback: `secrets.NVIDIA_API_KEY` if present) so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.
 
-## Large-repo OpenCode timeouts (~1 hour)
+## Large-repo OpenCode timeouts (NIM ≥7200s)
 
-Primary/default run timeouts and the dynamic queue timeout cap default to
-**3600s** (hour-class) so large repositories are not cut off by the old 600s
-default when env is unset. Free-tier failover remains capped at 600s.
-Workflow-provided values (e.g. 5400s) still win over defaults.
+The 180s NIM per-candidate timeout killed NVIDIA sessions in three minutes
+and skipped the review (ContextualWisdomLab/fast-mlsirm#290). Central
+dispatch now sets:
+
+- `OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS` and
+  `OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS` to **7200** (one two-hour NIM
+  attempt, then skip remaining NIM so seven 7200s candidates cannot stack)
+- generic / cadence / dynamic-cap / central-fallback run timeouts to **7200**
+- GPT-5 at **45s** and free-tier at **3600s** (unchanged short caps)
+
+`opencode/gpt-5.6-terra` and `github-models/*` are omitted from
+`OPENCODE_MODEL_CANDIDATES` so a Copilot-class fallback cannot win the pool
+after a NIM kill. They may still appear in `opencode.jsonc` / isolated
+catalog definitions and in the short publish-stage diagnosis. Concurrency
+stays PR-number scoped with `cancel-in-progress: true`; pool max cycles and
+attempts stay at 1 so the 8997-run dispatch queue does not multiply
+unbounded parallel two-hour jobs.

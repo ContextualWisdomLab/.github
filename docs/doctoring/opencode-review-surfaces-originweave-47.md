@@ -61,7 +61,11 @@ Coverage remains a fail-closed gate. It is no longer the review.
 Read-only review-agent permissions, NVIDIA NIM-first routing
 (`NVIDIA_NIM_API_KEY` bound into `NVIDIA_API_KEY`), OpenCode CLI 1.17.13, and
 the existing review-bot identity are unchanged. `COPILOT_GITHUB_TOKEN` is not
-introduced.
+introduced. The same dispatch file now gives NIM (and matching cadence /
+dynamic-cap) a 7200s run window instead of the 180s kill that skipped
+reviews on ContextualWisdomLab/fast-mlsirm#290, keeps GPT-5 / free-tier
+short, and omits `opencode/gpt-5.6-terra` and `github-models/*` from the
+pool. Concurrency remains PR-number scoped with `cancel-in-progress: true`.
 
 ## Verification contract
 
