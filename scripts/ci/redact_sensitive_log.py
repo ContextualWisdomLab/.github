@@ -143,6 +143,7 @@ MAX_RAW_JSON_TOKENS = 8_192
 MAX_RAW_JSON_STRING_BYTES = 32_768
 MAX_RAW_JSON_REPLACEMENTS = 2_048
 MAX_RAW_JSON_WORK = 262_144
+RAW_JSON_SPAN_PREFIXES = frozenset(" \t\r\n{[:,=()]")
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -1211,6 +1212,23 @@ def _looks_like_sensitive_json_candidate(text: str) -> bool:
     return False
 
 
+def _is_plausible_raw_json_start(text: str, index: int) -> bool:
+    """Return whether a brace or bracket can start a top-level JSON span."""
+    if index == 0:
+        return True
+    return text[index - 1] in RAW_JSON_SPAN_PREFIXES
+
+
+def _next_plausible_raw_json_start(text: str, index: int) -> int:
+    """Return the next plausible JSON opener after index, or the text length."""
+    cursor = index
+    while cursor < len(text):
+        if text[cursor] in "{[" and _is_plausible_raw_json_start(text, cursor):
+            return cursor
+        cursor += 1
+    return len(text)
+
+
 def _redact_plain_json_gap(
     text: str,
     literal_pattern: re.Pattern[str] | None,
@@ -1238,19 +1256,17 @@ def _redact_raw_json_spans(
     spans: list[tuple[int, int]] = []
     cursor = 0
     parsed = False
-    malformed_sensitive_candidate: bool | None = None
     budget = {"tokens": MAX_RAW_JSON_TOKENS, "work": MAX_RAW_JSON_WORK}
     while cursor < len(text):
-        if text[cursor] not in "{[":
+        if text[cursor] not in "{[" or not _is_plausible_raw_json_start(text, cursor):
             cursor += 1
             continue
         start = cursor
         try:
             node, end = _raw_json_parse_value(text, start, 0, budget)
         except _RawJsonError:
-            if malformed_sensitive_candidate is None:
-                malformed_sensitive_candidate = _looks_like_sensitive_json_candidate(text)
-            if malformed_sensitive_candidate:
+            window_end = _next_plausible_raw_json_start(text, start + 1)
+            if _looks_like_sensitive_json_candidate(text[start:window_end]):
                 return REDACTED, True
             cursor += 1
             continue

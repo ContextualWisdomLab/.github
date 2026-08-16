@@ -53,6 +53,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Preserve raw JSON layout atomically during sandbox log redaction so command wrappers cannot leak secrets through pretty-printed dumps.
+- Cite RFC 8259, ECMA-404, and ISO/IEC 21778 for duplicate JSON member handling, pin the sandbox redaction quality-gate operator prose, and keep architecture drift on the same exact-head quality path.
+- Stop treating GitHub Actions `##[group]` markers and prose `[timeout]` brackets as JSON array starts, so a later pretty-printed password object is rewritten in place instead of erasing the whole job log.
 
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.
@@ -77,3 +79,4 @@ Semantic Versioning where the repository publishes a release.
 - Added fast-mlsirm operational documentation for the hourly RCA loop, psychometric scientific gates, Rust ownership, bounded retry cadence, credential isolation, modular reuse, rollback, and APA 7 references.
 - Documented the ordinary and conflict repair write-scope parity, ignored-path and symlink inventory, Git-control-file denial, hook suppression, explicit push destination, RED/GREEN evidence, operator response, and local-versus-protected evidence boundary.
 - Documented the review-authentication boundary that excludes autonomous writer control-plane paths from review-derived file authority, its test-first Strix security evidence, exact-head coverage contract, and rollback prohibition.
+- Recorded RFC 8259 unpredictable duplicate-name behavior, ECMA-404 / ISO/IEC 21778 syntax neutrality, and the operator next step: treat `[REDACTED]` as evidence suppression, then rerun the exact-head sandbox redaction quality job after any layout-preserving change.
