@@ -4527,7 +4527,7 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
     monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
     monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
 
-    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 1
     assert seen == [1, 2]
     output = capsys.readouterr().out
     assert "PR #1: action_error: Command failed (1): gh pr merge 1; GraphQL: Resource not accessible by integration" in output
@@ -4616,7 +4616,7 @@ def test_main_keeps_scanning_after_update_branch_403_and_422(monkeypatch, capsys
     monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
     monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
 
-    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
+    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 1
     assert seen == [1, 2, 3]
     output = capsys.readouterr().out
     assert "PR #1: action_error:" in output

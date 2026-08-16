@@ -889,8 +889,12 @@ jobs:
               # PR_REVIEW_MERGE_TOKEN does not cover it. The automation can never
               # merge those PRs regardless, so this is a skipped, non-fatal
               # "unavailable" repository, not a failure the sweep can act on. Any
-              # other non-zero exit is a genuine per-repository failure.
-              if printf '%s' "$sweep_output" | grep -qF "Resource not accessible by integration"; then
+              # other non-zero exit is a genuine per-repository failure. A
+              # versioned scheduler payload proves the repository was readable
+              # and the failure was an attempted per-PR action, even when that
+              # action's API error contains the same 403 wording.
+              if printf '%s' "$sweep_output" | grep -qF "Resource not accessible by integration" &&
+                ! printf '%s' "$sweep_output" | grep -qF '"schema_version": "pr-review-merge-scheduler/v2"'; then
                 echo "::warning::Skipping ${repo_full_name}: the sweep credential lacks access (HTTP 403 Resource not accessible by integration). Install the OpenCode app on this repository or grant PR_REVIEW_MERGE_TOKEN access to include it in the sweep."
                 unavailable=$((unavailable + 1))
                 unavailable_repos+=("$repo_full_name")

@@ -816,6 +816,7 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # The 403 signal is classified as a skipped, non-fatal "unavailable" repo.
     assert "ORG_SWEEP_MAX_UNAVAILABLE" in workflow
     assert 'grep -qF "Resource not accessible by integration"' in workflow
+    assert "grep -qF '\"schema_version\": \"pr-review-merge-scheduler/v2\"'" in workflow
     assert "unavailable=$((unavailable + 1))" in workflow
     assert 'unavailable_repos+=("$repo_full_name")' in workflow
     assert "the sweep credential lacks access (HTTP 403" in workflow
@@ -830,6 +831,37 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # if condition (which set -e does not trap) and silently skip the guard.
     assert '"$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$' in workflow
     assert "ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer" in workflow
+
+
+def test_scheduler_action_errors_propagate_after_structured_summary() -> None:
+    """Targeted and organization scans must fail after retaining their summary."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    targeted = workflow.split("      - name: Inspect PR review and merge queue", 1)[1].split(
+        "\n  org-queue-sweep:", 1
+    )[0]
+    assert 'python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"' in targeted
+    assert "continue-on-error: true" not in targeted
+    assert "|| true" not in targeted
+
+    org_sweep = workflow.split("  org-queue-sweep:", 1)[1]
+    assert 'sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}" 2>&1)"' in org_sweep
+    assert "sweep_rc=$?" in org_sweep
+    assert 'if [ "$sweep_rc" -ne 0 ]; then' in org_sweep
+    assert "grep -qF '\"schema_version\": \"pr-review-merge-scheduler/v2\"'" in org_sweep
+    assert "failures=$((failures + 1))" in org_sweep
+
+
+def test_scheduler_exit_policy_is_documented() -> None:
+    """Keep the doctoring record bound to the terminal action_error contract."""
+    policy = (REPO_ROOT / "docs/doctoring/pr-review-merge-scheduler.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "action_error" in policy
+    assert "non-zero" in policy
+    assert "targeted" in policy
+    assert "organization sweep" in policy
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
