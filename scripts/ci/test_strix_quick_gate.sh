@@ -626,6 +626,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" 'NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}' "opencode review exposes NVIDIA NIM credentials only to the model runtime"
 	assert_file_contains "$workflow_file" '"north-mini-code-free"' "opencode review declares the current Zen coding model"
 	assert_file_contains "$workflow_file" "needs.validate-pr-metadata.outputs.is_private == 'false'" "opencode review limits data-retaining free models to public repositories"
+	assert_file_contains "$workflow_file" 'OPENCODE_REPOSITORY_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}' "opencode model pool receives trusted repository visibility next to PR_BASE_SHA"
+	assert_file_contains "$workflow_file" 'PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}' "opencode model pool receives the live validated PR base SHA"
 	assert_file_matches "$workflow_file" 'uses:[[:space:]]+actions/checkout@[0-9a-fA-F]{40}([[:space:]]|$)' "opencode review workflow pins checkout to a full commit SHA"
 	assert_workflow_uses_are_sha_pinned "$workflow_file" "opencode review workflow"
 	assert_file_contains "$workflow_file" "scripts/ci/codegraph-package/package-lock.json" "opencode review workflow installs CodeGraph from the committed lockfile"
