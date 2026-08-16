@@ -249,6 +249,10 @@ class GitHubClient:
             raise GitHubError("GH_TOKEN is required; no GITHUB_TOKEN fallback is permitted")
         return cls(token)
 
+    def _redact_credential(self, value: str) -> str:
+        """Remove the exact GitHub credential before any diagnostic truncation."""
+        return value.replace(self._token, "[REDACTED]")
+
     def request(
         self,
         path: str,
@@ -258,6 +262,7 @@ class GitHubClient:
     ) -> Any:
         """Call one GitHub REST endpoint and decode a bounded JSON response."""
         normalized_method = method.upper()
+        safe_path = self._redact_credential(path)
         args = ["gh", "api"]
         if normalized_method != "GET":
             args.extend(["--method", normalized_method])
@@ -280,15 +285,19 @@ class GitHubClient:
             raise GitHubError(f"GitHub API transport failed: {type(exc).__name__}") from exc
         if completed.returncode != 0:
             raw = (completed.stderr or completed.stdout or "GitHub API request failed").strip()
-            bounded = raw[-900:].replace(self._token, "[REDACTED]")
-            raise GitHubError(f"GitHub API {normalized_method} {path} failed: {bounded}")
+            bounded = self._redact_credential(raw)[-900:]
+            raise GitHubError(
+                f"GitHub API {normalized_method} {safe_path} failed: {bounded}"
+            )
         text = completed.stdout.strip()
         if not text:
             return None
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
-            raise GitHubError(f"GitHub API returned invalid JSON for {path}") from exc
+            raise GitHubError(
+                f"GitHub API returned invalid JSON for {safe_path}"
+            ) from exc
 
     def list_repositories(self, organization: str) -> list[dict[str, Any]]:
         """Return every repository visible to the coordinator installation."""
