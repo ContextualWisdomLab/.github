@@ -56,3 +56,5 @@ Vulnerability gates print the package, advisory or CVE, affected manifest, and
 severity when available. Review gates print whether the block came from
 current-head checks, unresolved review threads, stale approvals, mergeability,
 or GitHub Actions requiring manual approval.
+
+Protected `main` still requires exactly two eligible approvals.

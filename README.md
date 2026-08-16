@@ -149,3 +149,9 @@ Operational cases folded into the central policy:
   reduce maintainer, reviewer, CI-operator, contributor, user, or reader
   friction. Noisy automation, repeated waiting, false failures, misleading
   statuses, and URL-only diagnostics are treated as review-experience defects.
+
+## Automation control plane
+
+Authoritative specifications live in [docs/automation/README.md](docs/automation/README.md).
+Protected `main` requires exactly two approving reviews. The scheduled repair
+worker cannot invoke Bash, task/subagents, or webfetch.

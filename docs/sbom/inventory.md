@@ -23,3 +23,5 @@ alongside the central Security Scan.
 No copyleft or NOASSERTION components detected.
 
 ## Per-repository components
+
+An empty table is an unmaterialized generated-artifact state, not proof that the organization has zero components.

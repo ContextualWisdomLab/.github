@@ -90,3 +90,8 @@ GitHub. (n.d.). *REST API endpoints for issues*. GitHub Docs. Retrieved August 6
 GitHub. (n.d.). *REST API endpoints for repositories: Create a repository dispatch event*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event
 
 GitHub. (n.d.). *Store and share data with workflow artifacts*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/actions/tutorials/store-and-share-data
+
+## Dead-letter
+
+Failed acknowledgement is an at-most-once dead-letter. See
+https://github.com/ContextualWisdomLab/.github/issues/893.
