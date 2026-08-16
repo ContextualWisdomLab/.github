@@ -2939,6 +2939,15 @@ is_llm_token_limit_error() {
 	return 1
 }
 
+# Strix's agent SDK can reject a provider response before it produces scan
+# evidence when the model emits a tool call that the selected agent does not
+# expose. Treat this exact SDK/provider failure as retryable so a configured
+# fallback model can complete the security scan; it is not evidence from the
+# target repository and must never be treated as a vulnerability.
+is_model_tool_protocol_error() {
+	grep -Eiq 'agents\.exceptions\.ModelBehaviorError:[[:space:]]*Tool [[:alnum:]_]+ not found in agent strix' "$STRIX_LOG"
+}
+
 # Detect whether the strix log contains evidence of infrastructure-level
 # errors (timeout, rate-limit, transport failures) that indicate the scan
 # was interrupted or incomplete.  Used as a guard to prevent the
@@ -2957,6 +2966,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_llm_token_limit_error; then
+		return 0
+	fi
+
+	if is_model_tool_protocol_error; then
 		return 0
 	fi
 
@@ -3835,6 +3848,12 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_token_limit_error; then
+		return 0
+	fi
+
+	if is_model_tool_protocol_error; then
+		# A provider/model tool-contract failure is recoverable with a distinct
+		# configured model, but it is not a clean scan result.
 		return 0
 	fi
 

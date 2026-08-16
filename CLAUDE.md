@@ -119,6 +119,8 @@ repeatable compile command.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
+- **Strix tool-protocol errors** (`ModelBehaviorError: Tool … not found in agent strix`) are
+  retryable infrastructure. They must not be published as repository vulnerabilities.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

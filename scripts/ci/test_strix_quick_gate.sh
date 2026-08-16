@@ -727,6 +727,8 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "is_model_tool_protocol_error" "strix quick gate retries agent tool-protocol provider failures"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "ModelBehaviorError:[[:space:]]*Tool [[:alnum:]_]+ not found in agent strix" "strix quick gate identifies unsupported agent tool responses"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
@@ -3564,6 +3566,23 @@ REPORT
 			;;
 		esac
 		;;
+	tool-protocol-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/tool-protocol-primary)
+			echo "agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix"
+			echo "agents.exceptions.ModelBehaviorError: Tool agent_finish not found in agent strix"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after tool-protocol fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: tool-protocol fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 26
+			;;
+		esac
+		;;
 	openai-primary-quota-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/quota-primary)
@@ -5824,6 +5843,16 @@ run_filtered_gate_case_if_requested() {
 		;;
 	input-file-root-override-precedence)
 		run_input_file_root_override_takes_precedence_over_runner_temp_case
+		;;
+	tool-protocol-fallback-success)
+		run_gate_case "tool-protocol-fallback-success" \
+			"vertex_ai/tool-protocol-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/tool-protocol-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
 		;;
 	vertex-without-llm-api-key)
 		run_vertex_without_llm_api_key_case
@@ -9327,6 +9356,15 @@ run_gate_case_allow_provider_signal "vertex-primary-midstream-fallback-success" 
 	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
 	"2" \
 	"vertex_ai/midstream-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "tool-protocol-fallback-success" \
+	"vertex_ai/tool-protocol-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/tool-protocol-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
 run_gate_case_allow_provider_signal "vertex-primary-midstream-retry-same-model-success" \

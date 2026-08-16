@@ -39,6 +39,13 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## Strix tool-protocol fallback
+
+When a provider emits `agents.exceptions.ModelBehaviorError: Tool <name>
+not found in agent strix`, the quick gate treats that line as retryable
+infrastructure and continues to a distinct configured model. It is not
+scan evidence from the target repository.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
