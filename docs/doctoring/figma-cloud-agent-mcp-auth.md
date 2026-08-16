@@ -40,11 +40,18 @@ Use two disjoint auth paths:
 | Surface | Auth | Capability |
 |---|---|---|
 | Cursor Desktop / CLI | Figma MCP OAuth (`Settings → Tools & MCP → Figma → Connect`) | Full MCP toolset (`get_design_context`, `use_figma`, write-to-canvas, …) |
-| Cursor Cloud Agent | Figma personal access token in `FIGMA_ACCESS_TOKEN` | REST only: `python3 scripts/ci/figma_rest_auth.py` then `python3 scripts/ci/figma_rest_file.py <file-key-or-url>` (`X-Figma-Token` on pinned `https://api.figma.com/v1/me` and `/v1/files/{key}`) |
+| Cursor Cloud Agent | Figma personal or plan access token in `FIGMA_ACCESS_TOKEN` | REST only: `python3 scripts/ci/figma_rest_auth.py` then `python3 scripts/ci/figma_rest_file.py <file-key-or-url>` (`X-Figma-Token` only, pinned `https://api.figma.com/v1/me` and `/v1/files/{key}`) |
 
-A personal access token does **not** unlock Figma MCP on Cloud Agents. It only
-authorizes the REST API. Do not commit the token. Do not put it in
+A personal or plan access token does **not** unlock Figma MCP on Cloud Agents.
+It only authorizes the REST API. Do not commit the token. Do not put it in
 `environment.json`, workflow YAML, or chat output.
+
+Prefer a **plan access token** for organization Cloud Agent fleets
+(admin-managed, expiry up to one year; Figma, 2026a). Use a personal access
+token only when the operator is acting on their own account (maximum 90 days).
+Both kinds are stored in the same secret name. Whoami and file bodies are
+capped (64 KiB / 8 MiB). The opener refuses every header except
+`X-Figma-Token` so a `Host` override cannot retarget TLS (CWE-22; MITRE, 2026).
 
 ## Operator procedure
 
@@ -123,6 +130,13 @@ authorization framework* (Internet-Draft draft-ietf-oauth-v2-1). Internet
 Engineering Task Force. Retrieved August 16, 2026, from
 https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1
 
+MITRE. (2026). *CWE-22: Improper limitation of a pathname to a restricted
+directory ('Path Traversal')*. https://cwe.mitre.org/data/definitions/22.html
+
 Neilson, K. (2026, June 10). Reply in *Figma MCP shows "Forbidden" in
 Automations / Cloud Agents*. Cursor Forum. Retrieved August 16, 2026, from
 https://forum.cursor.com/t/figma-mcp-shows-forbidden-in-automations-cloud-agents/162969
+
+Sakimura, N., Bradley, J., & Agarwal, N. (2015). *Proof Key for Code Exchange
+by OAuth public clients* (RFC 7636). RFC Editor.
+https://doi.org/10.17487/RFC7636

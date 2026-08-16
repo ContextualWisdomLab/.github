@@ -30,6 +30,8 @@ from scripts.ci.figma_rest_auth import (
     FigmaAuthError,
     identity_field,
     read_access_token,
+    read_bounded_body,
+    sanitize_request_headers,
 )
 
 EXIT_INVALID_TARGET = 5
@@ -48,6 +50,7 @@ ALLOWED_REQUEST_PATH = re.compile(
 )
 DEFAULT_TREE_DEPTH = 2
 MAX_TREE_DEPTH = 8
+MAX_FILE_BODY_BYTES = 8_388_608
 FileOpener = Callable[[str, Mapping[str, str]], tuple[int, bytes]]
 
 
@@ -169,9 +172,9 @@ def default_file_opener(path: str, headers: Mapping[str, str]) -> tuple[int, byt
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     try:
-        connection.request("GET", path, headers=dict(headers))
+        connection.request("GET", path, headers=sanitize_request_headers(headers))
         response = connection.getresponse()
-        return int(response.status), response.read()
+        return int(response.status), read_bounded_body(response.read, MAX_FILE_BODY_BYTES)
     except OSError as exc:
         raise FigmaAuthError(
             f"Figma REST transport failed: {exc}",
