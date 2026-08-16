@@ -114,6 +114,8 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
+- **Control-plane SLI receipts** (`scripts/ci/control_plane_sli_receipt.py`) are local, finite, and
+  read-only. They are operator evidence, not merge or writer authority.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

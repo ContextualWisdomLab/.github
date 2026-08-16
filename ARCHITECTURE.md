@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Control-plane SLI receipts
+
+`scripts/ci/control_plane_sli_receipt.py` turns a local finite evidence
+document into one `cwl.control-plane-sli/v1` receipt. The collector does
+not query GitHub or acquire mutation authority. Named wait reasons and
+acceptance debt are operator evidence only.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
