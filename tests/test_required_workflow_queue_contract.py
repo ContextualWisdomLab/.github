@@ -117,7 +117,7 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
         assert "github.event.client_payload" in workflow
 
     scheduler = (
-        REPO_ROOT / "scripts" / "ci" / "pr_review_merge_scheduler.py"
+        REPO_ROOT / "scripts" / "ci" / "_pr_review_merge_scheduler_core.py"
     ).read_text(encoding="utf-8")
     assert 'f"repos/{dispatch_repo}/dispatches"' in scheduler
     assert '"event_type": "opencode-review"' in scheduler
