@@ -11,8 +11,18 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+if __package__ in (None, ""):  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import (
+    REDACTED as REDACTION_MARKER,
+    redact_command_argv,
+    redact_json_value,
+    redact_text,
+)
 
 
 DEFAULT_IGNORE = (
@@ -57,6 +67,33 @@ SAFE_ENV_ALLOWLIST = (
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MIN_ALLOWED_ENV_VALUE_LENGTH = 8
+RESERVED_EVIDENCE_FRAGMENTS = (
+    "SANDBOXED_VERIFY_RESULT",
+    "SANDBOXED_WEB_E2E_RESULT",
+    "sandboxed-verify",
+    "sandboxed-web-e2e",
+    "allowed env names",
+    "service readiness failed",
+    "command timed out after",
+    "execution failed",
+    "allowed_env",
+    "backend_cmd",
+    "backend_ready",
+    "elapsed_seconds",
+    "evidence_note",
+    "exit_code",
+    "frontend_cmd",
+    "frontend_ready",
+    "frontend",
+    "not-required",
+    "required",
+    "sandboxed",
+)
+
+
+class UnsafeAllowedEnvValueError(ValueError):
+    """An allowed environment value cannot be redacted unambiguously."""
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -85,7 +122,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         metavar="NAME",
-        help="Pass one named environment variable into the sandbox. Values are never printed.",
+        help=(
+            "Pass one named environment variable into the sandbox. Nonempty values "
+            "must be at least 8 characters and must not collide with fixed "
+            "redaction evidence."
+        ),
     )
     parser.add_argument(
         "--network",
@@ -138,6 +179,48 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
+def allowed_env_values(
+    allow_env: Sequence[str],
+    source: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Capture nonempty allowed values before any fallible sandbox setup."""
+    environment = os.environ if source is None else source
+    return tuple(
+        dict.fromkeys(
+            value
+            for name in allow_env
+            if (value := environment.get(name))
+        )
+    )
+
+
+def validate_allowed_env_values(
+    allow_env: Sequence[str],
+    source: Mapping[str, str] | None = None,
+) -> None:
+    """Reject short values that cannot be redacted without destroying evidence."""
+    environment = os.environ if source is None else source
+    for name in dict.fromkeys(allow_env):
+        value = environment.get(name, "")
+        if value and len(value) < MIN_ALLOWED_ENV_VALUE_LENGTH:
+            raise UnsafeAllowedEnvValueError(
+                f"--allow-env value for {name} must contain at least "
+                f"{MIN_ALLOWED_ENV_VALUE_LENGTH} characters"
+            )
+        if value and (value in REDACTION_MARKER or REDACTION_MARKER in value):
+            raise UnsafeAllowedEnvValueError(
+                f"--allow-env value for {name} must not overlap the redaction marker"
+            )
+        if value and any(value in fragment for fragment in RESERVED_EVIDENCE_FRAGMENTS):
+            raise UnsafeAllowedEnvValueError(
+                f"--allow-env value for {name} conflicts with reserved evidence text"
+            )
+        if value and any(value in allowed_name for allowed_name in allow_env):
+            raise UnsafeAllowedEnvValueError(
+                f"--allow-env value for {name} conflicts with an allowed environment name"
+            )
+
+
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
@@ -164,13 +247,19 @@ def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout:
     )
 
 
-def timeout_output_text(value: str | bytes | None) -> str:
-    """Return timeout output as text, regardless of subprocess internals."""
+def timeout_output_text(
+    value: str | bytes | None,
+    *,
+    sensitive_values: Sequence[str] = (),
+) -> str:
+    """Return redacted timeout output as text, regardless of subprocess internals."""
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    return value
+        text = value.decode(errors="replace")
+    else:
+        text = value
+    return redact_text(text, sensitive_values=sensitive_values)
 
 
 def emit_result(
@@ -184,11 +273,15 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    sensitive_values: Sequence[str] = (),
 ) -> None:
     """Print a machine-readable execution evidence summary."""
     payload = {
         "allowed_env": sorted(set(allowed_env)),
-        "command": list(command),
+        "command": redact_command_argv(
+            command,
+            sensitive_values=sensitive_values,
+        ),
         "cwd": str(copied_repo),
         "elapsed_seconds": round(elapsed_seconds, 3),
         "evidence_note": evidence_note,
@@ -197,7 +290,12 @@ def emit_result(
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
-    print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
+    redacted_payload = redact_json_value(
+        payload,
+        sensitive_values=sensitive_values,
+        redact_literal_keys=False,
+    )
+    print(f"{RESULT_MARKER} {json.dumps(redacted_payload, sort_keys=True)}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -207,11 +305,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     start = time.monotonic()
     exit_code = 1
     copied_repo = sandbox / "repo"
+    sensitive_values = allowed_env_values(args.allow_env)
+    result_command: Sequence[str] = args.command
     try:
+        validate_allowed_env_values(args.allow_env)
         copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = scrubbed_env(sandbox, args.allow_env)
+        validate_allowed_env_values(args.allow_env, env)
+        sensitive_values = tuple(
+            dict.fromkeys(
+                (*sensitive_values, *allowed_env_values(args.allow_env, env))
+            )
+        )
         print(f"sandboxed-verify: cwd={copied_repo}")
-        print(f"sandboxed-verify: command={' '.join(args.command)}")
+        print(
+            "sandboxed-verify: command="
+            + " ".join(
+                redact_command_argv(
+                    args.command,
+                    sensitive_values=sensitive_values,
+                )
+            )
+        )
         if args.allow_env:
             print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
         if args.network != "default":
@@ -219,13 +334,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_command(args.command, copied_repo, env, args.timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(
+                    redact_text(completed.stdout, sensitive_values=sensitive_values),
+                    end="",
+                )
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(
+                    redact_text(completed.stderr, sensitive_values=sensitive_values),
+                    end="",
+                    file=sys.stderr,
+                )
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
-            stdout = timeout_output_text(exc.stdout)
-            stderr = timeout_output_text(exc.stderr)
+            stdout = timeout_output_text(exc.stdout, sensitive_values=sensitive_values)
+            stderr = timeout_output_text(exc.stderr, sensitive_values=sensitive_values)
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
@@ -233,10 +355,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
+    except UnsafeAllowedEnvValueError as exc:
+        print(f"sandboxed-verify: execution failed: {exc}", file=sys.stderr)
+        sensitive_values = ()
+        result_command = (REDACTION_MARKER,)
+        exit_code = 126
+        return exit_code
+    except Exception as exc:
+        detail = redact_text(str(exc), sensitive_values=sensitive_values).strip()
+        suffix = f": {detail}" if detail else ""
+        print(f"sandboxed-verify: execution failed{suffix}", file=sys.stderr)
+        exit_code = 126
+        return exit_code
     finally:
         elapsed = time.monotonic() - start
         emit_result(
-            command=args.command,
+            command=result_command,
             copied_repo=copied_repo,
             sandbox_root=sandbox,
             exit_code=exit_code,
@@ -245,6 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allowed_env=args.allow_env,
             network=args.network,
             evidence_note=args.evidence_note,
+            sensitive_values=sensitive_values,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
