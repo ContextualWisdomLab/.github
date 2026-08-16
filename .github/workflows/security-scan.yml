@@ -19,7 +19,8 @@
 # NOTE on dependency-review: unavailable evidence is not a clean result. Only
 # an exact base/head comparison returning HTTP 200 may reach the pinned hard
 # gate. Every other probe outcome fails closed without printing the response
-# body. See docs/doctoring/dependency-review-fail-closed.md.
+# body. Diagnostics include allowlisted repository visibility. See
+# docs/doctoring/dependency-review-fail-closed.md.
 #
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
 # MEDIUM/HIGH/CRITICAL finding blocks every PR in that repo until it is fixed.
@@ -270,10 +271,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
+          case "${REPOSITORY_VISIBILITY}" in
+            public|private|internal) visibility="${REPOSITORY_VISIBILITY}" ;;
+            *) visibility="unknown" ;;
+          esac
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \
@@ -294,13 +300,12 @@ jobs:
           esac
 
           if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then
-            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
+            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} (visibility ${visibility}) at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
             exit 1
           fi
 
           echo "supported=true" >>"$GITHUB_OUTPUT"
       - name: Dependency review
-        if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate

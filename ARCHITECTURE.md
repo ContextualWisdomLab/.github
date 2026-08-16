@@ -104,6 +104,29 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Dependency-review evidence
+
+The central `Security Scan` job treats GitHub's exact `BASE_SHA...HEAD_SHA`
+comparison as a hard supply-chain evidence boundary. Only transport exit `0`
+plus HTTP `200` may reach the immutably pinned dependency-review action. A
+`403`, `404`, timeout, truncated transfer, or malformed status fails closed
+and records allowlisted repository visibility with the exact revisions. Other
+scanners are complementary; they are not substitutes.
+
+```mermaid
+flowchart TD
+  Probe["Exact base/head compare probe"]
+  Transport{"curl exit 0 and HTTP 200?"}
+  Action["Pinned dependency-review action"]
+  Fail["Fail closed with repo, visibility, SHAs, status"]
+
+  Probe --> Transport
+  Transport -->|"yes"| Action
+  Transport -->|"no"| Fail
+```
+
+See [`docs/doctoring/dependency-review-fail-closed.md`](docs/doctoring/dependency-review-fail-closed.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.

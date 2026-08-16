@@ -6,7 +6,7 @@ Status: `active_pr` until the matching workflow and regression contract are pres
 
 Dependency review is a hard supply-chain gate. The central workflow accepts only HTTP `200` from GitHub's exact `BASE_SHA...HEAD_SHA` comparison before invoking the immutably pinned dependency-review action. A `403`, `404`, empty or malformed status, timeout, transport failure, truncated exchange, or other unexpected outcome is unavailable evidence and fails closed.
 
-The support probe has a 10-second connection limit and 30-second total limit. It preserves curl's transport exit code separately from the bounded HTTP status and requires transport exit `0` plus exact HTTP `200`. It discards the response body and logs only repository identity, exact base/head revisions, the normalized HTTP status, and the numeric transport exit. Credentials and response bodies are never diagnostic output.
+The support probe has a 10-second connection limit and 30-second total limit. It preserves curl's transport exit code separately from the bounded HTTP status and requires transport exit `0` plus exact HTTP `200`. It discards the response body and logs only repository identity, allowlisted visibility (`public`, `private`, `internal`, or `unknown`), exact base/head revisions, the normalized HTTP status, and the numeric transport exit. Credentials, response bodies, and raw untrusted visibility strings are never diagnostic output. After a successful probe the pinned action is not independently skippable.
 
 RFC 9110 §15.3.1 defines `200` as a completed successful representation, not as a status that can be inferred after a truncated transfer (Fielding et al., 2022). NIST SP 800-53 Rev. 5 RA-5 and SA-12 require that vulnerability and supply-chain evidence be obtained, not assumed absent (National Institute of Standards and Technology, 2020). SLSA v1.0 likewise treats missing provenance as unverified rather than passing (SLSA, 2023). An HTTP `403` or `404` is therefore unavailable evidence, not a clean skip.
 
@@ -19,7 +19,7 @@ Checks, status contexts, review submissions, and merge authorization remain sepa
 ## Failure classification and remediation
 
 - Transport exit `0` plus HTTP `200`: proceed to the pinned dependency-review action.
-- Any other result: fail the job and retain exact repository/base/head/status and transport-exit evidence. An HTTP `200` emitted by a failed or partial transfer is unavailable evidence.
+- Any other result: fail the job and retain exact repository, allowlisted visibility, base/head, status, and transport-exit evidence. An HTTP `200` emitted by a failed or partial transfer is unavailable evidence. Do not infer a root cause from HTTP `403` or `404`.
 - Public repository failure: verify dependency graph and security configuration, organization policy, token read access, and GitHub service health.
 - Private or internal exception: require a separately reviewed organization policy with explicit entitlement evidence and compensating controls. Never infer `not-applicable` from an unavailable response.
 
@@ -41,6 +41,8 @@ GitHub. (n.d.). *Dependency review*. GitHub Docs. Retrieved August 9, 2026, from
 GitHub. (n.d.). *REST API endpoints for dependency review*. GitHub Docs. Retrieved August 9, 2026, from https://docs.github.com/en/rest/dependency-graph/dependency-review
 
 GitHub. (n.d.). *Dependency graph*. GitHub Docs. Retrieved August 9, 2026, from https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph
+
+GitHub. (n.d.). *Webhook events and payloads*. GitHub Docs. Retrieved August 16, 2026, from https://docs.github.com/en/webhooks/webhook-events-and-payloads#repository
 
 National Institute of Standards and Technology. (2020). *Security and
 privacy controls for information systems and organizations* (NIST SP
