@@ -27,6 +27,49 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
+def run_dependency_review_support_probe(
+    tmp_path: Path,
+    *,
+    curl_script: str,
+    repository_visibility: str = "public",
+) -> subprocess.CompletedProcess:
+    """Run the workflow support probe against a controlled curl binary.
+
+    The helper places a fake ``curl`` first on ``PATH`` so the extracted
+    workflow script cannot call the real binary, then supplies only the
+    synthetic environment variables the support step reads.
+    """
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(curl_script, encoding="utf-8")
+    fake_curl.chmod(0o755)
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("security-scan.yml"),
+            "Check dependency review support",
+        ).split("        run: |\n", 1)[1]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_API_URL": "https://api.example.invalid",
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "GH_TOKEN": "synthetic-read-token",
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "REPOSITORY": "ContextualWisdomLab/.github",
+            "REPOSITORY_VISIBILITY": repository_visibility,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -842,11 +885,21 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
 def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
     workflow = workflow_text("security-scan.yml")
     support_probe = workflow_step(workflow, "Check dependency review support")
+    action_first_line = workflow.split(
+        "      - name: Dependency review\n",
+        1,
+    )[1].splitlines()[0]
 
     assert "id: dependency_review_support" in workflow
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
     assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in workflow
     assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert (
+        "REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}"
+        in support_probe
+    )
+    assert "public|private|internal)" in support_probe
+    assert "visibility ${visibility}" in support_probe
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -858,8 +911,8 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
     assert "supported=false" not in workflow
     assert "skipping dependency-review hard gate" not in workflow
-    assert (
-        "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    assert action_first_line.startswith(
+        "        uses: actions/dependency-review-action@"
     )
 
 
@@ -868,42 +921,72 @@ def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
 ) -> None:
     """A failed curl transport must not make HTTP 200 acceptable evidence."""
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_curl = fake_bin / "curl"
-    fake_curl.write_text(
-        "#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
-        encoding="utf-8",
-    )
-    fake_curl.chmod(0o755)
-    github_output = tmp_path / "github-output"
-    script = textwrap.dedent(
-        workflow_step(
-            workflow_text("security-scan.yml"),
-            "Check dependency review support",
-        ).split("        run: |\n", 1)[1]
-    )
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            "GITHUB_API_URL": "https://api.example.invalid",
-            "GITHUB_OUTPUT": str(github_output),
-            "GH_TOKEN": "synthetic-read-token",
-            "BASE_SHA": "a" * 40,
-            "HEAD_SHA": "b" * 40,
-            "REPOSITORY": "ContextualWisdomLab/.github",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
     )
 
     assert result.returncode == 1
     assert "HTTP 200; curl exit 18" in result.stdout
-    assert not github_output.exists()
+    assert "visibility public" in result.stdout
+    assert not (tmp_path / "github-output").exists()
+
+
+@pytest.mark.parametrize(
+    ("curl_script", "expected_http"),
+    [
+        ("#!/usr/bin/env bash\nprintf '403'\nexit 0\n", "403"),
+        ("#!/usr/bin/env bash\nprintf '404'\nexit 0\n", "404"),
+        ("#!/usr/bin/env bash\nprintf ''\nexit 0\n", "unavailable"),
+        ("#!/usr/bin/env bash\nprintf 'OK'\nexit 0\n", "malformed"),
+    ],
+)
+def test_dependency_review_non_200_status_fails_closed(
+    tmp_path: Path,
+    curl_script: str,
+    expected_http: str,
+) -> None:
+    """HTTP 403/404, empty, and malformed statuses must fail closed."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=curl_script,
+    )
+
+    assert result.returncode == 1
+    assert f"HTTP {expected_http}; curl exit 0" in result.stdout
+    assert "visibility public" in result.stdout
+    assert not (tmp_path / "github-output").exists()
+
+
+def test_dependency_review_success_writes_supported_true(tmp_path: Path) -> None:
+    """Only a complete HTTP 200 with transport exit 0 may emit supported=true."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+
+
+def test_dependency_review_records_unknown_visibility_when_unset(
+    tmp_path: Path,
+) -> None:
+    """Missing or unrecognized visibility must be recorded as unknown."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+        repository_visibility="",
+    )
+
+    assert result.returncode == 1
+    assert "visibility unknown" in result.stdout
+    assert not (tmp_path / "github-output").exists()
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
