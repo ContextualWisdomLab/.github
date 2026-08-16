@@ -28,6 +28,7 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Closed the object-storage contract around exact lowercase DNS hosts, TCP port range, finite RFC 8259 numbers, nested JSON Schema objects, and typed observability labels so hardening tests cannot pass a metadata, Unicode, or unhashable-label document.
+- Removed the leftover one-shot object-storage repair workflow so Scorecard Token-Permissions no longer sees workflow-default `contents: write` after the hardening is already committed.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
