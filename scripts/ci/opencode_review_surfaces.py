@@ -239,8 +239,6 @@ def emit_mermaid(
         lines = ["```mermaid", "classDiagram"]
         for symbol in symbols[:8]:
             lines.append(f"  class {_quote_label(symbol)}")
-        if len(symbols) >= 2:
-            lines.append(f"  {_quote_label(symbols[0])} --> {_quote_label(symbols[1])}")
         lines.append("```")
         return "\n".join(lines) + "\n"
     if rust_paths:

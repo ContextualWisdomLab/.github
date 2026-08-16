@@ -68,8 +68,12 @@ Regression tests prove that:
    `request_changes_for_coverage_evidence_failure` updates the status comment
    and does not call `create_pull_review`;
 6. the model pool still runs when coverage-evidence failed (`!= cancelled`);
-   and
-7. bounded Rust toolchain materialization copies manifests only, selects
+7. `publish_fallback_diff_review` restores `COVERAGE_BLOCKED` after the
+   COMMENT review so `create_pull_review` cannot leave `Gate result: COMMENT`
+   on a coverage miss;
+8. the class diagram lists public items and does not invent
+   `FirstType --> SecondType`; and
+9. bounded Rust toolchain materialization copies manifests only, selects
    rustup 1.97 for OriginWeave-style workspaces, and rejects parent-directory
    members and symlinks.
 
@@ -79,14 +83,31 @@ A later rustup or llvm-tools catalog change can still fail the image build.
 That failure remains a coverage-gate failure, not a synthesized product-file
 finding. The sandbox does not weaken a genuine below-threshold coverage miss.
 
+Publishing the fallback review uses `create_pull_review COMMENT`, which also
+rewrites the issue comment to `Gate result: COMMENT`. The publisher must then
+restore `COVERAGE_BLOCKED` on that status surface so a model-unavailable
+coverage miss does not look like a completed comment-only review. The fallback
+class diagram lists extracted public items and does not invent a relationship
+between the first two names.
+
 ## References
 
-GitHub, Inc. (2026). *REST API endpoints for pull request reviews*. GitHub
-Docs.
+GitHub, Inc. (n.d.). *REST API endpoints for pull request reviews*. GitHub
+Docs. Retrieved August 16, 2026, from
 https://docs.github.com/en/rest/pulls/reviews
 
-Rust Project Developers. (2026). *The rustup book*. Rust Project.
-https://rust-lang.github.io/rustup/
+International Organization for Standardization. (2023). *Systems and software
+engineering — Systems and software Quality Requirements and Evaluation
+(SQuaRE) — Product quality model* (ISO/IEC 25010:2023).
+https://www.iso.org/standard/78176.html
 
-Taiki Endo. (2026). *cargo-llvm-cov*. GitHub.
+National Institute of Standards and Technology. (2022). *Secure software
+development framework (SSDF) version 1.1: Recommendations for mitigating the
+risk of software vulnerabilities* (NIST Special Publication 800-218).
+https://doi.org/10.6028/NIST.SP.800-218
+
+Rust Project Developers. (n.d.). *The rustup book*. Retrieved August 16, 2026,
+from https://rust-lang.github.io/rustup/
+
+Taiki Endo. (2026). *cargo-llvm-cov* (Version 0.8.7) [Computer software].
 https://github.com/taiki-e/cargo-llvm-cov

@@ -5676,6 +5676,7 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
+            request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }
 
@@ -7617,7 +7618,6 @@ jobs:
             APPROVE)
               if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
                 publish_fallback_diff_review
-                request_changes_for_coverage_evidence_failure
                 echo "::endgroup::"
                 exit 1
               fi
