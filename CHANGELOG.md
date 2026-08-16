@@ -53,6 +53,7 @@ Semantic Versioning where the repository publishes a release.
 
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Fail closed when GitHub dependency-review evidence is unavailable (non-200, transport failure, truncated compare, or curl's `000` no-status sentinel) instead of treating HTTP 403/404 as a clean skip; the probe records allowlisted repository visibility with the exact head SHA and never prints the API body or raw visibility strings.
+- Reject named Git revisions and non-`owner/name` repository values before the dependency-review compare request so GitHub cannot resolve `main` to a moving HEAD and so path injection cannot reach the compare URL.
 
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.

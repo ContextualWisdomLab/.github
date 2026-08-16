@@ -280,6 +280,16 @@ jobs:
             public|private|internal) visibility="${REPOSITORY_VISIBILITY}" ;;
             *) visibility="unknown" ;;
           esac
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable for the allowlisted repository (visibility ${visibility}): exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable (visibility ${visibility}): owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \

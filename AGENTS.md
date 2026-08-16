@@ -7,4 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
-Dependency-review unavailability fails closed; diagnostics include allowlisted repository visibility. See [`docs/doctoring/dependency-review-fail-closed.md`](docs/doctoring/dependency-review-fail-closed.md).
+Dependency-review unavailability fails closed; diagnostics include allowlisted repository visibility. Named refs and non-`owner/name` repository values are rejected before the compare request. See [`docs/doctoring/dependency-review-fail-closed.md`](docs/doctoring/dependency-review-fail-closed.md).
