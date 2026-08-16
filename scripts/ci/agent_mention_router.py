@@ -79,6 +79,7 @@ class GitHubClient:
             capture_output=True,
             check=False,
             env=environment,
+            shell=False,
         )
         return_code = int(getattr(completed, "returncode", 0))
         if return_code:
