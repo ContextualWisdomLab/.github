@@ -51,3 +51,7 @@ Primary/default run timeouts and the dynamic queue timeout cap default to
 **3600s** (hour-class) so large repositories are not cut off by the old 600s
 default when env is unset. Free-tier failover remains capped at 600s.
 Workflow-provided values (e.g. 5400s) still win over defaults.
+
+## Credential and ruleset isolation
+
+No legacy secret alias is accepted. No branch-protection or ruleset bypass is authorized.

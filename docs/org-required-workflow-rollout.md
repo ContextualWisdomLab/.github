@@ -314,3 +314,9 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - `pg-erd-cloud` no longer has a repository-local `pr-review-autofix.yml` worker on its default branch. Live default-branch workflows after PR `#393` are `ci.yml`, `codeql-backfill.yml`, `codeql.yml`, `dependency-review.yml`, and `scorecard.yml`.
 - Some repositories use classic branch protection while others use rulesets. Normalize branch protection into rulesets without removing repository-specific required application checks.
 - Existing PRs may not show newly inherited required workflows until a new PR event or branch update occurs, even though the org ruleset now uses the all-repository condition.
+
+## Current executable policy corrections
+
+Hourly product callers use `cancel-in-progress: true`. Organization queue
+starvation remains https://github.com/ContextualWisdomLab/.github/issues/889.
+The central autofix worker is not a substitute for required review or checks.
