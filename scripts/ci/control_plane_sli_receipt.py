@@ -281,6 +281,8 @@ def build_receipt(
             exhausted = retry["exhausted"]
             if not isinstance(exhausted, bool):
                 raise ValueError("exhausted must be a boolean")
+            if exhausted and attempts == 0:
+                raise ValueError("exhausted retries require at least one attempt")
             retry_attempts[failure_class] = retry_attempts.get(failure_class, 0) + attempts
             if exhausted:
                 retry_exhaustions[failure_class] = retry_exhaustions.get(failure_class, 0) + 1
@@ -317,13 +319,19 @@ def build_receipt(
         writer_collisions += _require_nonnegative_integer(
             repository["writer_collisions_avoided"], "writer_collisions_avoided"
         )
-        meta_events += _require_nonnegative_integer(
+        repository_meta_events = _require_nonnegative_integer(
             repository["meta_intermediate_events"], "meta_intermediate_events"
         )
-        meta_actions += _require_nonnegative_integer(
+        repository_meta_actions = _require_nonnegative_integer(
             repository["meta_followed_by_substantive_action"],
             "meta_followed_by_substantive_action",
         )
+        if repository_meta_actions > repository_meta_events:
+            raise ValueError(
+                "meta_followed_by_substantive_action cannot exceed meta_intermediate_events"
+            )
+        meta_events += repository_meta_events
+        meta_actions += repository_meta_actions
         exit_discoveries += _require_nonnegative_integer(
             repository["first_exit_sweep_work_discoveries"],
             "first_exit_sweep_work_discoveries",

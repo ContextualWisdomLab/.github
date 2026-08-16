@@ -424,3 +424,27 @@ def test_receipt_rejects_non_integer_user_redirection_counters() -> None:
 
     with pytest.raises(ValueError, match="non-negative integer"):
         sli.build_receipt(payload, now=NOW)
+
+
+def test_receipt_rejects_follow_through_that_exceeds_meta_events() -> None:
+    """Follow-through cannot outnumber the intermediate events it claims to close."""
+    payload = _sample_payload()
+    alpha = payload["repositories"][0]
+    assert isinstance(alpha, dict)
+    alpha["meta_intermediate_events"] = 1
+    alpha["meta_followed_by_substantive_action"] = 2
+
+    with pytest.raises(ValueError, match="cannot exceed meta_intermediate_events"):
+        sli.build_receipt(payload, now=NOW)
+
+
+def test_receipt_rejects_exhausted_retries_with_zero_attempts() -> None:
+    """A retry class cannot be exhausted before any attempt is recorded."""
+    payload = _sample_payload()
+    alpha = payload["repositories"][0]
+    assert isinstance(alpha, dict)
+    alpha["retries"][0]["attempts"] = 0
+    alpha["retries"][0]["exhausted"] = True
+
+    with pytest.raises(ValueError, match="exhausted retries require at least one attempt"):
+        sli.build_receipt(payload, now=NOW)

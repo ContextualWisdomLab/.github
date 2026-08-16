@@ -7,7 +7,11 @@ on:
       - ".github/workflows/control-plane-sli-receipt-quality-ci.yml"
       - "scripts/ci/control_plane_sli_receipt.py"
       - "tests/test_control_plane_sli_receipt.py"
+      - "tests/test_control_plane_sli_receipt_quality_workflow_contract.py"
       - "docs/doctoring/control-plane-sli-receipts.md"
+      - "AGENTS.md"
+      - "ARCHITECTURE.md"
+      - "CLAUDE.md"
       - "CHANGELOG.md"
 
 permissions:
@@ -55,7 +59,8 @@ jobs:
             scripts/ci/control_plane_sli_receipt.py
           python -m compileall -q \
             scripts/ci/control_plane_sli_receipt.py \
-            tests/test_control_plane_sli_receipt.py
+            tests/test_control_plane_sli_receipt.py \
+            tests/test_control_plane_sli_receipt_quality_workflow_contract.py
 
       - name: Run complete central test suite
         shell: bash --noprofile --norc -e -o pipefail {0}

@@ -44,7 +44,8 @@ only established scheduler credentials, and grants job-scoped
 `scripts/ci/control_plane_sli_receipt.py` turns a local finite evidence
 document into one `cwl.control-plane-sli/v1` receipt. The collector does
 not query GitHub or acquire mutation authority. Named wait reasons and
-acceptance debt are operator evidence only.
+acceptance debt are operator evidence only. Follow-through cannot exceed
+intermediate events, and exhausted retries require at least one attempt.
 
 ## Hourly NVIDIA NIM repair gate
 
