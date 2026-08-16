@@ -79,6 +79,10 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- OpenCode `REQUEST_CHANGES` findings attach only to current-head `@@` hunk
+  lines. Hunk membership is sealed in review evidence
+  (`OPENCODE_CHANGED_HUNK_LINE`) so hashed
+  `opencode-review-dispatch.yml` (`83f6830d`) is not rewritten.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
 - Logs and review receipts redact credential shapes (tokens, bearer values,
@@ -106,5 +110,7 @@ tests pin workflow structure and governance prose so drift fails closed.
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/review-hunk-anchored-findings.md`](docs/doctoring/review-hunk-anchored-findings.md)
+  — hunk-anchored REQUEST_CHANGES without rewriting hashed review dispatch.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.

@@ -65,8 +65,10 @@ def clear_caches(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
     monkeypatch.delenv("OPENCODE_EVIDENCE_FILE", raising=False)
     monkeypatch.delenv("OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE", raising=False)
+    monkeypatch.delenv("OPENCODE_CHANGED_HUNK_LINES_FILE", raising=False)
     seal_artifacts(tmp_path, changed_files)
     norm.current_changed_files.cache_clear()
+    norm.current_changed_hunk_lines.cache_clear()
     norm.trusted_execution_receipts.cache_clear()
 
 
@@ -1661,6 +1663,192 @@ def test_valid_control_canonicalizes_known_safe_finding_field_drift():
         )
         is None
     )
+
+
+def test_valid_control_rejects_findings_outside_current_head_hunks(
+    tmp_path, monkeypatch
+):
+    hunk_lines = tmp_path / "opencode-changed-hunk-lines.txt"
+    hunk_lines.write_text("scripts/ci/example.py:7\n", encoding="utf-8")
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    monkeypatch.setenv("OPENCODE_CHANGED_HUNK_LINES_FILE", str(hunk_lines))
+    seal_artifacts(tmp_path, changed_files, hunk_lines)
+    norm.current_changed_hunk_lines.cache_clear()
+
+    kwargs = {
+        "expected_head_sha": "head",
+        "expected_run_id": "run",
+        "expected_run_attempt": "attempt",
+    }
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[finding(line=8)]),
+            rejection_reasons=reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any("changed hunk line" in reason for reason in reasons)
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[finding(line=7)]),
+            **kwargs,
+        )["result"]
+        == "REQUEST_CHANGES"
+    )
+    assert norm.finding_hunk_location_error("scripts/ci/example.py", 7) == ""
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 8)
+        == "line is not a current-head changed hunk line"
+    )
+    hunk_lines.write_text(
+        "scripts/ci/example.py:6\nscripts/ci/example.py:7\n",
+        encoding="utf-8",
+    )
+    seal_artifacts(tmp_path, changed_files, hunk_lines)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7, 6) == ""
+    )
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7, 5)
+        == "leftover start_line is not a current-head changed hunk line"
+    )
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7, True)
+        == "leftover start_line is not a current-head changed hunk line"
+    )
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7, 0)
+        == "leftover start_line is not a current-head changed hunk line"
+    )
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7, 8)
+        == "leftover start_line is not a current-head changed hunk line"
+    )
+    assert not norm.hunk_line_path_is_safe("")
+    assert not norm.hunk_line_path_is_safe("src/spaced name.py")
+    assert not norm.hunk_line_path_is_safe("src/eq=name.py")
+    leftover_start_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(
+                result="REQUEST_CHANGES",
+                findings=[finding(line=7, start_line=5)],
+            ),
+            rejection_reasons=leftover_start_reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any(
+        "leftover start_line" in reason for reason in leftover_start_reasons
+    )
+    assert (
+        norm.parse_changed_hunk_line_manifest(
+            "# none\n../escape.py:1\n/abs.py:2\nscripts/ci/example.py:7\nbad\n"
+            "scripts/ci/<script>.py:4\nscripts/ci/`tick`.py:5\n"
+            "scripts/ci/a&b.py:6\nscripts\\\\win.py:8\n"
+            "scripts/ci/close-->comment.py:9\n"
+            "scripts/ci/fence```suggestion.py:10\n"
+        )
+        == {"scripts/ci/example.py": frozenset({7})}
+    )
+
+    empty_hunks = tmp_path / "opencode-changed-hunk-lines.txt"
+    empty_hunks.write_text("# no current-head hunk lines\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_HUNK_LINES_FILE", str(empty_hunks))
+    seal_artifacts(tmp_path, changed_files, empty_hunks)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert norm.current_changed_hunk_lines() == {}
+    assert (
+        norm.finding_hunk_location_error("scripts/ci/example.py", 7)
+        == "line is not a current-head changed hunk line"
+    )
+    empty_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[finding(line=7)]),
+            rejection_reasons=empty_reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any("changed hunk line" in reason for reason in empty_reasons)
+
+    monkeypatch.setenv(
+        "OPENCODE_CHANGED_HUNK_LINES_FILE",
+        str(tmp_path / "missing-hunk-lines.txt"),
+    )
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert norm.current_changed_hunk_lines() is None
+    monkeypatch.delenv("OPENCODE_CHANGED_HUNK_LINES_FILE", raising=False)
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert norm.current_changed_hunk_lines() is None
+    assert norm.finding_hunk_location_error("scripts/ci/example.py", 7) == ""
+
+
+def test_valid_control_reads_hunk_lines_from_sealed_evidence(
+    tmp_path, monkeypatch
+):
+    """Production CI keeps hashed dispatch at 83f6830d and still fail-closes."""
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    evidence = tmp_path / "opencode-review-evidence.md"
+    evidence.write_text(
+        "## Current-head changed hunk lines\n\n"
+        "OPENCODE_CHANGED_HUNK_LINE path=scripts/ci/example.py line=7\n"
+        "OPENCODE_CHANGED_HUNK_LINE path=../escape.py line=1\n"
+        "OPENCODE_CHANGED_HUNK_LINE path=scripts/ci/`tick`.py line=3\n"
+        "not a token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_EVIDENCE_FILE", str(evidence))
+    seal_artifacts(tmp_path, changed_files, evidence)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert norm.current_changed_hunk_lines() == {
+        "scripts/ci/example.py": frozenset({7})
+    }
+    assert (
+        norm.parse_changed_hunk_line_evidence(
+            "OPENCODE_CHANGED_HUNK_LINE none\n"
+        )
+        == {}
+    )
+    assert norm.parse_changed_hunk_line_evidence("no tokens here") is None
+    kwargs = {
+        "expected_head_sha": "head",
+        "expected_run_id": "run",
+        "expected_run_attempt": "attempt",
+    }
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[finding(line=7)]),
+            **kwargs,
+        )["result"]
+        == "REQUEST_CHANGES"
+    )
+    off_hunk_reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(result="REQUEST_CHANGES", findings=[finding(line=8)]),
+            rejection_reasons=off_hunk_reasons,
+            **kwargs,
+        )
+        is None
+    )
+    assert any("changed hunk line" in reason for reason in off_hunk_reasons)
+
+    evidence.write_text(
+        "## Current-head changed hunk lines\n\n"
+        "OPENCODE_CHANGED_HUNK_LINE none\n",
+        encoding="utf-8",
+    )
+    seal_artifacts(tmp_path, changed_files, evidence)
+    norm.current_changed_hunk_lines.cache_clear()
+    assert norm.current_changed_hunk_lines() == {}
 
 
 def test_approval_gate_rejects_prose_fix_direction_without_suggested_diff(tmp_path):

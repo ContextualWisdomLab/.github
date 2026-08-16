@@ -241,10 +241,16 @@ EVIDENCE_REPAIR_ENV_VARS = (
 
 TRUSTED_ARTIFACT_NAMES = {
     "OPENCODE_CHANGED_FILES_FILE": "opencode-changed-files.txt",
+    "OPENCODE_CHANGED_HUNK_LINES_FILE": "opencode-changed-hunk-lines.txt",
     "OPENCODE_EVIDENCE_FILE": "opencode-review-evidence.md",
     "OPENCODE_APPROVAL_REPAIR_EVIDENCE_FILE": "opencode-review-evidence.md",
     "OPENCODE_EXECUTION_RECEIPTS_FILE": "opencode-execution-receipts.txt",
 }
+HUNK_LINE_MANIFEST_RE = re.compile(r"^(.+):([1-9][0-9]*)$")
+HUNK_LINE_EVIDENCE_RE = re.compile(
+    r"^OPENCODE_CHANGED_HUNK_LINE path=(\S+) line=([1-9][0-9]*)$"
+)
+HUNK_LINE_NONE_RE = re.compile(r"^OPENCODE_CHANGED_HUNK_LINE none$")
 TRUSTED_ARTIFACT_MANIFEST = "opencode-artifact-manifest.json"
 
 HANGUL_RE = re.compile(r"[가-힣]")
@@ -498,6 +504,109 @@ def current_changed_files() -> frozenset[str]:
         for line in changed_files_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
+
+
+def hunk_line_path_is_safe(path: str) -> bool:
+    """Return whether a hunk-line path can be treated as a current-head location."""
+    posix_path = PurePosixPath(path)
+    return not (
+        not path
+        or path.startswith("/")
+        or ".." in posix_path.parts
+        or posix_path.is_absolute()
+        or any(character in path for character in ("`", "<", ">", "&", "\\", " ", "="))
+        or any(token in path for token in ("-->", "<!--", "```"))
+    )
+
+
+def parse_changed_hunk_line_manifest(text: str) -> dict[str, frozenset[int]]:
+    """Parse trusted ``path:line`` rows into per-file current-head hunk lines."""
+    collected: dict[str, set[int]] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = HUNK_LINE_MANIFEST_RE.fullmatch(line)
+        if match is None or not hunk_line_path_is_safe(match.group(1)):
+            continue
+        collected.setdefault(match.group(1), set()).add(int(match.group(2)))
+    return {path: frozenset(lines) for path, lines in collected.items()}
+
+
+def parse_changed_hunk_line_evidence(
+    text: str,
+) -> dict[str, frozenset[int]] | None:
+    """Parse sealed-evidence hunk tokens, or ``None`` when the section is absent."""
+    collected: dict[str, set[int]] = {}
+    saw_token = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if HUNK_LINE_NONE_RE.fullmatch(line):
+            saw_token = True
+            continue
+        match = HUNK_LINE_EVIDENCE_RE.fullmatch(line)
+        if match is None:
+            continue
+        saw_token = True
+        if not hunk_line_path_is_safe(match.group(1)):
+            continue
+        collected.setdefault(match.group(1), set()).add(int(match.group(2)))
+    if not saw_token:
+        return None
+    return {path: frozenset(lines) for path, lines in collected.items()}
+
+
+@lru_cache(maxsize=1)
+def current_changed_hunk_lines() -> dict[str, frozenset[int]] | None:
+    """Return sealed current-head hunk lines, or ``None`` when no artifact exists.
+
+    A dedicated sealed ``opencode-changed-hunk-lines.txt`` wins when the hashed
+    review-dispatch workflow supplies it. Otherwise the normalizer reads
+    ``OPENCODE_CHANGED_HUNK_LINE`` tokens from the already-sealed evidence file
+    so REQUEST_CHANGES hunk enforcement does not require rewriting
+    ``opencode-review-dispatch.yml``.
+    """
+    if os.environ.get("OPENCODE_CHANGED_HUNK_LINES_FILE", "").strip():
+        hunk_lines_path = trusted_artifact_path("OPENCODE_CHANGED_HUNK_LINES_FILE")
+        if hunk_lines_path is None:
+            return None
+        return parse_changed_hunk_line_manifest(
+            hunk_lines_path.read_text(encoding="utf-8")
+        )
+    evidence_path = trusted_artifact_path("OPENCODE_EVIDENCE_FILE")
+    if evidence_path is None:
+        return None
+    return parse_changed_hunk_line_evidence(
+        evidence_path.read_text(encoding="utf-8")
+    )
+
+
+def finding_hunk_location_error(
+    path: str, line: int, start_line: object = None
+) -> str:
+    """Return why a REQUEST_CHANGES finding is not on a current-head changed hunk.
+
+    GitHub inline review comments attach to the pull-request diff. A positive
+    line that merely exists in a changed file but sits outside every ``@@``
+    hunk is not an attachable RIGHT-side comment (GitHub, n.d.). A leftover
+    ``start_line`` that sits off-hunk still 422s a multi-line comment even
+    when ``line`` is attachable. A sealed empty manifest (pure deletions, no
+    RIGHT-side lines) is present evidence, not a missing artifact, so every
+    cited line fails closed.
+    """
+    hunks = current_changed_hunk_lines()
+    if hunks is None:
+        return ""
+    hunk_lines = hunks.get(path)
+    if hunk_lines is None or line not in hunk_lines:
+        return "line is not a current-head changed hunk line"
+    if start_line is None:
+        return ""
+    if isinstance(start_line, bool) or not isinstance(start_line, int):
+        return "leftover start_line is not a current-head changed hunk line"
+    if start_line <= 0 or start_line > line or start_line not in hunk_lines:
+        return "leftover start_line is not a current-head changed hunk line"
+    return ""
 
 
 def runtime_tool_slug(tool_name: str) -> str:
@@ -1350,6 +1459,11 @@ def valid_control(
                 return reject(
                     f"finding {finding_index} field {field} must be a non-empty string"
                 )
+        hunk_error = finding_hunk_location_error(
+            str(finding["path"]).strip(), line, finding.get("start_line")
+        )
+        if hunk_error:
+            return reject(f"finding {finding_index} {hunk_error}")
         normalized_findings.append(finding)
 
     normalized = {

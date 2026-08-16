@@ -26,6 +26,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Rejected OpenCode `REQUEST_CHANGES` findings whose line is not on a current-head changed hunk, so GitHub inline comments attach to the pull-request diff instead of 422ing on unchanged lines inside a changed file. Hunk lines travel as sealed `OPENCODE_CHANGED_HUNK_LINE` evidence tokens; hashed `opencode-review-dispatch.yml` stays at blob `83f6830d`.
+- Fail-closed leftover OpenCode `start_line` values that sit off a current-head changed hunk, so a multi-line leftover range cannot 422 after the last line was attachable.
+- Omitted sealed hunk-line evidence rows whose path contains backticks, HTML metacharacters, `-->`, `<!--`, a suggestion fence, spaces, or `=` so a leftover cannot close `<!-- opencode-review-overview -->` or split a token (CWE-116).
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

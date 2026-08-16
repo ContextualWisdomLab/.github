@@ -1742,6 +1742,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Never print raw tool-call markup" in prompt_template
     assert "Do not request changes solely because your tool call" in prompt_template
     assert "never use line 0" in prompt_template
+    assert "current-head changed hunk" in prompt_template
+    assert "outside the focused diff hunks" in prompt_template
     assert "Current-head authority order" in workflow
     assert "historical context only" in workflow
     assert "Do not infer active failed checks" in workflow

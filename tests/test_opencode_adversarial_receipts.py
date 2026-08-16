@@ -354,3 +354,73 @@ def test_main_emits_fail_closed_evidence_when_no_regular_line_exists(
     with pytest.raises(SystemExit) as exc:
         runpy.run_path("scripts/ci/opencode_adversarial_receipts.py", run_name="__main__")
     assert exc.value.code == 0
+
+
+def test_all_changed_hunk_lines_cover_every_new_hunk_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The hunk manifest lists every RIGHT-side line, not only span endpoints."""
+    repo = initialized_repo(tmp_path)
+    source = repo / "src" / "review.py"
+    source.parent.mkdir()
+    source.write_text("alpha\nbefore\nmiddle\n", encoding="utf-8")
+    base_sha = commit_all(repo, "base")
+    source.write_text("alpha\nafter\nmiddle\nlast\n", encoding="utf-8")
+    head_sha = commit_all(repo, "head")
+
+    assert receipts.all_changed_hunk_lines(
+        repo, base_sha, head_sha, ["src/review.py", "../escape.py"]
+    ) == [
+        ("src/review.py", 2),
+        ("src/review.py", 4),
+    ]
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            receipts,
+            "git_bytes",
+            lambda *_args: b"@@ -2,1 +2,0 @@\nnot-a-hunk\n",
+        )
+        assert (
+            receipts.all_changed_hunk_lines(
+                tmp_path, "a" * 40, "b" * 40, ["file.py"]
+            )
+            == []
+        )
+    assert not receipts.hunk_line_path_is_safe("")
+    assert not receipts.hunk_line_path_is_safe("src/eq=name.py")
+    assert receipts.render_hunk_line_manifest([]) == "# no current-head hunk lines\n"
+    assert (
+        receipts.render_hunk_line_manifest([("src/review.py", 2)])
+        == "src/review.py:2\n"
+    )
+    assert receipts.render_hunk_line_manifest(
+        [("scripts/ci/`tick`.py", 1)]
+    ) == "# no current-head hunk lines\n"
+    assert "OPENCODE_CHANGED_HUNK_LINE none" in receipts.render_hunk_line_evidence([])
+    assert (
+        "OPENCODE_CHANGED_HUNK_LINE path=src/review.py line=2"
+        in receipts.render_hunk_line_evidence([("src/review.py", 2)])
+    )
+    assert "tick" not in receipts.render_hunk_line_evidence(
+        [("scripts/ci/`tick`.py", 1)]
+    )
+
+    manifest = tmp_path / "changed.txt"
+    manifest.write_text("src/review.py\n", encoding="utf-8")
+    hunk_file = tmp_path / "hunks.txt"
+    status = receipts.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--base-sha",
+            base_sha,
+            "--head-sha",
+            head_sha,
+            "--changed-files-file",
+            str(manifest),
+            "--hunk-lines-file",
+            str(hunk_file),
+        ]
+    )
+    assert status == 0
+    assert hunk_file.read_text(encoding="utf-8") == "src/review.py:2\nsrc/review.py:4\n"

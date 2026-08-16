@@ -199,6 +199,90 @@ def collect_receipts(
     return receipts
 
 
+def all_changed_hunk_lines(
+    repo_root: Path,
+    base_sha: str,
+    head_sha: str,
+    paths: Sequence[str],
+) -> list[tuple[str, int]]:
+    """Return every current-head line that belongs to a changed hunk."""
+    base_sha = validate_git_sha(base_sha, "base SHA")
+    head_sha = validate_git_sha(head_sha, "head SHA")
+    rows: list[tuple[str, int]] = []
+    for raw_path in paths[:MAX_CHANGED_PATHS]:
+        path = safe_relative_path(raw_path)
+        if path is None:
+            continue
+        diff = git_bytes(
+            repo_root,
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            base_sha,
+            head_sha,
+            "--",
+            path,
+        )
+        for diff_line in diff.splitlines():
+            match = HUNK_RE.match(diff_line)
+            if match is None:
+                continue
+            start = int(match.group(1))
+            count = int(match.group(2) or b"1")
+            if count < 1:
+                continue
+            rows.extend((path, line) for line in range(start, start + count))
+    return rows
+
+
+def hunk_line_path_is_safe(path: str) -> bool:
+    """Return whether a hunk-line path can appear in sealed review evidence."""
+    posix_path = PurePosixPath(path)
+    return not (
+        not path
+        or path.startswith("/")
+        or ".." in posix_path.parts
+        or posix_path.is_absolute()
+        or any(character in path for character in ("`", "<", ">", "&", "\\", " ", "="))
+        or any(token in path for token in ("-->", "<!--", "```"))
+    )
+
+
+def render_hunk_line_manifest(rows: Sequence[tuple[str, int]]) -> str:
+    """Render a nonempty trusted ``path:line`` manifest for the normalizer."""
+    safe_rows = [
+        (path, line) for path, line in rows if hunk_line_path_is_safe(path)
+    ]
+    if not safe_rows:
+        return "# no current-head hunk lines\n"
+    return "".join(f"{path}:{line}\n" for path, line in safe_rows)
+
+
+def render_hunk_line_evidence(rows: Sequence[tuple[str, int]]) -> str:
+    """Render sealed-evidence tokens so hashed review-dispatch need not change."""
+    lines = [
+        "## Current-head changed hunk lines",
+        "",
+        (
+            "The trusted workflow listed every RIGHT-side path and line from "
+            "git diff --unified=0. REQUEST_CHANGES findings may cite only these "
+            "lines so GitHub inline comments attach instead of returning HTTP 422."
+        ),
+        "",
+    ]
+    emitted = False
+    for path, line in rows:
+        if not hunk_line_path_is_safe(path):
+            continue
+        lines.append(f"OPENCODE_CHANGED_HUNK_LINE path={path} line={line}")
+        emitted = True
+    if not emitted:
+        lines.append("OPENCODE_CHANGED_HUNK_LINE none")
+    return "\n".join(lines)
+
+
 def render_markdown(receipts: Sequence[SourceLineReceipt]) -> str:
     """Render injection-resistant trusted receipt evidence for the review model."""
     lines = [
@@ -247,6 +331,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--changed-files-file", required=True, type=Path)
+    parser.add_argument("--hunk-lines-file", type=Path)
     parser.add_argument("--lines-per-file", type=int, default=2)
     parser.add_argument("--max-receipts", type=int, default=40)
     return parser.parse_args(argv)
@@ -262,18 +347,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
+        paths = changed_paths(args.changed_files_file)
         receipts = collect_receipts(
             args.repo_root,
             args.base_sha,
             args.head_sha,
-            changed_paths(args.changed_files_file),
+            paths,
             lines_per_file=args.lines_per_file,
             max_receipts=args.max_receipts,
         )
+        hunk_rows = all_changed_hunk_lines(
+            args.repo_root, args.base_sha, args.head_sha, paths
+        )
+        if args.hunk_lines_file is not None:
+            args.hunk_lines_file.write_text(
+                render_hunk_line_manifest(hunk_rows),
+                encoding="utf-8",
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"trusted adversarial receipt generation failed: {exc}", file=sys.stderr)
         return 2
     print(render_markdown(receipts))
+    print()
+    print(render_hunk_line_evidence(hunk_rows))
     return 0
 
 
