@@ -90,6 +90,33 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Figma Cloud Agent REST fallback
+
+```mermaid
+flowchart TD
+  Need["Cloud Agent needs Figma"]
+  Mcp{"Figma MCP OAuth available?"}
+  Desktop["Desktop / CLI: Settings → Tools and MCP → Figma → Connect"]
+  Token{"FIGMA_ACCESS_TOKEN set?"}
+  Whoami["python3 scripts/ci/figma_rest_auth.py"]
+  File["python3 scripts/ci/figma_rest_file.py file-key-or-url"]
+  Mint["Mint a Figma PAT with file_content:read and store the secret"]
+
+  Need --> Mcp
+  Mcp -->|"yes, Desktop or CLI"| Desktop
+  Mcp -->|"no, Cloud or Automation"| Token
+  Token -->|"no"| Mint
+  Mint --> Whoami
+  Token -->|"yes"| Whoami
+  Whoami --> File
+```
+
+Cloud Agents never complete Figma MCP OAuth. Whoami alone is not file
+read. The file helper allowlists the file key and node ids, opens a
+pinned `HTTPSConnection("api.figma.com")`, and prints a token-free JSON
+outline the agent can use for the next design-to-code step. See
+[`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
@@ -108,3 +135,5 @@ tests pin workflow structure and governance prose so drift fails closed.
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md)
+  — Cloud Agent Figma MCP boundary and REST file-read fallback.

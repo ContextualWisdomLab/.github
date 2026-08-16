@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added Cloud Agent Figma REST helpers `scripts/ci/figma_rest_auth.py` and `scripts/ci/figma_rest_file.py` that verify `FIGMA_ACCESS_TOKEN` against pinned `GET /v1/me` and then read an allowlisted `GET /v1/files/{file_key}` (optional `/nodes` or `/images`) without printing the secret, so design-to-code continues when Figma MCP OAuth is unavailable.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 - Added a permanent exact-head contract workflow for the hourly review-repair scheduler, immutable reusable-workflow source, NVIDIA NIM model boundary, credential isolation, and fail-closed unattended-agent permissions.
@@ -55,6 +56,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Documentation
 
+- Added an APA 7 doctoring record for the Cloud Agent Figma MCP OAuth boundary, REST whoami and file-read helpers, operator next-action contract, and Figma file-endpoint citations.
 - Added an APA 7 doctoring record for conflict-control evidence isolation, including the Strix-reported trust-boundary failure, test-first remediation, canonical-path rule, operator contract, rollback, MITRE CWE-22, and current GitHub Actions secure-use guidance.
 - Added operator and APA 7 doctoring records for the hourly cadence, immutable source identity, NVIDIA NIM provider and secret boundary, high-reasoning Mistral Small 4 writer, model-process credential isolation, modular MSA ownership, product-specific caller activation, verification contract, and rollback.
 - Added DiskSage operational documentation for the hourly RCA loop, bounded retry cadence, permission model, standalone and MSA reuse, verification, rollback, and APA 7 references.
