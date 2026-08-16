@@ -2000,10 +2000,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
     assert "The scheduled organization sweep remains authoritative." in workflow
-    assert (
-        "github.event_name == 'pull_request_review' || "
-        "github.event_name == 'repository_dispatch'" in workflow
-    )
+    assert "cancel-in-progress: false" in workflow
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():
