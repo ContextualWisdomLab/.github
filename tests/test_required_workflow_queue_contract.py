@@ -40,7 +40,7 @@ def run_dependency_review_support_probe(
 ) -> subprocess.CompletedProcess:
     """Run the workflow support probe against a controlled curl binary.
 
-    The helper places a fake ``curl`` alone on ``PATH`` so the extracted
+    The helper places a fake ``curl`` first on ``PATH`` so the extracted
     workflow script cannot call the real binary, then supplies only the
     synthetic environment variables the support step reads.
     """
@@ -56,10 +56,12 @@ def run_dependency_review_support_probe(
             "Check dependency review support",
         ).split("        run: |\n", 1)[1]
     )
+    bash = shutil.which("bash")
+    assert bash is not None
     return subprocess.run(
-        ["bash", "-c", script],
+        [bash, "-c", script],
         env={
-            "PATH": str(fake_bin),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin')}",
             "HOME": str(tmp_path),
             "GITHUB_API_URL": "https://api.example.invalid",
             "GITHUB_OUTPUT": str(tmp_path / "github-output"),
