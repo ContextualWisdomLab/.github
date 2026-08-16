@@ -209,6 +209,17 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh' "strix workflow executes the central Strix gate script"
 	assert_file_contains "$workflow_file" "Materialize target workspace" "strix workflow materializes target repository data separately from trusted scripts"
 	assert_file_contains "$workflow_file" "types: [strix-scan]" "strix repository dispatch accepts only its dedicated default-branch event type"
+	assert_file_contains "$workflow_file" "workflow_dispatch:" "strix workflow restores manual official-mode selection for incomplete release candidates"
+	assert_file_contains "$workflow_file" "default: standard" "strix manual dispatch defaults to official standard mode"
+	assert_file_contains "$workflow_file" "          - quick" "strix manual dispatch offers official quick mode"
+	assert_file_contains "$workflow_file" "          - standard" "strix manual dispatch offers official standard mode"
+	assert_file_contains "$workflow_file" "          - deep" "strix manual dispatch offers official deep mode"
+	assert_file_not_contains "$workflow_file" "          - normal" "strix workflow must not offer a non-official normal scan-mode choice"
+	assert_file_not_contains "$workflow_file" $'\n  release:' "strix workflow must not invent a GitHub release trigger"
+	assert_file_not_contains "$workflow_file" "v*-rc*" "strix workflow must not invent RC-tag triggers"
+	assert_file_not_contains "$workflow_file" "client_payload.scan_mode" "strix repository_dispatch cannot select scan mode"
+	assert_file_contains "$workflow_file" "STRIX_SCAN_MODE: \${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_mode || 'standard') || github.event_name == 'schedule' && 'standard' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && 'standard' || 'quick' }}" "strix workflow maps dual-flow events to official scan modes"
+	assert_file_contains "$workflow_file" "github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')" "strix standard mode on push requires the push event, not merely a main ref"
 	assert_file_contains "$workflow_file" 'REPOSITORY: ${{ github.event.client_payload.target_repository }}' "strix repository dispatch binds the requested target repository before fetching data"
 	assert_file_contains "$workflow_file" "Validate repository dispatch against live pull request metadata" "strix repository dispatch validates its supplied PR metadata"
 	assert_file_contains "$workflow_file" '[ "$live_base_sha" != "$SUPPLIED_BASE_SHA" ]' "strix repository dispatch verifies the target repository base SHA against the live PR"
@@ -274,11 +285,20 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "GOOGLE_APPLICATION_CREDENTIALS" "strix workflow exports Vertex AI credentials only for Vertex provider mode"
 	assert_file_contains "$workflow_file" "VERTEXAI_PROJECT" "strix workflow exports LiteLLM Vertex project env"
 	assert_file_contains "$workflow_file" "VERTEXAI_LOCATION" "strix workflow exports LiteLLM Vertex location env"
-	assert_file_contains "$workflow_file" "timeout-minutes: 120" "strix workflow job budget preserves full-hour scans and artifact publication margin"
-	assert_file_contains "$workflow_file" "timeout-minutes: 100" "strix workflow scan step permits legitimate 90-minute repository reviews"
+	assert_file_contains "$workflow_file" "timeout-minutes: \${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'deep' && '360' || '120') }}" "strix workflow keeps the 120-minute job budget except for manual deep"
+	assert_file_contains "$workflow_file" "timeout-minutes: \${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'deep' && '340' || '100') }}" "strix workflow keeps the 100-minute step budget except for manual deep"
+	assert_file_not_contains "$workflow_file" "timeout-minutes: 360" "strix workflow must not apply the deep job ceiling unconditionally"
+	assert_file_not_contains "$workflow_file" "timeout-minutes: 340" "strix workflow must not apply the deep step ceiling unconditionally"
 	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
-	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"' "strix workflow preserves a 95-minute bounded total Strix budget"
-	assert_file_contains "$workflow_file" 'process_budget_seconds="5400"' "strix workflow gives a legitimate scan up to 90 minutes"
+	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=$total_budget_seconds"' "strix workflow exports the selected total budget through the split timeout key"
+	assert_file_contains "$workflow_file" 'process_budget_seconds="5400"' "strix workflow gives a legitimate quick or standard scan up to 90 minutes"
+	assert_file_contains "$workflow_file" 'total_budget_seconds="5700"' "strix workflow preserves a 95-minute bounded total budget for quick and standard"
+	assert_file_contains "$workflow_file" 'process_budget_seconds="14400"' "strix workflow gives a manual deep scan a 4-hour process budget"
+	assert_file_contains "$workflow_file" 'total_budget_seconds="16200"' "strix workflow gives a manual deep scan a 4.5-hour total budget"
+	assert_file_contains "$workflow_file" '[ "${STRIX_SCAN_MODE}" = "deep" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]' "strix workflow raises process budgets only for manual deep"
+	assert_file_contains "$GATE_SCRIPT" "quick | standard | deep)" "strix gate allowlists official scan modes only"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_SCAN_MODE must be one of quick, standard, or deep" "strix gate rejects unofficial scan modes"
+	assert_file_not_contains "$GATE_SCRIPT" "normal)" "strix gate must not accept a non-official normal scan-mode alias"
 	assert_file_contains "$workflow_file" 'strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log' "strix workflow preserves partial console output after failures and timeouts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "gate-last-attempt.log" "strix gate preserves the last partial attempt before runtime cleanup"
 	assert_file_contains "$workflow_file" 'IS_PR_EVIDENCE_RUN: ${{ (github.event_name == '"'"'pull_request_target'"'"' || github.event.client_payload.pr_number != '"'"''"'"') && '"'"'true'"'"' || '"'"'false'"'"' }}' "strix workflow passes PR evidence mode through env"
@@ -8128,6 +8148,56 @@ EOF
 	rm -rf "$tmp_dir"
 }
 
+run_scan_mode_validation_case() {
+	local case_name="$1"
+	local scan_mode="$2"
+	local expected_rc="$3"
+	local expected_message="$4"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local output_log="$tmp_dir/output.log"
+	local call_count_file="$tmp_dir/strix_calls"
+	local fake_strix="$tmp_dir/strix"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "1" >> "${STRIX_CALL_COUNT_FILE:?}"
+exit 0
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'openai-direct/gpt-5.4' >"$strix_llm_file"
+	printf '%s' 'dummy-key' >"$llm_api_key_file"
+
+	set +e
+	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+		PATH="$tmp_dir:$PATH" \
+		STRIX_EXECUTABLE_PATH="$fake_strix" \
+		STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+		STRIX_DISABLE_PR_SCOPING="1" \
+		STRIX_LLM_FILE="$strix_llm_file" \
+		LLM_API_KEY_FILE="$llm_api_key_file" \
+		STRIX_CALL_COUNT_FILE="$call_count_file" \
+		STRIX_SCAN_MODE="$scan_mode" \
+		bash "$GATE_SCRIPT" >"$output_log" 2>&1
+	local rc=$?
+	set -e
+
+	assert_equals "$expected_rc" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" "$expected_message" "case=$case_name output"
+
+	local actual_calls="0"
+	if [ -f "$call_count_file" ]; then
+		actual_calls="$(wc -l <"$call_count_file" | tr -d ' ')"
+	fi
+	assert_equals "0" "$actual_calls" "case=$case_name strix call count"
+
+	rm -rf "$tmp_dir"
+}
+
 run_missing_config_case() {
 	local case_name="$1"
 	local strix_llm="$2"
@@ -11614,6 +11684,10 @@ run_gate_case_allow_provider_signal "pr-low-markdown-plus-console-critical-manif
 	"123" \
 	'{"workflow_runs":[{"id":405,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":406,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
 
+run_scan_mode_validation_case "scan-mode-rejects-normal-alias" "normal" "2" "ERROR: STRIX_SCAN_MODE must be one of quick, standard, or deep; got 'normal'."
+run_scan_mode_validation_case "scan-mode-rejects-whitespace" "   " "2" "ERROR: STRIX_SCAN_MODE must be one of quick, standard, or deep; got ''."
+run_scan_mode_validation_case "scan-mode-rejects-capitalized-quick" "Quick" "2" "ERROR: STRIX_SCAN_MODE must be one of quick, standard, or deep; got 'Quick'."
+run_scan_mode_validation_case "scan-mode-rejects-injection" "quick;id" "2" "ERROR: STRIX_SCAN_MODE must be one of quick, standard, or deep; got 'quick;id'."
 run_missing_config_case "missing-strix-llm" "" "dummy" "ERROR: STRIX_LLM_FILE must reference a regular file containing the model."
 run_missing_config_case "missing-llm-api-key" "openai/gpt-5.4" "" "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key."
 run_missing_config_case "whitespace-only-strix-llm" "   " "dummy" "ERROR: STRIX_LLM_FILE must contain a non-empty model value."

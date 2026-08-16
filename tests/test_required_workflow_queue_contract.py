@@ -112,8 +112,13 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
 
         assert "repository_dispatch:" in trigger_contract
         assert f"types: [{event_type}]" in trigger_contract
-        assert "workflow_dispatch:" not in trigger_contract
-        assert "github.event.inputs" not in workflow
+        if filename == "strix.yml":
+            assert "workflow_dispatch:" in trigger_contract
+            assert "github.event.inputs.scan_mode" in workflow
+            assert "client_payload.scan_mode" not in workflow
+        else:
+            assert "workflow_dispatch:" not in trigger_contract
+            assert "github.event.inputs" not in workflow
         assert "github.event.client_payload" in workflow
 
     scheduler = (
@@ -137,14 +142,20 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
 
 
 def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
-    """Every central manual entrypoint must load code from the default branch."""
+    """Privileged central entrypoints must not load caller-selected workflow code.
+
+    Strix is the documented exception: ``workflow_dispatch`` exists only so an
+    operator can choose official ``quick|standard|deep`` for an incomplete
+    release candidate. CWL has no RC-tag convention. The privileged same-head
+    retry remains default-branch ``repository_dispatch`` type ``strix-scan``.
+    """
     workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
     offenders = [
         path.name
         for path in workflow_files
         if "workflow_dispatch:" in path.read_text(encoding="utf-8")
     ]
-    assert offenders == []
+    assert offenders == ["strix.yml"]
 
 
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
@@ -1098,7 +1109,7 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
     workflow = workflow_text("strix.yml")
-    run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
+    run_step = workflow.split("      - name: Run Strix\n", 1)[1].split(
         "      - name:", 1
     )[0]
 
