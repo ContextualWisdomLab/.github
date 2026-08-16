@@ -88,6 +88,29 @@ sequenceDiagram
   MS->>PR: merge only on current-head approval + green checks
 ```
 
+## Mention-sweep shared-budget stop
+
+```mermaid
+flowchart TD
+  Router["Review Agent Mention Router"]
+  List["List org repos and recent PRs"]
+  Work["Build mentions and dispatch"]
+  Cap{"Shared installation REST budget exhausted?"}
+  Halt["Record one scope, tell the operator to wait, exit 1"]
+  Next["Continue later repos and PRs"]
+
+  Router --> List --> Work --> Cap
+  Cap -->|"yes"| Halt
+  Cap -->|"no"| Next
+  Next --> Work
+```
+
+The scheduled sweep treats GitHub primary and secondary rate-limit wording as
+one shared installation budget, not a per-repository skip. After the first
+exhausted scope it stops so later repositories cannot amplify an already empty
+budget. Ordinary candidate-local failures stay isolated. Operators wait for
+GitHub to reset the installation window; they do not re-run immediately.
+
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
@@ -122,5 +145,7 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/agent-mention-rate-limit-fail-fast.md`](docs/doctoring/agent-mention-rate-limit-fail-fast.md)
+  — mention-sweep shared-budget stop, incident-path tests, and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
