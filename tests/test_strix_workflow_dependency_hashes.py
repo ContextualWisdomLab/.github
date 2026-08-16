@@ -40,6 +40,15 @@ def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
 
 
+def test_strix_workflow_reruns_when_dependency_manifest_changes() -> None:
+    """Changing the Strix dependency lock must trigger its install contract."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert (ROOT / "requirements-strix-ci-hashes.txt").is_file()
+    assert '      - "requirements-strix-ci-hashes.txt"' in workflow
+    assert '      - "docs/doctoring/strix-dependency-manifest-trigger.md"' in workflow
+
+
 def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
     """Central executable workflows load no branch-selected manual source."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
