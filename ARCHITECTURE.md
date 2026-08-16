@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Rust coverage LLVM 19 boundary
+
+Reviewed Rust coverage evidence binds `LLVM_COV=/usr/bin/llvm-cov-19` and
+`LLVM_PROFDATA=/usr/bin/llvm-profdata-19` in `scripts/ci/ensure_rust_llvm19.sh`.
+The independent OpenCode review-dispatch workflow remains the hashed
+review-agent key blob and is not the carrier for this runtime check.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
