@@ -26,6 +26,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Pass trusted `validate-pr-metadata` repository visibility into the live OpenCode model-pool runner so public reviews keep the governed free catalog without a credential-free `ls-remote` probe.
 - Allow governed anonymous OpenCode free-model candidates on private repositories only when an unchanged trusted-base policy opts in, and wrap `opencode` with a provider-scoped credential guard.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).

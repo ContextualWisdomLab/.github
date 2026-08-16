@@ -92,10 +92,15 @@ or merge gates.
 Preconfigured anonymous candidates are not themselves authorization. The wrapper
 first needs positive visibility evidence:
 
+- the live model-pool step MUST export
+  `OPENCODE_REPOSITORY_IS_PRIVATE` from
+  `needs.validate-pr-metadata.outputs.is_private` next to `PR_BASE_SHA`;
 - a trusted caller may provide `OPENCODE_REPOSITORY_IS_PRIVATE=false`; or
-- when that signal is absent, the wrapper may prove only the **public** case by
-  performing a credential-free `git ls-remote` against a strictly validated
-  `https://github.com/ContextualWisdomLab/<repository>[.git]` origin.
+- when that trusted signal is absent, the wrapper may prove only the **public**
+  case by performing a credential-free `git ls-remote` against a strictly
+  validated `https://github.com/ContextualWisdomLab/<repository>[.git]` origin.
+  A timeout or transport failure on a public ContextualWisdomLab origin is not
+  the production authorization path.
 
 `true`, malformed visibility input, private/auth-required Git access, timeout,
 transport failure, missing remote metadata, or any other indeterminate outcome is
