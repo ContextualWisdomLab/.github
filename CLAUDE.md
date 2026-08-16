@@ -133,3 +133,8 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+- **Figma on Cloud Agents is REST-only.** Do not retry MCP Connect against
+  `https://mcp.figma.com/mcp`. Store `FIGMA_ACCESS_TOKEN`, run
+  `python3 scripts/ci/figma_rest_auth.py`, then
+  `python3 scripts/ci/figma_rest_file.py <file-key-or-url>`. Desktop/CLI keep
+  the full MCP path. See `docs/doctoring/figma-cloud-agent-mcp-auth.md`.

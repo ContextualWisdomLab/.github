@@ -40,7 +40,7 @@ Use two disjoint auth paths:
 | Surface | Auth | Capability |
 |---|---|---|
 | Cursor Desktop / CLI | Figma MCP OAuth (`Settings → Tools & MCP → Figma → Connect`) | Full MCP toolset (`get_design_context`, `use_figma`, write-to-canvas, …) |
-| Cursor Cloud Agent | Figma personal access token in `FIGMA_ACCESS_TOKEN` | REST only (`X-Figma-Token` on `https://api.figma.com/v1/...`) |
+| Cursor Cloud Agent | Figma personal access token in `FIGMA_ACCESS_TOKEN` | REST only: `python3 scripts/ci/figma_rest_auth.py` then `python3 scripts/ci/figma_rest_file.py <file-key-or-url>` (`X-Figma-Token` on pinned `https://api.figma.com/v1/me` and `/v1/files/{key}`) |
 
 A personal access token does **not** unlock Figma MCP on Cloud Agents. It only
 authorizes the REST API. Do not commit the token. Do not put it in
@@ -67,6 +67,27 @@ authorizes the REST API. Do not commit the token. Do not put it in
    `http.client.HTTPSConnection("api.figma.com")` to `GET /v1/me` and refuses
    any other URL, so Semgrep `dynamic-urllib-use-detected` does not apply
    (`urllib.request.urlopen` is not used).
+4. **Read the file the buyer asked for.** Whoami is not file read. After the
+   secret verifies, run:
+
+   ```bash
+   python3 scripts/ci/figma_rest_file.py 'https://www.figma.com/design/<file_key>/<name>?node-id=12-34'
+   ```
+
+   Or pass the file key and node id directly:
+
+   ```bash
+   python3 scripts/ci/figma_rest_file.py '<file_key>' --node-id 12:34
+   python3 scripts/ci/figma_rest_file.py '<file_key>' --node-id 12:34 --images
+   ```
+
+   The helper allowlists the file key (10-128 letters or digits) and node
+   ids before they enter the path, opens the same pinned
+   `api.figma.com` origin, and prints a token-free JSON outline (pages and
+   top-level frames at depth 2 by default). `--images` returns HTTPS PNG
+   URLs for those nodes. `file://`, `http://`, and `api.figma.com` locators
+   are refused. Use the outline or image URLs as the next design-to-code
+   input; do not retry MCP Connect.
 
 ## Why MCP Connect cannot be finished here
 
@@ -77,17 +98,31 @@ user to "click Connect" inside a Cloud Agent or Automation therefore cannot
 succeed. The same Connect button works in the desktop IDE because that client
 is allowlisted.
 
-## References
+## APA 7th references
 
-Figma. (2025). *Changelog*. Figma Developer Docs.
-https://developers.figma.com/docs/rest-api/changelog/
+Figma. (2025). *Changelog*. Figma Developer Docs. Retrieved August 16, 2026,
+from https://developers.figma.com/docs/rest-api/changelog/
 
-Figma. (2026a). *Personal access tokens*. Figma Developer Docs.
+Figma. (2026a). *Personal access tokens*. Figma Developer Docs. Retrieved
+August 16, 2026, from
 https://developers.figma.com/docs/rest-api/personal-access-tokens/
 
 Figma. (2026b). *Set up the remote server (recommended)*. Figma Developer Docs.
+Retrieved August 16, 2026, from
 https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/
 
+Figma. (2026c). *Endpoints*. Figma Developer Docs. Retrieved August 16, 2026,
+from https://developers.figma.com/docs/rest-api/file-endpoints/
+
+Fielding, R., Nottingham, M., & Reschke, J. (Eds.). (2022). *HTTP semantics*
+(RFC 9110). Internet Engineering Task Force.
+https://www.rfc-editor.org/rfc/rfc9110
+
+Hardt, D., Parecki, A., & Lodderstedt, T. (Eds.). (2025). *The OAuth 2.1
+authorization framework* (Internet-Draft draft-ietf-oauth-v2-1). Internet
+Engineering Task Force. Retrieved August 16, 2026, from
+https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1
+
 Neilson, K. (2026, June 10). Reply in *Figma MCP shows "Forbidden" in
-Automations / Cloud Agents*. Cursor Forum.
+Automations / Cloud Agents*. Cursor Forum. Retrieved August 16, 2026, from
 https://forum.cursor.com/t/figma-mcp-shows-forbidden-in-automations-cloud-agents/162969
