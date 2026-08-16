@@ -142,6 +142,11 @@ assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workfl
 assert_file_contains "$workflow_file" "Self-test Strix required workflow contract" "Strix workflow uses bounded required-path smoke test"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_REQUIRED_SMOKE"' "Strix workflow executes bounded smoke test"
 assert_file_contains "$workflow_file" "timeout-minutes: 2" "Strix required-path smoke test has a short timeout"
+assert_file_contains "$workflow_file" "workflow_dispatch:" "Strix workflow restores manual official-mode selection"
+assert_file_contains "$workflow_file" "STRIX_SCAN_MODE:" "Strix workflow sets official scan mode from the event"
+assert_file_contains "$workflow_file" "github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')" "Strix standard push mapping requires the push event"
+assert_file_contains "$workflow_file" "fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'deep' && '360' || '120')" "Strix required path keeps the 120-minute job budget"
+assert_file_contains "$gate_script" "quick | standard | deep)" "Strix gate allowlists official scan modes"
 assert_status_permissions_scoped
 assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishes the strix commit status context"
 assert_file_contains "$workflow_file" "Existing current-run Strix success status is already present" "Strix manual follow-up status publisher accepts already-published same-run evidence"
