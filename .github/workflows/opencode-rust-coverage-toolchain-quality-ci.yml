@@ -3,6 +3,7 @@ name: OpenCode Rust Coverage Toolchain Quality CI
 on:
   pull_request:
     paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
       - ".github/workflows/opencode-rust-coverage-toolchain-quality-ci.yml"
       - "scripts/ci/ensure_rust_llvm19.sh"
       - "tests/test_opencode_rust_coverage_toolchain_contract.py"

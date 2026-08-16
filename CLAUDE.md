@@ -114,9 +114,10 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
-- **LLVM 19 Rust coverage boundary** lives in `scripts/ci/ensure_rust_llvm19.sh`. Do not edit
-  `.github/workflows/opencode-review-dispatch.yml` to carry that check; its blob SHA is the
-  independent review-agent key contract.
+- **LLVM 19 Rust coverage boundary** lives in the trusted coverage image and
+  `ensure_rust_toolchain` guard inside `.github/workflows/opencode-review-dispatch.yml`.
+  Updating that workflow requires a paired `REVIEW_DISPATCH_BLOB_SHA` update. Do not
+  move the runtime check into a pull-request-head script.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

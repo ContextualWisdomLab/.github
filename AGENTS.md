@@ -5,4 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-Rust coverage evidence binds LLVM 19 through `scripts/ci/ensure_rust_llvm19.sh`; do not rewrite the hashed `opencode-review-dispatch.yml` review-agent key blob for that check.
+Rust coverage evidence binds LLVM 19 in the trusted coverage image and `ensure_rust_toolchain` guard inside `.github/workflows/opencode-review-dispatch.yml`. Updating that workflow requires a paired `REVIEW_DISPATCH_BLOB_SHA` update. Do not move the runtime check into a pull-request-head script.
