@@ -30,6 +30,8 @@ def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
     assert "Ecma International. (2017)." in doctoring
     assert "International Organization for Standardization. (2017)." in doctoring
     assert "RFC 3339" in doctoring
+    assert "time-numoffset" in doctoring
+    assert "HTAB" in doctoring
     assert "Klyne, G., & Newman, C. (2002)." in doctoring
     assert "https://doi.org/10.17487/RFC3339" in doctoring
     assert "Using workflow run logs" in doctoring
@@ -40,6 +42,8 @@ def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
     assert "ISO/IEC 21778" in architecture
     assert "RFC 3339" in architecture
     assert "runner timestamp" in architecture
+    assert "time-numoffset" in architecture
+    assert "HTAB" in architecture
 
 
 def _timestamped_job_log(lines: tuple[str, ...], *, crlf: bool = False) -> str:
@@ -195,6 +199,46 @@ def test_timestamped_pretty_printed_array_rewrites_only_leaves() -> None:
     assert credential not in cleaned
     assert "false" in cleaned
     assert "null" in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_rfc3339_offset_timestamped_job_log_keeps_group_and_status() -> None:
+    """RFC 3339 time-numoffset prefixes must not fail-close a password object."""
+    credential = _credential("offset")
+    source = (
+        "2026-08-16T15:22:12.0012340+00:00 ##[group]Runner\n"
+        "2026-08-16T15:22:12.0012341+00:00 {\n"
+        f'2026-08-16T15:22:12.0012342+00:00   "password": "{credential}",\n'
+        '2026-08-16T15:22:12.0012343+00:00   "status": "failed"\n'
+        "2026-08-16T15:22:12.0012344+00:00 }\n"
+        "2026-08-16T15:22:12.0012345-07:00 ##[endgroup]\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "##[group]Runner" in cleaned
+    assert "##[endgroup]" in cleaned
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_tab_separated_timestamped_job_log_keeps_status() -> None:
+    """A runner timestamp followed by HTAB must still leave one JSON span."""
+    credential = _credential("tab")
+    source = (
+        "2026-08-16T15:22:12.0012340Z\t{\n"
+        f'2026-08-16T15:22:12.0012341Z\t  "password": "{credential}",\n'
+        '2026-08-16T15:22:12.0012342Z\t  "status": "failed"\n'
+        "2026-08-16T15:22:12.0012343Z\t}\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert '"status": "failed"' in cleaned
     assert f'"{redactor.REDACTED}"' in cleaned
     assert cleaned != redactor.REDACTED
 
