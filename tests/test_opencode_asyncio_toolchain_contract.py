@@ -20,6 +20,9 @@ _REVIEW_HASH_LOCK_PATH = _REPOSITORY_ROOT / "requirements-opencode-review-ci-has
 _DISPATCH_WORKFLOW_PATH = (
     _REPOSITORY_ROOT / ".github/workflows/opencode-review-dispatch.yml"
 )
+_QUALITY_WORKFLOW_PATH = (
+    _REPOSITORY_ROOT / ".github/workflows/trusted-uv-materializer-quality-ci.yml"
+)
 _PINNED_ASYNCIO_PLUGIN = "pytest-asyncio==1.4.0"
 _PINNED_TYPING_EXTENSIONS = "typing-extensions==4.16.0"
 _HELPER_IMPORT_LINE = (
@@ -95,9 +98,50 @@ def test_hashed_dispatch_smoke_is_not_rewritten_for_asyncio() -> None:
     assert _HELPER_IMPORT_LINE not in dispatch
 
 
+def test_quality_ci_executes_asyncio_helper_after_hash_lock_install() -> None:
+    """Keep the helper on the installed lock path, not as unread documentation."""
+
+    workflow = _QUALITY_WORKFLOW_PATH.read_text(encoding="utf-8")
+    install_index = workflow.index(
+        "python -m pip install --disable-pip-version-check --require-hashes "
+        "-r requirements-opencode-review-ci-hashes.txt"
+    )
+    helper_index = workflow.index(
+        "bash scripts/ci/ensure_opencode_asyncio_toolchain.sh"
+    )
+    assert helper_index > install_index
+    assert workflow.count('"scripts/ci/ensure_opencode_asyncio_toolchain.sh"') == 2
+    assert workflow.count('"tests/test_opencode_asyncio_toolchain_contract.py"') == 2
+
+
 @pytest.mark.asyncio
 async def test_marked_coroutine_executes_under_pinned_plugin() -> None:
     """Prove a marked coroutine actually runs instead of failing collection."""
 
     await asyncio.sleep(0)
     assert pytest_asyncio.__name__ == "pytest_asyncio"
+
+
+def test_pinned_plugin_collects_a_marked_coroutine_like_a_buyer_suite(
+    tmp_path: Path,
+) -> None:
+    """Reproduce the downstream failure: marked async tests must collect and pass."""
+
+    sample = tmp_path / "test_buyer_async_suite.py"
+    sample.write_text(
+        "import pytest\n"
+        "\n"
+        "@pytest.mark.asyncio\n"
+        "async def test_marked_coroutine_reaches_an_assertion() -> None:\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(sample), "-q"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "async def functions are not natively supported" not in result.stdout
+    assert "async def functions are not natively supported" not in result.stderr

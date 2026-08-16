@@ -20,12 +20,15 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
     required_paths = (
         '".github/workflows/trusted-uv-materializer-quality-ci.yml"',
         '"scripts/ci/materialize_base_python_requirements.py"',
+        '"scripts/ci/ensure_opencode_asyncio_toolchain.sh"',
         '"tests/conftest.py"',
         '"tests/test_materialize*.py"',
         '"tests/test_trusted_uv*.py"',
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
+        '"tests/test_opencode_asyncio_toolchain_contract.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
+        '"requirements-opencode-review-ci.txt"',
         '"pyproject.toml"',
     )
     for required_path in required_paths:
@@ -80,6 +83,8 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert "unset COVERAGE_RCFILE" in workflow
     assert "python -m interrogate --fail-under 100" in workflow
     assert "python -m compileall -q" in workflow
+    assert "bash scripts/ci/ensure_opencode_asyncio_toolchain.sh" in workflow
+    assert "tests/test_opencode_asyncio_toolchain_contract.py" in workflow
 
     required_tests = (
         "tests/test_materialize_base_python_requirements.py",

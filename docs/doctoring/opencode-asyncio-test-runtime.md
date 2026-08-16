@@ -12,11 +12,12 @@ The trusted OpenCode coverage image must execute repository tests that use
 plugin, so marked coroutine tests run instead of failing collection.
 
 `scripts/ci/ensure_opencode_asyncio_toolchain.sh` is the isolated
-`python3 -I` import wrapper. This repository's quality suite executes the
-same import in the test interpreter and a marked coroutine. The hashed
-`opencode-review-dispatch.yml` review-agent blob keeps
-its existing smoke import because `tests/test_opencode_agent_contract.py`
-pins that line. Do not rewrite the blob to carry `pytest_asyncio`.
+`python3 -I` import wrapper. After the quality job installs the hash lock,
+`trusted-uv-materializer-quality-ci.yml` executes that helper. The same
+suite also runs a marked coroutine the way a downstream buyer suite does.
+The hashed `opencode-review-dispatch.yml` review-agent blob keeps its
+existing smoke import because `tests/test_opencode_agent_contract.py` pins
+that line. Do not rewrite the blob to carry `pytest_asyncio`.
 
 Root `AGENTS.md`, `ARCHITECTURE.md`, and `CLAUDE.md` stay with
 ContextualWisdomLab/.github#896. Record the asyncio boundary here and in
