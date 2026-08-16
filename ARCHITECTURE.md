@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Strix 1.5.3 + cryptography 50 lock
+
+The required Strix installer consumes the complete hashed lock with
+`--no-deps` and fail-closes unless `strix-agent==1.5.3` and
+`cryptography==50.0.0` are the installed versions. Quality CI retriggers
+when the compile input, override, or lock changes.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid

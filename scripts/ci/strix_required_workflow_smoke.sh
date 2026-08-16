@@ -136,6 +136,8 @@ assert_file_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outp
 assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "Strix workflow checks out resolved central ref"
 assert_file_contains "$workflow_file" "Materialize central Strix dependency lock from PR head" "Strix workflow validates same-repo central lock-file PRs against the PR head lock"
 assert_file_contains "$workflow_file" "requirements-strix-ci-hashes.txt" "Strix workflow can materialize the central Strix hashed requirements lock"
+assert_file_contains "$workflow_file" "--require-hashes --no-deps -r requirements-strix-ci-hashes.txt" "Strix workflow installs the complete hashed lock without pip re-resolution"
+assert_file_contains "$workflow_file" 'expected = {"strix-agent": "1.5.3", "cryptography": "50.0.0"}' "Strix workflow fail-closes unless both override pins are installed"
 assert_file_contains "$workflow_file" "Materialize target workspace" "Strix workflow separates target workspace from trusted source"
 assert_file_contains "$workflow_file" 'STRIX_REPO_ROOT:' "Strix workflow passes target root explicitly"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workflow executes central Strix gate"
