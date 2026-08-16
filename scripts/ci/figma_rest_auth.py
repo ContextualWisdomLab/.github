@@ -103,18 +103,32 @@ def parse_whoami_payload(body: bytes) -> dict[str, Any]:
     return payload
 
 
+def identity_field(value: object) -> str | None:
+    """Return a single-line identity token, including numeric Figma ids."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        return None
+    return cleaned
+
+
 def identity_summary(payload: Mapping[str, Any]) -> str:
     """Return a token-free identity line from a ``/v1/me`` object."""
-    handle = payload.get("handle")
-    account_id = payload.get("id")
-    email = payload.get("email")
     parts: list[str] = []
-    if isinstance(handle, str) and handle.strip():
-        parts.append(f"handle={handle.strip()}")
-    if isinstance(account_id, str) and account_id.strip():
-        parts.append(f"id={account_id.strip()}")
-    if isinstance(email, str) and email.strip():
-        parts.append(f"email={email.strip()}")
+    handle = identity_field(payload.get("handle"))
+    account_id = identity_field(payload.get("id"))
+    email = identity_field(payload.get("email"))
+    if handle is not None:
+        parts.append(f"handle={handle}")
+    if account_id is not None:
+        parts.append(f"id={account_id}")
+    if email is not None:
+        parts.append(f"email={email}")
     if not parts:
         return "Figma REST authentication succeeded."
     return "Figma REST authentication succeeded (" + ", ".join(parts) + ")."

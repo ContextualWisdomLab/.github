@@ -41,6 +41,15 @@ def test_read_access_token_strips_whitespace() -> None:
     assert auth.read_access_token({auth.TOKEN_ENV_NAME: f"  {TOKEN}\n"}) == TOKEN
 
 
+def test_identity_field_normalizes_scalar_values() -> None:
+    """Booleans and non-text values never become identity tokens."""
+    assert auth.identity_field(True) is None
+    assert auth.identity_field(3.14) is None
+    assert auth.identity_field(["x"]) is None
+    assert auth.identity_field("  ") is None
+    assert auth.identity_field(0) == "0"
+
+
 def test_identity_summary_omits_unknown_fields() -> None:
     """Identity lines stay token-free and tolerate a sparse payload."""
     assert auth.identity_summary({}) == "Figma REST authentication succeeded."
@@ -52,7 +61,10 @@ def test_identity_summary_omits_unknown_fields() -> None:
         "(handle=seonghobae, id=123, email=user@example.com)."
     )
     assert auth.identity_summary({"handle": "  ", "id": 17}) == (
-        "Figma REST authentication succeeded."
+        "Figma REST authentication succeeded (id=17)."
+    )
+    assert auth.identity_summary({"handle": "a\nb", "id": True}) == (
+        "Figma REST authentication succeeded (handle=a b)."
     )
 
 
@@ -160,13 +172,24 @@ class _FakeWhoamiConnection:
         self.closed = True
 
 
-def test_default_opener_rejects_non_whoami_urls() -> None:
+def test_default_opener_rejects_non_whoami_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     """``file://`` and other caller URLs never reach the TLS sink."""
+    constructed: list[object] = []
+
+    def forbidden_connection(*args: object, **kwargs: object) -> object:
+        constructed.append((args, kwargs))
+        raise AssertionError("whoami opener must not connect for a refused URL")
+
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", forbidden_connection)
     with pytest.raises(auth.FigmaAuthError) as refused:
         auth.default_opener("file:///etc/passwd", {auth.TOKEN_HEADER: TOKEN})
     assert refused.value.exit_code == auth.EXIT_TRANSPORT
     assert "refuses" in str(refused.value)
     assert TOKEN not in str(refused.value)
+    assert constructed == []
+    with pytest.raises(auth.FigmaAuthError):
+        auth.default_opener("https://api.figma.com/v1/files/TestFileKey0123456789", {})
+    assert constructed == []
 
 
 def test_default_opener_returns_http_error_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,6 +292,25 @@ def test_main_writes_identity_and_error_channels() -> None:
     assert missing_out.getvalue() == ""
     assert auth.TOKEN_ENV_NAME in missing_err.getvalue()
     assert TOKEN not in missing_err.getvalue()
+
+    rejected_out = io.StringIO()
+    rejected_err = io.StringIO()
+
+    def reject(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        del url, headers
+        return 401, b'{"err":"Invalid token"}'
+
+    rejected = auth.main(
+        argv=[],
+        environ={auth.TOKEN_ENV_NAME: TOKEN},
+        opener=reject,
+        stdout=rejected_out,
+        stderr=rejected_err,
+    )
+    assert rejected == auth.EXIT_REJECTED
+    assert rejected_out.getvalue() == ""
+    assert "401" in rejected_err.getvalue()
+    assert TOKEN not in rejected_err.getvalue()
 
 
 def test_main_uses_process_streams_when_unspecified(
