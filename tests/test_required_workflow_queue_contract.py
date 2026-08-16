@@ -136,6 +136,28 @@ def assert_dependency_review_probe_failed(
     assert not (tmp_path / "github-output").exists()
 
 
+def assert_dependency_review_identity_rejected(
+    result: subprocess.CompletedProcess,
+    tmp_path: Path,
+    *,
+    expected_visibility: str = "public",
+    forbidden_substrings: tuple[str, ...] = (),
+) -> None:
+    """Require identity rejection before curl, without echoing raw values."""
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert "HTTP unavailable; curl exit uncalled" in result.stdout
+    assert f"visibility {expected_visibility}" in result.stdout
+    assert PROBE_TOKEN not in combined
+    assert "Authorization:" not in combined
+    assert not (tmp_path / "github-output").exists()
+    assert not (tmp_path / "curl-argv").exists()
+    for needle in forbidden_substrings:
+        assert needle
+        assert needle not in combined
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -955,8 +977,22 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "visibility ${visibility}" in support_probe
     assert 'revision_pattern=' in support_probe
     assert 'repository_pattern=' in support_probe
+    assert "repository_owner=" in support_probe
+    assert "repository_name=" in support_probe
+    assert '[ "${repository_owner}" = ".." ]' in support_probe
+    assert '[ "${repository_name}" = ".." ]' in support_probe
     assert "Malformed revision" in support_probe
     assert "Malformed repository" in support_probe
+    assert "Named refs are not evidence" in support_probe
+    assert '000|"") http_status="unavailable"' in support_probe
+    assert (
+        "Dependency review evidence unavailable for the allowlisted repository"
+        in support_probe
+    )
+    assert "at exact base ${BASE_SHA} and head ${HEAD_SHA}" not in support_probe.split(
+        "set +e",
+        1,
+    )[0]
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -1052,6 +1088,7 @@ def test_dependency_review_transport_failure_fails_closed(tmp_path: Path) -> Non
     [
         ("#!/usr/bin/env bash\nprintf '404'\nexit 0\n", "404"),
         ("#!/usr/bin/env bash\nprintf ''\nexit 0\n", "unavailable"),
+        ("#!/usr/bin/env bash\nprintf '000'\nexit 0\n", "unavailable"),
         ("#!/usr/bin/env bash\nprintf 'OK'\nexit 0\n", "malformed"),
     ],
 )
@@ -1183,16 +1220,37 @@ def test_dependency_review_rejects_malformed_revision_before_network(
         head_sha=head_sha,
     )
 
-    assert_dependency_review_probe_failed(
+    forbidden = tuple(
+        value
+        for value in (base_sha, head_sha)
+        if value and value not in {PROBE_BASE_SHA, PROBE_HEAD_SHA}
+    )
+    assert_dependency_review_identity_rejected(
         result,
         tmp_path,
-        expected_http="unavailable",
-        expected_curl_exit="uncalled",
-        expected_base_sha=base_sha,
-        expected_head_sha=head_sha,
+        forbidden_substrings=forbidden,
     )
     assert "Malformed revision" in result.stdout
-    assert not (tmp_path / "curl-argv").exists()
+    assert "Named refs are not evidence" in result.stdout
+
+
+def test_dependency_review_named_head_revision_cannot_go_green(
+    tmp_path: Path,
+) -> None:
+    """GitHub resolves named revisions to moving HEADs; that is not evidence."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        head_sha="main",
+    )
+
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=("main",),
+    )
+    assert "Malformed revision" in result.stdout
 
 
 def test_dependency_review_rejects_malformed_repository_before_network(
@@ -1200,21 +1258,66 @@ def test_dependency_review_rejects_malformed_repository_before_network(
 ) -> None:
     """A repository name that cannot form a compare URL must not reach curl."""
 
+    raw_repository = "../evil/repo"
     result = run_dependency_review_support_probe(
         tmp_path,
         curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
-        repository="../evil/repo",
+        repository=raw_repository,
     )
 
-    assert_dependency_review_probe_failed(
+    assert_dependency_review_identity_rejected(
         result,
         tmp_path,
-        expected_http="unavailable",
-        expected_curl_exit="uncalled",
-        expected_visibility="public",
+        forbidden_substrings=(raw_repository, "../evil"),
     )
     assert "Malformed repository" in result.stdout
-    assert not (tmp_path / "curl-argv").exists()
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "ContextualWisdomLab/..",
+        "../.github",
+        "ContextualWisdomLab/.",
+        "./.github",
+    ],
+)
+def test_dependency_review_rejects_dot_repository_segments(
+    tmp_path: Path,
+    repository: str,
+) -> None:
+    """`.` and `..` path segments must not reach the compare URL."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository=repository,
+    )
+
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=(repository,),
+    )
+    assert "Malformed repository" in result.stdout
+
+
+def test_dependency_review_accepts_dot_github_repository_name(
+    tmp_path: Path,
+) -> None:
+    """The special `.github` repository name is canonical owner/name, not `..`."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository="ContextualWisdomLab/.github",
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+    assert_dependency_review_compare_invoked(tmp_path)
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:

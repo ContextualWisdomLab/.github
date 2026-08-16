@@ -48,8 +48,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
-- Fail closed when GitHub dependency-review evidence is unavailable (non-200, transport failure, or truncated compare) instead of treating HTTP 403/404 as a clean skip; the probe records allowlisted repository visibility with the exact head SHA and never prints the API body.
-- Reject malformed dependency-review revisions and repository names before the compare request so an empty SHA or `../` repository cannot mint a green `supported=true` from a forged HTTP 200.
+- Fail closed when GitHub dependency-review evidence is unavailable (non-200, transport failure, truncated compare, or curl's `000` no-status sentinel) instead of treating HTTP 403/404 as a clean skip; the probe records allowlisted repository visibility with the exact head SHA and never prints the API body.
+- Reject named Git revisions, `.`/`..` repository segments, and other non-`owner/name` values before the dependency-review compare request so GitHub cannot resolve `main` to a moving HEAD and so path traversal cannot leave `/repos/{owner}/{repo}`. Identity-rejection diagnostics tell the operator to resupply exact event SHAs and do not echo the raw invalid values.
 
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.
