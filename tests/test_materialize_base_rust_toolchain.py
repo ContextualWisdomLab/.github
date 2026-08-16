@@ -309,6 +309,58 @@ def test_non_numeric_rust_version_does_not_select_rustup(tmp_path: Path) -> None
     assert materializer.rustup_channel(repo) is None
 
 
+def test_symlink_manifest_and_non_list_members(tmp_path: Path) -> None:
+    """Symlinked manifests and non-list workspace members yield no rustup inputs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = tmp_path / "outside.toml"
+    target.write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
+    (repo / "Cargo.toml").symlink_to(target)
+    assert materializer.declared_rust_version(repo) is None
+    assert materializer.workspace_member_manifests(repo) == []
+    (repo / "Cargo.toml").unlink()
+    (repo / "Cargo.toml").write_text("[workspace]\nmembers = \"crates/*\"\n", encoding="utf-8")
+    assert materializer.workspace_member_manifests(repo) == []
+
+
+def test_glob_skips_non_crate_children_and_unsafe_git_paths(tmp_path: Path) -> None:
+    """Glob expansion ignores files, symlinked crates, and unsafe git paths."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    crates = repo / "crates"
+    crates.mkdir()
+    (crates / "README").write_text("not a crate\n", encoding="utf-8")
+    linked = tmp_path / "linked-crate"
+    linked.mkdir()
+    (linked / "Cargo.toml").write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
+    (crates / "linked").symlink_to(linked)
+    empty = crates / "empty"
+    empty.mkdir()
+    (empty / "Cargo.toml").symlink_to(linked / "Cargo.toml")
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n', encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "glob-skips")
+    assert materializer.expand_workspace_member(repo, "crates/*") == []
+    listed = materializer.tracked_paths(repo)
+    assert all(".." not in path and not path.startswith("/") for path in listed)
+
+
+def test_declared_version_without_manifest_and_unsafe_tracked_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing manifests and git paths with traversal do not enter the image."""
+    assert materializer.declared_rust_version(tmp_path) is None
+    monkeypatch.setattr(
+        materializer,
+        "_git",
+        lambda *_args, **_kwargs: b"../escape\0/abs/Cargo.toml\0Cargo.toml\0",
+    )
+    assert materializer.tracked_paths(tmp_path) == {"Cargo.toml"}
+
+
 def test_invalid_toml_decode_fails_cli(tmp_path: Path) -> None:
     """Corrupt Cargo.toml fails the materializer CLI instead of building an image."""
     repo = tmp_path / "repo"

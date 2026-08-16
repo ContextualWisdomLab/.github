@@ -351,6 +351,46 @@ def test_crates_root_and_grouped_python_surfaces() -> None:
     assert "2 files" in docs["surface"]
 
 
+def test_surfaces_cover_remaining_review_branches(tmp_path: Path) -> None:
+    """Empty paths, duplicate symbols, loose Rust files, and control blocks are covered."""
+    assert surfaces.classify_surfaces(["", "  "]) == []
+    source = tmp_path / "lib.rs"
+    source.write_text(
+        "pub struct Once {}\npub struct Once {}\n",
+        encoding="utf-8",
+    )
+    assert surfaces.rust_api_symbols(tmp_path, ["README.md", "lib.rs"]) == ["Once"]
+    diagram = surfaces.emit_mermaid(["lib.rs"], source_root=tmp_path)
+    assert "classDiagram" in diagram
+    assert "Once -->" not in diagram
+    loose = surfaces.emit_mermaid(["src/resolution.rs"])
+    assert "Rust crate" in loose
+    quoted = surfaces._quote_label('Fresh\r\n"Snapshot"')
+    assert '"' not in quoted
+    assert "\n" not in quoted
+    status = surfaces.build_status_comment(
+        result="APPROVE",
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        coverage_result="success",
+        language="korean",
+        control_block="<!-- opencode-review-control-v1\n{}\n-->",
+    )
+    assert "커버리지 증거 작업이 통과하지 않아" not in status
+    assert "opencode-review-control-v1" in status
+    review = surfaces.build_fallback_review(
+        changed_files=["lib.rs"],
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        source_root=tmp_path,
+        language="korean",
+    )
+    assert "변경 API" in review
+    assert "`Once`" in review
+
+
 def test_publisher_workflow_cannot_replace_review_with_coverage_finding() -> None:
     """The #47 publisher shape — coverage REQUEST_CHANGES as the whole review — is gone."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
