@@ -1,4 +1,4 @@
-name: Diagnose PR 1009 quick gate assertions
+name: Apply PR 1009 quick-gate repair
 
 on:
   push:
@@ -6,24 +6,98 @@ on:
       - codex/strix-evidence-minimal
     paths:
       - .github/workflows/diagnose-pr1009-quick-gate.yml
+      - .github/bootstrap/pr1009-quick-gate-repair/**
+
+concurrency:
+  group: apply-pr1009-quick-gate-repair
+  cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  apply:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Check out exact contributor branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: codex/strix-evidence-minimal
-          persist-credentials: false
-      - name: Print stale assertion locations and candidate owning files
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify reviewed ancestry and bounded bootstrap scope
         shell: bash
         run: |
           set -euo pipefail
-          grep -n -C 3 -E 'manual_run_line|Default-branch repository_dispatch Strix structured evidence binding passed|current_head_manual_strix_structured_success_status|current_head_successful_strix_check_run|A successful same-head default-branch' scripts/ci/test_strix_quick_gate.sh || true
-          printf '\n--- candidate production locations ---\n'
-          grep -R -n -C 2 -E 'manual_run_line|Default-branch repository_dispatch Strix structured evidence binding passed|current_head_manual_strix_structured_success_status|current_head_successful_strix_check_run|A successful same-head default-branch' .github/workflows scripts/ci --exclude=test_strix_quick_gate.sh || true
-          exit 1
+          reviewed_head=5ac58a909fac5d170480aa9ecb40c5c1c5496ae4
+          git merge-base --is-ancestor "$reviewed_head" HEAD
+          unexpected="$({ git diff --name-only "$reviewed_head"...HEAD || true; } | grep -Ev '^\.github/(bootstrap/pr1009-quick-gate-repair/|workflows/diagnose-pr1009-quick-gate\.yml$)' || true)"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected files changed after reviewed head:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-locked test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove the stale ownership assertions fail
+        shell: bash
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
+        run: |
+          set +e
+          bash scripts/ci/test_strix_quick_gate.sh
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected the reviewer-coupled quick-gate assertions to fail before repair." >&2
+            exit 1
+          fi
+
+      - name: Apply bounded test-contract repair
+        run: python .github/bootstrap/pr1009-quick-gate-repair/transform.py
+
+      - name: Run exact Strix quick-gate contract
+        shell: bash
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
+        run: bash scripts/ci/test_strix_quick_gate.sh
+
+      - name: Run full repository suite
+        run: python -m pytest -q
+
+      - name: Verify shell, compilation, and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/test_strix_quick_gate.sh
+          python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Publish verified repair and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/bootstrap/pr1009-quick-gate-repair
+          rm -f .github/workflows/diagnose-pr1009-quick-gate.yml
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No verified quick-gate repair was produced.' >&2
+            exit 1
+          fi
+          git config user.name 'cwl-control-plane-maintainer[bot]'
+          git config user.email 'cwl-control-plane-maintainer[bot]@users.noreply.github.com'
+          git commit -m 'test(strix): decouple evidence checks from reviewer workflow'
+          git push origin HEAD:codex/strix-evidence-minimal
