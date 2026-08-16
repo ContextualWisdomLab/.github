@@ -37,6 +37,10 @@ REQUIRED_LIFECYCLE_STATES = (
 FORBIDDEN_HIGH_CARDINALITY_LABELS = frozenset(
     {"bucket", "object_key", "credential", "raw_pii"}
 )
+FORBIDDEN_EXACT_HOSTS = frozenset(
+    {"localhost", "metadata.google.internal", "metadata.goog"}
+)
+MAX_TCP_PORT = 65535
 ALLOWED_TOP_LEVEL = (
     "schema_version",
     "capability",
@@ -84,6 +88,13 @@ class ObjectStorageContractError(ValueError):
     """Raised when a contract file fails a fail-closed policy check."""
 
 
+def _reject_non_finite_json_constant(token: str) -> None:
+    """Reject NaN and Infinity, which are not finite RFC 8259 numbers."""
+    raise ObjectStorageContractError(
+        f"contract contains a non-finite JSON number: {token}"
+    )
+
+
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Build an object while rejecting duplicate JSON keys."""
     seen: set[str] = set()
@@ -96,21 +107,36 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _is_dns_label_char(char: str) -> bool:
+    """Return whether *char* is an ASCII lowercase DNS label character."""
+    return char.isascii() and (char.islower() or char.isdigit() or char == "-")
+
+
 def is_exact_dns_host(host: str) -> bool:
-    """Return whether *host* is one exact DNS name with no wildcards or ports."""
+    """Return whether *host* is one exact lowercase DNS name.
+
+    Localhost, link-local metadata names, IPv4 literals, Unicode, and
+    case aliases are not exact allowlist members.
+    """
     if not host or not isinstance(host, str):
         return False
     if any(char in host for char in "*:/@ \t\\"):
         return False
     if host.startswith(".") or host.endswith("."):
         return False
+    if host != host.lower():
+        return False
+    if host in FORBIDDEN_EXACT_HOSTS or host.endswith(".localhost"):
+        return False
     labels = host.split(".")
+    if len(labels) == 4 and all(label.isdigit() and label.isascii() for label in labels):
+        return False
     for label in labels:
         if not label or len(label) > 63:
             return False
         if label.startswith("-") or label.endswith("-"):
             return False
-        if not all(char.isalnum() or char == "-" for char in label):
+        if not all(_is_dns_label_char(char) for char in label):
             return False
     return True
 
@@ -130,7 +156,12 @@ def parse_https_endpoint_host(url: str) -> str:
             "custom endpoints must not embed credentials"
         )
     host, separator, port = authority.partition(":")
-    if separator and (not port.isdigit() or port == "0"):
+    if separator and (
+        not port.isdigit()
+        or not port.isascii()
+        or port == "0"
+        or int(port) > MAX_TCP_PORT
+    ):
         raise ObjectStorageContractError("custom endpoint port is invalid")
     if not is_exact_dns_host(host):
         raise ObjectStorageContractError(
@@ -151,7 +182,10 @@ def load_contract_bytes(raw: bytes) -> dict[str, Any]:
         raise ObjectStorageContractError("contract is not UTF-8") from exc
     if "\x00" in text:
         raise ObjectStorageContractError("contract contains a NUL byte")
-    decoder = json.JSONDecoder(object_pairs_hook=reject_duplicate_keys)
+    decoder = json.JSONDecoder(
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=_reject_non_finite_json_constant,
+    )
     try:
         data, index = decoder.raw_decode(text)
     except json.JSONDecodeError as exc:
@@ -233,10 +267,15 @@ def validate_endpoint_policy(policy: Mapping[str, Any]) -> None:
             "endpoint_policy.host_allowlist must be a nonempty list"
         )
     seen: set[str] = set()
+    private_network_trust = policy.get("private_network_trust")
     for host in hosts:
         if not isinstance(host, str) or not is_exact_dns_host(host):
             raise ObjectStorageContractError(
                 f"endpoint host {host!r} is not an exact DNS name"
+            )
+        if private_network_trust == "denied" and "." not in host:
+            raise ObjectStorageContractError(
+                f"endpoint host {host!r} is a single-label name"
             )
         if host in seen:
             raise ObjectStorageContractError(f"duplicate endpoint host {host!r}")
@@ -364,7 +403,18 @@ def validate_observability(observability: Mapping[str, Any]) -> None:
         raise ObjectStorageContractError(
             "observability.high_cardinality_labels_forbid must be a list"
         )
-    missing = sorted(FORBIDDEN_HIGH_CARDINALITY_LABELS - set(labels))
+    seen_labels: set[str] = set()
+    for label in labels:
+        if not isinstance(label, str) or not label:
+            raise ObjectStorageContractError(
+                "observability.high_cardinality_labels_forbid must contain nonempty strings"
+            )
+        if label in seen_labels:
+            raise ObjectStorageContractError(
+                f"duplicate observability label {label!r}"
+            )
+        seen_labels.add(label)
+    missing = sorted(FORBIDDEN_HIGH_CARDINALITY_LABELS - seen_labels)
     if missing:
         raise ObjectStorageContractError(
             "observability must forbid high-cardinality labels: "

@@ -25,14 +25,117 @@
     "capability": { "const": "object_storage" },
     "repository": { "type": "string", "minLength": 1 },
     "provider_class": { "enum": ["aws_s3", "s3_compatible"] },
-    "endpoint_policy": { "type": "object" },
-    "credentials": { "type": "object" },
-    "permissions": { "type": "object" },
-    "encryption": { "type": "object" },
-    "integrity": { "type": "object" },
-    "lifecycle": { "type": "object" },
-    "rollback": { "type": "object" },
-    "observability": { "type": "object" },
+    "endpoint_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "host_allowlist",
+        "allow_wildcards",
+        "follow_redirects",
+        "private_network_trust"
+      ],
+      "properties": {
+        "transport": { "const": "https" },
+        "host_allowlist": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allow_wildcards": { "const": false },
+        "follow_redirects": { "const": false },
+        "private_network_trust": {
+          "enum": ["explicit_allowlist", "denied"]
+        },
+        "custom_endpoint": { "type": "string", "minLength": 1 }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "broadcast",
+        "browser_long_lived",
+        "ambient_process_wide",
+        "mechanism"
+      ],
+      "properties": {
+        "broadcast": { "const": false },
+        "browser_long_lived": { "const": false },
+        "ambient_process_wide": { "const": false },
+        "mechanism": {
+          "enum": ["scoped_secret_registry", "workload_identity"]
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_acls", "public_buckets", "least_privilege"],
+      "properties": {
+        "public_acls": { "const": false },
+        "public_buckets": { "const": false },
+        "least_privilege": { "const": true }
+      }
+    },
+    "encryption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server_side"],
+      "properties": {
+        "server_side": { "const": "required" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_length", "digest", "fail_closed_read"],
+      "properties": {
+        "content_length": { "const": true },
+        "digest": { "enum": ["sha256", "sha384", "sha512"] },
+        "fail_closed_read": { "const": true }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "states",
+        "consumed_implies_immediate_delete",
+        "zero_retention_explicit",
+        "legal_hold_distinct"
+      ],
+      "properties": {
+        "states": {
+          "type": "array",
+          "minItems": 5,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "consumed_implies_immediate_delete": { "type": "boolean" },
+        "zero_retention_explicit": { "type": "boolean" },
+        "legal_hold_distinct": { "const": true }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delete_customer_data_on_partial_migration"],
+      "properties": {
+        "delete_customer_data_on_partial_migration": { "const": false }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["high_cardinality_labels_forbid"],
+      "properties": {
+        "high_cardinality_labels_forbid": {
+          "type": "array",
+          "minItems": 4,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "database_object_names": { "const": "multiword_snake_case" },
     "assurance_posture": { "const": "design_constraints_only" }
   }
