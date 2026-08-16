@@ -370,8 +370,9 @@ def test_traceability_has_exact_identifiers_and_accountability_columns() -> None
 
     traceability = read_document("TRACEABILITY.md")
     assert "#888` is closed/unmerged `superseded`" in traceability
-    assert "#906` is the Draft `active_pr`" in traceability
-    assert "Every #906 head change invalidates" in traceability
+    assert "#906` is closed/unmerged `superseded`" in traceability
+    assert "#1031` is the current open `active_pr`" in traceability
+    assert "Every #1031 head change invalidates" in traceability
     for number in range(1, 15):
         assert f"`PRD-{number:02d}`" in traceability
     for requirement_id in (
@@ -515,6 +516,7 @@ def test_current_lineage_threat_maturity_and_gap_objects_are_exact() -> None:
         assert "/pull/842" not in document
         assert "https://github.com/ContextualWisdomLab/.github/pull/888" in document
         assert "https://github.com/ContextualWisdomLab/.github/pull/906" in document
+        assert "https://github.com/ContextualWisdomLab/.github/pull/1031" in document
         assert "closed unmerged" in document
         assert "superseded" in document
         assert "Draft" in document
@@ -551,7 +553,7 @@ def test_current_lineage_threat_maturity_and_gap_objects_are_exact() -> None:
     traceability = read_document("TRACEABILITY.md")
     gap_objects = {
         "IG-001": (
-            "https://github.com/ContextualWisdomLab/.github/pull/840",
+            "https://github.com/ContextualWisdomLab/.github/pull/1021",
             "active_pr",
         ),
         "IG-002": (

@@ -1,6 +1,6 @@
 # ADR-0009: Redact the complete sandbox evidence boundary while preserving diagnosis
 
-Status: Accepted; Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) is the active integration path; [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) is closed unmerged as superseded incident evidence
+Status: Accepted; [PR #1031](https://github.com/ContextualWisdomLab/.github/pull/1031) is the current open integration path; Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) and [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) are closed unmerged as superseded incident evidence
 Date: 2026-08-09
 Decision owners: CWL security and CI maintainers
 
@@ -8,7 +8,7 @@ Decision owners: CWL security and CI maintainers
 
 `sandboxed_verify.py` and `sandboxed_web_e2e.py` execute proof commands and publish completed output, timeout payloads, exceptions, backend/frontend service tails, command metadata, and structured result JSON. Applying redaction to only some print calls leaves credentials reachable through JSON, terminal/Unicode evasion, nested commands, explicit allowed environment values, or stream/result boundaries. Over-broad pattern matching can instead erase benign keys and the diagnostics needed to fix CI.
 
-`ContextualWisdomLab/.github#841` identified the disclosure class but mixed an unrelated SSRF slice and missed publication paths. It was closed unmerged. Its first broad successor was also closed unmerged because secret-shaped fixtures remained in reachable history. [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) was the clean-history replacement, but a later committed credential-shaped fixture recontaminated its reachable history; it was closed unmerged and remains superseded incident evidence. Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) is the current clean-history active replacement and preserves all predecessors as historical evidence.
+`ContextualWisdomLab/.github#841` identified the disclosure class but mixed an unrelated SSRF slice and missed publication paths. It was closed unmerged. Its first broad successor was also closed unmerged because secret-shaped fixtures remained in reachable history. [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) was the clean-history replacement, but a later committed credential-shaped fixture recontaminated its reachable history; it was closed unmerged and remains superseded incident evidence. Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) is also closed unmerged `superseded`. [PR #1031](https://github.com/ContextualWisdomLab/.github/pull/1031) is the current open successor; do not merge overlapping [PR #929](https://github.com/ContextualWisdomLab/.github/pull/929) in parallel.
 
 ## Decision drivers
 
@@ -62,7 +62,7 @@ This reduces credential disclosure and log-injection risk while preserving audit
 
 ## Migration and rollback
 
-Integrate Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) through normal protection after it becomes review-ready, then run a synthetic credential fixture from protected main and an affected consumer. Update the PR body, doctoring, and CHANGELOG with only final exact-head numbers. If regression requires rollback, disable the affected evidence publication or revert to a reviewed fail-closed no-output path; do not restore a known disclosure path.
+Integrate [PR #1031](https://github.com/ContextualWisdomLab/.github/pull/1031) through normal protection after current-head gates and qualifying review pass, then run a synthetic credential fixture from protected main and an affected consumer. Update the PR body, doctoring, and CHANGELOG with only final exact-head numbers. If regression requires rollback, disable the affected evidence publication or revert to a reviewed fail-closed no-output path; do not restore a known disclosure path.
 
 ## Supersession conditions
 

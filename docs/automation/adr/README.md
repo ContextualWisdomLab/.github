@@ -14,7 +14,7 @@ ADRs record durable decisions, not transient run status. A changed exact head, r
 | [ADR-0006](0006-protected-main-operational-acceptance.md) | Protected-main/consumer evidence closes operational incidents | Accepted |
 | [ADR-0007](0007-work-conserving-maintenance.md) | Work-conserving automation; reporting is not completion | Accepted |
 | [ADR-0008](0008-central-control-plane-and-thin-consumers.md) | Central control-plane ownership and thin product consumers | Accepted |
-| [ADR-0009](0009-sandbox-evidence-redaction-boundary.md) | One complete sandbox evidence-redaction boundary with diagnostic preservation | Accepted; Draft clean-history integration proposed by [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906); [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) closed unmerged as superseded evidence |
+| [ADR-0009](0009-sandbox-evidence-redaction-boundary.md) | One complete sandbox evidence-redaction boundary with diagnostic preservation | Accepted; current open integration is [PR #1031](https://github.com/ContextualWisdomLab/.github/pull/1031); Draft [PR #906](https://github.com/ContextualWisdomLab/.github/pull/906) and [PR #888](https://github.com/ContextualWisdomLab/.github/pull/888) are closed unmerged as superseded evidence |
 | [ADR-0010](0010-agent-mention-routing-and-idempotency-ledger.md) | Authenticated agent-mention routing with an idempotency ledger | Accepted |
 | [ADR-0011](0011-provider-routing-and-credential-isolation.md) | Ordered provider routing with per-purpose credential isolation | Accepted |
 | [ADR-0012](0012-hash-pinned-toolchains-and-exact-base-materialization.md) | Hash-pinned toolchains and independently resolved live-base identity | Accepted |

@@ -233,7 +233,7 @@ type and maturity are mapped in [TRACEABILITY.md](TRACEABILITY.md).
 
 | ID | Audited protected-main behavior | Required closure |
 |---|---|---|
-| `IG-001` | Mention wrappers bind a claim, but the complete downstream review path does not yet preserve every versioned field, live-base observation, and review-only policy through authoritative publication. | Integrate and accept [PR #840](https://github.com/ContextualWisdomLab/.github/pull/840). |
+| `IG-001` | Mention wrappers bind a claim, but the complete downstream review path does not yet preserve every versioned field, live-base observation, and review-only policy through authoritative publication. | Integrate and accept Draft [PR #1021](https://github.com/ContextualWisdomLab/.github/pull/1021), the bounded successor to closed-unmerged [PR #840](https://github.com/ContextualWisdomLab/.github/pull/840). |
 | `IG-002` | Bot/model identities remain advisory; a counted qualifying independent non-author human approval is still externally required. | Establish the governance path in [Issue #772](https://github.com/ContextualWisdomLab/.github/issues/772). |
 | `IG-003` | Privileged targeted scheduler, OpenCode, and Strix paths reject external heads while older policy prose described them as reviewable. | Align every entrypoint under [Issue #889](https://github.com/ContextualWisdomLab/.github/issues/889). |
 | `IG-004` | Per-workflow concurrency, invocation claims, and expected-head guards exist, but there is no shared owner/TTL/heartbeat/fencing record across branch-mutating workflows. | Implement [Issue #890](https://github.com/ContextualWisdomLab/.github/issues/890). |
