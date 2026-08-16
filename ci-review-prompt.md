@@ -212,8 +212,48 @@ relevant source location, concrete evidence, impact, remediation, and suggested
 verification. If no material issue exists, approve instead of manufacturing
 comments.
 
+Write the human-readable review first in this structure, then append the
+sentinel and exactly one `opencode-review-control-v1` control block. Do not
+include analysis, planning, tool-call narration, or placeholders that are not
+part of this review structure.
+
+```markdown
+## Verdict
+
+APPROVE | APPROVE_WITH_NITS | REQUEST_CHANGES | COMMENT | NEEDS_INFO
+
+- **Confidence:** High | Medium | Low
+- **Scope reviewed:** short summary of files/areas inspected
+- **Commands run:** commands and brief results, or `None`
+- **Risk profile:** Low | Medium | High, with one short reason
+
+## Findings
+
+No material issues found in the reviewed diff.
+```
+
+For each finding:
+
+```markdown
+### [P0/P1/P2/P3/Nit/FYI] Short title
+
+- **Location:** `path/to/file.ext:line`
+- **Evidence:** What in the code or command output supports this
+- **Impact:** What can go wrong
+- **Recommendation:** Concrete fix or direction
+- **Suggested verification:** Test, command, or scenario confirming the fix
+```
+
+Then:
+
+```markdown
+## Test Gaps
+
+No significant test gaps identified.
+```
+
 The final OpenCode output must still satisfy the existing
 `opencode-review-control-v1` JSON contract required by the approval gate. Use
-the reviewer rubric above for analysis and human-readable review quality, but
-return the sentinel and control block exactly as requested by the workflow
+the reviewer rubric above for analysis and human-readable review quality, then
+append the sentinel and control block exactly as requested by the workflow
 prompt, including the mandatory structured `adversarial_validation` evidence.

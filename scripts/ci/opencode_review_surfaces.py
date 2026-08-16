@@ -10,11 +10,12 @@ Rust crate. This module is the trusted publisher contract for those surfaces.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Sequence
 
 CENTRAL_WORKFLOW_ANCHOR = ".github/workflows/opencode-review.yml"
 PUB_ITEM_RE = re.compile(
@@ -76,6 +77,14 @@ def classify_changed_path(raw_path: str) -> dict[str, str]:
             "impact": "Rust workspace crate API and tests",
             "verify": "cargo test plus llvm-cov",
             "kind": "rust-crate",
+        }
+    if name in {"Cargo.toml", "Cargo.lock"}:
+        return {
+            "key": "rust-manifest",
+            "surface": f"Rust manifest: {name}",
+            "impact": "Rust workspace or package manifest",
+            "verify": "cargo test plus llvm-cov",
+            "kind": "rust",
         }
     if suffix in RUST_SUFFIXES:
         return {
@@ -234,7 +243,14 @@ def emit_mermaid(
         )
 
     symbols = rust_api_symbols(source_root, paths)
-    rust_paths = [path for path in paths if path.startswith("crates/") or path.endswith(".rs")]
+    rust_paths = [
+        path
+        for path in paths
+        if path.startswith("crates/")
+        or path.endswith(".rs")
+        or path.endswith("Cargo.toml")
+        or path.endswith("Cargo.lock")
+    ]
     if symbols:
         lines = ["```mermaid", "classDiagram"]
         for symbol in symbols[:8]:
@@ -296,6 +312,120 @@ def _language(value: str) -> str:
     return "korean" if value.strip().casefold() == "korean" else "english"
 
 
+CONTROL_START = "<!-- opencode-review-control-v1"
+SENTINEL_PREFIX = "<!-- opencode-review-gate "
+
+
+def extract_model_prose(raw_output: str) -> str:
+    """Return the human review body, stripping sentinel and control JSON."""
+    lines: list[str] = []
+    skipping_control = False
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(SENTINEL_PREFIX):
+            continue
+        if stripped.startswith(CONTROL_START):
+            skipping_control = True
+            continue
+        if skipping_control:
+            if stripped.endswith("-->"):
+                skipping_control = False
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def format_structured_findings(
+    findings: Sequence[object],
+    changed_files: Sequence[str] | None = None,
+) -> str:
+    """Render control-plane findings as markdown without a fake workflow:1 anchor."""
+    allowed = list(changed_files or [])
+    blocks: list[str] = []
+    for index, raw in enumerate(findings, start=1):
+        if not isinstance(raw, Mapping):
+            continue
+        path = str(raw.get("path") or "unknown")
+        line = raw.get("line") or 0
+        location = f"{path}:{line}"
+        if (
+            path == CENTRAL_WORKFLOW_ANCHOR
+            and str(line) == "1"
+            and not coverage_anchor_allowed(CENTRAL_WORKFLOW_ANCHOR, allowed)
+        ):
+            location = "Review process"
+        title = str(raw.get("title") or "Finding")
+        severity = str(raw.get("severity") or "severity").upper()
+        blocks.append(
+            "\n".join(
+                [
+                    f"### {index}. {severity} {location} - {title}",
+                    f"- Problem: {raw.get('problem') or ''}",
+                    f"- Root cause: {raw.get('root_cause') or ''}",
+                    f"- Fix: {raw.get('fix_direction') or ''}",
+                    f"- Regression test: {raw.get('regression_test_direction') or ''}",
+                    "- Suggested diff: posted in this finding's inline review thread.",
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
+def _strip_forbidden_workflow_anchor(body: str, changed_files: Sequence[str]) -> str:
+    """Remove a synthesized central-workflow:1 citation unless that file changed."""
+    if coverage_anchor_allowed(CENTRAL_WORKFLOW_ANCHOR, changed_files):
+        return body
+    return body.replace(f"{CENTRAL_WORKFLOW_ANCHOR}:1", "Review process")
+
+
+def format_request_changes_review(
+    *,
+    model_prose: str,
+    structured_findings: str = "",
+    findings: Sequence[object] | None = None,
+    head_sha: str,
+    run_id: str,
+    run_attempt: str,
+    reason: str = "",
+    changed_files: Sequence[str] | None = None,
+) -> str:
+    """Keep model walkthrough/diagrams and append structured findings."""
+    allowed = list(changed_files or [])
+    prose = extract_model_prose(model_prose)
+    rendered = structured_findings.strip()
+    if not rendered and findings:
+        rendered = format_structured_findings(findings, allowed)
+    lines: list[str] = []
+    if prose:
+        lines.extend([prose, ""])
+    else:
+        lines.extend(
+            [
+                "## Verdict",
+                "",
+                "REQUEST_CHANGES",
+                "",
+            ]
+        )
+    joined = "\n".join(lines)
+    if rendered and rendered not in joined:
+        if "## Findings" not in joined:
+            lines.extend(["## Findings", ""])
+        lines.extend([rendered, ""])
+    if reason and f"- Reason: {reason}" not in "\n".join(lines):
+        lines.extend([f"- Reason: {reason}", ""])
+    identity = (
+        f"- Head SHA: `{head_sha}`",
+        f"- Workflow run: {run_id}",
+        f"- Workflow attempt: {run_attempt}",
+    )
+    existing = "\n".join(lines)
+    if identity[0] not in existing:
+        lines.extend([*identity, ""])
+    body = _strip_forbidden_workflow_anchor("\n".join(lines), allowed)
+    return body if body.endswith("\n") else body + "\n"
+
+
 def build_status_comment(
     *,
     result: str,
@@ -306,6 +436,9 @@ def build_status_comment(
     coverage_summary: str = "",
     language: str = "english",
     control_block: str = "",
+    model_pool_outcome: str = "",
+    verdict: str = "",
+    formal_review_url: str = "",
 ) -> str:
     """Build the issue-comment gate/status surface without review findings."""
     korean = _language(language) == "korean"
@@ -320,8 +453,17 @@ def build_status_comment(
         f"- Workflow attempt: {run_attempt}",
         f"- Gate result: `{result}`",
         f"- {coverage_label}: `{coverage_result}`",
-        "",
     ]
+    if model_pool_outcome:
+        label = "모델 풀" if korean else "Model pool"
+        lines.append(f"- {label}: `{model_pool_outcome}`")
+    if verdict:
+        label = "판정" if korean else "Verdict"
+        lines.append(f"- {label}: `{verdict}`")
+    if formal_review_url:
+        label = "정식 리뷰" if korean else "Formal review"
+        lines.append(f"- {label}: {formal_review_url}")
+    lines.append("")
     if coverage_result != "success":
         blocker = (
             "커버리지 증거 작업이 통과하지 않아 승인은 차단됩니다. 코드 리뷰는 별도 정식 리뷰 본문에 있습니다."
@@ -333,18 +475,9 @@ def build_status_comment(
             )
         )
         lines.extend([blocker, ""])
-    summary = coverage_summary.strip()
-    if summary:
-        lines.extend(
-            [
-                "## Coverage evidence",
-                "",
-                summary,
-                "",
-            ]
-        )
     if control_block.strip():
         lines.extend([control_block.strip(), ""])
+    _ = coverage_summary
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -482,6 +615,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     status.add_argument("--result", required=True)
     status.add_argument("--coverage-summary", default="")
     status.add_argument("--control-block", default="")
+    status.add_argument("--model-pool-outcome", default="")
+    status.add_argument("--verdict", default="")
+    status.add_argument("--formal-review-url", default="")
 
     fallback = subparsers.add_parser(
         "build-fallback-review", help="Render a source-backed diff review"
@@ -489,6 +625,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_common_identity_args(fallback)
     fallback.add_argument("--changed-files-file", type=Path, required=True)
     fallback.add_argument("--source-root", type=Path)
+
+    extract = subparsers.add_parser(
+        "extract-prose", help="Strip sentinel and control JSON from model output"
+    )
+    extract.add_argument("--model-body-file", type=Path, required=True)
+
+    request_changes = subparsers.add_parser(
+        "format-request-changes",
+        help="Keep model prose and append structured findings",
+    )
+    _add_common_identity_args(request_changes)
+    request_changes.add_argument("--model-body-file", type=Path)
+    request_changes.add_argument("--findings-json-file", type=Path)
+    request_changes.add_argument("--reason", default="")
+    request_changes.add_argument("--changed-files-file", type=Path)
 
     args = parser.parse_args(argv)
     if args.command == "emit-mermaid":
@@ -511,6 +662,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                 coverage_summary=args.coverage_summary,
                 language=args.language,
                 control_block=args.control_block,
+                model_pool_outcome=args.model_pool_outcome,
+                verdict=args.verdict,
+                formal_review_url=args.formal_review_url,
+            )
+        )
+        return 0
+    if args.command == "extract-prose":
+        prose = extract_model_prose(args.model_body_file.read_text(encoding="utf-8"))
+        sys.stdout.write(prose if prose.endswith("\n") else prose + "\n")
+        return 0
+    if args.command == "format-request-changes":
+        model_body = (
+            args.model_body_file.read_text(encoding="utf-8")
+            if args.model_body_file is not None
+            else ""
+        )
+        findings: list[object] = []
+        if args.findings_json_file is not None:
+            loaded = json.loads(args.findings_json_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                findings = loaded
+        changed = (
+            read_changed_files(args.changed_files_file)
+            if args.changed_files_file is not None
+            else []
+        )
+        sys.stdout.write(
+            format_request_changes_review(
+                model_prose=model_body,
+                findings=findings,
+                head_sha=args.head_sha,
+                run_id=args.run_id,
+                run_attempt=args.run_attempt,
+                reason=args.reason,
+                changed_files=changed,
             )
         )
         return 0
