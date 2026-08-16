@@ -159,6 +159,7 @@ def list_recent_pull_requests(
         return  # pragma: no cover
 
     def fetch_repo_prs(repository: str) -> list[dict[str, Any]]:
+        """Fetch pull requests for a specific repository."""
         repo_prs = []
         page = 1
         while True:
