@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -18,8 +19,15 @@ _DISPATCH_WORKFLOW_PATH = (
 _QUALITY_WORKFLOW_PATH = (
     _REPOSITORY_ROOT / ".github/workflows/opencode-rust-coverage-toolchain-quality-ci.yml"
 )
+_NIM_CONTRACT_PATH = (
+    _REPOSITORY_ROOT / "tests/test_pr_review_autofix_nvidia_nim_contract.py"
+)
 _LLVM_COV_PATH = "/usr/bin/llvm-cov-19"
 _LLVM_PROFDATA_PATH = "/usr/bin/llvm-profdata-19"
+_BLOB_SHA_PATTERN = re.compile(
+    r'^REVIEW_DISPATCH_BLOB_SHA = "([0-9a-f]{40})"$',
+    re.MULTILINE,
+)
 
 
 def _helper_text() -> str:
@@ -97,6 +105,25 @@ def test_quality_workflow_watches_the_trusted_dispatch_workflow() -> None:
     assert (
         '      - ".github/workflows/opencode-review-dispatch.yml"\n' in quality_workflow
     )
+    assert (
+        '      - "tests/test_pr_review_autofix_nvidia_nim_contract.py"\n'
+        in quality_workflow
+    )
+
+
+def test_review_dispatch_blob_sha_stays_paired_with_trusted_workflow() -> None:
+    """A dispatch.yml rewrite must update the independent review-dispatch blob pin."""
+
+    nim_contract = _NIM_CONTRACT_PATH.read_text(encoding="utf-8")
+    match = _BLOB_SHA_PATTERN.search(nim_contract)
+    assert match is not None
+    hashed = subprocess.run(
+        ["git", "hash-object", str(_DISPATCH_WORKFLOW_PATH)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert hashed.stdout.strip() == match.group(1)
 
 
 def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
@@ -114,6 +141,7 @@ def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
 
     assert watched_paths
     assert ".github/workflows/opencode-review-dispatch.yml" in watched_paths
+    assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in watched_paths
     for relative_path in watched_paths:
         assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path
 
