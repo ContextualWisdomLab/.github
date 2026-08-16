@@ -697,6 +697,58 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
     assert sched.fetch_pr("owner/repo", 1) == [{"repo": "owner/repo", "number": 1}]
 
 
+def test_graphql_utf8_errors_fall_back_to_rest(monkeypatch):
+    """Unicode GraphQL transport failures must not stall the org queue."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError("Command failed (1): gh api graphql\ngh: invalid UTF-8 string")
+
+    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
+
+    assert sched.is_transient_github_api_error(RuntimeError("invalid UTF-8 string"))
+    assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
+    assert sched.fetch_pr("owner/repo", 1) == [{"repo": "owner/repo", "number": 1}]
+
+
+def test_graphql_resource_limit_falls_back_to_rest(monkeypatch):
+    """A 58-PR GraphQL list that exceeds GitHub query cost uses REST instead of aborting."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError(
+            "GraphQL: Resource limits for this query exceeded. "
+            "(repository.pullRequests.nodes.0.url), "
+            "Resource limits for this query exceeded. "
+            "(repository.pullRequests.nodes.1.number)"
+        )
+
+    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(
+        sched,
+        "fetch_open_prs_rest",
+        lambda repo, max_prs: [{"repo": repo, "max": max_prs, "via": "rest"}],
+    )
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr_rest",
+        lambda repo, number: [{"repo": repo, "number": number, "via": "rest"}],
+    )
+
+    observed = RuntimeError(
+        "GraphQL: Resource limits for this query exceeded. "
+        "(repository.pullRequests.nodes.0.url)"
+    )
+    assert sched.is_transient_github_api_error(observed)
+    assert not sched.github_resource_inaccessible(observed)
+    assert sched.fetch_open_prs("ContextualWisdomLab/.github", 58) == [
+        {"repo": "ContextualWisdomLab/.github", "max": 58, "via": "rest"}
+    ]
+    assert sched.fetch_pr("ContextualWisdomLab/.github", 934) == [
+        {"repo": "ContextualWisdomLab/.github", "number": 934, "via": "rest"}
+    ]
+
+
 def test_graphql_read_errors_do_not_fall_back_for_schema_errors(monkeypatch):
     def fail_graphql(*args, **kwargs):
         raise RuntimeError("gh: Field 'unknown' doesn't exist on type 'PullRequest'")

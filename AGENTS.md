@@ -5,3 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
+GraphQL `invalid UTF-8 string` and query-cost overruns are transient; fall back to REST. Do not treat review/Checks wait as a blocker.

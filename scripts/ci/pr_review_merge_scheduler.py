@@ -630,6 +630,8 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "stream error",
     "temporary failure",
     "timeout",
+    "invalid UTF-8 string",
+    "Resource limits for this query exceeded",
     "unexpected end of JSON input",
     "unexpected EOF",
     "received from peer",

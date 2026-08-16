@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Merge-scheduler GraphQL fallback
+
+`TRANSIENT_GITHUB_API_ERRORS` includes `invalid UTF-8 string` and
+`Resource limits for this query exceeded`. Those failures retry, then
+fall back to REST so Unicode refs and large queues do not abort the
+org scan. Authorization and schema errors stay fail-closed.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid

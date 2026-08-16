@@ -114,6 +114,8 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
+- **GraphQL `invalid UTF-8 string` and query-cost overruns** are transient for the merge
+  scheduler. Fall back to REST; do not abort the org queue.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
