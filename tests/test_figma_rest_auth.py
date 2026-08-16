@@ -6,7 +6,6 @@ import io
 import json
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -116,57 +115,124 @@ def test_verify_rest_auth_treats_unexpected_status_as_transport() -> None:
     assert "503" in str(transport.value)
 
 
+class _FakeWhoamiResponse:
+    """Minimal ``HTTPResponse`` stand-in for ``HTTPSConnection.getresponse``."""
+
+    def __init__(self, status: int, body: bytes) -> None:
+        """Record the canned status and body."""
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        """Return the canned body."""
+        return self._body
+
+
+class _FakeWhoamiConnection:
+    """Record the pinned Figma origin used by ``default_opener``."""
+
+    last: _FakeWhoamiConnection | None = None
+
+    def __init__(self, host: str, timeout: int = 0) -> None:
+        """Capture the TLS host and timeout."""
+        self.host = host
+        self.timeout = timeout
+        self.method = ""
+        self.path = ""
+        self.headers: dict[str, str] = {}
+        self.closed = False
+        self._status = 200
+        self._body = b'{"handle":"ok"}'
+        type(self).last = self
+
+    def request(self, method: str, path: str, headers: dict[str, str] | None = None) -> None:
+        """Record the fixed GET /v1/me call."""
+        self.method = method
+        self.path = path
+        self.headers = dict(headers or {})
+
+    def getresponse(self) -> _FakeWhoamiResponse:
+        """Return the canned whoami response."""
+        return _FakeWhoamiResponse(self._status, self._body)
+
+    def close(self) -> None:
+        """Mark the connection closed."""
+        self.closed = True
+
+
+def test_default_opener_rejects_non_whoami_urls() -> None:
+    """``file://`` and other caller URLs never reach the TLS sink."""
+    with pytest.raises(auth.FigmaAuthError) as refused:
+        auth.default_opener("file:///etc/passwd", {auth.TOKEN_HEADER: TOKEN})
+    assert refused.value.exit_code == auth.EXIT_TRANSPORT
+    assert "refuses" in str(refused.value)
+    assert TOKEN not in str(refused.value)
+
+
 def test_default_opener_returns_http_error_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTPError is mapped to ``(status, body)`` so callers can classify 401/403."""
+    """Non-200 Figma statuses stay as ``(status, body)`` for auth classification."""
 
-    def fake_urlopen(request: object, timeout: int = 0) -> object:
-        del request, timeout
-        raise HTTPError(auth.WHOAMI_URL, 403, "Forbidden", hdrs=None, fp=io.BytesIO(b"nope"))
+    class ForbiddenConnection(_FakeWhoamiConnection):
+        """Return HTTP 403 from the pinned origin."""
 
-    monkeypatch.setattr(auth.urllib.request, "urlopen", fake_urlopen)
+        def __init__(self, host: str, timeout: int = 0) -> None:
+            """Initialize a 403 canned response."""
+            super().__init__(host, timeout)
+            self._status = 403
+            self._body = b"nope"
+
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", ForbiddenConnection)
     status, body = auth.default_opener(auth.WHOAMI_URL, {auth.TOKEN_HEADER: TOKEN})
     assert status == 403
     assert body == b"nope"
+    assert ForbiddenConnection.last is not None
+    assert ForbiddenConnection.last.closed is True
 
 
 def test_default_opener_reads_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A successful urllib response yields its status and body bytes."""
-
-    class FakeResponse:
-        """Minimal urlopen context manager."""
-
-        status = 200
-
-        def read(self) -> bytes:
-            """Return a canned body."""
-            return b'{"handle":"ok"}'
-
-        def __enter__(self) -> FakeResponse:
-            """Return the fake response."""
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            """No cleanup."""
-
-    monkeypatch.setattr(auth.urllib.request, "urlopen", lambda *args, **kwargs: FakeResponse())
+    """A successful HTTPS response yields its status and body bytes."""
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", _FakeWhoamiConnection)
     status, body = auth.default_opener(auth.WHOAMI_URL, {auth.TOKEN_HEADER: TOKEN})
     assert status == 200
     assert body == b'{"handle":"ok"}'
+    connection = _FakeWhoamiConnection.last
+    assert connection is not None
+    assert connection.host == "api.figma.com"
+    assert connection.timeout == auth.REQUEST_TIMEOUT_SECONDS
+    assert connection.method == "GET"
+    assert connection.path == "/v1/me"
+    assert connection.headers == {auth.TOKEN_HEADER: TOKEN}
+    assert connection.closed is True
 
 
-def test_default_opener_wraps_url_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_opener_wraps_os_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """Network failures become ``EXIT_TRANSPORT`` without leaking the token."""
 
-    def failing_urlopen(request: object, timeout: int = 0) -> object:
-        del request, timeout
-        raise URLError(reason="timed out")
+    class FailingConnection(_FakeWhoamiConnection):
+        """Raise a transport error after the host is already pinned."""
 
-    monkeypatch.setattr(auth.urllib.request, "urlopen", failing_urlopen)
+        def request(self, method: str, path: str, headers: dict[str, str] | None = None) -> None:
+            """Fail after recording the request."""
+            super().request(method, path, headers)
+            raise TimeoutError("timed out")
+
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", FailingConnection)
     with pytest.raises(auth.FigmaAuthError) as transport:
         auth.default_opener(auth.WHOAMI_URL, {auth.TOKEN_HEADER: TOKEN})
     assert transport.value.exit_code == auth.EXIT_TRANSPORT
     assert "timed out" in str(transport.value)
     assert TOKEN not in str(transport.value)
+    assert FailingConnection.last is not None
+    assert FailingConnection.last.closed is True
+
+
+def test_helper_pins_https_origin_instead_of_dynamic_urllib() -> None:
+    """Semgrep ``dynamic-urllib-use-detected`` must not apply to this helper."""
+    source = Path(auth.__file__).read_text(encoding="utf-8")
+    assert "urlopen(" not in source
+    assert "http.client.HTTPSConnection" in source
+    assert '"api.figma.com"' in source
+    assert '"/v1/me"' in source
 
 
 def test_main_writes_identity_and_error_channels() -> None:
