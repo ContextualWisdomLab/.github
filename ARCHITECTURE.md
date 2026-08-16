@@ -29,8 +29,22 @@ flowchart LR
 
 The hash-pinned OpenCode review lock includes `pytest-asyncio==1.4.0`.
 `scripts/ci/ensure_opencode_asyncio_toolchain.sh` fail-closed imports that
-plugin. The independent review-dispatch workflow remains the hashed
-review-agent key blob.
+plugin after the quality job installs the lock. The independent
+review-dispatch workflow remains the hashed review-agent key blob.
+
+```mermaid
+flowchart LR
+  Lock["requirements-opencode-review-ci-hashes.txt"]
+  Quality["trusted-uv-materializer-quality-ci"]
+  Helper["ensure_opencode_asyncio_toolchain.sh"]
+  Image["Coverage image on merge"]
+  Buyer["Downstream marked asyncio suite"]
+
+  Lock --> Quality
+  Quality --> Helper
+  Lock --> Image
+  Image --> Buyer
+```
 
 ## Hourly NVIDIA NIM repair gate
 

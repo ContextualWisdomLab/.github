@@ -5,4 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-Coverage sandbox asyncio execution is pinned through `requirements-opencode-review-ci.txt` and `scripts/ci/ensure_opencode_asyncio_toolchain.sh`; do not rewrite hashed `opencode-review-dispatch.yml` for that import.
+Coverage sandbox asyncio execution is pinned through `requirements-opencode-review-ci.txt` and `scripts/ci/ensure_opencode_asyncio_toolchain.sh`; quality CI must run that helper after the hash-lock install. Do not rewrite hashed `opencode-review-dispatch.yml` for that import.

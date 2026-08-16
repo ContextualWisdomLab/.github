@@ -6,24 +6,30 @@ on:
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/ensure_opencode_asyncio_toolchain.sh"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "tests/test_opencode_asyncio_toolchain_contract.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-opencode-review-ci.txt"
       - "pyproject.toml"
   push:
     branches: [main]
     paths:
       - ".github/workflows/trusted-uv-materializer-quality-ci.yml"
       - "scripts/ci/materialize_base_python_requirements.py"
+      - "scripts/ci/ensure_opencode_asyncio_toolchain.sh"
       - "tests/conftest.py"
       - "tests/test_materialize*.py"
       - "tests/test_trusted_uv*.py"
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
+      - "tests/test_opencode_asyncio_toolchain_contract.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-opencode-review-ci.txt"
       - "pyproject.toml"
 
 concurrency:
@@ -109,6 +115,9 @@ jobs:
       - name: Install hash-locked quality tooling
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
+      - name: Verify asyncio coverage toolchain imports
+        run: bash scripts/ci/ensure_opencode_asyncio_toolchain.sh
+
       - name: Run trusted uv tests with complete branch coverage
         run: |
           cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
@@ -159,6 +168,7 @@ jobs:
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
             tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            tests/test_opencode_asyncio_toolchain_contract.py \
             tests/test_repository_branch_coverage_javascript_and_noema.py \
             tests/test_repository_branch_coverage_review_schedulers.py \
             tests/test_repository_branch_coverage_execution_sandboxes.py \

@@ -9,6 +9,7 @@ Semantic Versioning where the repository publishes a release.
 ### Added
 
 - Added hash-pinned `pytest-asyncio==1.4.0` and `typing-extensions==4.16.0` plus `scripts/ci/ensure_opencode_asyncio_toolchain.sh` so the coverage sandbox can execute marked asyncio tests without rewriting the hashed review-dispatch workflow.
+- Execute that asyncio helper on the hash-locked quality job and collect a marked coroutine the same way a downstream buyer suite does, so an unread helper cannot claim the runtime is present.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 - Added a permanent exact-head contract workflow for the hourly review-repair scheduler, immutable reusable-workflow source, NVIDIA NIM model boundary, credential isolation, and fail-closed unattended-agent permissions.
