@@ -2,7 +2,7 @@
 
 The central Strix workflow must not turn a provider-side model-catalog 404 into a
 security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate before using the existing GitHub Models
+approved NVIDIA NIM candidate before using the existing GitHub Models
 fallbacks, while ordinary application 404 output remains non-retryable.
 """
 
@@ -19,7 +19,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 DEFAULT_NVIDIA_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
-FREE_NVIDIA_FALLBACK = (
+PRIMARY_NVIDIA_FALLBACK = (
+    "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1"
+)
+SECONDARY_NVIDIA_FALLBACK = (
     "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
 )
 RETIRED_PRIMARY_MODEL = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
@@ -171,8 +174,8 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Prefer a documented hosted NIM and another NIM before GitHub."""
+    def test_workflow_uses_bounded_nvidia_fallback_plan(self) -> None:
+        """Prefer Ultra, then Super, before GitHub Models."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         default_expression = (
@@ -187,8 +190,8 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} github_models/openai/o3 "
-            "github_models/openai/gpt-5-chat'",
+            f"'{PRIMARY_NVIDIA_FALLBACK} {SECONDARY_NVIDIA_FALLBACK} "
+            "github_models/openai/o3 github_models/openai/gpt-5-chat'",
             workflow,
         )
 

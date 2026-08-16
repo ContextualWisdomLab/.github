@@ -26,6 +26,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Reserved 1800 seconds of each NVIDIA NIM Strix attempt so a second hosted NIM candidate still receives test-time compute, added Llama-3.1-Nemotron-Ultra-253B before GitHub Models, and skipped remaining `github_models/*` fallbacks after a same-line HTTP 410 `github_models_retirement_brownout` without neutralizing reported vulnerabilities. The decision record now cites CWE-770 so one hung NIM attempt cannot allocate the remaining scan budget without an independent process limit.
+- Treated only a terminated `Error code: 410` / `HTTP 410` (or the phrase `retirement brownout`) as GitHub Models family-dead evidence, so an issue `#410` or a longer status such as `4100` / `4104` on a brownout-mentioned line cannot skip remaining fallbacks.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

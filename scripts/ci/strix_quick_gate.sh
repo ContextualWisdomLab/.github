@@ -30,6 +30,7 @@ ACTIVE_REPORTS_DIR="$STRIX_RUNTIME_DIR/reports"
 ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
 STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
+STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS="${STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS:-1800}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
 STRIX_DISABLE_PR_SCOPING="${STRIX_DISABLE_PR_SCOPING:-1}"
 # shellcheck disable=SC2034  # consumed by sourced normalize_model helper
@@ -266,6 +267,17 @@ is_vertex_model() {
 is_gemini_model() {
 	case "$1" in
 	gemini/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_nvidia_nim_model() {
+	case "$1" in
+	nvidia_nim/*)
 		return 0
 		;;
 	*)
@@ -748,6 +760,7 @@ fi
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS" "STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 require_non_negative_integer "$STRIX_PROCESS_TIMEOUT_SECONDS" "STRIX_PROCESS_TIMEOUT_SECONDS"
+require_non_negative_integer "$STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS" "STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS"
 require_non_negative_integer "$STRIX_TOTAL_TIMEOUT_SECONDS" "STRIX_TOTAL_TIMEOUT_SECONDS"
 case "$STRIX_FAIL_ON_PROVIDER_SIGNAL" in
 0 | 1)
@@ -2347,6 +2360,13 @@ run_strix_once() {
 			total_budget_limited_timeout=1
 		fi
 	fi
+	if is_nvidia_nim_model "$(normalize_model "$model")" &&
+		[ "$STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS" -gt 0 ]; then
+		if [ "$timeout_seconds" -eq 0 ] ||
+			[ "$STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS" -lt "$timeout_seconds" ]; then
+			timeout_seconds="$STRIX_NVIDIA_NIM_PROCESS_TIMEOUT_SECONDS"
+		fi
+	fi
 	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
 		return 2
 	fi
@@ -2827,6 +2847,24 @@ is_github_models_unavailable_model_error() {
 		return 0
 	fi
 
+	if is_github_models_retirement_brownout_error; then
+		return 0
+	fi
+
+	return 1
+}
+
+is_github_models_retirement_brownout_error() {
+	# Classify only one bounded provider-error line that carries GitHub
+	# Models context and the scheduled-retirement 410. Cross-line assembly
+	# and application 410s remain non-retryable so target output cannot
+	# spoof a family-level skip of remaining github_models fallbacks.
+	if grep -Ei 'github_models_retirement_brownout' "$STRIX_LOG" |
+		grep -Ei '(GitHub Models|github_models|models\.github\.ai)' |
+		grep -Eiq '(Error code:[[:space:]]*410([^0-9]|$)|HTTP[[:space:]]+410([^0-9]|$)|retirement brownout)'; then
+		return 0
+	fi
+
 	return 1
 }
 
@@ -2973,6 +3011,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_github_models_retirement_brownout_error; then
 		return 0
 	fi
 
@@ -3940,12 +3982,17 @@ run_current_target_scan() {
 	read -r -a FALLBACK_MODELS <<<"$FALLBACK_MODELS_RAW"
 
 	fallback_tried=0
+	skip_remaining_github_models=0
 	for candidate_raw in "${FALLBACK_MODELS[@]}"; do
 		candidate="$(normalize_model "$candidate_raw")"
 		if [ -z "$candidate" ] || [ "$candidate" = "$PRIMARY_MODEL" ]; then
 			if [ -n "$candidate" ]; then
 				echo "Skipping fallback model '$candidate' — same as primary model." >&2
 			fi
+			continue
+		fi
+		if [ "$skip_remaining_github_models" -eq 1 ] && is_github_models_model "$candidate"; then
+			echo "Skipping fallback model '$candidate' — GitHub Models retirement brownout already failed this family." >&2
 			continue
 		fi
 		if [ "$TOTAL_TIMEOUT_EXCEEDED" -eq 1 ]; then
@@ -3972,6 +4019,11 @@ run_current_target_scan() {
 		fi
 		if [ "$fallback_scan_rc" -eq 2 ]; then
 			return 2
+		fi
+
+		if is_github_models_model "$candidate" && is_github_models_retirement_brownout_error; then
+			skip_remaining_github_models=1
+			echo "GitHub Models retirement brownout; skipping remaining github_models fallbacks." >&2
 		fi
 
 		local strict_fallback_provider_signal=0
