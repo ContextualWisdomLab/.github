@@ -23,6 +23,17 @@ flowchart LR
   STRIX --> SCH
 ```
 
+## PR automation loop cadence (2026-08-15)
+
+Scheduler cadence is now `*/30 * * * *` for per-repository queue scans, plus an
+hourly `0 * * * *` organization sweep that reconciles late approvals/checks
+arriving after the last event-driven run. The scheduler now also ignores the
+control-plane `scan-pr-queue` check in merge blocking logic so transient control
+workflow churn does not stall current-head merge transitions. If check metadata is
+temporarily unavailable, scheduler summaries now surface the next UTC heartbeat
+timestamp so manual operators can confirm the next autonomous reconciliation
+cycle without external tooling.
+
 ## Bounded requirement includes (2026-08-14)
 
 Coverage materialize treats a lone `--require-hashes` line as non-evidence.

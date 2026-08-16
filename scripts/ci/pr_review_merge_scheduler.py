@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -125,6 +125,11 @@ OPENCODE_WORKFLOW_NAMES = {
 }
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
+SCHEDULER_CONTROL_PLANE_CHECKS = {"scan-pr-queue"}
+SCHEDULER_WORKFLOW_NAMES = {
+    "PR Review Merge Scheduler",
+    "Required PR Review Merge Scheduler",
+}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -1416,16 +1421,28 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     }
     for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
         conclusion = (node.get("conclusion") or "").upper()
+        check_name = node.get("name") or "check-run"
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        if check_name in SCHEDULER_CONTROL_PLANE_CHECKS and (
+            not workflow or workflow in SCHEDULER_WORKFLOW_NAMES
+        ):
+            continue
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
             if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
                 continue
-            failed.append(node.get("name") or "check-run")
+            failed.append(check_name)
     for node in status_contexts:
+        context_name = node.get("context") or "status-context"
+        if context_name in SCHEDULER_CONTROL_PLANE_CHECKS:
+            continue
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
-            failed.append(node.get("context") or "status-context")
+            failed.append(context_name)
     return failed
 
 
@@ -2774,6 +2791,17 @@ def print_summary(
     )
 
 
+def next_hourly_heartbeat_line(now: datetime | None = None) -> str:
+    """Return a plain-language UTC one-hour heartbeat marker for scheduler users."""
+    cursor = now if now is not None else datetime.now(timezone.utc)
+    next_tick = cursor.replace(
+        minute=0,
+        second=0,
+        microsecond=0,
+    ) + timedelta(hours=1)
+    return f"Next scheduler heartbeat: `{next_tick:%Y-%m-%d %H:%M:%S}Z` (UTC)"
+
+
 def markdown_cell(value: object) -> str:
     """Escape a value for a compact GitHub Actions summary table cell."""
     return str(value).replace("|", "\\|").replace("\n", "<br>")
@@ -2806,6 +2834,7 @@ def write_actions_summary(
         f"- Dry run: `{str(dry_run).lower()}`",
         f"- Inspected PRs: `{len(decisions)}`",
         f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
+        f"- {next_hourly_heartbeat_line()}",
         "",
         "| PR | Action | Reason |",
         "| ---: | --- | --- |",
@@ -3215,6 +3244,42 @@ def self_test() -> None:
         },
         "statusCheckRollup": {"contexts": {"nodes": []}},
     }
+    assert failed_status_checks(sample) == []
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {
+            "__typename": "CheckRun",
+            "name": "scan-pr-queue",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "checkSuite": {
+                "workflowRun": {
+                    "workflow": {
+                        "name": "PR Review Merge Scheduler",
+                    }
+                }
+            },
+        },
+    ]
+    assert failed_status_checks(sample) == []
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {
+            "__typename": "CheckRun",
+            "name": "scan-pr-queue",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "checkSuite": {"workflowRun": {"workflow": {}}},
+        },
+    ]
+    assert failed_status_checks(sample) == []
+    sample["statusCheckRollup"]["contexts"]["nodes"] = [
+        {
+            "__typename": "StatusContext",
+            "context": "scan-pr-queue",
+            "state": "FAILURE",
+        },
+    ]
+    assert failed_status_checks(sample) == []
+    sample["statusCheckRollup"]["contexts"]["nodes"] = []
     assert has_current_head_approval(sample)
     assert not has_current_head_changes_requested(sample)
     decision = inspect_pr(
