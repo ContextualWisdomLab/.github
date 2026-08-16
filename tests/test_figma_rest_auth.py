@@ -41,6 +41,15 @@ def test_read_access_token_strips_whitespace() -> None:
     assert auth.read_access_token({auth.TOKEN_ENV_NAME: f"  {TOKEN}\n"}) == TOKEN
 
 
+def test_read_access_token_rejects_embedded_control_characters() -> None:
+    """A multiline secret cannot reach ``X-Figma-Token`` (CWE-113)."""
+    with pytest.raises(auth.FigmaAuthError) as control:
+        auth.read_access_token({auth.TOKEN_ENV_NAME: f"{TOKEN}\r\ninjected"})
+    assert control.value.exit_code == auth.EXIT_MISSING_TOKEN
+    assert "control" in str(control.value)
+    assert TOKEN not in str(control.value)
+
+
 def test_identity_field_normalizes_scalar_values() -> None:
     """Booleans and non-text values never become identity tokens."""
     assert auth.identity_field(True) is None
@@ -265,6 +274,11 @@ def test_sanitize_request_headers_allows_only_figma_token() -> None:
     with pytest.raises(auth.FigmaAuthError) as blank:
         auth.sanitize_request_headers({auth.TOKEN_HEADER: "  "})
     assert blank.value.exit_code == auth.EXIT_TRANSPORT
+    with pytest.raises(auth.FigmaAuthError) as control:
+        auth.sanitize_request_headers({auth.TOKEN_HEADER: f"{TOKEN}\r\nHost: evil"})
+    assert control.value.exit_code == auth.EXIT_TRANSPORT
+    assert "control" in str(control.value)
+    assert TOKEN not in str(control.value)
 
 
 def test_read_bounded_body_rejects_oversize_and_nonpositive_limits() -> None:

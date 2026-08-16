@@ -54,11 +54,17 @@ def read_access_token(environ: Mapping[str, str]) -> str:
             "token and store it as this secret; do not commit it.",
             EXIT_MISSING_TOKEN,
         )
+    if any(ord(character) < 32 for character in token):
+        raise FigmaAuthError(
+            f"{TOKEN_ENV_NAME} contains control characters. Store a "
+            "single-line token; do not paste a multiline secret.",
+            EXIT_MISSING_TOKEN,
+        )
     return token
 
 
 def sanitize_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    """Allow only ``X-Figma-Token`` so a ``Host`` header cannot retarget TLS."""
+    """Allow only ``X-Figma-Token`` so a ``Host`` header never reaches request."""
     sanitized: dict[str, str] = {}
     for name, value in headers.items():
         if name.lower() != TOKEN_HEADER.lower():
@@ -70,6 +76,11 @@ def sanitize_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
         if not value.strip():
             raise FigmaAuthError(
                 "Figma REST token header is empty.",
+                EXIT_TRANSPORT,
+            )
+        if any(ord(character) < 32 for character in value):
+            raise FigmaAuthError(
+                "Figma REST token header contains control characters.",
                 EXIT_TRANSPORT,
             )
         sanitized[TOKEN_HEADER] = value
