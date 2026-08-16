@@ -856,6 +856,173 @@ def test_changed_file_and_verification_posture_detection():
     )
 
 
+def test_approval_must_name_every_current_head_changed_file(tmp_path, monkeypatch):
+    """A CodeRabbit-thin approval that names one of two files cannot pass."""
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text(
+        "scripts/ci/example.py\n.github/workflows/strix.yml\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+
+    assert norm.unnamed_changed_files(
+        "Reviewed scripts/ci/example.py.",
+        FULL_SUMMARY,
+    ) == (".github/workflows/strix.yml",)
+    assert (
+        norm.unnamed_changed_files(
+            "Reviewed scripts/ci/example.py and .github/workflows/strix.yml.",
+            FULL_SUMMARY,
+        )
+        == ()
+    )
+    assert (
+        norm.unnamed_changed_files(
+            "Reviewed scripts/ci/example.py.bak only.",
+            "Coverage: 100%.",
+        )
+        == (".github/workflows/strix.yml", "scripts/ci/example.py")
+    )
+    assert norm.changed_file_named_in_text(
+        "Reviewed scripts/ci/example.py:7.", "scripts/ci/example.py"
+    )
+    assert not norm.changed_file_named_in_text(
+        "Reviewed scripts/ci/example.py.bak.", "scripts/ci/example.py"
+    )
+    assert not norm.changed_file_named_in_text("", "scripts/ci/example.py")
+    assert not norm.changed_file_named_in_text("scripts/ci/example.py", "")
+    assert norm._path_token_continues("scripts/ci/example.py.bak", 22)
+    assert not norm._path_token_continues("scripts/ci/example.py.", 22)
+    assert not norm._path_token_continues("x", -1)
+    assert not norm._path_token_continues("x", 1)
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(reason="Reviewed scripts/ci/example.py only."),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any(
+        "does not name every current-head changed file" in reason
+        and ".github/workflows/strix.yml" in reason
+        for reason in reasons
+    )
+
+    reasons.clear()
+    accepted = norm.valid_control(
+        control(
+            reason=(
+                "Reviewed scripts/ci/example.py and .github/workflows/strix.yml "
+                "on the current head."
+            )
+        ),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+        rejection_reasons=reasons,
+    )
+    assert accepted is not None
+    assert accepted["result"] == "APPROVE"
+
+    monkeypatch.delenv("OPENCODE_CHANGED_FILES_FILE", raising=False)
+    norm.current_changed_files.cache_clear()
+    assert norm.unnamed_changed_files("any reason", "any summary") == ()
+
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+    monkeypatch.setattr(norm, "repair_approval_summary", lambda reason, summary: summary)
+    monkeypatch.setattr(
+        norm,
+        "repair_approval_reason",
+        lambda reason, summary: reason.replace(".github/workflows/strix.yml", ""),
+    )
+    reasons.clear()
+    assert (
+        norm.valid_control(
+            control(
+                reason=(
+                    "Reviewed scripts/ci/example.py and .github/workflows/strix.yml "
+                    "on the current head."
+                )
+            ),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any(
+        "does not name every current-head changed file" in reason
+        for reason in reasons
+    )
+
+
+def test_valid_control_rejects_kind_contradiction_after_naming_every_file(
+    tmp_path, monkeypatch
+):
+    """Naming every path still fails when the approval denies source-file kinds."""
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(
+                reason="Reviewed scripts/ci/example.py with no source changes.",
+                summary=FULL_SUMMARY,
+            ),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any("contradicts changed file kinds" in reason for reason in reasons)
+
+
+def test_valid_control_rejects_material_trivialization_after_naming_every_file(
+    tmp_path, monkeypatch
+):
+    """Naming every path still fails when the approval calls the change a string typo."""
+
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
+    seal_artifacts(tmp_path, changed_files)
+    norm.current_changed_files.cache_clear()
+
+    reasons: list[str] = []
+    assert (
+        norm.valid_control(
+            control(
+                reason="Reviewed scripts/ci/example.py; no tests are needed.",
+                summary=FULL_SUMMARY,
+            ),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any("trivializes material changed files" in reason for reason in reasons)
+
+
 def test_actual_changed_file_detection_prefers_current_head_file_list(
     tmp_path, monkeypatch
 ):
@@ -1819,8 +1986,8 @@ M\tsrc/test/java/example/LogSanitizerTest.java
 
     candidate = control(
         reason=(
-            "src/main/java/example/LogSanitizer.java hardens log input and adds "
-            "a regression test."
+            "src/main/java/example/LogSanitizer.java hardens log input and "
+            "src/test/java/example/LogSanitizerTest.java adds a regression test."
         ),
         summary=FULL_SUMMARY.replace(
             "scripts/ci/example.py",
@@ -1959,7 +2126,9 @@ M\t.github/workflows/r.yml
 
     repaired = norm.valid_control(
         control(
-            reason="Dependency version bump with no source changes",
+            reason=(
+                "Dependency version bump in .github/workflows/r.yml with no source changes"
+            ),
             summary=(
                 "Approval sufficiency: Dependency version bump with no source changes. "
                 "Verification posture: No verification needed for workflow-only updates. "
@@ -2157,7 +2326,10 @@ M\tscripts/ci/test_strix_quick_gate.sh
 
     repaired = norm.valid_control(
         control(
-            reason="Current-head evidence was reviewed.",
+            reason=(
+                "Current-head .github/workflows/strix.yml and "
+                "scripts/ci/test_strix_quick_gate.sh were reviewed."
+            ),
             summary=(
                 "The change is a simple typo fix in a string with no functional impact. "
                 "No tests are needed for a string change."

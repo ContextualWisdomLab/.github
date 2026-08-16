@@ -25,6 +25,12 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Per-file OpenCode APPROVE
+
+`valid_control` rejects APPROVE unless every current-head changed path
+appears as a whole token. A longer sibling (`example.py.bak`) is not a
+disposition of `example.py`.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid

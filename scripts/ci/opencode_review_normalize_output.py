@@ -854,13 +854,77 @@ def contradicts_material_changed_file_scope(reason: str, summary: str) -> bool:
     return any(phrase in combined for phrase in MATERIAL_CHANGE_FALSE_PHRASES)
 
 
+_PATH_TOKEN_BODY = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+/"
+)
+
+
+def _path_token_continues(text: str, index: int) -> bool:
+    """Return True when ``text[index]`` extends a repository path token."""
+    if index < 0 or index >= len(text):
+        return False
+    char = text[index]
+    if char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+/":
+        return True
+    if char == "." and index + 1 < len(text) and text[index + 1] in _PATH_TOKEN_BODY:
+        return True
+    return False
+
+
+def changed_file_named_in_text(text: str, path: str) -> bool:
+    """Return True when ``path`` appears as a whole path token in ``text``.
+
+    A longer sibling such as ``example.py.bak`` contains ``example.py`` as a
+    prefix substring. That is not a disposition of the shorter file. A
+    sentence period after ``.yml`` is not a continuation.
+    """
+
+    if not path or not text:
+        return False
+    start = 0
+    while True:
+        index = text.find(path, start)
+        if index < 0:
+            return False
+        after = index + len(path)
+        if not _path_token_continues(text, after) and not _path_token_continues(
+            text, index - 1
+        ):
+            return True
+        start = index + 1
+
+
 def mentions_actual_changed_file(reason: str, summary: str) -> bool:
     """Return whether an approval names an exact current-head changed file."""
     changed_files = current_changed_files()
     if not changed_files:
         return False
     combined = f"{reason}\n{summary}"
-    return any(changed_file in combined for changed_file in changed_files)
+    return any(
+        changed_file_named_in_text(combined, changed_file)
+        for changed_file in changed_files
+    )
+
+
+def unnamed_changed_files(reason: str, summary: str) -> tuple[str, ...]:
+    """Return current-head changed files the approval never names.
+
+    Naming one file is not a file-by-file walk. Live OpenCode approvals that
+    cited a single path while leaving the rest unnamed were thinner than the
+    CodeRabbit per-file contract the buyer asked for.
+    """
+
+    changed_files = current_changed_files()
+    if not changed_files:
+        return ()
+    combined = f"{reason}\n{summary}"
+    return tuple(
+        sorted(
+            path
+            for path in changed_files
+            if not changed_file_named_in_text(combined, path)
+        )
+    )
 
 
 def mentions_verification_posture(reason: str, summary: str) -> bool:
@@ -1289,6 +1353,12 @@ def valid_control(
             return reject("approval admits missing structural review")
         if not mentions_actual_changed_file(reason, summary):
             return reject("approval does not cite changed-file evidence")
+        unnamed = unnamed_changed_files(reason, summary)
+        if unnamed:
+            return reject(
+                "approval does not name every current-head changed file: "
+                + ", ".join(unnamed)
+            )
         if not mentions_verification_posture(reason, summary):
             return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
@@ -1311,6 +1381,12 @@ def valid_control(
             return reject("review prose does not follow the preferred PR language")
         if not mentions_actual_changed_file(reason, summary):
             return reject("approval does not cite changed-file evidence")
+        unnamed = unnamed_changed_files(reason, summary)
+        if unnamed:
+            return reject(
+                "approval does not name every current-head changed file: "
+                + ", ".join(unnamed)
+            )
         if not mentions_verification_posture(reason, summary):
             return reject("approval does not include the required verification posture")
         if not mentions_full_coverage(reason, summary):
