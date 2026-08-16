@@ -66,6 +66,13 @@ def test_loader_rejects_non_finite_json_constants() -> None:
         "api.localhost",
         "169.254.169.254",
         "127.0.0.1",
+        "2130706433",
+        "2851992574",
+        "127.1",
+        "127.0.1",
+        "0x7f000001",
+        "0x7f.0.0.1",
+        "a" * 254,
         "metadata.google.internal",
         "metadata.goog",
         "OBJECTS.EXAMPLE.COM",
@@ -77,6 +84,23 @@ def test_exact_dns_hosts_reject_local_metadata_literal_and_noncanonical_names(
 ) -> None:
     """An exact allowlist must not admit metadata, IP, Unicode, or case aliases."""
     assert validator.is_exact_dns_host(host) is False
+
+
+def test_exact_dns_hosts_still_accept_numeric_dns_labels() -> None:
+    """A numeric label is allowed only when the name is not an IP alias."""
+    assert validator.is_exact_dns_host("1.s3.amazonaws.com")
+    assert validator.is_exact_dns_host("0xz.example.com")
+    assert validator.is_exact_dns_host("0x.example.com")
+
+
+def test_explicit_allowlist_rejects_decimal_metadata_ip_alias() -> None:
+    """Decimal IPv4 aliases must not enter an explicit host allowlist."""
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
+    contract["endpoint_policy"]["host_allowlist"] = ["2851992574"]
+    contract["endpoint_policy"].pop("custom_endpoint", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="exact DNS"):
+        validator.validate_contract(contract)
 
 
 def test_denied_private_network_policy_rejects_single_label_hosts() -> None:

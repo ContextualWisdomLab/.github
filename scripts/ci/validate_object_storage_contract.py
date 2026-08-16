@@ -11,6 +11,7 @@ constraints, never as a certification claim.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import sys
 from collections.abc import Mapping, Sequence
@@ -41,6 +42,7 @@ FORBIDDEN_EXACT_HOSTS = frozenset(
     {"localhost", "metadata.google.internal", "metadata.goog"}
 )
 MAX_TCP_PORT = 65535
+MAX_DNS_HOST_LENGTH = 253
 ALLOWED_TOP_LEVEL = (
     "schema_version",
     "capability",
@@ -112,13 +114,35 @@ def _is_dns_label_char(char: str) -> bool:
     return char.isascii() and (char.islower() or char.isdigit() or char == "-")
 
 
+def _label_is_integer_token(label: str) -> bool:
+    """Return whether *label* is a decimal or ``0x`` hexadecimal integer token."""
+    if label.isdigit() and label.isascii():
+        return True
+    return (
+        label.startswith("0x")
+        and len(label) > 2
+        and all(char in "0123456789abcdef" for char in label[2:])
+    )
+
+
+def _is_ip_literal_or_alias(host: str) -> bool:
+    """Return whether *host* is an IP literal or a numeric IP alias."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return True
+    return all(_label_is_integer_token(label) for label in host.split("."))
+
+
 def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
-    Localhost, link-local metadata names, IPv4 literals, Unicode, and
-    case aliases are not exact allowlist members.
+    Localhost, link-local metadata names, IP literals, decimal or hexadecimal
+    IP aliases, Unicode, and case aliases are not exact allowlist members.
     """
-    if not host or not isinstance(host, str):
+    if not isinstance(host, str) or not host or len(host) > MAX_DNS_HOST_LENGTH:
         return False
     if any(char in host for char in "*:/@ \t\\"):
         return False
@@ -128,9 +152,9 @@ def is_exact_dns_host(host: str) -> bool:
         return False
     if host in FORBIDDEN_EXACT_HOSTS or host.endswith(".localhost"):
         return False
-    labels = host.split(".")
-    if len(labels) == 4 and all(label.isdigit() and label.isascii() for label in labels):
+    if _is_ip_literal_or_alias(host):
         return False
+    labels = host.split(".")
     for label in labels:
         if not label or len(label) > 63:
             return False
