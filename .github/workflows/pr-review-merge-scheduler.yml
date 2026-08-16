@@ -99,7 +99,10 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
+  # scan-pr-queue is a required check. Cancelling an in-flight same-head run
+  # leaves a CANCELLED required conclusion that stays in the rollup after a
+  # later success, so the PR looks failed with zero failed jobs.
+  cancel-in-progress: false
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access

@@ -296,6 +296,28 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
     assert "exit 0" in workflow
 
 
+def test_merge_scheduler_does_not_cancel_required_queue_scans() -> None:
+    """A cancelled required scan-pr-queue stays red after later same-head success."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+
+    assert "cancel-in-progress: false" in concurrency
+    assert "cancel-in-progress: true" not in concurrency
+    assert "leaves a CANCELLED required conclusion" in concurrency
+
+
+def test_opencode_bootstrap_required_checks_do_not_serialize_runner_waits() -> None:
+    """Required stub names must not wait on each other for a runner."""
+    bootstrap = workflow_text("opencode-review.yml")
+    jobs = bootstrap.split("jobs:\n", 1)[1]
+
+    assert "  required-workflow-bootstrap:\n" in jobs
+    assert "  coverage-source-tree:\n" in jobs
+    assert "  coverage-evidence:\n" in jobs
+    assert "  opencode-review-target:\n" in jobs
+    assert "    needs:" not in jobs
+
+
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
     for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
         workflow = workflow_text(filename)
