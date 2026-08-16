@@ -1,0 +1,79 @@
+name: OpenCode Coverage Artifact Rerun Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/opencode-coverage-artifact-rerun-quality-ci.yml"
+      - "tests/test_opencode_coverage_artifact_rerun_contract.py"
+      - "docs/doctoring/opencode-coverage-artifact-reruns.md"
+      - "CHANGELOG.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/opencode-coverage-artifact-rerun-quality-ci.yml"
+      - "tests/test_opencode_coverage_artifact_rerun_contract.py"
+      - "docs/doctoring/opencode-coverage-artifact-reruns.md"
+      - "CHANGELOG.md"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "pyproject.toml"
+
+concurrency:
+  group: opencode-coverage-artifact-rerun-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  exact-head-contract:
+    name: Python 3.14 attempt-scoped artifact contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run attempt-scoped artifact regression
+        run: python -m pytest tests/test_opencode_coverage_artifact_rerun_contract.py -q
+
+      - name: Enforce complete central test and branch coverage
+        run: |
+          set -euo pipefail
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing
+
+      - name: Enforce production docstring coverage
+        run: python -m interrogate scripts/ci
+
+      - name: Compile permanent contracts
+        run: python -m compileall -q scripts tests
+
+      - name: Reject uncommitted generated state
+        run: git diff --exit-code --check && test -z "$(git status --porcelain)"
