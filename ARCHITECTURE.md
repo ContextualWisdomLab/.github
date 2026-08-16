@@ -25,6 +25,12 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## Fatal-provider process groups
+
+Each `opencode run` attempt starts under `setsid`. A structured fatal
+provider event sends `SIGTERM` then `SIGKILL` to the negative process-group
+id so descendants cannot hold stdout/stderr after the launcher returns.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid

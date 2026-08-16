@@ -465,16 +465,34 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" \
-		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
-		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-		opencode run "$(cat "$prompt_file")" \
-		--pure \
-		--agent "$agent" \
-		--model "$model_candidate" \
-		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
-		>"$opencode_json_file" 2>"$opencode_stderr_file" &
+	# Linux CI has setsid (util-linux). Start the timeout wrapper in its own
+	# session so a fatal-provider abort can terminate the complete provider
+	# process group. Killing only the timeout wrapper leaves descendants
+	# holding stdout/stderr pipes open. Darwin local runners lack setsid;
+	# they keep PID-directed TERM/KILL so the repository suite still runs.
+	if command -v setsid >/dev/null 2>&1; then
+		setsid timeout --kill-after=30s "${run_timeout_seconds}s" \
+			env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+			-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+			opencode run "$(cat "$prompt_file")" \
+			--pure \
+			--agent "$agent" \
+			--model "$model_candidate" \
+			--format json \
+			--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+			>"$opencode_json_file" 2>"$opencode_stderr_file" &
+	else
+		timeout --kill-after=30s "${run_timeout_seconds}s" \
+			env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+			-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+			opencode run "$(cat "$prompt_file")" \
+			--pure \
+			--agent "$agent" \
+			--model "$model_candidate" \
+			--format json \
+			--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+			>"$opencode_json_file" 2>"$opencode_stderr_file" &
+	fi
 	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and
 	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
@@ -484,12 +502,21 @@ run_one_model_attempt() {
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-			kill "$opencode_pid" 2>/dev/null
-			for _ in $(seq 1 30); do
-				kill -0 "$opencode_pid" 2>/dev/null || break
-				sleep 1
-			done
-			kill -9 "$opencode_pid" 2>/dev/null
+			if command -v setsid >/dev/null 2>&1; then
+				kill -TERM -- "-$opencode_pid" 2>/dev/null || true
+				for _ in $(seq 1 30); do
+					kill -0 -- "-$opencode_pid" 2>/dev/null || break
+					sleep 1
+				done
+				kill -KILL -- "-$opencode_pid" 2>/dev/null || true
+			else
+				kill -TERM "$opencode_pid" 2>/dev/null || true
+				for _ in $(seq 1 30); do
+					kill -0 "$opencode_pid" 2>/dev/null || break
+					sleep 1
+				done
+				kill -KILL "$opencode_pid" 2>/dev/null || true
+			fi
 			break
 		fi
 		sleep "$fatal_poll_seconds"
