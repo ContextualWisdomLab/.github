@@ -304,7 +304,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
                 model_name
             )
-    assert github_candidate_models == [
+    catalog_github_models = [
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
         "openai/gpt-5",
@@ -313,6 +313,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "deepseek/deepseek-r1-0528",
         "deepseek/deepseek-r1",
     ]
+    assert github_candidate_models == []
+    assert set(catalog_github_models).issubset(set(github_models))
     banned_review_candidates = {
         "gpt-5-nano",
         "openai/gpt-5-nano",
@@ -328,7 +330,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
     assert '"openrouter": {' in workflow
     assert '"apiKey": "{env:OPENROUTER_API_KEY}"' in workflow
-    for model_name in direct_openai_models + openrouter_models + github_candidate_models:
+    for model_name in direct_openai_models + openrouter_models + catalog_github_models:
         assert f'"{model_name}": {{' in workflow
 
     def is_reasoning_capable(model_name: str) -> bool:
@@ -340,7 +342,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             or model_name.startswith("deepseek/deepseek-r1")
         )
 
-    for model_name in github_candidate_models:
+    for model_name in catalog_github_models:
         model_config = github_models[model_name]
         if is_reasoning_capable(model_name):
             assert model_config["reasoning"] is True, model_name
