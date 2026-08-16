@@ -231,7 +231,11 @@ def emit_mermaid(
     merge_state: str = "UNKNOWN",
     source_root: Path | None = None,
 ) -> str:
-    """Render a source-backed diagram of the changed API, not a file inventory."""
+    """Render a source-backed diagram of the changed API, not a file inventory.
+
+    Public Rust names become a class list only. Do not invent ``A --> B``
+    edges unless a later parser records a real call, field, or impl.
+    """
     paths = [posix_path(path) for path in raw_paths if str(path).strip()]
     if not paths:
         return (
@@ -255,8 +259,6 @@ def emit_mermaid(
         lines = ["```mermaid", "classDiagram"]
         for symbol in symbols[:8]:
             lines.append(f"  class {_quote_label(symbol)}")
-        if len(symbols) >= 2:
-            lines.append(f"  {_quote_label(symbols[0])} --> {_quote_label(symbols[1])}")
         lines.append("```")
         return "\n".join(lines) + "\n"
     if rust_paths:

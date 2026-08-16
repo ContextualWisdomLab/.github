@@ -28,6 +28,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Restored `COVERAGE_BLOCKED` on the OpenCode status comment after a fallback product-file review, so a coverage miss plus no model control block no longer leaves `Gate result: COMMENT` (ContextualWisdomLab/OriginWeave#47).
+- Stopped the OpenCode mermaid helper from inventing `FirstType --> SecondType` between the first two public Rust items when no call, field, or impl relationship was parsed.
 - Stopped the OriginWeave-style coverage sandbox false blocker: the isolated image now installs the repository rustup channel plus `llvm-tools-preview`, prefetches `Cargo.lock` crates, and runs `cargo llvm-cov --offline --locked` instead of Debian rustc 1.85 without llvm-tools (ContextualWisdomLab/OriginWeave#47).
 - Taught the OpenCode mermaid helper `crates/`, `src/`, and Rust/Python/TypeScript layouts so a three-file crate change is labeled as that crate, not `Changed file (3 files)`.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.

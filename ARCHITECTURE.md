@@ -74,6 +74,32 @@ sequenceDiagram
   MS->>PR: merge only on current-head approval + green checks
 ```
 
+## OpenCode publication surfaces
+
+```mermaid
+flowchart LR
+  Diff["Changed product files"]
+  Review["Formal pull-request review"]
+  Gate["Issue comment: gate/status only"]
+  Coverage{"Coverage evidence success?"}
+
+  Diff --> Review
+  Review --> Gate
+  Coverage -->|"no"| Gate
+  Gate -->|"COVERAGE_BLOCKED"| BuyerNext["Fix coverage evidence, then rerun OpenCode"]
+  Coverage -->|"yes"| MergeReady["Current-head approval + green checks"]
+```
+
+The formal review walks the current-head product diff, including a
+source-backed fallback when the model pool has no control block. The issue
+comment is identity and gate only: head SHA, run id/attempt, coverage
+result, model-pool outcome, verdict, and a link to the formal review. A
+coverage miss still blocks approval. After a COMMENT fallback review the
+publisher restores `COVERAGE_BLOCKED` so the next action stays “fix
+coverage evidence, then rerun OpenCode.” Mermaid lists extracted public
+API names and does not invent class edges. See
+[`docs/doctoring/opencode-review-surfaces-originweave-47.md`](docs/doctoring/opencode-review-surfaces-originweave-47.md).
+
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
@@ -104,6 +130,9 @@ tests pin workflow structure and governance prose so drift fails closed.
   — Project #1 operation.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
+- [`docs/doctoring/opencode-review-surfaces-originweave-47.md`](docs/doctoring/opencode-review-surfaces-originweave-47.md)
+  — review vs status-comment split, coverage-gate honesty, and APA 7th
+  citations.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)

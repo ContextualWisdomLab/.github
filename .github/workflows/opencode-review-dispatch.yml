@@ -5732,6 +5732,10 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
+            # create_pull_review COMMENT rewrites the issue comment to
+            # Gate result: COMMENT. The OriginWeave #47 path (coverage miss
+            # plus no model control block) then exits, so restore the gate.
+            update_review_overview "COVERAGE_BLOCKED"
             rm -f "$body_file"
           }
 
