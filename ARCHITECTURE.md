@@ -90,6 +90,17 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Required Strix lock
+
+The org-required Strix workflow installs a complete hashed lock. Upstream
+`strix-agent==1.5.3` still declares `cryptography<49`, so compile-time
+override keeps `cryptography==50.0.0` (CVE-2026-69247 PKCS#7 timing
+oracle; also above CVE-2026-39892). CI then installs with
+`pip install --require-hashes --no-deps` and fail-closes unless
+`importlib.metadata` reports both pins. The missing-artifact gate is
+unchanged: console severity markers are not a passing report. See
+[`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
@@ -106,5 +117,7 @@ tests pin workflow structure and governance prose so drift fails closed.
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md)
+  — Strix 1.5.3 report persist with cryptography 50.0.0 override.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.

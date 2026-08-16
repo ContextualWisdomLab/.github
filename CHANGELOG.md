@@ -26,6 +26,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Pin required Strix to `strix-agent==1.5.3` so a completed scan writes a durable report artifact, keep `cryptography==50.0.0` (CVE-2026-69247 / CVE-2026-39892) via a compile-time override, and install the complete hashed lock with `--no-deps` so pip cannot re-apply the stale `cryptography<49` bound. The fail-closed missing-artifact gate is unchanged.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.

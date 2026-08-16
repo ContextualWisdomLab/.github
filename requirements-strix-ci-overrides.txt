@@ -1,0 +1,3 @@
+# Force the CVE-fixed cryptography wheel even though strix-agent 1.5.3
+# still declares cryptography<49. Do not add other overrides here.
+cryptography==50.0.0

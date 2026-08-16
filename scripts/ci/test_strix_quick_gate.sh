@@ -205,6 +205,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Materialize central Strix dependency lock from PR head" "strix workflow validates central same-repo lock-file PRs against the PR head lock"
 	assert_file_contains "$workflow_file" "github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'" "strix workflow limits central lock materialization to same-repository PR heads"
 	assert_file_contains "$workflow_file" 'git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt"' "strix workflow copies only the hashed requirements lock from the PR head"
+	assert_file_contains "$workflow_file" "--require-hashes --no-deps -r requirements-strix-ci-hashes.txt" "strix workflow installs the complete hashed lock without pip re-resolution"
+	assert_file_contains "$workflow_file" 'expected = {"strix-agent": "1.5.3", "cryptography": "50.0.0"}' "strix workflow fail-closes unless both override pins are installed"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_SOURCE=$trusted_strix_source' "strix workflow exports the central Strix source path"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh' "strix workflow executes the central Strix gate script"
 	assert_file_contains "$workflow_file" "Materialize target workspace" "strix workflow materializes target repository data separately from trusted scripts"

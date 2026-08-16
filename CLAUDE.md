@@ -96,14 +96,16 @@ e.g.:
 ```bash
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-bandit-ci.txt -o requirements-bandit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-pip-audit-ci.txt -o requirements-pip-audit-ci-hashes.txt
-uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
+./scripts/ci/compile_strix_ci_lock.sh
 ./scripts/ci/compile_opencode_review_lock.sh
 ```
 
 Note the per-file Python versions differ (bandit/pip-audit: 3.12; strix: 3.13; OpenCode
-review: 3.14). The OpenCode review generator always passes `--upgrade` so an existing output
-file cannot preserve hashes from the previous Python target, and records itself as the lock's
-repeatable compile command.
+review: 3.14). The Strix generator records itself as the lock's repeatable compile command
+and applies `requirements-strix-ci-overrides.txt` so `strix-agent==1.5.3` can keep
+`cryptography==50.0.0`. The OpenCode review generator always passes `--upgrade` so an
+existing output file cannot preserve hashes from the previous Python target, and records
+itself as the lock's repeatable compile command.
 
 ## Conventions and gotchas specific to this repo
 
