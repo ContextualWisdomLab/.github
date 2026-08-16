@@ -338,9 +338,11 @@ def test_policy_and_doctoring_record_buyer_visible_controls() -> None:
     assert "design constraints" in policy.lower()
     assert "not a blanket PII mask" in policy
     assert "tenant- and purpose-bound" in policy
+    assert "DNS pinning" in policy
     assert "PRODUCT_ACCEPTANCE_TEMPLATE.md" in policy
     assert "APA 7" in doctoring or "References (APA 7th)" in doctoring
     assert "Amazon Web Services" in doctoring
+    assert "Jackson" in doctoring
     assert "CWE-918" in doctoring
     assert "object-storage contract" in changelog
     assert "object-storage" in architecture.lower()

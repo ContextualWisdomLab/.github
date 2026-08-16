@@ -146,6 +146,8 @@ def test_observability_labels_fail_closed_without_type_errors() -> None:
         "storage.home",
         "minio.intranet",
         "objects.private",
+        "minio.default.svc",
+        "objects.localdomain",
     ],
 )
 def test_denied_private_network_rejects_special_use_internal_suffixes(
@@ -173,12 +175,52 @@ def test_mdns_local_suffix_is_never_an_exact_allowlist_member() -> None:
         validator.validate_contract(contract)
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "169.254.169.254.nip.io",
+        "127.0.0.1.sslip.io",
+        "10.0.0.1.xip.io",
+        "metadata.lvh.me",
+        "minio.localtest.me",
+        "bucket.test",
+        "objects.invalid",
+    ],
+)
+def test_dns_rebinding_helper_suffixes_are_never_exact_hosts(host: str) -> None:
+    """Rebinding helpers and RFC 6761 test names cannot enter any allowlist."""
+    assert validator.is_exact_dns_host(host) is False
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
+    contract["endpoint_policy"]["host_allowlist"] = [host]
+    contract["endpoint_policy"].pop("custom_endpoint", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="exact DNS"):
+        validator.validate_contract(contract)
+
+
+def test_dns_pinning_is_mandatory() -> None:
+    """A later DNS TTL flip must not retarget an in-flight object transfer."""
+    contract = _valid_contract()
+    contract["endpoint_policy"]["dns_pinning"] = False
+    with pytest.raises(
+        validator.ObjectStorageContractError, match="dns_pinning must be true"
+    ):
+        validator.validate_contract(contract)
+    contract = _valid_contract()
+    contract["endpoint_policy"].pop("dns_pinning", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="dns_pinning"):
+        validator.validate_contract(contract)
+
+
 def test_explicit_allowlist_still_admits_a_named_internal_host() -> None:
     """Operators may name one private DNS host after an explicit trust decision."""
     contract = _valid_contract()
     contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
     contract["endpoint_policy"]["host_allowlist"] = ["minio.internal"]
     contract["endpoint_policy"]["custom_endpoint"] = "https://minio.internal"
+    validator.validate_contract(contract)
+    contract["endpoint_policy"]["host_allowlist"] = ["minio.default.svc"]
+    contract["endpoint_policy"]["custom_endpoint"] = "https://minio.default.svc"
     validator.validate_contract(contract)
 
 
@@ -233,6 +275,14 @@ def test_schema_encodes_value_level_closed_controls() -> None:
         validator.FORBIDDEN_HIGH_CARDINALITY_LABELS
     )
     assert schema["properties"]["tenant_purpose_bound"]["const"] is True
+    endpoint = schema["properties"]["endpoint_policy"]
+    assert endpoint["properties"]["dns_pinning"]["const"] is True
+    assert "dns_pinning" in endpoint["required"]
+    lifecycle = schema["properties"]["lifecycle"]
+    assert lifecycle["if"]["properties"]["consumed_implies_immediate_delete"][
+        "const"
+    ] is True
+    assert lifecycle["then"]["properties"]["zero_retention_explicit"]["const"] is True
 
 
 def test_product_acceptance_template_names_the_consumer_failure_lane() -> None:
@@ -244,3 +294,4 @@ def test_product_acceptance_template_names_the_consumer_failure_lane() -> None:
     assert "write/read/delete" in template
     assert "partial" in template.lower()
     assert "timeout" in template.lower()
+    assert "rebinding" in template.lower()

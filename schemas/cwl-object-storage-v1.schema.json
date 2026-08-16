@@ -37,6 +37,7 @@
         "host_allowlist",
         "allow_wildcards",
         "follow_redirects",
+        "dns_pinning",
         "private_network_trust"
       ],
       "properties": {
@@ -49,6 +50,7 @@
         },
         "allow_wildcards": { "const": false },
         "follow_redirects": { "const": false },
+        "dns_pinning": { "const": true },
         "private_network_trust": {
           "enum": ["explicit_allowlist", "denied"]
         },
@@ -127,6 +129,18 @@
         "consumed_implies_immediate_delete": { "type": "boolean" },
         "zero_retention_explicit": { "type": "boolean" },
         "legal_hold_distinct": { "const": true }
+      },
+      "if": {
+        "properties": {
+          "consumed_implies_immediate_delete": { "const": true }
+        },
+        "required": ["consumed_implies_immediate_delete"]
+      },
+      "then": {
+        "properties": {
+          "zero_retention_explicit": { "const": true }
+        },
+        "required": ["zero_retention_explicit"]
       }
     },
     "rollback": {

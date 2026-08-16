@@ -26,6 +26,7 @@ against the current head, including:
 | delete timeout | Retry the same deterministic key; do not enumerate the bucket |
 | partial or aborted upload | Do not publish a `available` object; compensate without deleting older customer data |
 | digest or content-length mismatch | Reject the read; keep the prior object |
+| DNS TTL flip / rebinding | Pin the first resolved address for the request; do not look the name up again mid-transfer |
 
 ## Rollback and retention
 
