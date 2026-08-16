@@ -74,18 +74,15 @@ on:
         type: string
   schedule:
     - cron: "*/30 * * * *"
-    # 15-minute org-wide sweep cadence for the org-queue-sweep job below, used
-    # in combination with an hourly heartbeat. Target repositories only receive
-    # scheduler runs on PR events, review/security workflow completion, and
-    # protected-branch pushes; a PR whose approval or required checks land AFTER
-    # its last event has no later trigger and sits approved-but-unmerged until a
-    # human pushes something. The hourly sweep closes that gap so late events are
-    # reconciled even when no new event is emitted.
+    # Every-15-minutes org-wide sweep cadence for the org-queue-sweep job below. Target
+    # repositories only receive scheduler runs on PR events, review/security
+    # workflow completion, and protected-branch pushes; a PR whose approval or
+    # required checks land AFTER its last event has no later trigger and sits
+    # approved-but-unmerged until a human pushes something. The sweep closes
+    # that gap on a fixed heartbeat. Runs every 15 minutes so an approval or
+    # required check that lands after a PR's last event is auto-updated/merged
+    # within ~15 minutes instead of sitting idle for up to an hour.
     - cron: "*/15 * * * *"
-    # Hourly sweep cadence adds a deterministic fallback for events that arrive
-    # after repository-level schedulers have already completed and before mergeability
-    # evidence is available.
-    - cron: "0 * * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -137,7 +134,7 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        (github.event.schedule != '*/15 * * * *' && github.event.schedule != '0 * * * *')
+        github.event.schedule != '*/15 * * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -564,12 +561,11 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       (
         (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
-        (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-latest
     # The complete organization walk exceeded the legacy 30-minute boundary in
-    # production. Keep one running and one latest pending hourly sweep through the
+    # production. Keep one running and one latest pending */15 sweep through the
     # schedule-specific concurrency key above, while allowing the current walk
     # enough time to finish instead of cancelling before later repositories.
     timeout-minutes: 60

@@ -1,33 +1,45 @@
 # Strix 1.5.3 atomic report persist + cryptography 50 override
 
-검토 기준일: **2026-08-13**
+검토 기준일: **2026-08-16**
 
 ## Incident
 
-The required Strix check on `contextual-orchestrator` (and every other
-ruleset consumer of this central workflow) completed a real scan, printed
-`Penetration test completed` with a vulnerability list, then exited
-non-zero (exit `2`, or `124` after timeout) before the report artifact
-was written. `scripts/ci/strix_quick_gate.sh` correctly fail-closed
-("No Strix vulnerability report artifact was produced; log-only severity
-markers are incomplete evidence"). That gate is working as designed
-(ContextualWisdomLab/.github#891) and is not weakened here.
+The required Strix check is the central `pull_request_target` /
+`repository_dispatch` workflow in this repository. On current `main`
+(`c47afc2dc68488292c1db7c9d6f82dcd5360f181`) consumer runs still install
+`strix-agent==1.0.4` with `cryptography==50.0.0`. Recent failures that
+were re-read for this increment, not only ContextualWisdomLab/.github#952:
 
-The crash-after-print shape is the 1.0.4 scanner: upstream 1.1.0 added
+| Consumer | Run | Observed terminal shape |
+|---|---|---|
+| ContextualWisdomLab/mightyETL#315 | [31950271564](https://github.com/ContextualWisdomLab/.github/actions/runs/31950271564) / job 95172565509 | `Tool execute not found in agent strix`, then `No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence` |
+| ContextualWisdomLab/.github#1023 | [31952135549](https://github.com/ContextualWisdomLab/.github/actions/runs/31952135549) / job 95177171349 | `Penetration test completed` / `Vulnerabilities MEDIUM: 1`, then exit 2 and `Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed` |
+| ContextualWisdomLab/noema#392 | [31950935010](https://github.com/ContextualWisdomLab/.github/actions/runs/31950935010) | required `strix` red on the same 1.0.4 lock |
+
+The fail-closed missing-artifact rule in `scripts/ci/strix_quick_gate.sh`
+(ContextualWisdomLab/.github#891) is working as designed and is not
+weakened here. Console TUI lines such as `Vulnerabilities MEDIUM: 1` are
+not a passing report.
+
+The crash-after-print shape is the 1.0.4 scanner. Upstream 1.1.0 added
 atomic CSV/MD writes, and 1.4.0+ quit after scan instead of hosting a
-local viewer. Latest 1.5.3 keeps both fixes. See
-ContextualWisdomLab/.github#952.
+local viewer. Latest PyPI release remains `strix-agent==1.5.3` and still
+declares `cryptography>=48.0.1,<49` (usestrix/strix#859, Intel macOS
+universal2 wheel). See ContextualWisdomLab/.github#952.
 
-A one-line bump is blocked because `strix-agent>=1.4.0` still declares
-`cryptography>=48.0.1,<49`, while this repo pins `cryptography==50.0.0`
-to stay above CVE-2026-39892 (non-contiguous buffer overflow, fixed in
-46.0.7) and to close the PKCS#7 Bleichenbacher-style timing oracle
-fixed in 50.0.0 (CVE-2026-69247 / GHSA-g6cj-pr64-35w5). `uv pip compile`
-without an override refuses the pair.
+A one-line bump is blocked because `uv pip compile` without an override
+refuses `strix-agent==1.5.3` + `cryptography==50.0.0`. Cryptography 50.0.0
+is the floor that closes CVE-2026-69247 (PKCS#7 EnvelopedData
+Bleichenbacher-style timing/error oracle in `pkcs7_decrypt_der` /
+`pkcs7_decrypt_pem` / `pkcs7_decrypt_smime`, introduced in 44.0.0). It
+also sits above CVE-2026-39892 (non-contiguous buffer overflow, fixed in
+46.0.7).
 
 ## Decision
 
-1. Pin `strix-agent==1.5.3` and keep `cryptography==50.0.0`. Materialize only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+1. Pin `strix-agent==1.5.3` and keep `cryptography==50.0.0`. Materialize
+   only exact SHA-256 pins or a bounded relative `-r` include; a lone
+   `--require-hashes` line is not lock evidence.
 2. Resolve the declared upper bound only at compile time through
    `requirements-strix-ci-overrides.txt` and
    `scripts/ci/compile_strix_ci_lock.sh`.
@@ -39,19 +51,22 @@ without an override refuses the pair.
    unless `importlib.metadata` reports `strix-agent==1.5.3` and
    `cryptography==50.0.0`.
 4. Do not scrape console TUI lines as a substitute report. The gate still
-   requires a durable artifact.
+   requires a durable artifact and still fail-closes on warning / fatal /
+   denied / timeout report signals.
 
-A live install of this lock on CPython 3.12 imported `strix`, ran
-`strix --help`, and loaded `cryptography==50.0.0` together with
-`strix-agent==1.5.3`. Strix's only "cryptography" source hit is the
-SARIF keyword catalogue, not a PKCS#7 call.
+A live `pip`/`uv` install of this hashed lock with `--require-hashes
+--no-deps` imported `strix`, ran `strix --help` (including the
+non-interactive “exits on completion” path), and loaded
+`cryptography==50.0.0` together with `strix-agent==1.5.3` on CPython
+3.12.3 and 3.13.15.
 
 ## Trust boundary
 
 - The fail-closed missing-artifact rule is unchanged.
 - The override file may contain only `cryptography==50.0.0`.
 - Hashes remain required. `--no-deps` is not an unhashed install.
-- NVIDIA NIM / OpenCode credentials are untouched.
+- NVIDIA NIM / OpenCode credentials are untouched. This path never uses
+  `COPILOT_GITHUB_TOKEN`.
 
 ## Verification contract
 
@@ -66,6 +81,14 @@ quality CI retriggers when any of those files change.
 If 1.5.3 regresses a required scan, revert the pin to 1.0.4 and the
 `--no-deps` install together. Do not drop cryptography 50.0.0 to satisfy
 the stale `<49` bound.
+
+## After merge
+
+Consumer required `strix` checks read this workflow from protected
+`main`. After this lands, a new same-head scan installs 1.5.3, persists
+the report directory, and lets the existing gate judge that artifact.
+Findings at or above `STRIX_FAIL_ON_MIN_SEVERITY` still fail the check.
+A completed scan with no threshold finding can go green.
 
 ## References (APA 7th)
 

@@ -100,3 +100,4 @@ def test_doctoring_records_the_cve_and_upstream_atomic_write_fix() -> None:
     assert "--no-deps" in doctoring
     assert "National Institute of Standards and Technology" in doctoring
     assert "MITRE" in doctoring
+    assert "No Strix vulnerability report artifact was produced" in doctoring

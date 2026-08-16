@@ -10,8 +10,7 @@ disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap)
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
 truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
 The repo/Project — not private agent memory — is the source of truth. This file complements those
-documents; it does not replace them. Materialize accepts only exact SHA-256 pins or a bounded
-relative `-r` include; a lone `--require-hashes` line is not lock evidence.
+documents; it does not replace them.
 
 ## What this repository is
 
@@ -102,12 +101,11 @@ uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-
 ```
 
 Note the per-file Python versions differ (bandit/pip-audit: 3.12; strix: 3.13; OpenCode
-review: 3.14). The OpenCode review generator always passes `--upgrade` so an existing output
-file cannot preserve hashes from the previous Python target, and records itself as the lock's
-repeatable compile command. The Strix generator applies
-`requirements-strix-ci-overrides.txt` so `strix-agent==1.5.3` can coexist with
-`cryptography==50.0.0`; the required workflow then installs that complete lock
-with `--require-hashes --no-deps`.
+review: 3.14). The Strix generator records itself as the lock's repeatable compile command
+and applies `requirements-strix-ci-overrides.txt` so `strix-agent==1.5.3` can keep
+`cryptography==50.0.0`. The OpenCode review generator always passes `--upgrade` so an
+existing output file cannot preserve hashes from the previous Python target, and records
+itself as the lock's repeatable compile command.
 
 ## Conventions and gotchas specific to this repo
 

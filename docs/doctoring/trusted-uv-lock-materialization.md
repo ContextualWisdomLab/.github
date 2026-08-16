@@ -6,10 +6,7 @@ Central coverage automation may translate a tracked `uv.lock` from the exact
 validated pull-request base revision into a pip-compatible, hash-pinned
 requirements closure. The translation must not depend on a mutable runner tool,
 repository-head dependency metadata, ambient runner configuration, or network
-access during export. Materialize accepts only exact SHA-256 pins or a bounded
-relative `-r` include; a lone `--require-hashes` line is not lock evidence
-(CWE-22 path traversal; CWE-1288 untrusted include). See MITRE (2024a,
-2024b) and pip's hash-checking mode (PyPA, n.d.).
+access during export.
 
 The implementation therefore:
 
@@ -203,12 +200,3 @@ https://slsa.dev/spec/v1.2/provenance
 Supply-chain Levels for Software Artifacts. (2025). *Source: Requirements for
 producing source (version 1.2)*.
 https://slsa.dev/spec/v1.2/source-requirements
-
-MITRE. (2024a). *CWE-22: Improper limitation of a pathname to a restricted
-directory ('Path Traversal')*. https://cwe.mitre.org/data/definitions/22.html
-
-MITRE. (2024b). *CWE-1288: Improper validation of consistency within input*.
-https://cwe.mitre.org/data/definitions/1288.html
-
-Python Packaging Authority. (n.d.). *Hash-checking mode*. pip documentation.
-Retrieved August 14, 2026, from https://pip.pypa.io/en/stable/topics/secure-installs/

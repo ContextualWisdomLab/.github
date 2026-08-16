@@ -90,33 +90,22 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Required Strix lock
+
+The org-required Strix workflow installs a complete hashed lock. Upstream
+`strix-agent==1.5.3` still declares `cryptography<49`, so compile-time
+override keeps `cryptography==50.0.0` (CVE-2026-69247 PKCS#7 timing
+oracle; also above CVE-2026-39892). CI then installs with
+`pip install --require-hashes --no-deps` and fail-closes unless
+`importlib.metadata` reports both pins. The missing-artifact gate is
+unchanged: console severity markers are not a passing report. See
+[`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
 CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed.
-
-## PR automation loop cadence (2026-08-15)
-
-Scheduler cadence is `*/30 * * * *` for per-repository queue scans, `*/15 * * * *`
-for the organization sweep, plus an hourly `0 * * * *` heartbeat. The scheduler
-ignores the control-plane `scan-pr-queue` check in merge blocking so transient
-control-workflow churn does not stall current-head merge. Summaries emit the next
-UTC heartbeat timestamp.
-
-## Bounded requirement includes (2026-08-14)
-
-Coverage materialize treats a lone `--require-hashes` line as non-evidence.
-Only exact SHA-256 package pins or a bounded relative `-r`/`--requirement`
-include (`target == PurePosixPath.as_posix()`, no `.`/`..` parts, candidate
-lock path only) enter the trusted image (CWE-22; CWE-1288).
-
-## Strix scanner pin (2026-08-13)
-
-Required Strix is `strix-agent==1.5.3` with `cryptography==50.0.0`. Compile uses
-`requirements-strix-ci-overrides.txt`; install uses
-`pip install --require-hashes --no-deps` on the complete lock. Decision record:
-`docs/doctoring/strix-agent-cryptography-override.md`.
 
 ## Related durable documents
 
@@ -128,9 +117,7 @@ Required Strix is `strix-agent==1.5.3` with `cryptography==50.0.0`. Compile uses
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md)
+  — Strix 1.5.3 report persist with cryptography 50.0.0 override.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
-- [`docs/doctoring/strix-agent-cryptography-override.md`](docs/doctoring/strix-agent-cryptography-override.md)
-  — Strix 1.5.3 plus cryptography 50.0.0 pin.
-- [`docs/doctoring/trusted-uv-lock-materialization.md`](docs/doctoring/trusted-uv-lock-materialization.md)
-  — bounded requirement includes.

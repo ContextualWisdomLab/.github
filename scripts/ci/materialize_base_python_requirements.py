@@ -87,6 +87,7 @@ def _is_candidate_lock_name(name: str) -> bool:
     )
 
 
+
 def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
     """Return whether one safe tracked path can name a pip requirements lock.
 
