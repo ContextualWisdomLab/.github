@@ -35,6 +35,14 @@ Human `repository_dispatch` as `seonghobae` remains rejected; only
 verdict is posted, re-run the required `opencode-review` job so the
 fail-closed check can observe it.
 
+The one-dispatch-per-run budget used to walk pull requests in created-at
+order, so leftover increments that already had a previous-head verdict
+consumed the slot while a later PR with an empty Reviews tab waited. The
+scheduler now stable-sorts that budget: no OpenCode APPROVED or
+CHANGES_REQUESTED on any commit first, then previous-head re-reviews,
+then current-head verdicts. COMMENTED-only evidence is not a verdict and
+keeps the empty-Reviews priority.
+
 ## Draft pull-request review contract
 
 Draft status is a merge-readiness signal, not a request to suppress early
@@ -58,7 +66,9 @@ automation.
 - `tests/test_pr_review_merge_scheduler.py` proves that a draft pull request
   receives same-head Strix and OpenCode dispatch while branch updates,
   auto-merge mutation, direct merge, review dismissal, and thread cleanup
-  remain unreachable.
+  remain unreachable, and that a never-reviewed pull request consumes the
+  one-dispatch budget before a leftover increment that already has a
+  previous-head OpenCode verdict.
 - Both repairs were exercised test-first: the draft-dispatch contract failed
   against the old unconditional skip, and the Noema ordering contract failed
   against the old secondary-review-first branch. The exact repaired source

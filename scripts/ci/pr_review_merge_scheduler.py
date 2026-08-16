@@ -1193,6 +1193,36 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def has_any_opencode_verdict(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode ever posted APPROVED or CHANGES_REQUESTED on this PR."""
+    for review in (pr.get("reviews") or {}).get("nodes") or []:
+        if not is_opencode_review(review):
+            continue
+        if (review.get("state") or "").upper() in {"APPROVED", "CHANGES_REQUESTED"}:
+            return True
+    return False
+
+
+def review_dispatch_priority(pr: dict[str, Any]) -> int:
+    """Return a lower rank for PRs that should consume the dispatch budget first.
+
+    Rank 0 has no OpenCode APPROVED or CHANGES_REQUESTED on any commit — the
+    empty Reviews tab from ContextualWisdomLab/contextual-orchestrator#176.
+    Rank 1 already received a verdict on a previous head and can wait for a
+    leftover re-review. Rank 2 already has a current-head verdict.
+    """
+    if has_current_head_approval(pr) or has_current_head_changes_requested(pr):
+        return 2
+    if has_any_opencode_verdict(pr):
+        return 1
+    return 0
+
+
+def prioritize_review_dispatch_queue(prs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort so never-reviewed PRs take the dispatch slot before leftover increments."""
+    return sorted(prs, key=review_dispatch_priority)
+
+
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
     """Return dismissible automated change requests tied to previous heads."""
     review_ids: list[int] = []
@@ -3878,6 +3908,8 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if not args.pr_number:
+        prs = prioritize_review_dispatch_queue(prs)
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0

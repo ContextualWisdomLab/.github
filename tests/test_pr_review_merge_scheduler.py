@@ -4568,6 +4568,95 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     )
 
 
+def test_review_dispatch_priority_ranks_empty_reviews_before_leftover_rereview():
+    never_reviewed = make_pr(number=176)
+    leftover_rereview = make_pr(
+        number=998,
+        reviews={
+            "nodes": [
+                opencode_review("COMMENTED", "old-head", login="seonghobae"),
+                opencode_review("CHANGES_REQUESTED", "old-head"),
+            ]
+        },
+    )
+    already_verdicted = make_pr(
+        number=1002,
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    commented_only = make_pr(
+        number=42,
+        reviews={"nodes": [opencode_review("COMMENTED", "head")]},
+    )
+
+    human_only = make_pr(
+        number=7,
+        reviews={"nodes": [opencode_review("APPROVED", "head", login="seonghobae")]},
+    )
+    assert sched.has_any_opencode_verdict(never_reviewed) is False
+    assert sched.has_any_opencode_verdict(commented_only) is False
+    assert sched.has_any_opencode_verdict(human_only) is False
+    assert sched.has_any_opencode_verdict(leftover_rereview) is True
+    assert sched.review_dispatch_priority(never_reviewed) == 0
+    assert sched.review_dispatch_priority(commented_only) == 0
+    assert sched.review_dispatch_priority(leftover_rereview) == 1
+    assert sched.review_dispatch_priority(already_verdicted) == 2
+    assert [
+        pr["number"]
+        for pr in sched.prioritize_review_dispatch_queue(
+            [leftover_rereview, already_verdicted, never_reviewed, commented_only]
+        )
+    ] == [176, 42, 998, 1002]
+
+
+def test_main_prefers_never_reviewed_pr_when_dispatch_budget_is_one(monkeypatch, capsys):
+    prs = [
+        make_pr(
+            number=998,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "old-head")]},
+        ),
+        make_pr(
+            number=176,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+    ]
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--review-dispatch-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert dispatched == [176]
+    assert payload["decisions"][0]["pr"] == 176
+    assert payload["decisions"][0]["action"] == "review_dispatch"
+    assert payload["decisions"][1]["pr"] == 998
+    assert payload["decisions"][1]["reason"] == (
+        "current head has completed Strix evidence; review dispatch limit reached"
+    )
+
+
 def test_main_rejects_invalid_review_dispatch_limit():
     with pytest.raises(SystemExit, match="--review-dispatch-limit must be -1 or greater"):
         sched.main(
