@@ -5,4 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-Cursor Cloud Agents cannot complete Figma MCP OAuth against `https://mcp.figma.com/mcp` (allowlisted-client catalog; Cloud unsupported). Desktop/CLI remain the MCP path. Cloud Agents that must read Figma files use the `FIGMA_ACCESS_TOKEN` secret with the REST API. See [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).
+Cursor Cloud Agents cannot complete Figma MCP OAuth against `https://mcp.figma.com/mcp` (allowlisted-client catalog; Cloud unsupported). Desktop/CLI remain the MCP path. Cloud Agents that must read Figma files use the `FIGMA_ACCESS_TOKEN` secret with the REST API: `python3 scripts/ci/figma_rest_auth.py` then `--file FILE_KEY`. See [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).

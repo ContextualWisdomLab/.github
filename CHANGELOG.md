@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added a Cloud Agent Figma REST fallback that verifies `FIGMA_ACCESS_TOKEN` against `GET /v1/me` and loads one file at `GET /v1/files/:key?depth=1`, so agents can inventory pages after MCP Connect fails.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 - Added a permanent exact-head contract workflow for the hourly review-repair scheduler, immutable reusable-workflow source, NVIDIA NIM model boundary, credential isolation, and fail-closed unattended-agent permissions.
@@ -39,6 +40,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
+- Pin Figma REST calls to `http.client.HTTPSConnection("api.figma.com")`, allow only the `X-Figma-Token` header, accept alphanumeric file keys, and cap whoami/file bodies so `file://`, `Host` retargeting, and unbounded reads cannot leave the helper.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.
 - Snapshot the complete pre-model worktree for ordinary and conflict repair and reject every model-caused created, deleted, modified, mode-changed, retargeted, ignored, dangling, directory-backed, external-link, metadata-race, or out-of-scope path before staging or push.
@@ -55,6 +57,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Documentation
 
+- Recorded the Cloud Agent Figma MCP boundary, plan-token preference, `--file` next action, and APA 7th citations for Figma REST authentication, file endpoints, OAuth 2.1, PKCE, RFC 9110, and CWE-22.
 - Added an APA 7 doctoring record for conflict-control evidence isolation, including the Strix-reported trust-boundary failure, test-first remediation, canonical-path rule, operator contract, rollback, MITRE CWE-22, and current GitHub Actions secure-use guidance.
 - Added operator and APA 7 doctoring records for the hourly cadence, immutable source identity, NVIDIA NIM provider and secret boundary, high-reasoning Mistral Small 4 writer, model-process credential isolation, modular MSA ownership, product-specific caller activation, verification contract, and rollback.
 - Added DiskSage operational documentation for the hourly RCA loop, bounded retry cadence, permission model, standalone and MSA reuse, verification, rollback, and APA 7 references.
