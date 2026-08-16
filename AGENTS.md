@@ -5,3 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
+Dependency-review unavailability fails closed; diagnostics include allowlisted repository visibility. See [`docs/doctoring/dependency-review-fail-closed.md`](docs/doctoring/dependency-review-fail-closed.md).
