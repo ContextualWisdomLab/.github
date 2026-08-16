@@ -1,0 +1,93 @@
+name: Apply contextual-orchestrator adaptive-default governance
+
+on:
+  push:
+    branches:
+      - agent/contextual-orchestrator-adaptive-policy
+    paths:
+      - scripts/ci/stage_contextual_orchestrator_policy_test.py
+      - scripts/ci/apply_contextual_orchestrator_policy.py
+      - .github/workflows/apply-contextual-orchestrator-policy.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-contextual-orchestrator-policy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  red-green-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Stage scanner unit tests before implementation
+        run: python scripts/ci/stage_contextual_orchestrator_policy_test.py
+
+      - name: Prove tests are red while the scanner is missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python -m unittest tests.ci.test_contextual_orchestrator_defaults > /tmp/policy-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/policy-red.log
+          test "$status" -ne 0
+
+      - name: Apply scanner, reusable workflow, and ADR
+        run: python scripts/ci/apply_contextual_orchestrator_policy.py
+
+      - name: Pin upload-artifact in the reusable workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/contextual-orchestrator-policy.yml')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'uses: actions/upload-artifact@v4',
+              'uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Prove scanner tests are green
+        run: python -m unittest tests.ci.test_contextual_orchestrator_defaults
+
+      - name: Run all organization Python tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Verify syntax and patch integrity
+        shell: bash
+        run: |
+          python -m compileall -q scripts tests
+          python scripts/ci/check_contextual_orchestrator_defaults.py .
+          git diff --check
+
+      - name: Publish the verified source commit
+        env:
+          TARGET_BRANCH: agent/contextual-orchestrator-adaptive-policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/ci/stage_contextual_orchestrator_policy_test.py
+          rm scripts/ci/apply_contextual_orchestrator_policy.py
+          rm .github/workflows/apply-contextual-orchestrator-policy.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --check
+          git commit -m "feat(governance): enforce adaptive orchestration defaults"
+          git push origin "HEAD:${TARGET_BRANCH}"
