@@ -38,6 +38,13 @@ only established scheduler credentials, and grants job-scoped
 16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
+## SBOM Markdown integrity
+
+`scripts/ci/sbom_inventory_aggregator.py` keeps machine-readable JSON
+lossless and renders the governance Markdown inventory only after
+`_markdown_text` collapses line structure and encodes active CommonMark /
+GFM punctuation. Missing repository evidence increments `error_count` and
+marks the receipt incomplete.
 
 ## Hourly NVIDIA NIM repair gate
 

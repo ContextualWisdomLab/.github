@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from scripts.ci import sbom_inventory_aggregator as agg
 
 
@@ -119,8 +121,8 @@ def test_render_markdown_contains_rollup_and_flags():
     )
     markdown = agg.render_inventory_markdown(inventory, generated_at="2026-07-08T00:00:00Z")
     assert "# Organization SBOM inventory" in markdown
-    assert "2026-07-08T00:00:00Z" in markdown
-    assert "GPL-3.0-or-later" in markdown
+    assert "2026-07-08T00&#58;00&#58;00Z" in markdown
+    assert "GPL-3&#46;0-or-later" in markdown
     assert "commercial-license-only" in markdown
     assert "| readline |" in markdown
 
@@ -159,6 +161,52 @@ def test_self_test_passes(capsys):
     """The bundled self-test runs clean and prints its sentinel."""
     agg.self_test()
     assert "self-test passed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "repo",
+    [
+        "--repo=attacker/repo",
+        "owner",
+        "owner/repo/extra",
+        "owner/-R",
+        "owner/bad repo",
+        "owner/..",
+        "double--hyphen/repo",
+    ],
+)
+def test_validate_repo_full_name_rejects_unsafe_values(repo):
+    """Explicit repository inputs must be canonical full names."""
+    with pytest.raises(ValueError, match="repository full name"):
+        agg._validate_repo_full_name(repo)
+
+
+def test_validate_repo_full_name_accepts_github_dot_repository():
+    """The organization's special dot repository remains a valid target."""
+    assert (
+        agg._validate_repo_full_name("ContextualWisdomLab/.github")
+        == "ContextualWisdomLab/.github"
+    )
+
+
+def test_validate_owner_login_rejects_unsafe_values():
+    """Organization discovery operands must be canonical logins."""
+    with pytest.raises(ValueError, match="organization login"):
+        agg._validate_owner_login("bad org")
+    with pytest.raises(ValueError, match="organization login"):
+        agg._validate_owner_login(None)
+
+
+def test_list_org_repos_rejects_unsafe_name_returned_by_gh(monkeypatch):
+    """Discovery output is untrusted until every full name is validated."""
+    monkeypatch.setattr(
+        agg,
+        "_run",
+        lambda _args: '[{"nameWithOwner":"ContextualWisdomLab/bad repo"}]',
+    )
+
+    with pytest.raises(ValueError, match="repository full name"):
+        agg.list_org_repos("ContextualWisdomLab")
 
 
 def test_arg_parser_defaults():

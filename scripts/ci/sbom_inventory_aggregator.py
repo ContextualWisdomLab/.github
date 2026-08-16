@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -50,6 +51,11 @@ COPYLEFT_LICENSE_MARKERS: tuple[str, ...] = (
 
 # Sentinel emitted by SBOM tooling when it cannot determine a license.
 NOASSERTION = "NOASSERTION"
+
+_OWNER_LOGIN_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}"
+)
+_REPOSITORY_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,100}")
 
 
 @dataclass(frozen=True)
@@ -202,8 +208,10 @@ def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]
     license_totals: dict[str, int] = {}
     flagged: list[dict[str, str]] = []
     total_components = 0
+    error_count = 0
 
     for repo_inventory in sorted(repo_inventories, key=lambda r: r.repo.lower()):
+        error_count += int(repo_inventory.error is not None)
         components_payload = [
             {
                 "name": component.name,
@@ -242,6 +250,8 @@ def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]
             "repo_count": len(repos_payload),
             "component_count": total_components,
             "flagged_count": len(flagged),
+            "error_count": error_count,
+            "complete": error_count == 0,
             "policy": "commercial-license-only",
         },
         "license_totals": dict(sorted(license_totals.items())),
@@ -250,13 +260,36 @@ def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]
     }
 
 
+def _markdown_text(value: Any) -> str:
+    """Return untrusted inventory text without active Markdown structure."""
+    text = str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    replacements = {
+        "&": "&amp;",
+        "\\": "&#92;",
+        "|": "&#124;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "`": "&#96;",
+        "*": "&#42;",
+        "_": "&#95;",
+        "~": "&#126;",
+        ":": "&#58;",
+        "@": "&#64;",
+        "#": "&#35;",
+        ".": "&#46;",
+    }
+    return "".join(replacements.get(character, character) for character in text)
+
+
 def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -> str:
     """Render the consolidated inventory as a governance-facing markdown page."""
     summary = inventory["summary"]
     lines: list[str] = [
         "# Organization SBOM inventory",
         "",
-        f"Generated: {generated_at}",
+        f"Generated: {_markdown_text(generated_at)}",
         "",
         "One central view of every managed repository's software components,",
         "versions, and licenses. Feeds license and vulnerability governance",
@@ -268,6 +301,8 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
         f"- Components: {summary['component_count']}",
         f"- Policy: {summary['policy']}",
         f"- Flagged licenses: {summary['flagged_count']}",
+        f"- SBOMs unavailable: {summary['error_count']}",
+        f"- Evidence completeness: {'complete' if summary['complete'] else 'incomplete'}",
         "",
         "## License roll-up",
         "",
@@ -276,7 +311,7 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
     ]
     for license_key, count in inventory["license_totals"].items():
         flag = " ⚠️" if is_flagged_license(license_key) else ""
-        lines.append(f"| {license_key}{flag} | {count} |")
+        lines.append(f"| {_markdown_text(license_key)}{flag} | {count} |")
 
     lines.extend(["", "## Flagged components (policy violations)", ""])
     if inventory["flagged_licenses"]:
@@ -288,17 +323,19 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
         )
         for item in inventory["flagged_licenses"]:
             lines.append(
-                f"| {item['repo']} | {item['name']} | {item['version'] or '—'} | {item['license']} |"
+                f"| {_markdown_text(item['repo'])} | {_markdown_text(item['name'])} | "
+                f"{_markdown_text(item['version'] or '—')} | "
+                f"{_markdown_text(item['license'])} |"
             )
     else:
         lines.append("No copyleft or NOASSERTION components detected.")
 
     lines.extend(["", "## Per-repository components", ""])
     for repo in inventory["repos"]:
-        lines.append(f"### {repo['repo']}")
+        lines.append(f"### {_markdown_text(repo['repo'])}")
         lines.append("")
-        if repo["error"]:
-            lines.append(f"SBOM unavailable: {repo['error']}")
+        if repo["error"] is not None:
+            lines.append(f"SBOM unavailable: {_markdown_text(repo['error'])}")
             lines.append("")
             continue
         if not repo["components"]:
@@ -311,7 +348,9 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
         for component in repo["components"]:
             flag = "yes" if component["flagged"] else "no"
             lines.append(
-                f"| {component['name']} | {component['version'] or '—'} | {component['license']} | {flag} |"
+                f"| {_markdown_text(component['name'])} | "
+                f"{_markdown_text(component['version'] or '—')} | "
+                f"{_markdown_text(component['license'])} | {flag} |"
             )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -332,26 +371,54 @@ def _run(args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrap
     return process.stdout
 
 
+def _validate_owner_login(value: str) -> str:
+    """Return a canonical GitHub owner login or reject an unsafe operand."""
+    if not isinstance(value, str) or _OWNER_LOGIN_PATTERN.fullmatch(value) is None:
+        raise ValueError("invalid GitHub organization login")
+    return value
+
+
+def _validate_repo_full_name(value: str) -> str:
+    """Return a canonical ``owner/repository`` name or reject it."""
+    if not isinstance(value, str) or value.count("/") != 1:
+        raise ValueError("invalid GitHub repository full name")
+    owner, repository = value.split("/", 1)
+    if (
+        _OWNER_LOGIN_PATTERN.fullmatch(owner) is None
+        or _REPOSITORY_NAME_PATTERN.fullmatch(repository) is None
+        or repository in {".", ".."}
+        or repository.startswith("-")
+    ):
+        raise ValueError("invalid GitHub repository full name")
+    return value
+
+
 def list_org_repos(org: str) -> list[str]:  # pragma: no cover - network
     """List non-archived repositories for an organization via gh."""
+    validated_org = _validate_owner_login(org)
     raw = _run(
         [
             "gh",
             "repo",
             "list",
-            org,
             "--no-archived",
             "--limit",
             "500",
             "--json",
             "nameWithOwner",
+            "--",
+            validated_org,
         ]
     )
-    return [entry["nameWithOwner"] for entry in json.loads(raw or "[]")]
+    return [
+        _validate_repo_full_name(entry["nameWithOwner"])
+        for entry in json.loads(raw or "[]")
+    ]
 
 
 def fetch_repo_sbom(repo: str) -> RepoInventory:  # pragma: no cover - network
     """Fetch and parse one repository's dependency-graph SBOM via gh."""
+    repo = _validate_repo_full_name(repo)
     try:
         raw = _run(["gh", "api", f"/repos/{repo}/dependency-graph/sbom"])
     except subprocess.CalledProcessError as exc:
@@ -448,7 +515,11 @@ def main(argv: list[str]) -> int:  # pragma: no cover - CLI orchestration
     if args.self_test:
         self_test()
         return 0
-    repos = args.repos if args.repos else list_org_repos(args.org)
+    repos = (
+        [_validate_repo_full_name(repo) for repo in args.repos]
+        if args.repos
+        else list_org_repos(args.org)
+    )
     inventories = collect_inventories(repos)
     inventory = build_inventory(inventories)
     generated_at = args.generated_at or "unspecified"
