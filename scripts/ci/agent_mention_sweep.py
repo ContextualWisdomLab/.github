@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import os
 import re
 from dataclasses import dataclass
@@ -78,9 +79,7 @@ def flatten_pages(
         if not isinstance(collection, list):
             raise ValueError("paginated GitHub response is not a list")
         if not all(isinstance(record, dict) for record in collection):
-            raise ValueError(
-                "paginated GitHub response contains a non-object record"
-            )
+            raise ValueError("paginated GitHub response contains a non-object record")
         records.extend(collection)
     return records
 
@@ -155,62 +154,77 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    for repository in repositories:
-        try:
-            page = 1
-            while True:
-                response = client.request(
-                    [
-                        f"repos/{repository}/pulls",
-                        "-X",
-                        "GET",
-                        "-f",
-                        "state=open",
-                        "-f",
-                        "sort=updated",
-                        "-f",
-                        "direction=desc",
-                        "-f",
-                        "per_page=100",
-                        "-f",
-                        f"page={page}",
-                    ]
-                )
-                pull_requests = flatten_pages(response)
-                if not pull_requests:
+
+    if not repositories:
+        return  # pragma: no cover
+
+    def fetch_repo_prs(repository: str) -> list[dict[str, Any]]:
+        repo_prs = []
+        page = 1
+        while True:
+            response = client.request(
+                [
+                    f"repos/{repository}/pulls",
+                    "-X",
+                    "GET",
+                    "-f",
+                    "state=open",
+                    "-f",
+                    "sort=updated",
+                    "-f",
+                    "direction=desc",
+                    "-f",
+                    "per_page=100",
+                    "-f",
+                    f"page={page}",
+                ]
+            )
+            pull_requests = flatten_pages(response)
+            if not pull_requests:
+                break
+            reached_cutoff = False
+            for pull_request in pull_requests:
+                if parse_timestamp(str(pull_request.get("updated_at") or "")) < cutoff:
+                    reached_cutoff = True
                     break
-                reached_cutoff = False
-                for pull_request in pull_requests:
-                    if (
-                        parse_timestamp(
-                            str(pull_request.get("updated_at") or "")
-                        )
-                        < cutoff
-                    ):
-                        reached_cutoff = True
-                        break
-                    number = pull_request.get("number")
-                    if not isinstance(number, int) or number < 1:
-                        raise ValueError(
-                            "GitHub returned an invalid pull request number"
-                        )
-                    yield {
+                number = pull_request.get("number")
+                if not isinstance(number, int) or number < 1:
+                    raise ValueError("GitHub returned an invalid pull request number")
+                repo_prs.append(
+                    {
                         "number": number,
                         "repository": repository,
                         "pull_request": {
                             "url": (
-                                "https://api.github.com/repos/"
-                                f"{repository}/pulls/{number}"
+                                f"https://api.github.com/repos/{repository}/pulls/{number}"
                             )
                         },
                     }
-                if reached_cutoff or len(pull_requests) < 100:
-                    break
-                page += 1
-        except Exception as exc:  # noqa: BLE001 - repository isolation boundary
-            if on_error is None:
-                raise
-            on_error(repository, exc)
+                )
+            if reached_cutoff or len(pull_requests) < 100:
+                break
+            page += 1
+        return repo_prs
+
+    max_workers = min(10, len(repositories))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+
+    try:
+        futures = {
+            executor.submit(fetch_repo_prs, repository): repository
+            for repository in repositories
+        }
+        for future in concurrent.futures.as_completed(futures):
+            repository = futures[future]
+            try:
+                for pr in future.result():
+                    yield pr
+            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+                if on_error is None:
+                    raise
+                on_error(repository, exc)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def list_recent_comments(
@@ -305,9 +319,7 @@ def sweep(
 
         counters.failures += 1
         message = " ".join(str(error).split()) or error.__class__.__name__
-        print(
-            f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
-        )
+        print(f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}")
 
     for issue in list_recent_pull_requests(
         target_client,
@@ -375,9 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metrics = SweepMetrics()
     sweep(
-        target_client=GitHubClient(
-            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
-        ),
+        target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
         dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
         organization=args.organization,
         repository_source=args.repository_source,

@@ -43,3 +43,6 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+## 2024-05-15 - [Parallelizing API calls in generators]
+**Learning:** When yielding items concurrently from a ThreadPoolExecutor within a Python generator, using the "with" context manager can cause hangs during early exits or exceptions.
+**Action:** Manually instantiate the executor and use a finally block to call executor.shutdown(wait=False, cancel_futures=True) to prevent hangs.
