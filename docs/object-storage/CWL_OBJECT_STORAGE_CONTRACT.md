@@ -17,8 +17,9 @@ A contract JSON document is valid only when every control below is true.
 | Control | Required value |
 |---|---|
 | Transport | `https` only |
-| Hosts | exact-host allowlist; no wildcards; no automatic redirects; no multicast `.local` or metadata names |
-| Private networks | `explicit_allowlist` or `denied`; never implicit RFC1918, RFC 6761/6762, or `.internal` access |
+| Hosts | exact-host allowlist; no wildcards; no automatic redirects; no multicast `.local`, metadata, RFC 6761 `.test`/`.invalid`, or DNS-rebinding helper names |
+| DNS pinning | resolve once and pin the address for the request lifetime; a later TTL flip must not retarget the socket |
+| Private networks | `explicit_allowlist` or `denied`; never implicit RFC1918, RFC 6761/6762, Kubernetes `.svc`, or `.internal` access |
 | Credentials | scoped secret registry or workload identity; never broadcast, browser-exposed, or ambient process-wide |
 | Permissions | least privilege; public ACLs and public buckets prohibited |
 | Encryption | server-side encryption `required` |
@@ -42,9 +43,9 @@ high-cardinality labels is not a blanket PII mask.
 3. **Authorized private-network endpoints** — `private_network_trust` is
    `explicit_allowlist` and each private host is named. Implicit RFC1918,
    link-local, metadata-service, multicast `.local`, or special-use
-   `.internal` / `.corp` / `.lan` access is rejected unless that exact host
-   is named after an explicit trust decision. Multicast `.local` names are
-   never valid unicast endpoints.
+   `.internal` / `.corp` / `.lan` / `.svc` access is rejected unless that exact
+   host is named after an explicit trust decision. Multicast `.local` names and
+   DNS-rebinding helpers such as `.nip.io` are never valid unicast endpoints.
 
 Workload-identity and instance-metadata access require their own SSRF review.
 This contract does not grant that access.

@@ -11,6 +11,7 @@
     ],
     "allow_wildcards": false,
     "follow_redirects": false,
+    "dns_pinning": true,
     "private_network_trust": "explicit_allowlist",
     "custom_endpoint": "https://objects.example.example"
   },

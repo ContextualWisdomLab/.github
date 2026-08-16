@@ -48,7 +48,17 @@ FORBIDDEN_EXACT_HOSTS = frozenset(
         "kubernetes.default.svc",
     }
 )
-ALWAYS_FORBIDDEN_HOST_SUFFIXES = (".localhost", ".local")
+ALWAYS_FORBIDDEN_HOST_SUFFIXES = (
+    ".localhost",
+    ".local",
+    ".invalid",
+    ".test",
+    ".nip.io",
+    ".sslip.io",
+    ".xip.io",
+    ".lvh.me",
+    ".localtest.me",
+)
 DENIED_PRIVATE_NETWORK_SUFFIXES = (
     ".internal",
     ".corp",
@@ -56,6 +66,8 @@ DENIED_PRIVATE_NETWORK_SUFFIXES = (
     ".home",
     ".intranet",
     ".private",
+    ".svc",
+    ".localdomain",
 )
 MAX_TCP_PORT = 65535
 MAX_DNS_HOST_LENGTH = 253
@@ -81,6 +93,7 @@ ENDPOINT_POLICY_KEYS = (
     "host_allowlist",
     "allow_wildcards",
     "follow_redirects",
+    "dns_pinning",
     "private_network_trust",
     "custom_endpoint",
 )
@@ -173,7 +186,8 @@ def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
     Localhost, link-local metadata names, IP literals, decimal or hexadecimal
-    IP aliases, Unicode, and case aliases are not exact allowlist members.
+    IP aliases, Unicode, case aliases, RFC 6761 ``.test`` / ``.invalid``, and
+    DNS-rebinding helper suffixes are not exact allowlist members.
     """
     if not isinstance(host, str) or not host or len(host) > MAX_DNS_HOST_LENGTH:
         return False
@@ -315,6 +329,7 @@ def validate_endpoint_policy(policy: Mapping[str, Any]) -> None:
     require_bool(
         policy.get("follow_redirects"), "endpoint_policy.follow_redirects", False
     )
+    require_bool(policy.get("dns_pinning"), "endpoint_policy.dns_pinning", True)
     require_allowed(
         policy.get("private_network_trust"),
         "endpoint_policy.private_network_trust",

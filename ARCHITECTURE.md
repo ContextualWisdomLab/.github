@@ -98,7 +98,9 @@ Naruon and other products keep their own adapters. The executable check is
 allowlists, tenant-purpose binding, server-side encryption, SHA-256-or-stronger
 integrity, distinct lifecycle states, and non-destructive rollback are
 required. Denied private-network trust also rejects special-use internal
-suffixes. CSAP and SOC 2 remain design constraints, not certification claims.
+and Kubernetes `.svc` suffixes. DNS pinning is mandatory; rebinding helper
+suffixes are never allowlist members. CSAP and SOC 2 remain design
+constraints, not certification claims.
 Operational PII is not blanket-masked. Product adapters prove write/read/delete
 timeout and partial-upload behavior with
 `docs/object-storage/PRODUCT_ACCEPTANCE_TEMPLATE.md`.
