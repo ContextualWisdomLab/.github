@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `bandscope-hourly-review-repair.yml` owns BandScope's heartbeat at minute 53
+  against protected `develop` with a one-hour same-head retry floor.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
@@ -38,6 +40,24 @@ The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
 `NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
 OpenCode execution steps in the separately reviewed autofix worker.
+
+## BandScope execution contract
+
+The BandScope caller is a thin consumer of the same reusable scheduler:
+
+```yaml
+target_repository: ContextualWisdomLab/bandscope
+base_branch: develop
+max_prs: "50"
+max_dispatches: "1"
+retry_hours: "1"
+```
+
+It runs at `53 * * * *`, uses its own non-cancelling single-flight group, and
+passes only the two established scheduler credentials. Before activation on
+protected `main`, `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must include the exact
+BandScope repository. A missing target mapping fails before any mutation
+credential is materialized; it never falls back to a broader repository scope.
 
 ## Reusable target-selection contract
 
@@ -195,6 +215,9 @@ Permanent tests prove:
 
 - the Clearfolio caller owns exactly one hourly schedule and names the exact
   repository and protected base branch;
+- the BandScope caller owns its distinct minute-53 schedule, exact repository,
+  protected `develop` base, non-cancelling concurrency, and explicit secret
+  contract;
 - the shared scheduler contains no product-specific timer or repository name;
 - the dispatch budget and same-head retry floor remain one;
 - caller and reusable-workflow secrets are explicit and never use

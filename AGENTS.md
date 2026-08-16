@@ -5,3 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
+The BandScope hourly repair caller runs at minute 53 against protected `develop`. See [`docs/doctoring/bandscope-hourly-review-caller.md`](docs/doctoring/bandscope-hourly-review-caller.md).
