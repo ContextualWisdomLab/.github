@@ -90,6 +90,16 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Object-storage governance (2026-08-16)
+
+Central `.github` publishes a provider-neutral `object_storage` contract.
+Naruon and other products keep their own adapters. The executable check is
+`scripts/ci/validate_object_storage_contract.py`. HTTPS, exact-host
+allowlists, server-side encryption, SHA-256-or-stronger integrity, distinct
+lifecycle states, and non-destructive rollback are required. CSAP and SOC 2
+remain design constraints, not certification claims. Operational PII is not
+blanket-masked.
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.

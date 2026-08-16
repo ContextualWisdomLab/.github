@@ -8,6 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added a provider-neutral object-storage contract with an executable fail-closed validator, JSON Schema, naruon-shaped example, and APA 7 doctoring so AWS S3 and S3-compatible endpoints share one HTTPS, exact-host, integrity, retention, and rollback policy (ContextualWisdomLab/.github#1019, ContextualWisdomLab/naruon#1364).
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 - Added a permanent exact-head contract workflow for the hourly review-repair scheduler, immutable reusable-workflow source, NVIDIA NIM model boundary, credential isolation, and fail-closed unattended-agent permissions.
