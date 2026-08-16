@@ -119,6 +119,46 @@ def test_requirement_symlink_is_rejected_instead_of_followed(
         module.discover_requirement_files(tmp_path)
 
 
+def test_symlink_hash_sibling_cannot_suppress_source_audit(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A symlink ``*-hashes.txt`` sibling is not a regular complete lock."""
+
+    module = load_module()
+    source = tmp_path / "requirements-demo.txt"
+    source.write_text("demo==1.0.0\n", encoding="utf-8")
+    outside = tmp_path / "outside-lock.txt"
+    _write_valid_lock(outside)
+    sibling = tmp_path / "requirements-demo-hashes.txt"
+    sibling.symlink_to(outside)
+
+    assert module.hashed_sibling(source) is None
+    assert module.audit_command(source) == [
+        "pip-audit",
+        "--strict",
+        "--desc=on",
+        "-r",
+        str(source),
+    ]
+    assert "--disable-pip" not in (module.audit_command(source) or [])
+
+
+def test_filename_only_requirement_is_not_a_complete_lock(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A hashed wheel path without an exact ``==`` pin cannot bypass pip."""
+
+    module = load_module()
+    requirements = tmp_path / "requirements-wheel.txt"
+    requirements.write_text(
+        "./demo-1.0.0-py3-none-any.whl --hash=sha256:" + ("c" * 64) + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.is_hashed_lock(requirements) is False
+    assert "--disable-pip" not in (module.audit_command(requirements) or [])
+
+
 def test_valid_regular_hash_sibling_still_suppresses_compile_input(
     tmp_path: pathlib.Path,
 ) -> None:

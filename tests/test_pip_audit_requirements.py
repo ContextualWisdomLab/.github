@@ -383,7 +383,7 @@ def test_should_audit_skips_unstatable_children_and_accepts_pylock(
     """Unstatable children are skipped; a pylock.*.toml file is a real manifest."""
 
     module = load_module()
-    vanished = tmp_path / "vanished"
+    vanished = tmp_path / "aaa-vanished"
     vanished.mkdir()
     service = tmp_path / "service"
     service.mkdir()
@@ -392,12 +392,31 @@ def test_should_audit_skips_unstatable_children_and_accepts_pylock(
     original = pathlib.Path.lstat
 
     def flaky(self: pathlib.Path) -> Any:
-        if self.name == "vanished":
+        if self.name == "aaa-vanished":
             raise OSError("race")
         return original(self)
 
     monkeypatch.setattr(pathlib.Path, "lstat", flaky)
     assert module.should_audit_project_manifest(tmp_path) is True
+
+
+def test_should_audit_continues_when_only_child_cannot_be_stated(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """An unstatable child cannot hide the no-manifest result."""
+
+    module = load_module()
+    vanished = tmp_path / "vanished"
+    vanished.mkdir()
+    original = pathlib.Path.lstat
+
+    def flaky(self: pathlib.Path) -> Any:
+        if self.name == "vanished":
+            raise OSError("race")
+        return original(self)
+
+    monkeypatch.setattr(pathlib.Path, "lstat", flaky)
+    assert module.should_audit_project_manifest(tmp_path) is False
 
 
 def test_display_path_falls_back_to_name_outside_the_root(
