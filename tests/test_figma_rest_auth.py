@@ -135,9 +135,11 @@ class _FakeWhoamiResponse:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
-        """Return the canned body."""
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        """Return the canned body, honoring an optional byte limit."""
+        if amt is None:
+            return self._body
+        return self._body[:amt]
 
 
 class _FakeWhoamiConnection:
@@ -247,6 +249,61 @@ def test_default_opener_wraps_os_errors(monkeypatch: pytest.MonkeyPatch) -> None
     assert TOKEN not in str(transport.value)
     assert FailingConnection.last is not None
     assert FailingConnection.last.closed is True
+
+
+def test_sanitize_request_headers_allows_only_figma_token() -> None:
+    """A Host or empty token header never reaches ``HTTPSConnection.request``."""
+    assert auth.sanitize_request_headers({}) == {}
+    assert auth.sanitize_request_headers({auth.TOKEN_HEADER: TOKEN}) == {
+        auth.TOKEN_HEADER: TOKEN
+    }
+    with pytest.raises(auth.FigmaAuthError) as host:
+        auth.sanitize_request_headers({auth.TOKEN_HEADER: TOKEN, "Host": "evil.example"})
+    assert host.value.exit_code == auth.EXIT_TRANSPORT
+    assert "Host" in str(host.value)
+    assert TOKEN not in str(host.value)
+    with pytest.raises(auth.FigmaAuthError) as blank:
+        auth.sanitize_request_headers({auth.TOKEN_HEADER: "  "})
+    assert blank.value.exit_code == auth.EXIT_TRANSPORT
+
+
+def test_read_bounded_body_rejects_oversize_and_nonpositive_limits() -> None:
+    """Response bodies cannot grow past the configured byte cap."""
+    assert auth.read_bounded_body(lambda amt: b"ok"[:amt], 8) == b"ok"
+    with pytest.raises(auth.FigmaAuthError) as oversize:
+        auth.read_bounded_body(lambda amt: b"x" * amt, 4)
+    assert oversize.value.exit_code == auth.EXIT_TRANSPORT
+    assert "4" in str(oversize.value)
+    with pytest.raises(auth.FigmaAuthError) as invalid:
+        auth.read_bounded_body(lambda amt: b"", 0)
+    assert invalid.value.exit_code == auth.EXIT_TRANSPORT
+
+
+def test_default_opener_rejects_oversize_whoami_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whoami body larger than 64 KiB is a transport failure."""
+
+    class HugeConnection(_FakeWhoamiConnection):
+        """Return more bytes than the whoami cap."""
+
+        def __init__(self, host: str, timeout: int = 0) -> None:
+            """Initialize an oversized body."""
+            super().__init__(host, timeout)
+            self._body = b"x" * (auth.MAX_WHOAMI_BODY_BYTES + 1)
+
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", HugeConnection)
+    with pytest.raises(auth.FigmaAuthError) as oversize:
+        auth.default_opener(auth.WHOAMI_URL, {auth.TOKEN_HEADER: TOKEN})
+    assert oversize.value.exit_code == auth.EXIT_TRANSPORT
+    assert str(auth.MAX_WHOAMI_BODY_BYTES) in str(oversize.value)
+
+
+def test_live_unauthenticated_whoami_is_rejected_by_figma() -> None:
+    """The real ``/v1/me`` endpoint rejects a missing token with HTTP 401/403."""
+    status, body = auth.default_opener(auth.WHOAMI_URL, {})
+    assert status in {401, 403}
+    assert TOKEN not in body.decode("utf-8", errors="replace")
+    lowered = body.lower()
+    assert b"token" in lowered or b"unauthorized" in lowered or b"invalid" in lowered
 
 
 def test_helper_pins_https_origin_instead_of_dynamic_urllib() -> None:
