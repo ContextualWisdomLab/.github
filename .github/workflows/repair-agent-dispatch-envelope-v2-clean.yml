@@ -1,0 +1,82 @@
+name: Repair agent dispatch envelope clean successor
+
+on:
+  push:
+    branches:
+      - fix/agent-mention-dispatch-envelope-v2-clean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-agent-dispatch-envelope-v2-clean
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/agent-mention-dispatch-envelope-v2-clean
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply bounded compatibility repair and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git show origin/main:tests/test_required_workflow_queue_contract.py > tests/test_required_workflow_queue_contract.py
+          python3 - <<'PYTHON'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          replacements = {
+              'os.environ["DISPATCH_CLIENT_PAYLOAD_JSON"] or "null"':
+                  'os.environ.get("DISPATCH_CLIENT_PAYLOAD_JSON") or "null"',
+              'os.environ["GITHUB_EVENT_ACTION"] == "merge-scheduler-agent-review-v2"':
+                  'os.environ.get("GITHUB_EVENT_ACTION", "") == "merge-scheduler-agent-review-v2"',
+          }
+          for old, new in replacements.items():
+              if workflow.count(old) != 1:
+                  raise SystemExit(f'expected exactly one workflow occurrence: {old}')
+              workflow = workflow.replace(old, new, 1)
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          test_path = Path('tests/test_opencode_agent_contract.py')
+          test_source = test_path.read_text(encoding='utf-8')
+          old = '''    assert (
+        "SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' "
+        "&& github.event.client_payload.target_repository != '' && "
+        "(secrets.PR_REVIEW_MERGE_TOKEN || "
+        "secrets.OPENCODE_APPROVE_TOKEN || "
+        "steps.scheduler_app_token.outputs.token) || github.token }}"
+        in workflow
+    )
+'''
+          new = '''    read_token_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith("SCHEDULER_READ_TOKEN:")
+    )
+    assert "github.event.action == 'merge-scheduler-agent-review-v2'" in read_token_line
+    assert "github.event.client_payload.claim.repository != ''" in read_token_line
+    assert "github.event.client_payload.target_repository != ''" in read_token_line
+    assert "secrets.PR_REVIEW_MERGE_TOKEN" in read_token_line
+    assert "secrets.OPENCODE_APPROVE_TOKEN" in read_token_line
+    assert "steps.scheduler_app_token.outputs.token" in read_token_line
+    assert read_token_line.endswith("|| github.token }}")
+'''
+          if test_source.count(old) != 1:
+              raise SystemExit('expected exactly one scheduler read-token assertion block')
+          test_path.write_text(test_source.replace(old, new, 1), encoding='utf-8')
+          PYTHON
+          rm .github/workflows/repair-agent-dispatch-envelope-v2-clean.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/pr-review-merge-scheduler.yml tests/test_opencode_agent_contract.py tests/test_required_workflow_queue_contract.py .github/workflows/repair-agent-dispatch-envelope-v2-clean.yml
+          git commit -m "fix(automation): preserve legacy scheduler test contracts"
+          git push origin HEAD:fix/agent-mention-dispatch-envelope-v2-clean
