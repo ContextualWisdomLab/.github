@@ -20,11 +20,13 @@ TOKEN_ENV_NAME = "FIGMA_ACCESS_TOKEN"
 TOKEN_HEADER = "X-Figma-Token"
 WHOAMI_URL = "https://api.figma.com/v1/me"
 REQUEST_TIMEOUT_SECONDS = 20
+MAX_WHOAMI_BODY_BYTES = 65_536
 EXIT_OK = 0
 EXIT_MISSING_TOKEN = 2
 EXIT_REJECTED = 3
 EXIT_TRANSPORT = 4
 Opener = Callable[[str, Mapping[str, str]], tuple[int, bytes]]
+BoundedReader = Callable[[int], bytes]
 
 
 class FigmaAuthError(Exception):
@@ -55,6 +57,41 @@ def read_access_token(environ: Mapping[str, str]) -> str:
     return token
 
 
+def sanitize_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Allow only ``X-Figma-Token`` so a ``Host`` header cannot retarget TLS."""
+    sanitized: dict[str, str] = {}
+    for name, value in headers.items():
+        if name.lower() != TOKEN_HEADER.lower():
+            raise FigmaAuthError(
+                f"Figma REST opener refuses header {name!s} other than "
+                f"{TOKEN_HEADER}.",
+                EXIT_TRANSPORT,
+            )
+        if not value.strip():
+            raise FigmaAuthError(
+                "Figma REST token header is empty.",
+                EXIT_TRANSPORT,
+            )
+        sanitized[TOKEN_HEADER] = value
+    return sanitized
+
+
+def read_bounded_body(read: BoundedReader, limit: int) -> bytes:
+    """Read at most ``limit`` bytes or raise ``FigmaAuthError``."""
+    if limit < 1:
+        raise FigmaAuthError(
+            "Figma REST body limit must be a positive byte count.",
+            EXIT_TRANSPORT,
+        )
+    payload = read(limit + 1)
+    if len(payload) > limit:
+        raise FigmaAuthError(
+            f"Figma REST response exceeded {limit} bytes.",
+            EXIT_TRANSPORT,
+        )
+    return payload
+
+
 def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
     """GET the fixed Figma whoami origin and return ``(status, body)``.
 
@@ -74,9 +111,9 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     try:
-        connection.request("GET", "/v1/me", headers=dict(headers))
+        connection.request("GET", "/v1/me", headers=sanitize_request_headers(headers))
         response = connection.getresponse()
-        return int(response.status), response.read()
+        return int(response.status), read_bounded_body(response.read, MAX_WHOAMI_BODY_BYTES)
     except OSError as exc:
         raise FigmaAuthError(
             f"Figma REST transport failed: {exc}",

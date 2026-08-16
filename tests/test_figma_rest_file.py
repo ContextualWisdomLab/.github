@@ -143,9 +143,11 @@ class _FakeFileResponse:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
-        """Return the canned body."""
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        """Return the canned body, honoring an optional byte limit."""
+        if amt is None:
+            return self._body
+        return self._body[:amt]
 
 
 class _FakeFileConnection:
@@ -195,6 +197,24 @@ def test_default_file_opener_reads_success_body(monkeypatch: pytest.MonkeyPatch)
     assert connection.path == path
     assert connection.headers == {auth.TOKEN_HEADER: TOKEN}
     assert connection.closed is True
+
+
+def test_default_file_opener_rejects_oversize_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file body larger than 8 MiB is a transport failure."""
+
+    class HugeConnection(_FakeFileConnection):
+        """Return more bytes than the file cap."""
+
+        def __init__(self, host: str, timeout: int = 0) -> None:
+            """Initialize an oversized body."""
+            super().__init__(host, timeout)
+            self._body = b"x" * (files.MAX_FILE_BODY_BYTES + 1)
+
+    monkeypatch.setattr(files.http.client, "HTTPSConnection", HugeConnection)
+    with pytest.raises(auth.FigmaAuthError) as oversize:
+        files.default_file_opener(files.build_request_path(FILE_KEY), {auth.TOKEN_HEADER: TOKEN})
+    assert oversize.value.exit_code == auth.EXIT_TRANSPORT
+    assert str(files.MAX_FILE_BODY_BYTES) in str(oversize.value)
 
 
 def test_default_file_opener_wraps_os_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -470,6 +490,9 @@ def test_doctoring_and_entry_docs_pin_file_read_fallback() -> None:
     assert "APA 7th references" in doctoring
     assert "Retrieved August 16, 2026" in doctoring
     assert "file-endpoints" in doctoring
+    assert "CWE-22" in doctoring
+    assert "plan access token" in doctoring
+    assert "X-Figma-Token" in changelog
     assert "scripts/ci/figma_rest_file.py" in changelog
     assert "Figma Cloud Agent REST" in architecture
     assert "FIGMA_ACCESS_TOKEN" in claude
