@@ -7,3 +7,4 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+Cursor Cloud Agents cannot complete Figma MCP OAuth against `https://mcp.figma.com/mcp` (allowlisted-client catalog; Cloud unsupported). Desktop/CLI remain the MCP path. Cloud Agents that must read Figma files use the `FIGMA_ACCESS_TOKEN` secret with the REST API. See [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).
