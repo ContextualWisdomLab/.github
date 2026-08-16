@@ -215,7 +215,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "          - standard" "strix manual dispatch offers official standard mode"
 	assert_file_contains "$workflow_file" "          - deep" "strix manual dispatch offers official deep mode"
 	assert_file_not_contains "$workflow_file" "          - normal" "strix workflow must not offer a non-official normal scan-mode choice"
-	assert_file_not_contains "$workflow_file" $'\n  release:' "strix workflow must not invent a GitHub release trigger"
+	assert_file_not_contains "$workflow_file" "  release:" "strix workflow must not invent a GitHub release trigger"
 	assert_file_not_contains "$workflow_file" "v*-rc*" "strix workflow must not invent RC-tag triggers"
 	assert_file_not_contains "$workflow_file" "client_payload.scan_mode" "strix repository_dispatch cannot select scan mode"
 	assert_file_contains "$workflow_file" "STRIX_SCAN_MODE: \${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_mode || 'standard') || github.event_name == 'schedule' && 'standard' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && 'standard' || 'quick' }}" "strix workflow maps dual-flow events to official scan modes"
