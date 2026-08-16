@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/.github/schemas/cwl-object-storage-v1.schema.json",
+  "title": "CWL object-storage contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capability",
+    "repository",
+    "provider_class",
+    "endpoint_policy",
+    "credentials",
+    "permissions",
+    "encryption",
+    "integrity",
+    "lifecycle",
+    "rollback",
+    "observability",
+    "database_object_names",
+    "assurance_posture"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "capability": { "const": "object_storage" },
+    "repository": { "type": "string", "minLength": 1 },
+    "provider_class": { "enum": ["aws_s3", "s3_compatible"] },
+    "endpoint_policy": { "type": "object" },
+    "credentials": { "type": "object" },
+    "permissions": { "type": "object" },
+    "encryption": { "type": "object" },
+    "integrity": { "type": "object" },
+    "lifecycle": { "type": "object" },
+    "rollback": { "type": "object" },
+    "observability": { "type": "object" },
+    "database_object_names": { "const": "multiword_snake_case" },
+    "assurance_posture": { "const": "design_constraints_only" }
+  }
+}
