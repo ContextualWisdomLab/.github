@@ -826,16 +826,71 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
-    None
-):
+def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
     workflow = workflow_text("security-scan.yml")
+    support_probe = workflow_step(workflow, "Check dependency review support")
 
     assert "id: dependency_review_support" in workflow
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
-    assert '"$status" = "403"' in workflow
-    assert '"$status" = "404"' in workflow
-    assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
+    assert "--connect-timeout 10" in workflow
+    assert "--max-time 30" in workflow
+    assert "-o /dev/null" in workflow
+    assert "curl_status=$?" in support_probe
+    assert "set +e" in support_probe
+    assert "set -e" in support_probe
+    assert "|| true" not in support_probe
+    assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
+    assert "supported=false" not in workflow
+    assert "skipping dependency-review hard gate" not in workflow
+    assert (
+        "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    )
+
+
+def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
+    tmp_path: Path,
+) -> None:
+    """A failed curl transport must not make HTTP 200 acceptable evidence."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    github_output = tmp_path / "github-output"
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("security-scan.yml"),
+            "Check dependency review support",
+        ).split("        run: |\n", 1)[1]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_API_URL": "https://api.example.invalid",
+            "GITHUB_OUTPUT": str(github_output),
+            "GH_TOKEN": "synthetic-read-token",
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "REPOSITORY": "ContextualWisdomLab/.github",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "HTTP 200; curl exit 18" in result.stdout
+    assert not github_output.exists()
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
