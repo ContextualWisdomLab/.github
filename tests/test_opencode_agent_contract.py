@@ -186,19 +186,14 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "glm-5-free"],
         ["opencode-free", "kimi-k2.5-free"],
         ["opencode-free", "qwen3.6-plus-free"],
-        ["opencode", "gpt-5.6-terra"],
-        ["github-models", "deepseek/deepseek-v3-0324"],
         ["openai", "gpt-5.6-luna"],
         ["openrouter", "deepseek/deepseek-v3.2"],
         ["openrouter", "qwen/qwen3-coder"],
-        ["github-models", "openai/gpt-4.1"],
-        ["github-models", "openai/gpt-5"],
-        ["github-models", "openai/gpt-5-chat"],
-        ["github-models", "openai/o3"],
-        ["github-models", "deepseek/deepseek-r1-0528"],
-        ["github-models", "deepseek/deepseek-r1"],
     ]
-    assert zen_models == ["gpt-5.6-terra"]
+    assert zen_models == []
+    assert github_candidate_models == []
+    assert "opencode/gpt-5.6-terra" not in candidates_text
+    assert "github-models/" not in candidates_text
     assert direct_openai_models == ["gpt-5.6-luna"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
@@ -1416,7 +1411,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "7200"'
         in workflow
     )
     assert (
@@ -1512,7 +1507,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert (
@@ -1569,20 +1564,18 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/qwen3.6-plus-free ' || ''"
     ) in workflow
     assert (
-        "opencode/gpt-5.6-terra "
-        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
-        "openrouter/qwen/qwen3-coder "
-        "github-models/openai/gpt-4.1 "
-        "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
-        "github-models/openai/o3 "
-        "github-models/deepseek/deepseek-r1-0528 "
-        "github-models/deepseek/deepseek-r1"
+        "openrouter/qwen/qwen3-coder"
     ) in workflow
+    pool_candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
+    assert pool_candidates_match is not None
+    pool_candidates = pool_candidates_match.group(1)
+    assert "opencode/gpt-5.6-terra" not in pool_candidates
+    assert "github-models/" not in pool_candidates
+    assert "opencode/gpt-5.6-terra" not in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
@@ -1592,19 +1585,19 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
         in workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "7200"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
-    assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "7200"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
@@ -1717,17 +1710,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        "github-models/deepseek/deepseek-v3-0324 "
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
-        "openrouter/qwen/qwen3-coder "
-        "github-models/openai/gpt-4.1 "
-        "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
-        "github-models/openai/o3 "
-        "github-models/deepseek/deepseek-r1-0528 "
-        "github-models/deepseek/deepseek-r1"
+        "openrouter/qwen/qwen3-coder"
     ) in workflow
+    assert "github-models/" not in pool_candidates
+    assert "opencode/gpt-5.6-terra" not in pool_candidates
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(
         r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"',

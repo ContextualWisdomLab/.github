@@ -753,7 +753,7 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
     assert result.returncode == 1
-    # Default dynamic timeout cap is now 3600s (hour-class large-repo allowance),
+    # Default dynamic timeout cap is now 7200s (two-hour NIM allowance),
     # so per-attempt 3600s is not reduced; only the total budget cap (1s) applies.
     assert (
         "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 3600s, "

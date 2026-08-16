@@ -92,7 +92,7 @@ env_integer_or_default() {
 cap_dynamic_cadence_for_queue() {
 	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
 
-	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600)"
+	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 7200)"
 	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 7200)"
 	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
 	previous_run_timeout="$original_run_timeout"
@@ -426,7 +426,7 @@ cap_model_run_timeout() {
 
 	case "$model_candidate" in
 	nvidia-nim/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180)"
+		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 7200)"
 		;;
 	opencode-free/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
@@ -613,7 +613,7 @@ main() {
 		fi
 		exit 1
 	fi
-	nim_budget_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900)"
+	nim_budget_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 7200)"
 	nim_elapsed_seconds=0
 	non_nim_candidate_count=0
 	for model_candidate in "${model_candidates[@]}"; do
