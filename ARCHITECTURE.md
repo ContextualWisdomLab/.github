@@ -125,10 +125,10 @@ replaced. See [`docs/doctoring/sandbox-log-redaction.md`](docs/doctoring/sandbox
   collapse would drop the first secret of a duplicate `token` pair. A
   failed opener is scored only until the next plausible start, so
   `##[group]` and prose `[timeout]` cannot erase a later complete object.
-  Downloaded Actions job logs prefix every line with an RFC 3339 UTC
-  runner timestamp (`YYYY-MM-DDTHH:MM:SS.nnnnnnnZ `). The span parser
-  skips that line metadata the same way it skips JSON whitespace, so a
-  pretty-printed password object remains one span. A `[` opens an array
+  Downloaded Actions job logs prefix every line with an RFC 3339
+  runner timestamp. The span parser skips `Z` and `time-numoffset`
+  prefixes plus a following SPACE or HTAB the same way it skips JSON
+  whitespace, so a pretty-printed password object remains one span. A `[` opens an array
   only when the next significant token can start a JSON value
   (`true` / `false` / `null` / number / string / container / `]`), so
   line-start `[INFO]` diagnostics stay visible (Klyne & Newman, 2002;

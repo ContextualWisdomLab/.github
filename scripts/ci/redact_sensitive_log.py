@@ -145,7 +145,7 @@ MAX_RAW_JSON_REPLACEMENTS = 2_048
 MAX_RAW_JSON_WORK = 262_144
 RAW_JSON_SPAN_PREFIXES = frozenset(" \t\r\n{[:,=()]")
 ACTIONS_JOB_LOG_TIMESTAMP_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z "
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})[ \t]"
 )
 JSON_ARRAY_NUMBER_STARTERS = frozenset("0123456789-")
 JSON_ARRAY_CONTAINER_STARTERS = frozenset("{[")
@@ -898,7 +898,7 @@ def _raw_json_spend(budget: dict[str, int], *, tokens: int = 0, work: int = 0) -
 
 
 def _skip_actions_job_log_noise(text: str, cursor: int) -> int:
-    """Advance over JSON whitespace and line-start runner timestamps."""
+    """Advance over JSON whitespace and line-start RFC 3339 runner timestamps."""
     while cursor < len(text):
         if text[cursor] in " \t\r\n":
             cursor += 1
