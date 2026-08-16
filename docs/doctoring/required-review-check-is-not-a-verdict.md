@@ -23,7 +23,9 @@ review on an old SHA, or no review at all cannot make the check green.
 
 `scripts/ci/noema_review_gate.py` no longer returns 0 when the current
 head has no primary OpenCode approval. That skip was exit 0, so the
-required `noema-review` check looked like a successful review. The gate
+required `noema-review` check looked like a successful review. Draft
+status is checked only after that primary-approval gate, so a draft
+without an OpenCode verdict cannot turn `noema-review` green. The gate
 also validates the primary approval before accepting an existing Noema
 review; a secondary verdict cannot independently turn the required gate
 green.

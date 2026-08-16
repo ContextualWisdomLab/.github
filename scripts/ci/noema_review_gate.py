@@ -606,7 +606,12 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 
 def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's LLM review when gates are clean."""
+    """Inspect PR state and submit Noema's LLM review when gates are clean.
+
+    Missing current-head primary OpenCode approval fails closed, including
+    on draft pull requests, so the required check cannot look reviewed
+    without a Reviews-tab verdict.
+    """
     pr = fetch_pr(repo, number)
     actor = current_actor()
     if actor in PRIMARY_REVIEW_AUTHORS:
@@ -615,9 +620,6 @@ def inspect_and_review(repo: str, number: int) -> int:
             "Noema review skipped so GitHub receives an independent reviewer."
         )
         return 0
-    if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
-        return 0
     if not current_primary_approval(pr):
         print(
             "Current head does not have a primary OpenCode approval; "
@@ -625,6 +627,9 @@ def inspect_and_review(repo: str, number: int) -> int:
             "check look like a review."
         )
         return 1
+    if pr.get("isDraft"):
+        print("PR is draft; Noema review skipped after primary OpenCode approval.")
+        return 0
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
