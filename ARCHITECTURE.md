@@ -93,6 +93,9 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- Central Semgrep binds one job-level `SEMGREP_IMAGE` digest for log
+  evidence, manifest inspect, and `docker run` so buyers can reconstruct
+  the exact scanner that produced SARIF.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
 - Logs and review receipts redact credential shapes (tokens, bearer values,
@@ -122,5 +125,7 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md)
+  — single-source Semgrep digest for log evidence and `docker run`.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.

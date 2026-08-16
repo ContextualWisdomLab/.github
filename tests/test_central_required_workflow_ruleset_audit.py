@@ -293,6 +293,18 @@ def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results(
     )
 
     assert "--output=semgrep-results.raw.sarif" in workflow
+    assert (
+        'SEMGREP_IMAGE: "semgrep/semgrep@sha256:'
+        "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942\""
+    ) in workflow
+    assert (
+        workflow.count(
+            "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+        )
+        == 1
+    )
+    assert '"${SEMGREP_IMAGE}"' in workflow
+    assert "Verify pinned Semgrep manifest" in workflow
     assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
     assert ".suppressions // []" in workflow
     assert "SEMGREP_SUPPRESSED_COUNT" in workflow
