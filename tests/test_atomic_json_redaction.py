@@ -35,6 +35,9 @@ def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
     assert "Klyne, G., & Newman, C. (2002)." in doctoring
     assert "https://doi.org/10.17487/RFC3339" in doctoring
     assert "Using workflow run logs" in doctoring
+    assert "gh run view" in doctoring
+    assert "UNKNOWN STEP" in doctoring
+    assert "https://cli.github.com/manual/gh_run_view" in doctoring
     assert "begin-array" in doctoring
     assert "RFC 8259" in architecture
     assert "unpredictable" in architecture
@@ -44,6 +47,7 @@ def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
     assert "runner timestamp" in architecture
     assert "time-numoffset" in architecture
     assert "HTAB" in architecture
+    assert "gh run view" in architecture
 
 
 def _timestamped_job_log(lines: tuple[str, ...], *, crlf: bool = False) -> str:
@@ -53,6 +57,23 @@ def _timestamped_job_log(lines: tuple[str, ...], *, crlf: bool = False) -> str:
     for index, line in enumerate(lines):
         stamped.append(f"2026-08-16T15:22:12.001234{index}Z {line}")
     return ending.join(stamped) + ending
+
+
+def _gh_run_view_log(
+    lines: tuple[str, ...],
+    *,
+    job: str = "Exact-head sandbox redaction contract",
+    step: str = "Verify fail-closed sandbox redaction contract",
+    offset: str = "Z",
+    separator: str = " ",
+) -> str:
+    """Prefix lines the way `gh run view --log-failed` copies zip logs."""
+    stamped: list[str] = []
+    for index, line in enumerate(lines):
+        stamped.append(
+            f"{job}\t{step}\t2026-08-16T15:22:12.001234{index}{offset}{separator}{line}"
+        )
+    return "\n".join(stamped) + "\n"
 
 
 def test_realistic_actions_job_log_preserves_layout_and_hides_secrets() -> None:
@@ -239,6 +260,131 @@ def test_tab_separated_timestamped_job_log_keeps_status() -> None:
 
     assert credential not in cleaned
     assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_gh_run_view_log_keeps_group_and_status() -> None:
+    """Collector `gh run view --log-failed` job/step prefixes must stay visible."""
+    credential = _credential("ghview")
+    source = _gh_run_view_log(
+        (
+            "##[group]Runner",
+            "{",
+            f'  "password": "{credential}",',
+            '  "status": "failed"',
+            "}",
+            "##[endgroup]",
+        )
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "##[group]Runner" in cleaned
+    assert "##[endgroup]" in cleaned
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_gh_run_view_unknown_step_offset_tab_keeps_status() -> None:
+    """UNKNOWN STEP plus offset and HTAB must still leave one JSON span."""
+    credential = _credential("unknown")
+    source = _gh_run_view_log(
+        (
+            "{",
+            f'  "password": "{credential}",',
+            '  "status": "failed"',
+            "}",
+        ),
+        job="Required OpenCode Review ContextualWisdomLab/.github#1040@df4b447f",
+        step="UNKNOWN STEP",
+        offset="+00:00",
+        separator="\t",
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_two_tab_tsv_without_timestamp_is_not_eaten_as_runner_prefix() -> None:
+    """A TSV diagnostic without an RFC 3339 prefix must keep its field text."""
+    credential = _credential("tsv")
+    source = f"name\tvalue\t{{\"password\": \"{credential}\", \"status\": \"failed\"}}\n"
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert cleaned.startswith("name\tvalue\t")
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+
+
+def test_single_tab_line_inside_object_fails_closed() -> None:
+    """A one-tab continuation is not a collector prefix and must not leak."""
+    credential = _credential("onetab")
+    source = "{\njob\tonly-one-field\n" f'  "password": "{credential}"\n}}\n'
+
+    assert redactor.redact_text(source) == redactor.REDACTED
+
+
+def test_two_tab_non_timestamp_line_inside_object_fails_closed() -> None:
+    """Two tabs without an RFC 3339 timestamp must not be skipped as metadata."""
+    credential = _credential("twotab")
+    source = "{\njob\tstep\tnot-a-timestamp\n" f'  "password": "{credential}"\n}}\n'
+
+    assert redactor.redact_text(source) == redactor.REDACTED
+
+
+def test_gh_run_view_job_step_fields_redact_on_continuation_lines() -> None:
+    """Skipped collector prefixes inside a span must still hide credential shapes."""
+    token = "ghp_" + ("A" * 22)
+    assignment_secret = _credential("asg")
+    leaf = _credential("leaf")
+    source = _gh_run_view_log(
+        (
+            "{",
+            f'  "password": "{leaf}",',
+            '  "status": "failed"',
+            "}",
+        ),
+        job=token,
+        step=f"password={assignment_secret}",
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert token not in cleaned
+    assert assignment_secret not in cleaned
+    assert leaf not in cleaned
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_gh_run_view_array_rewrites_only_leaves() -> None:
+    """A collector-prefixed pretty-printed array stays one span."""
+    credential = _credential("gharr")
+    source = _gh_run_view_log(
+        (
+            "[",
+            f'  {{"password": "{credential}"}},',
+            "  false,",
+            "  null",
+            "]",
+        )
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "false" in cleaned
+    assert "null" in cleaned
     assert f'"{redactor.REDACTED}"' in cleaned
     assert cleaned != redactor.REDACTED
 

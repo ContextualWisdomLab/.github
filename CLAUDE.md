@@ -128,9 +128,10 @@ repeatable compile command.
   — it escapes `<`, `>`, `&` when embedding JSON in HTML comments to prevent Markdown-comment
   breakout. Do not reintroduce bash fast-path extraction.
 - **Downloaded Actions job logs keep per-line RFC 3339 runner timestamps.** `redact_sensitive_log`
-  skips `Z` and `time-numoffset` prefixes plus SPACE or HTAB inside JSON spans and opens `[` only
-  for a real JSON value, so `##[group]` and `[INFO]` diagnostics are not fail-closed to
-  `[REDACTED]`. See `docs/doctoring/sandbox-log-redaction.md`.
+  skips `Z` and `time-numoffset` prefixes plus SPACE or HTAB, and the `gh run view --log-failed`
+  `job<HTAB>step<HTAB>` collector prefix (`UNKNOWN STEP` when unassociated), inside JSON spans.
+  It opens `[` only for a real JSON value, so `##[group]` and `[INFO]` diagnostics are not
+  fail-closed to `[REDACTED]`. See `docs/doctoring/sandbox-log-redaction.md`.
 - **Cloudflare changes are dry-run by default**; nothing is deleted unless `prune = true` is set
   explicitly. PRs never see the Cloudflare API token.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;

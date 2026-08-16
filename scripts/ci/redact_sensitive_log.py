@@ -147,6 +147,7 @@ RAW_JSON_SPAN_PREFIXES = frozenset(" \t\r\n{[:,=()]")
 ACTIONS_JOB_LOG_TIMESTAMP_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})[ \t]"
 )
+MAX_GH_RUN_VIEW_FIELD_CHARS = 512
 JSON_ARRAY_NUMBER_STARTERS = frozenset("0123456789-")
 JSON_ARRAY_CONTAINER_STARTERS = frozenset("{[")
 PROVIDER_TOKEN_RES = (
@@ -897,32 +898,66 @@ def _raw_json_spend(budget: dict[str, int], *, tokens: int = 0, work: int = 0) -
         raise _RawJsonError
 
 
-def _skip_actions_job_log_noise(text: str, cursor: int) -> int:
-    """Advance over JSON whitespace and line-start RFC 3339 runner timestamps."""
+def _bounded_field_tab(text: str, start: int) -> tuple[int | None, int]:
+    """Return the next HTAB index and characters scanned in one gh field."""
+    limit = min(len(text), start + MAX_GH_RUN_VIEW_FIELD_CHARS)
+    index = start
+    while index < limit:
+        character = text[index]
+        if character in "\n\r":
+            return None, index - start + 1
+        if character == "\t":
+            return index, index - start + 1
+        index += 1
+    return None, index - start
+
+
+def _match_actions_job_log_prefix(text: str, cursor: int) -> tuple[int | None, int]:
+    """Return a line-start runner-prefix end and the characters inspected."""
+    match = ACTIONS_JOB_LOG_TIMESTAMP_RE.match(text, cursor)
+    if match is not None:
+        return match.end(), match.end() - cursor
+    first_tab, first_scan = _bounded_field_tab(text, cursor)
+    if first_tab is None:
+        return None, first_scan
+    second_tab, second_scan = _bounded_field_tab(text, first_tab + 1)
+    scanned = first_scan + second_scan
+    if second_tab is None:
+        return None, scanned
+    match = ACTIONS_JOB_LOG_TIMESTAMP_RE.match(text, second_tab + 1)
+    if match is None:
+        return None, scanned + 1
+    return match.end(), match.end() - cursor
+
+
+def _skip_actions_job_log_noise(text: str, cursor: int) -> tuple[int, int]:
+    """Advance over JSON whitespace and collector or zip runner prefixes."""
+    start = cursor
+    probed = 0
     while cursor < len(text):
         if text[cursor] in " \t\r\n":
             cursor += 1
             continue
         if cursor == 0 or text[cursor - 1] in "\n\r":
-            match = ACTIONS_JOB_LOG_TIMESTAMP_RE.match(text, cursor)
-            if match is not None:
-                cursor = match.end()
+            prefix_end, scanned = _match_actions_job_log_prefix(text, cursor)
+            if prefix_end is not None:
+                cursor = prefix_end
                 continue
+            probed += scanned
         break
-    return cursor
+    return cursor, (cursor - start) + probed
 
 
 def _raw_json_skip_space(text: str, cursor: int, budget: dict[str, int]) -> int:
     """Advance over JSON whitespace and runner timestamps while charging work."""
-    start = cursor
-    cursor = _skip_actions_job_log_noise(text, cursor)
-    _raw_json_spend(budget, work=cursor - start)
+    cursor, work = _skip_actions_job_log_noise(text, cursor)
+    _raw_json_spend(budget, work=work)
     return cursor
 
 
 def _is_plausible_json_array_start(text: str, index: int) -> bool:
     """Return whether '[' opens a JSON array rather than a diagnostic label."""
-    cursor = _skip_actions_job_log_noise(text, index + 1)
+    cursor, _probed = _skip_actions_job_log_noise(text, index + 1)
     if cursor >= len(text):
         return False
     character = text[cursor]
@@ -1281,6 +1316,25 @@ def _redact_plain_json_gap(
     return "".join(output)
 
 
+def _redact_skipped_runner_prefixes(
+    text: str,
+    literal_pattern: re.Pattern[str] | None,
+) -> str:
+    """Redact collector or zip prefixes copied as interior JSON-span metadata."""
+    output: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        if cursor == 0 or text[cursor - 1] in "\n\r":
+            prefix_end, _scanned = _match_actions_job_log_prefix(text, cursor)
+            if prefix_end is not None:
+                output.append(_redact_unstructured(text[cursor:prefix_end], literal_pattern))
+                cursor = prefix_end
+                continue
+        output.append(text[cursor])
+        cursor += 1
+    return "".join(output)
+
+
 def _redact_raw_json_spans(
     text: str,
     literal_pattern: re.Pattern[str] | None,
@@ -1334,11 +1388,21 @@ def _redact_raw_json_spans(
             start, end, replacement = replacements[replacement_index]
             if start >= span_end:
                 break
-            output.append(text[span_cursor:start])
+            output.append(
+                _redact_skipped_runner_prefixes(
+                    text[span_cursor:start],
+                    literal_pattern,
+                )
+            )
             output.append(replacement)
             span_cursor = end
             replacement_index += 1
-        output.append(text[span_cursor:span_end])
+        output.append(
+            _redact_skipped_runner_prefixes(
+                text[span_cursor:span_end],
+                literal_pattern,
+            )
+        )
         gap_start = span_end
     output.append(_redact_plain_json_gap(text[gap_start:], literal_pattern))
     return "".join(output), True

@@ -126,9 +126,12 @@ replaced. See [`docs/doctoring/sandbox-log-redaction.md`](docs/doctoring/sandbox
   failed opener is scored only until the next plausible start, so
   `##[group]` and prose `[timeout]` cannot erase a later complete object.
   Downloaded Actions job logs prefix every line with an RFC 3339
-  runner timestamp. The span parser skips `Z` and `time-numoffset`
-  prefixes plus a following SPACE or HTAB the same way it skips JSON
-  whitespace, so a pretty-printed password object remains one span. A `[` opens an array
+  runner timestamp. `gh run view --log-failed` also prefixes
+  `job<HTAB>step<HTAB>` (`UNKNOWN STEP` when unassociated) before that
+  timestamp. The span parser skips those collector prefixes plus `Z`
+  and `time-numoffset` and a following SPACE or HTAB the same way it
+  skips JSON whitespace, so a pretty-printed password object remains
+  one span. A `[` opens an array
   only when the next significant token can start a JSON value
   (`true` / `false` / `null` / number / string / container / `]`), so
   line-start `[INFO]` diagnostics stay visible (Klyne & Newman, 2002;
