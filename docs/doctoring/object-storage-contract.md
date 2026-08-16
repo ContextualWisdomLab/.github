@@ -51,8 +51,13 @@ policy and the fail-closed check that leaf repositories can cite.
 
 `tests/test_object_storage_contract.py` proves the checked-in example passes,
 the schema keys match production constants, and each fail-closed control has a
-unique rejection. Local quality remains 100% statement/branch coverage and
-100% docstrings.
+unique rejection. `tests/test_object_storage_contract_hardening.py` proves
+nested schema objects stay closed, NaN/Infinity are rejected, exact-host
+allowlists exclude localhost, metadata, IPv4, Unicode, and case aliases, a
+denied private-network policy rejects single-label hosts, custom endpoints
+reject ports above 65535, and malformed observability labels raise policy
+errors instead of TypeError. Local quality remains 100% statement/branch
+coverage and 100% docstrings.
 
 ## Rollback
 

@@ -73,7 +73,7 @@ def test_load_contract_path_reports_unreadable_files(tmp_path: Path) -> None:
 def test_is_exact_dns_host_rejects_wildcards_ports_and_empty_labels() -> None:
     """Exact-host allowlists cannot contain wildcard or port syntax."""
     assert validator.is_exact_dns_host("s3.ap-northeast-2.amazonaws.com")
-    assert validator.is_exact_dns_host("localhost") is True
+    assert validator.is_exact_dns_host("localhost") is False
     assert validator.is_exact_dns_host("") is False
     assert validator.is_exact_dns_host(None) is False
     assert validator.is_exact_dns_host("a..b") is False
