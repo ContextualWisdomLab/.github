@@ -1,0 +1,489 @@
+name: Organization Production Stub Scan
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  repository_dispatch:
+    types: [organization-production-stub-scan]
+
+concurrency:
+  group: organization-production-stub-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SHARD_COUNT: '12'
+  MAX_REPOSITORIES_PER_RUN: '16'
+
+jobs:
+  discover-repositories:
+    name: Discover organization repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.inventory.outputs.matrix }}
+      selection_mode: ${{ steps.inventory.outputs.selection_mode }}
+      eligible_repository_count: ${{ steps.inventory.outputs.eligible_repository_count }}
+      selected_repository_count: ${{ steps.inventory.outputs.selected_repository_count }}
+      deferred_repository_count: ${{ steps.inventory.outputs.deferred_repository_count }}
+      continuation_offset: ${{ steps.inventory.outputs.continuation_offset }}
+      next_continuation_offset: ${{ steps.inventory.outputs.next_continuation_offset }}
+      max_repositories_per_run: ${{ steps.inventory.outputs.max_repositories_per_run }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Build exact default-branch matrix
+        id: inventory
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          ORGANIZATION_NAME: ContextualWisdomLab
+          EVENT_NAME: ${{ github.event_name }}
+          CONTINUATION_OFFSET: ${{ github.event.client_payload.continuation_offset || '0' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PR_REVIEW_MERGE_TOKEN is required for the organization inventory."
+            exit 1
+          fi
+          if ! [[ "${SHARD_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::SHARD_COUNT must be a positive integer."
+            exit 1
+          fi
+          if ! [[ "${MAX_REPOSITORIES_PER_RUN}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::MAX_REPOSITORIES_PER_RUN must be a positive integer."
+            exit 1
+          fi
+          if ! [[ "${CONTINUATION_OFFSET}" =~ ^[0-9]+$ ]]; then
+            echo "::error::CONTINUATION_OFFSET must be a non-negative integer."
+            exit 1
+          fi
+
+          gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/orgs/${ORGANIZATION_NAME}/repos?type=all&per_page=100" \
+            >"${RUNNER_TEMP}/repository-pages.json"
+
+          jq -s '
+            add
+            | map(select(.archived == false and .disabled == false and .fork == false))
+            | sort_by(.full_name)
+            | map({full_name, default_branch, has_issues})
+          ' "${RUNNER_TEMP}/repository-pages.json" >"${RUNNER_TEMP}/repositories.json"
+
+          EVENT_NAME="$EVENT_NAME" \
+          SHARD_COUNT="$SHARD_COUNT" \
+          MAX_REPOSITORIES_PER_RUN="$MAX_REPOSITORIES_PER_RUN" \
+          CONTINUATION_OFFSET="$CONTINUATION_OFFSET" \
+            python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          repositories = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "repositories.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          event_name = os.environ["EVENT_NAME"]
+          shard_count = int(os.environ["SHARD_COUNT"])
+          max_repositories = int(os.environ["MAX_REPOSITORIES_PER_RUN"])
+          requested_offset = int(os.environ["CONTINUATION_OFFSET"])
+          scheduled_shard = None
+
+          if event_name == "schedule":
+              epoch_hour = int(
+                  os.environ.get("SELECTION_EPOCH_HOUR", int(time.time()) // 3600)
+              )
+              scheduled_shard = epoch_hour % shard_count
+              eligible = []
+              for repository in repositories:
+                  full_name = repository["full_name"]
+                  digest = hashlib.sha256(full_name.encode("utf-8")).digest()
+                  repository_shard = int.from_bytes(digest[:8], "big") % shard_count
+                  if repository_shard == scheduled_shard:
+                      eligible.append(repository)
+              selection_mode = "scheduled_shard"
+              if len(eligible) > max_repositories:
+                  continuation_round = epoch_hour // shard_count
+                  continuation_offset = (
+                      continuation_round * max_repositories
+                  ) % len(eligible)
+                  selected = (eligible + eligible)[
+                      continuation_offset : continuation_offset + max_repositories
+                  ]
+                  deferred_repository_count = len(eligible) - len(selected)
+                  next_continuation_offset = (
+                      continuation_offset + len(selected)
+                  ) % len(eligible)
+              else:
+                  continuation_offset = 0
+                  selected = eligible
+                  deferred_repository_count = 0
+                  next_continuation_offset = 0
+          elif event_name == "repository_dispatch":
+              eligible = repositories
+              selection_mode = "dispatch_continuation"
+              continuation_offset = requested_offset
+              if eligible and continuation_offset >= len(eligible):
+                  raise SystemExit(
+                      "CONTINUATION_OFFSET must identify an eligible repository"
+                  )
+              selected = eligible[
+                  continuation_offset : continuation_offset + max_repositories
+              ]
+              after_selection = continuation_offset + len(selected)
+              deferred_repository_count = max(0, len(eligible) - after_selection)
+              next_continuation_offset = (
+                  after_selection if deferred_repository_count else 0
+              )
+          else:
+              raise SystemExit(f"Unsupported EVENT_NAME: {event_name}")
+
+          if len(selected) > max_repositories:
+              raise SystemExit("Selection exceeded MAX_REPOSITORIES_PER_RUN")
+
+          receipt = {
+              "schema": "cwl.implementation-completeness-selection/v1",
+              "selection_mode": selection_mode,
+              "scheduled_shard": scheduled_shard,
+              "eligible_repository_count": len(eligible),
+              "selected_repository_count": len(selected),
+              "deferred_repository_count": deferred_repository_count,
+              "max_repositories_per_run": max_repositories,
+              "continuation_offset": continuation_offset,
+              "next_continuation_offset": next_continuation_offset,
+              "complete": deferred_repository_count == 0,
+          }
+          Path(os.environ["RUNNER_TEMP"], "selected-repositories.json").write_text(
+              json.dumps(selected, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          Path(os.environ["RUNNER_TEMP"], "selected-shard.txt").write_text(
+              str(scheduled_shard) if scheduled_shard is not None else "all",
+              encoding="utf-8",
+          )
+          Path(os.environ["RUNNER_TEMP"], "selection-receipt.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          # Bind all operator claims to the single calculation that built the matrix.
+          scheduled_shard="$(cat "${RUNNER_TEMP}/selected-shard.txt")"
+          selection_mode="$(jq -r '.selection_mode' "${RUNNER_TEMP}/selection-receipt.json")"
+          eligible_repository_count="$(jq -r '.eligible_repository_count' "${RUNNER_TEMP}/selection-receipt.json")"
+          receipt_selected_repository_count="$(jq -r '.selected_repository_count' "${RUNNER_TEMP}/selection-receipt.json")"
+          deferred_repository_count="$(jq -r '.deferred_repository_count' "${RUNNER_TEMP}/selection-receipt.json")"
+          continuation_offset="$(jq -r '.continuation_offset' "${RUNNER_TEMP}/selection-receipt.json")"
+          next_continuation_offset="$(jq -r '.next_continuation_offset' "${RUNNER_TEMP}/selection-receipt.json")"
+          if [ "$scheduled_shard" = all ]; then
+            echo "Selected bounded dispatch window at offset ${continuation_offset} for event ${EVENT_NAME}."
+          else
+            echo "Selected shard ${scheduled_shard}/${SHARD_COUNT} for event ${EVENT_NAME}."
+          fi
+          echo "Selection budget receipt: mode=${selection_mode}; eligible=${eligible_repository_count}; selected=${receipt_selected_repository_count}; deferred=${deferred_repository_count}; cap=${MAX_REPOSITORIES_PER_RUN}; offset=${continuation_offset}; next_offset=${next_continuation_offset}."
+          if [ "$EVENT_NAME" = repository_dispatch ] && [ "$deferred_repository_count" -gt 0 ]; then
+            echo "::notice::Replay organization-production-stub-scan with client_payload.continuation_offset=${next_continuation_offset} to continue the exact full-fleet pass."
+          fi
+
+          : >"${RUNNER_TEMP}/matrix.ndjson"
+          while IFS=$'\t' read -r full_name default_branch has_issues; do
+            if [ -z "$full_name" ] || [ -z "$default_branch" ] || ! [[ "$has_issues" =~ ^(true|false)$ ]]; then
+              echo "::error::Repository inventory contained an incomplete identity."
+              exit 1
+            fi
+            repository_sha="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${full_name}/commits/${default_branch}" \
+                --jq '.sha'
+            )"
+            if ! [[ "$repository_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Could not bind ${full_name}@${default_branch} to an exact commit."
+              exit 1
+            fi
+            repository_slug="${full_name//\//--}"
+            jq -nc \
+              --arg repository_full_name "$full_name" \
+              --arg default_branch "$default_branch" \
+              --arg repository_sha "$repository_sha" \
+              --arg repository_slug "$repository_slug" \
+              --argjson has_issues "$has_issues" \
+              '{repository_full_name: $repository_full_name, default_branch: $default_branch, repository_sha: $repository_sha, repository_slug: $repository_slug, has_issues: $has_issues}' \
+              >>"${RUNNER_TEMP}/matrix.ndjson"
+          done < <(jq -r '.[] | [.full_name, .default_branch, .has_issues] | @tsv' "${RUNNER_TEMP}/selected-repositories.json")
+
+          matrix="$(jq -sc '{include: .}' "${RUNNER_TEMP}/matrix.ndjson")"
+          selected_repository_count="$(jq '.include | length' <<<"$matrix")"
+          if [ "$selected_repository_count" -eq 0 ]; then
+            echo "::error::No eligible organization repository was selected."
+            exit 1
+          fi
+          if [ "$selected_repository_count" -ne "$receipt_selected_repository_count" ]; then
+            echo "::error::Selection receipt count does not match the exact-SHA matrix."
+            exit 1
+          fi
+          if [ "$selected_repository_count" -gt "$MAX_REPOSITORIES_PER_RUN" ]; then
+            echo "::error::Exact-SHA matrix exceeded MAX_REPOSITORIES_PER_RUN."
+            exit 1
+          fi
+          {
+            echo 'matrix<<EOF'
+            echo "$matrix"
+            echo 'EOF'
+            echo "selection_mode=$selection_mode"
+            echo "eligible_repository_count=$eligible_repository_count"
+            echo "selected_repository_count=$selected_repository_count"
+            echo "deferred_repository_count=$deferred_repository_count"
+            echo "continuation_offset=$continuation_offset"
+            echo "next_continuation_offset=$next_continuation_offset"
+            echo "max_repositories_per_run=$MAX_REPOSITORIES_PER_RUN"
+          } >>"$GITHUB_OUTPUT"
+
+  scan-repository:
+    name: Scan ${{ matrix.repository_full_name }}
+    needs: discover-repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.discover-repositories.outputs.matrix) }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact target repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ matrix.repository_full_name }}
+          ref: ${{ matrix.repository_sha }}
+          token: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          path: target-repository
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout immutable central scanner source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.sha }}
+          path: central-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Scan every tracked runtime source file
+        id: scan
+        env:
+          TARGET_REPOSITORY: ${{ matrix.repository_full_name }}
+          TARGET_SHA: ${{ matrix.repository_sha }}
+        run: |
+          set -uo pipefail
+          report_path="${GITHUB_WORKSPACE}/production-stub-inventory.json"
+          PYTHONPATH="${GITHUB_WORKSPACE}/central-source" \
+            python3 "${GITHUB_WORKSPACE}/central-source/scripts/ci/organization_production_stub_scan.py" \
+              --repo-root "${GITHUB_WORKSPACE}/target-repository" \
+              --all-tracked \
+              --format json \
+              >"$report_path"
+          scanner_exit_code=$?
+          if [ "$scanner_exit_code" -gt 1 ]; then
+            jq -n \
+              --arg repository "$TARGET_REPOSITORY" \
+              --arg repository_sha "$TARGET_SHA" \
+              --argjson exit_code "$scanner_exit_code" \
+              '{schema: "cwl.implementation-completeness/v2", result: "fail", checked_runtime_source_files: 0, findings: [], errors: [("scanner failed with exit code " + ($exit_code | tostring))], repository: $repository, repository_sha: $repository_sha}' \
+              >"$report_path"
+          fi
+          echo "scanner_exit_code=$scanner_exit_code" >>"$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload exact inventory evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: production-stub-inventory-${{ matrix.repository_slug }}-${{ matrix.repository_sha }}
+          path: production-stub-inventory.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Find existing remediation issue
+        id: remediation-issue
+        if: matrix.has_issues == true
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          TARGET_REPOSITORY: ${{ matrix.repository_full_name }}
+        run: |
+          set -euo pipefail
+          title='[Production Stub Remediation] Default-branch inventory'
+          gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${TARGET_REPOSITORY}/issues?state=open&per_page=100" \
+            >"${RUNNER_TEMP}/open-issues-pages.json"
+          issue_number="$(
+            jq -sr --arg title "$title" \
+              'add | map(select(.pull_request == null and .title == $title)) | first | .number // empty' \
+              "${RUNNER_TEMP}/open-issues-pages.json"
+          )"
+          echo "issue_number=$issue_number" >>"$GITHUB_OUTPUT"
+
+      - name: Create or refresh remediation issue
+        if: steps.scan.outputs.scanner_exit_code != '0' && matrix.has_issues == true
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          TARGET_REPOSITORY: ${{ matrix.repository_full_name }}
+          TARGET_BRANCH: ${{ matrix.default_branch }}
+          TARGET_SHA: ${{ matrix.repository_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='[Production Stub Remediation] Default-branch inventory'
+          issue_number="${{ steps.remediation-issue.outputs.issue_number }}"
+          python3 - <<'PY' >"${RUNNER_TEMP}/issue-body.md"
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("production-stub-inventory.json").read_text(encoding="utf-8"))
+          findings = payload.get("findings") or []
+          errors = payload.get("errors") or []
+          lines = [
+              "<!-- cwl-production-stub-inventory -->",
+              "# Production stub remediation inventory",
+              "",
+              f"- Exact repository: `{os.environ['TARGET_REPOSITORY']}`",
+              f"- Exact default branch: `{os.environ['TARGET_BRANCH']}`",
+              f"- Exact scanned SHA: `{os.environ['TARGET_SHA']}`",
+              f"- Runtime source files checked: `{payload.get('checked_runtime_source_files', 0)}`",
+              f"- Findings: `{len(findings)}`",
+              f"- Scanner errors: `{len(errors)}`",
+              f"- Evidence run: {os.environ['RUN_URL']}",
+              "",
+              "Replace each executable/demo-only path with production behavior or remove the advertised capability. Do not convert a stub into a success-shaped no-op. Add a fail-first regression, exact-head tests, production statement/branch coverage, public docstrings, CHANGELOG, and applicable operator/doctoring evidence.",
+          ]
+          if errors:
+              lines.extend(["", "## Scanner errors"])
+              lines.extend(f"- `{error}`" for error in errors[:50])
+          if findings:
+              lines.extend(["", "## Findings"])
+              for item in findings[:200]:
+                  lines.append(
+                      f"- `{item['path']}:{item['line']}` `{item['symbol']}` — {item['reason']}"
+                  )
+              if len(findings) > 200:
+                  lines.append(f"- … {len(findings) - 200} additional findings are retained in the run artifact.")
+          print("\n".join(lines) + "\n")
+          PY
+          body="$(cat "${RUNNER_TEMP}/issue-body.md")"
+          if [ -n "$issue_number" ]; then
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${TARGET_REPOSITORY}/issues/${issue_number}" \
+              -f title="$title" \
+              -f body="$body" >/dev/null
+          else
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${TARGET_REPOSITORY}/issues" \
+              -f title="$title" \
+              -f body="$body" >/dev/null
+          fi
+
+      - name: Close resolved remediation issue
+        if: steps.scan.outputs.scanner_exit_code == '0' && matrix.has_issues == true
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          TARGET_REPOSITORY: ${{ matrix.repository_full_name }}
+        run: |
+          set -euo pipefail
+          issue_number="${{ steps.remediation-issue.outputs.issue_number }}"
+          if [ -n "$issue_number" ]; then
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${TARGET_REPOSITORY}/issues/${issue_number}/comments" \
+              -f body='Exact default-branch rescan found no remaining production-stub findings. Closing this inventory issue.' >/dev/null
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${TARGET_REPOSITORY}/issues/${issue_number}" \
+              -f state=closed \
+              -f state_reason=completed >/dev/null
+          fi
+
+      - name: Record issue-disabled remediation boundary
+        if: steps.scan.outputs.scanner_exit_code != '0' && matrix.has_issues != true
+        run: echo "Target repository has Issues disabled; remediation remains in the exact inventory artifact."
+
+      - name: Preserve failing inventory conclusion
+        if: always() && steps.scan.outputs.scanner_exit_code != '0'
+        env:
+          SCANNER_EXIT_CODE: ${{ steps.scan.outputs.scanner_exit_code }}
+        run: exit "${SCANNER_EXIT_CODE:-1}"
+
+  shard-operability:
+    name: Record shard execution budget
+    needs: [discover-repositories, scan-repository]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    env:
+      SHARD_EXECUTION_BUDGET_SECONDS: '3600'
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Record selected fleet size and elapsed run time
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          SELECTION_MODE: ${{ needs.discover-repositories.outputs.selection_mode }}
+          ELIGIBLE_REPOSITORY_COUNT: ${{ needs.discover-repositories.outputs.eligible_repository_count }}
+          SELECTED_REPOSITORY_COUNT: ${{ needs.discover-repositories.outputs.selected_repository_count }}
+          DEFERRED_REPOSITORY_COUNT: ${{ needs.discover-repositories.outputs.deferred_repository_count }}
+          CONTINUATION_OFFSET: ${{ needs.discover-repositories.outputs.continuation_offset }}
+          NEXT_CONTINUATION_OFFSET: ${{ needs.discover-repositories.outputs.next_continuation_offset }}
+          MAX_REPOSITORIES_PER_RUN: ${{ needs.discover-repositories.outputs.max_repositories_per_run }}
+        run: |
+          set -euo pipefail
+          for value_name in ELIGIBLE_REPOSITORY_COUNT SELECTED_REPOSITORY_COUNT DEFERRED_REPOSITORY_COUNT CONTINUATION_OFFSET NEXT_CONTINUATION_OFFSET MAX_REPOSITORIES_PER_RUN; do
+            value="${!value_name:-}"
+            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+              echo "::error::${value_name} is unavailable or invalid."
+              exit 1
+            fi
+          done
+          if [ "$SELECTED_REPOSITORY_COUNT" -eq 0 ] || [ "$SELECTED_REPOSITORY_COUNT" -gt "$MAX_REPOSITORIES_PER_RUN" ]; then
+            echo "::error::The selected repository count violated the enforced run budget."
+            exit 1
+          fi
+          echo "Selection budget receipt: mode=${SELECTION_MODE}; eligible=${ELIGIBLE_REPOSITORY_COUNT}; selected=${SELECTED_REPOSITORY_COUNT}; deferred=${DEFERRED_REPOSITORY_COUNT}; cap=${MAX_REPOSITORIES_PER_RUN}; offset=${CONTINUATION_OFFSET}; next_offset=${NEXT_CONTINUATION_OFFSET}."
+          created_at="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --jq '.created_at'
+          )"
+          created_epoch="$(date -u --date="$created_at" +%s)"
+          now_epoch="$(date -u +%s)"
+          elapsed_seconds=$(( now_epoch - created_epoch ))
+          echo "Shard execution receipt: selected=${SELECTED_REPOSITORY_COUNT}; elapsed_seconds=${elapsed_seconds}; budget_seconds=${SHARD_EXECUTION_BUDGET_SECONDS}."
+          if [ "$elapsed_seconds" -ge "$SHARD_EXECUTION_BUDGET_SECONDS" ]; then
+            echo "::warning::Shard execution exceeded ${SHARD_EXECUTION_BUDGET_SECONDS} seconds; investigate Actions queue occupancy before the next hourly run."
+          fi
