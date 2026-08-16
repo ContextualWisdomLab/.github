@@ -1,0 +1,29 @@
+name: Diagnose PR 1009 quick gate assertions
+
+on:
+  push:
+    branches:
+      - codex/strix-evidence-minimal
+    paths:
+      - .github/workflows/diagnose-pr1009-quick-gate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: codex/strix-evidence-minimal
+          persist-credentials: false
+      - name: Print stale assertion locations and candidate owning files
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n -C 3 -E 'manual_run_line|Default-branch repository_dispatch Strix structured evidence binding passed|current_head_manual_strix_structured_success_status|current_head_successful_strix_check_run|A successful same-head default-branch' scripts/ci/test_strix_quick_gate.sh || true
+          printf '\n--- candidate production locations ---\n'
+          grep -R -n -C 2 -E 'manual_run_line|Default-branch repository_dispatch Strix structured evidence binding passed|current_head_manual_strix_structured_success_status|current_head_successful_strix_check_run|A successful same-head default-branch' .github/workflows scripts/ci --exclude=test_strix_quick_gate.sh || true
+          exit 1
