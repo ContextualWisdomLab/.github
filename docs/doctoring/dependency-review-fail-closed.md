@@ -25,6 +25,10 @@ Checks, status contexts, review submissions, and merge authorization remain sepa
 
 Retries are operator-initiated only after the capability or service condition changes. Do not rerun unchanged evidence repeatedly and do not convert an unavailable endpoint into a green skip.
 
+## Known canary
+
+ContextualWisdomLab/EgressWeave#66, Security Scan run `31108241013`, job `92638903658`, compared `10d0c51daf2ad278d66f43be479df8cf6b08ba6d...c038a9509d1a8eae8561cc9081e67e12bd373d42` and received HTTP `403`. The required workflow printed the skip warning, omitted `actions/dependency-review-action`, and still concluded success. Downstream tracking: ContextualWisdomLab/EgressWeave#76. Keep ContextualWisdomLab/.github#810 open until a protected-main public consumer run proves a non-200 or failed-transfer comparison cannot green this job.
+
 ## Acceptance and rollback
 
 Acceptance requires the permanent queue contract to reject the former `supported=false` path, require bounded probing and discarded bodies, require exact-head checkout, and prove that only `200` reaches the action. Exact-head CI/security evidence, current review, protected integration, and a real protected-main consumer run remain required.
