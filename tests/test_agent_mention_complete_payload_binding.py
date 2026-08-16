@@ -74,12 +74,13 @@ def test_event_and_payloads_bind_exact_base_identity() -> None:
     assert request.pull_request_base_branch == "main"
     assert request.pull_request_base_sha == "b" * 40
 
-    for payload in (
-        router.noema_payload(request)["client_payload"],
-        router.opencode_payload(request)["client_payload"],
-    ):
-        assert payload["base_branch"] == "main"
-        assert payload["pr_base_sha"] == "b" * 40
+    noema_payload = router.noema_payload(request)["client_payload"]
+    assert noema_payload["base_branch"] == "main"
+    assert noema_payload["pr_base_sha"] == "b" * 40
+    opencode_envelope = router.opencode_payload(request)["client_payload"]
+    assert opencode_envelope["schema"] == "cwl.agent-invocation/v2"
+    assert opencode_envelope["claim"]["base_branch"] == "main"
+    assert opencode_envelope["claim"]["base_sha"] == "b" * 40
 
     malformed = _event()
     malformed["pull_request"]["base"]["sha"] = "not-a-sha"
@@ -150,36 +151,37 @@ def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    assert "PR_BASE_SHA:" in noema
+    assert "github.event.client_payload.pr_base_sha" in noema
+    assert '! [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]' in noema
+    assert '"base_sha": os.environ["PR_BASE_SHA"]' in noema
+    assert "--arg pr_base_sha \"$PR_BASE_SHA\"" in noema
+    assert "pr_base_sha: $pr_base_sha" in noema
+    assert noema.count('"base_sha": os.environ["PR_BASE_SHA"]') >= 2
+
+    assert "CLIENT_PAYLOAD_JSON:" in opencode
+    assert "github.event.client_payload.claim" in opencode
+    assert '"base_sha"' in opencode
+    assert 'r"[0-9a-f]{40}", claim["base_sha"]' in opencode
+    assert "set(envelope)" in opencode
+    assert "set(claim)" in opencode
+    assert '"client_payload": envelope' in opencode
+    assert '--input "$SCHEDULER_REQUEST_FILE"' in opencode
     for workflow in (noema, opencode):
-        assert "PR_BASE_SHA:" in workflow
-        assert "github.event.client_payload.pr_base_sha" in workflow
-        assert '! [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
-        assert '"base_sha": os.environ["PR_BASE_SHA"]' in workflow
         assert "hmac.compare_digest" in workflow
         assert workflow.index("Validate exact invocation payload") < workflow.index(
             "Inspect exact-name Actions artifact ledger"
         )
-        assert "--arg pr_base_sha \"$PR_BASE_SHA\"" in workflow
-        assert "pr_base_sha: $pr_base_sha" in workflow
 
-    for field in (
-        '"trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true"',
-        '"review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"]',
-        '"enable_auto_merge": os.environ["ENABLE_AUTO_MERGE"] == "true"',
-        '"update_branches": os.environ["UPDATE_BRANCHES"] == "true"',
-        '"merge_mode": os.environ["MERGE_MODE"]',
+    for field, value in (
+        ('"agent"', '"opencode-agent"'),
+        ('"trigger_reviews"', "True"),
+        ('"review_dispatch_limit"', '"1"'),
+        ('"enable_auto_merge"', "False"),
+        ('"update_branches"', "False"),
+        ('"merge_mode"', '"disabled"'),
     ):
-        assert field in opencode
-
-    assert noema.count('"base_sha": os.environ["PR_BASE_SHA"]') >= 2
-    for field in (
-        '"trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true"',
-        '"review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"]',
-        '"enable_auto_merge": os.environ["ENABLE_AUTO_MERGE"] == "true"',
-        '"update_branches": os.environ["UPDATE_BRANCHES"] == "true"',
-        '"merge_mode": os.environ["MERGE_MODE"]',
-    ):
-        assert opencode.count(field) >= 2
+        assert f"{field}: {value}" in opencode
 
 
 def test_no_pr_specific_writer_workflow_remains() -> None:

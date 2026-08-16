@@ -33,6 +33,7 @@ def fake_fine_grained_github_token(body):
 def make_pr(**overrides):
     value = {
         "number": 1,
+        "state": "OPEN",
         "title": "Central review",
         "isDraft": False,
         "mergeable": "MERGEABLE",
@@ -3399,6 +3400,405 @@ def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     assert cancelled == [("owner/repo", 1, True)]
 
 
+def test_snapshot_bound_inspection_performs_review_dispatch_without_general_mutations(
+    monkeypatch,
+):
+    """A digest-bound mention cannot clean up, merge, or update unrelated state."""
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError(f"unexpected general scheduler mutation: {args!r} {kwargs!r}")
+
+    for name in (
+        "cancel_stale_pr_runs",
+        "resolve_outdated_review_threads",
+        "dismiss_stale_opencode_approvals",
+        "dismiss_stale_opencode_change_requests",
+        "disable_auto_merge",
+        "enable_auto_merge",
+        "merge_pr",
+        "restamp_pr_head_for_last_push_approval",
+        "update_branch",
+    ):
+        monkeypatch.setattr(sched, name, forbidden)
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run, snapshot_guarded: dispatched.append(
+            (repo, workflow, pr["headRefOid"], dry_run, snapshot_guarded)
+        )
+        or "dispatched",
+    )
+
+    decision = inspect(
+        make_pr(),
+        dry_run=False,
+        snapshot_guarded=True,
+        enable_auto_merge_flag=False,
+        merge_mode="disabled",
+        update_branches=False,
+    )
+
+    assert decision.action == "security_dispatch"
+    assert dispatched == [
+        ("owner/repo", "Strix Security Scan", "head", False, True)
+    ]
+
+
+def test_snapshot_bound_review_covers_every_fail_closed_decision_boundary(monkeypatch):
+    """The review-only path remains explicit for every terminal evidence state."""
+
+    monkeypatch.setattr(
+        sched,
+        "unresolved_thread_count",
+        lambda pr: pr.get("test_unresolved", 0),
+    )
+    monkeypatch.setattr(
+        sched,
+        "has_current_head_changes_requested",
+        lambda pr: pr.get("test_changes_requested", False),
+    )
+    monkeypatch.setattr(
+        sched,
+        "effective_merge_state",
+        lambda pr: pr.get("test_merge_state", "CLEAN"),
+    )
+    monkeypatch.setattr(
+        sched,
+        "has_current_head_approval",
+        lambda pr: pr.get("test_approved", False),
+    )
+    monkeypatch.setattr(
+        sched,
+        "failed_status_checks",
+        lambda pr: pr.get("test_failed", []),
+    )
+    monkeypatch.setattr(
+        sched,
+        "action_required_checks",
+        lambda pr: pr.get("test_action_required", []),
+    )
+    monkeypatch.setattr(
+        sched,
+        "branch_outdated_by_base",
+        lambda pr, merge_state: pr.get("test_behind", 0),
+    )
+    monkeypatch.setattr(
+        sched,
+        "opencode_progress_state",
+        lambda pr, stale_after_minutes: pr.get("test_opencode", "absent"),
+    )
+    monkeypatch.setattr(
+        sched,
+        "has_current_head_deterministic_fallback_approval",
+        lambda pr: pr.get("test_fallback", False),
+    )
+    monkeypatch.setattr(
+        sched,
+        "strix_evidence_state",
+        lambda pr: pr.get("test_strix", "missing"),
+    )
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: "dispatch unavailable" if workflow.startswith("wait-") else None,
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run, snapshot_guarded: pr.get(
+            "test_dispatch_result", "dispatched"
+        ),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run, snapshot_guarded: pr.get(
+            "test_dispatch_result", "dispatched"
+        ),
+    )
+
+    def decide(
+        pr,
+        *,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="review",
+        security_workflow="security",
+    ):
+        return sched.inspect_snapshot_bound_review(
+            "owner/repo",
+            pr,
+            dry_run=False,
+            trigger_reviews=trigger_reviews,
+            review_dispatch_allowed=review_dispatch_allowed,
+            workflow=workflow,
+            security_workflow=security_workflow,
+            base_branch="main",
+            stale_opencode_minutes=60,
+        )
+
+    cases = [
+        (make_pr(state="CLOSED"), {}, "wait", "no longer open"),
+        (make_pr(isDraft=True), {}, "skip", "draft"),
+        (make_pr(baseRefName="release"), {}, "wait", "base branch changed"),
+        (make_pr(test_unresolved=2), {}, "block", "2 unresolved"),
+        (make_pr(test_changes_requested=True), {}, "block", "requested changes"),
+        (make_pr(test_merge_state="DIRTY"), {}, "block", "merge conflict"),
+        (
+            make_pr(test_approved=True, test_failed=["quality"]),
+            {},
+            "block",
+            "failed check(s)",
+        ),
+        (
+            make_pr(test_action_required=["deploy"]),
+            {},
+            "wait",
+            "workflow action required",
+        ),
+        (
+            make_pr(test_behind=2),
+            {},
+            "wait",
+            "current head has no OpenCode approval; snapshot-bound review cannot update",
+        ),
+        (make_pr(test_merge_state="UNKNOWN"), {}, "wait", "still being calculated"),
+        (make_pr(test_approved=True), {}, "wait", "review-only"),
+        (make_pr(test_opencode="running"), {}, "wait", "already in progress"),
+        (
+            make_pr(test_opencode="stale"),
+            {"trigger_reviews": False},
+            "wait",
+            "dispatch disabled",
+        ),
+        (
+            make_pr(test_opencode="stale"),
+            {"review_dispatch_allowed": False},
+            "wait",
+            "limit reached",
+        ),
+        (
+            make_pr(test_opencode="stale", test_dispatch_result="already_running"),
+            {},
+            "wait",
+            "already active",
+        ),
+        (
+            make_pr(test_opencode="stale", test_dispatch_result="snapshot_changed"),
+            {},
+            "wait",
+            "different-head review run is active",
+        ),
+        (make_pr(test_opencode="stale"), {}, "review_dispatch", "re-dispatched"),
+        (
+            make_pr(test_strix="missing"),
+            {"review_dispatch_allowed": False},
+            "wait",
+            "limit reached",
+        ),
+        (
+            make_pr(test_strix="missing"),
+            {"security_workflow": "wait-security"},
+            "wait",
+            "dispatch unavailable",
+        ),
+        (
+            make_pr(test_strix="missing", test_dispatch_result="snapshot_changed"),
+            {},
+            "wait",
+            "different-head Strix run is active",
+        ),
+        (
+            make_pr(test_strix="missing", test_dispatch_result="already_running"),
+            {},
+            "wait",
+            "same-head Strix evidence",
+        ),
+        (make_pr(test_strix="running"), {}, "wait", "still running"),
+        (
+            make_pr(test_strix="complete"),
+            {"review_dispatch_allowed": False},
+            "wait",
+            "limit reached",
+        ),
+        (
+            make_pr(test_strix="complete"),
+            {"workflow": "wait-review"},
+            "wait",
+            "dispatch unavailable",
+        ),
+        (
+            make_pr(test_strix="complete", test_dispatch_result="already_running"),
+            {},
+            "wait",
+            "already active",
+        ),
+        (
+            make_pr(test_strix="complete", test_dispatch_result="snapshot_changed"),
+            {},
+            "wait",
+            "different-head review run is active",
+        ),
+        (
+            make_pr(test_strix="complete"),
+            {},
+            "review_dispatch",
+            "OpenCode dispatched",
+        ),
+        (
+            make_pr(test_behind=1),
+            {"trigger_reviews": False},
+            "block",
+            "dispatch disabled",
+        ),
+    ]
+    for pr, kwargs, action, reason in cases:
+        decision = decide(pr, **kwargs)
+        assert decision.action == action
+        assert reason in decision.reason
+
+    approved_behind = decide(make_pr(test_behind=2, test_approved=True))
+    assert approved_behind == sched.Decision(
+        1,
+        "wait",
+        "current head is approved; snapshot-bound review cannot update an outdated branch",
+    )
+    assert "no OpenCode approval" not in approved_behind.reason
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    fallback = decide(make_pr(test_fallback=True))
+    assert fallback.action == "wait"
+    assert "deterministic fallback" in fallback.reason
+    no_fallback = decide(
+        make_pr(test_fallback=False),
+        trigger_reviews=False,
+    )
+    assert no_fallback.action == "block"
+
+
+def test_snapshot_guarded_review_dispatch_does_not_post_when_another_head_is_active(monkeypatch):
+    """A post-validation push prevents stale dispatch and receiver-side cancellation."""
+
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda repo, workflow, pr: ([], [(repo, "new-head-run")]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_run_refs",
+        lambda refs: (_ for _ in ()).throw(AssertionError(f"unexpected cancellation: {refs}")),
+    )
+    payloads = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, stdin=None: payloads.append(json.loads(stdin)),
+    )
+    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+
+    assert (
+        sched.dispatch_opencode_review(
+            "owner/repo",
+            "OpenCode Review",
+            pr,
+            dry_run=False,
+            snapshot_guarded=True,
+        )
+        == "snapshot_changed"
+    )
+    assert payloads == []
+
+
+def test_snapshot_guarded_strix_dispatch_does_not_post_or_cancel_newer_runs(
+    monkeypatch,
+):
+    """Snapshot mode leaves later-head Strix runs alone without queuing stale work."""
+
+    monkeypatch.setattr(
+        sched,
+        "matching_actions_job_id",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected rerun lookup")),
+    )
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_review_run_refs",
+        lambda *args, **kwargs: ([], [("owner/repo", "new-head-run")]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_run_refs",
+        lambda refs: (_ for _ in ()).throw(AssertionError(f"unexpected cancellation: {refs}")),
+    )
+    payloads = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, stdin=None: payloads.append(json.loads(stdin)),
+    )
+    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+
+    assert (
+        sched.dispatch_strix_evidence(
+            "owner/repo",
+            "Strix Security Scan",
+            pr,
+            dry_run=False,
+            snapshot_guarded=True,
+        )
+        == "snapshot_changed"
+    )
+    assert payloads == []
+
+
+def test_snapshot_guarded_dispatch_deduplicates_same_head_without_cancellation(
+    monkeypatch,
+):
+    """An exact-head active run suppresses duplicate OpenCode and Strix POSTs."""
+
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda repo, workflow, pr: ([(repo, "same-head")], []),
+    )
+    monkeypatch.setattr(
+        sched,
+        "active_review_run_refs",
+        lambda *args, **kwargs: ([("owner/repo", "same-head")], []),
+    )
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_run_refs",
+        lambda refs: (_ for _ in ()).throw(AssertionError(f"unexpected cancellation: {refs}")),
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected POST")),
+    )
+    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+
+    assert sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        pr,
+        dry_run=False,
+        snapshot_guarded=True,
+    ) == "already_running"
+    assert sched.dispatch_strix_evidence(
+        "owner/repo",
+        "Strix Security Scan",
+        pr,
+        dry_run=False,
+        snapshot_guarded=True,
+    ) == "already_running"
+
+
 def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
     auto_merges = []
     disables = []
@@ -4363,6 +4763,228 @@ def test_main_rejects_invalid_branch_update_limit():
                 "-2",
             ]
         )
+
+
+@pytest.mark.parametrize(
+    ("observed_head", "observed_base", "observed_branch", "observed_state", "message"),
+    [
+        ("c" * 40, "b" * 40, "main", "OPEN", "head SHA changed"),
+        ("a" * 40, "d" * 40, "main", "OPEN", "base SHA changed"),
+        ("a" * 40, "b" * 40, "release", "OPEN", "base branch changed"),
+        ("a" * 40, "b" * 40, "main", "CLOSED", "no longer open"),
+    ],
+)
+def test_main_rejects_target_snapshot_drift_before_inspection(
+    monkeypatch,
+    observed_head,
+    observed_base,
+    observed_branch,
+    observed_state,
+    message,
+):
+    """A validated mention cannot act after the PR head or base advances."""
+
+    inspected = []
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: [
+            make_pr(
+                number=number,
+                headRefOid=observed_head,
+                baseRefOid=observed_base,
+                baseRefName=observed_branch,
+                state=observed_state,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        sched,
+        "inspect_pr",
+        lambda *args, **kwargs: inspected.append((args, kwargs)),
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "a" * 40,
+                "--expected-base-sha",
+                "b" * 40,
+                "--expected-base-branch",
+                "main",
+            ]
+        )
+
+    assert inspected == []
+
+
+def test_main_accepts_the_exact_expected_target_snapshot(monkeypatch, capsys):
+    """Matching immutable refs reach inspection with the review-only policy."""
+
+    inspected = []
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: [
+            make_pr(number=number, headRefOid="a" * 40, baseRefOid="b" * 40)
+        ],
+    )
+
+    def fake_inspect(repo, pr, **kwargs):
+        inspected.append((repo, pr, kwargs))
+        return sched.Decision(pr["number"], "skip", "exact snapshot")
+
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "a" * 40,
+                "--expected-base-sha",
+                "b" * 40,
+                "--expected-base-branch",
+                "main",
+                "--no-enable-auto-merge",
+                "--merge-mode",
+                "disabled",
+                "--no-update-branches",
+            ]
+        )
+        == 0
+    )
+    assert len(inspected) == 1
+    assert inspected[0][1]["headRefOid"] == "a" * 40
+    assert inspected[0][1]["baseRefOid"] == "b" * 40
+    assert inspected[0][2]["enable_auto_merge_flag"] is False
+    assert inspected[0][2]["merge_mode"] == "disabled"
+    assert inspected[0][2]["update_branches"] is False
+    assert inspected[0][2]["snapshot_guarded"] is True
+    assert "exact snapshot" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("prs", "pr_number", "head", "base", "branch", "message"),
+    [
+        ([], 7, "a" * 40, "", "main", "must be supplied together"),
+        ([], 7, "", "b" * 40, "main", "must be supplied together"),
+        ([], 7, "a" * 40, "b" * 40, "", "must be supplied together"),
+        ([], 0, "a" * 40, "b" * 40, "main", "require --pr-number"),
+        ([], 7, "invalid", "b" * 40, "main", "invalid git sha"),
+        ([], 7, "a" * 40, "b" * 40, "bad..branch", "invalid git ref"),
+        ([], 7, "a" * 40, "b" * 40, "main", "unavailable or ambiguous"),
+        (
+            [make_pr(number=8, headRefOid="a" * 40, baseRefOid="b" * 40)],
+            7,
+            "a" * 40,
+            "b" * 40,
+            "main",
+            "unavailable or ambiguous",
+        ),
+        (
+            [make_pr(number=7, headRefOid="invalid", baseRefOid="b" * 40)],
+            7,
+            "a" * 40,
+            "b" * 40,
+            "main",
+            "returned malformed refs",
+        ),
+        (
+            [make_pr(number=7, headRefOid="a" * 40, baseRefOid="invalid")],
+            7,
+            "a" * 40,
+            "b" * 40,
+            "main",
+            "returned malformed refs",
+        ),
+    ],
+)
+def test_expected_snapshot_guard_rejects_incomplete_or_malformed_inputs(
+    prs,
+    pr_number,
+    head,
+    base,
+    branch,
+    message,
+):
+    """Target snapshot guards reject incomplete identities before inspection."""
+
+    with pytest.raises(SystemExit, match=message):
+        sched.validate_expected_pr_snapshot(
+            prs,
+            pr_number=pr_number,
+            expected_head_sha=head,
+            expected_base_sha=base,
+            expected_base_branch=branch,
+        )
+
+
+def test_main_refetches_a_guarded_snapshot_before_any_general_scheduler_action(
+    monkeypatch,
+):
+    """A push after initial validation aborts before cleanup or dispatch."""
+
+    snapshots = [
+        make_pr(number=7, headRefOid="a" * 40, baseRefOid="b" * 40),
+        make_pr(number=7, headRefOid="c" * 40, baseRefOid="b" * 40),
+    ]
+    fetches = []
+    general_inspections = []
+
+    def fake_fetch(repo, number):
+        fetches.append((repo, number))
+        return [snapshots.pop(0)]
+
+    monkeypatch.setattr(sched, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(
+        sched,
+        "inspect_pr",
+        lambda *args, **kwargs: general_inspections.append((args, kwargs)),
+    )
+
+    with pytest.raises(SystemExit, match="head SHA changed"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--pr-number",
+                "7",
+                "--expected-head-sha",
+                "a" * 40,
+                "--expected-base-sha",
+                "b" * 40,
+                "--expected-base-branch",
+                "main",
+                "--no-enable-auto-merge",
+                "--merge-mode",
+                "disabled",
+                "--no-update-branches",
+            ]
+        )
+
+    assert fetches == [("owner/repo", 7), ("owner/repo", 7)]
+    assert general_inspections == []
 
 
 def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):

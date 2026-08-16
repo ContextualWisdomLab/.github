@@ -28,6 +28,7 @@ LEDGER_ARTIFACTS_ENDPOINT = (
     f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
 )
 LEDGER_ARTIFACT_PREFIX = "cwl-agent-invocation-"
+OPENCODE_INVOCATION_SCHEMA = "cwl.agent-invocation/v2"
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
@@ -394,24 +395,22 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
 
     agent = "opencode-agent"
     claim = agent_invocation_claim(request, agent)
+    client_payload = {
+        "schema": OPENCODE_INVOCATION_SCHEMA,
+        "claim": claim,
+        "agent_invocation_key": agent_invocation_key(request, agent),
+    }
+    encoded = json.dumps(
+        client_payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(client_payload) > 10 or len(encoded) > 65_535:
+        raise ValueError("OpenCode repository dispatch exceeds GitHub limits")
     return {
         "event_type": "agent-mention-opencode",
-        "client_payload": {
-            "target_repository": request.repository,
-            "pr_number": request.pull_request_number,
-            "pr_head_sha": request.pull_request_head_sha,
-            "pr_base_sha": request.pull_request_base_sha,
-            "base_branch": request.pull_request_base_branch,
-            "trigger_reviews": claim["trigger_reviews"],
-            "review_dispatch_limit": claim["review_dispatch_limit"],
-            "enable_auto_merge": claim["enable_auto_merge"],
-            "update_branches": claim["update_branches"],
-            "merge_mode": claim["merge_mode"],
-            "requested_agent": agent,
-            "agent_invocation_key": agent_invocation_key(request, agent),
-            "requested_by": request.actor,
-            "source_comment_id": request.comment_id,
-        },
+        "client_payload": client_payload,
     }
 
 
@@ -478,14 +477,20 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    target_client.request(
-        [
-            f"{target_api}/issues/comments/{request.comment_id}/reactions",
-            "-X",
-            "POST",
-        ],
-        input_payload={"content": "eyes"},
-    )
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/comments/{request.comment_id}/reactions",
+                "-X",
+                "POST",
+            ],
+            input_payload={"content": "eyes"},
+        )
+    except RuntimeError as exc:
+        print(
+            "::warning::Agent dispatch is durably queued, but the optional "
+            f"eyes reaction could not be recorded: {exc}"
+        )
     status_parts = [f"Queued {' and '.join(handles)}"]
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing

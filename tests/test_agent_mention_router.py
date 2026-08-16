@@ -220,11 +220,13 @@ def test_eligible_agents_and_payloads() -> None:
     assert noema["client_payload"]["pr_base_sha"] == "b" * 40
     opencode = module.opencode_payload(request)
     assert opencode["event_type"] == "agent-mention-opencode"
-    assert opencode["client_payload"]["base_branch"] == "develop"
-    assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
-    assert opencode["client_payload"]["merge_mode"] == "disabled"
-    assert opencode["client_payload"]["enable_auto_merge"] is False
-    assert opencode["client_payload"]["update_branches"] is False
+    assert opencode["client_payload"]["schema"] == "cwl.agent-invocation/v2"
+    claim = opencode["client_payload"]["claim"]
+    assert claim["base_branch"] == "develop"
+    assert claim["base_sha"] == "b" * 40
+    assert claim["merge_mode"] == "disabled"
+    assert claim["enable_auto_merge"] is False
+    assert claim["update_branches"] is False
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:

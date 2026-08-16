@@ -77,6 +77,11 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
+    assert "TARGET_HEAD_SHA_INPUT:" in validation
+    assert "TARGET_BASE_SHA_INPUT:" in validation
+    assert "live_base_sha=" in validation
+    assert '"$TARGET_HEAD_SHA_INPUT" != "$live_head_sha"' in validation
+    assert '"$TARGET_BASE_SHA_INPUT" != "$live_base_sha"' in validation
     assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
     assert (
         "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}"
@@ -85,9 +90,13 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '--repo "$TARGET_REPOSITORY"' in inspect
     assert '--base-branch "$TARGET_DEFAULT_BRANCH"' in inspect
     assert 'args+=(--pr-number "$PULL_REQUEST_NUMBER")' in inspect
+    assert '--expected-head-sha "$EXPECTED_HEAD_SHA"' in inspect
+    assert '--expected-base-sha "$EXPECTED_BASE_SHA"' in inspect
     assert (
         "github.event_name == 'repository_dispatch' && "
-        "github.event.client_payload.target_repository != '' && "
+        "(github.event.action == 'merge-scheduler-agent-review-v2' && "
+        "github.event.client_payload.claim.repository != '' || "
+        "github.event.client_payload.target_repository != '') && "
         "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.scheduler_app_token.outputs.token) || github.token"
     ) in inspect
@@ -111,7 +120,13 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
         trigger_contract = workflow.split("concurrency:", 1)[0]
 
         assert "repository_dispatch:" in trigger_contract
-        assert f"types: [{event_type}]" in trigger_contract
+        if filename == "pr-review-merge-scheduler.yml":
+            assert (
+                "types: [merge-scheduler, merge-scheduler-agent-review-v2]"
+                in trigger_contract
+            )
+        else:
+            assert f"types: [{event_type}]" in trigger_contract
         assert "workflow_dispatch:" not in trigger_contract
         assert "github.event.inputs" not in workflow
         assert "github.event.client_payload" in workflow
@@ -206,7 +221,7 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
 
-def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
+def test_strix_isolates_repository_dispatch_runs_from_stale_event_cancellation() -> None:
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -221,13 +236,13 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
     assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
-    assert "github.event.client_payload.pr_number != '' && format('pr-{0}'," in workflow
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
-    assert "github.event.pull_request.head.sha" not in concurrency_contract
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "cancel-in-progress: true" in workflow
+    assert "github.event_name == 'repository_dispatch' && github.run_id" in concurrency_contract
+    assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in workflow
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in workflow
+    assert "run-id scope prevents an out-of-order stale dispatch" in workflow
+    assert "default pending-run replacement could discard newer valid evidence" in workflow
+    assert "queue: max cannot be combined with the pull-request cancellation policy" in workflow
+    assert "\n  queue: max\n" not in concurrency_contract
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -281,8 +296,9 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    assert "cancel-in-progress: true" in strix_workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
+    assert "cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}" in strix_workflow
+    assert "run-id scope prevents an out-of-order stale dispatch" in strix_workflow
+    assert "default pending-run replacement could discard newer valid evidence" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:

@@ -30,12 +30,9 @@ def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
     for text in (noema, opencode):
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
-        assert "source_comment_id" in text
-        assert "requested_agent" in text
         assert "cancel-in-progress: false" in text
         assert "queue: max" in text
         assert "^[0-9a-f]{64}$" in text
-        assert "^[1-9][0-9]*$" in text
         assert "actions/artifacts" in text
         assert "name=${LEDGER_ARTIFACT_NAME}" in text
         assert f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}" in text
@@ -49,11 +46,17 @@ def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
     assert "types: [agent-mention-noema]" in noema
     assert 'event_type: "noema-review"' in noema
     assert 'REQUESTED_AGENT: "cwl-noema-review"' in noema
+    assert "^[1-9][0-9]*$" in noema
+    assert "source_comment_id" in noema
+    assert "requested_agent" in noema
     assert "types: [agent-mention-opencode]" in opencode
-    assert 'event_type: "merge-scheduler"' in opencode
-    assert 'REQUESTED_AGENT: "opencode-agent"' in opencode
-    assert '[[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]' in opencode
-    assert '[[ "$BASE_BRANCH" == -* ]]' in opencode
+    assert '"event_type": "merge-scheduler-agent-review-v2"' in opencode
+    assert '"agent": "opencode-agent"' in opencode
+    assert '"comment_id"' in opencode
+    assert 'type(claim["comment_id"]) is not int' in opencode
+    assert 'type(claim["pr_number"]) is not int' in opencode
+    assert 're.fullmatch(r"[A-Za-z0-9._/-]+", claim["base_branch"])' in opencode
+    assert 'claim["base_branch"].startswith("-")' in opencode
 
 
 def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
@@ -74,11 +77,11 @@ def test_wrappers_recompute_the_router_canonical_payload_digest() -> None:
         '"pr_number"',
         '"repository"',
     )
-    for text in (
-        NOEMA_WORKFLOW.read_text(encoding="utf-8"),
-        OPENCODE_WORKFLOW.read_text(encoding="utf-8"),
-    ):
-        assert "BASE_BRANCH:" in text
+    noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
+    opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    assert "BASE_BRANCH:" in noema
+    assert '"BASE_BRANCH": claim["base_branch"]' in opencode
+    for text in (noema, opencode):
         assert "import hashlib" in text
         assert "import hmac" in text
         assert "json.dumps(" in text
@@ -104,3 +107,4 @@ def test_quality_gate_runs_full_suite_for_docs_and_exact_diff() -> None:
     coverage_config = text.split("[run]\n", 1)[1].split("[report]\n", 1)[0]
     assert "scripts/ci/agent_mention_router.py" in coverage_config
     assert "scripts/ci/agent_mention_sweep.py" in coverage_config
+    assert "scripts/ci/pr_review_merge_scheduler.py" in coverage_config

@@ -22,6 +22,7 @@ from urllib.parse import quote
 PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
+  state
   title
   isDraft
   mergeable
@@ -722,6 +723,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "number": number,
+        "state": str(pr.get("state") or "").upper(),
         "title": pr.get("title"),
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
@@ -2069,7 +2071,14 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
     return [run_id for _, run_id in stale_refs]
 
 
-def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
+def dispatch_opencode_review(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    snapshot_guarded: bool = False,
+) -> str:
     """Dispatch trusted OpenCode for the PR head, or report an active run.
 
     The review job is intentionally restricted to ``repository_dispatch``. A
@@ -2081,7 +2090,14 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
-        force_cancel_workflow_run_refs(stale_run_refs)
+        if snapshot_guarded and stale_run_refs:
+            print(
+                "OpenCode review dispatch skipped: a different-head workflow run became active "
+                "after snapshot validation"
+            )
+            return "snapshot_changed"
+        if not snapshot_guarded:
+            force_cancel_workflow_run_refs(stale_run_refs)
         if current_run_refs:
             print(
                 "OpenCode review dispatch skipped: active same-head workflow run(s) "
@@ -2123,12 +2139,20 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     return "dispatched"
 
 
-def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
+def dispatch_strix_evidence(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    snapshot_guarded: bool = False,
+) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
-    job_id = matching_actions_job_id(pr, is_strix_context)
-    if job_id:
-        rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
-        return "rerun" if not dry_run else "dry_run"
+    if not snapshot_guarded:
+        job_id = matching_actions_job_id(pr, is_strix_context)
+        if job_id:
+            rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
+            return "rerun" if not dry_run else "dry_run"
     if dry_run:
         return "dry_run"
     require_github_actions_control_actor("inspect-active-strix-evidence")
@@ -2139,7 +2163,14 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
     )
-    force_cancel_workflow_run_refs(stale_run_refs)
+    if snapshot_guarded and stale_run_refs:
+        print(
+            "Strix evidence dispatch skipped: a different-head workflow run became active "
+            "after snapshot validation"
+        )
+        return "snapshot_changed"
+    if not snapshot_guarded:
+        force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:
         print(
             "Strix evidence dispatch skipped: active same-head workflow run(s) "
@@ -2247,6 +2278,219 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+def inspect_snapshot_bound_review(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    trigger_reviews: bool,
+    review_dispatch_allowed: bool,
+    workflow: str,
+    security_workflow: str,
+    base_branch: str,
+    stale_opencode_minutes: int,
+) -> Decision:
+    """Dispatch exact-snapshot review work without general scheduler mutations."""
+
+    number = pr["number"]
+    base_ref = pr.get("baseRefName")
+    if str(pr.get("state") or "").upper() != "OPEN":
+        return Decision(number, "wait", "snapshot-bound target PR is no longer open")
+    if pr.get("isDraft"):
+        return Decision(number, "skip", "draft PR")
+    if base_ref != base_branch:
+        return Decision(
+            number,
+            "wait",
+            f"snapshot-bound target base branch changed from {base_branch} to {base_ref}",
+        )
+    unresolved = unresolved_thread_count(pr)
+    if unresolved:
+        return Decision(number, "block", f"{unresolved} unresolved review thread(s)")
+    if has_current_head_changes_requested(pr):
+        return Decision(number, "block", "current-head OpenCode review requested changes")
+
+    merge_state = effective_merge_state(pr)
+    current_head_approved = has_current_head_approval(pr)
+    if merge_state in {"DIRTY", "CONFLICTING"}:
+        return Decision(number, "block", merge_conflict_guidance(pr, merge_state))
+    if current_head_approved:
+        failed_checks = failed_status_checks(pr)
+        if failed_checks:
+            return Decision(number, "block", f"failed check(s): {', '.join(failed_checks[:5])}")
+    workflow_action_required = action_required_checks(pr)
+    if workflow_action_required:
+        return Decision(
+            number,
+            "wait",
+            workflow_action_required_reason(workflow_action_required),
+        )
+
+    behind_by = branch_outdated_by_base(pr, merge_state)
+    if behind_by and trigger_reviews:
+        approval_state = (
+            "current head is approved"
+            if current_head_approved
+            else "current head has no OpenCode approval"
+        )
+        return Decision(
+            number,
+            "wait",
+            f"{approval_state}; snapshot-bound review cannot update an outdated branch",
+        )
+    if merge_state == "UNKNOWN":
+        return Decision(
+            number,
+            "wait",
+            "mergeability is still being calculated and no branch freshness evidence is available",
+        )
+    if current_head_approved:
+        return Decision(
+            number,
+            "wait",
+            "current head is approved; snapshot-bound invocation is review-only",
+        )
+
+    opencode_state = opencode_progress_state(
+        pr,
+        stale_after_minutes=stale_opencode_minutes,
+    )
+    if opencode_state == "running":
+        return Decision(number, "wait", "OpenCode review is already in progress")
+    if (
+        os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"
+        and has_current_head_deterministic_fallback_approval(pr)
+    ):
+        return Decision(
+            number,
+            "wait",
+            "current-head deterministic fallback is not merge evidence; defer real-model retry to the next scheduler heartbeat",
+        )
+    if opencode_state == "stale" and not trigger_reviews:
+        return Decision(
+            number,
+            "wait",
+            f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch disabled",
+        )
+    if opencode_state == "stale":
+        if not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch limit reached",
+            )
+        dispatch_result = dispatch_opencode_review(
+            repo,
+            workflow,
+            pr,
+            dry_run=dry_run,
+            snapshot_guarded=True,
+        )
+        if dispatch_result == "snapshot_changed":
+            return Decision(
+                number,
+                "wait",
+                "OpenCode review retry skipped because a different-head review run is active",
+            )
+        if dispatch_result == "already_running":
+            return Decision(
+                number,
+                "wait",
+                "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active",
+            )
+        return Decision(
+            number,
+            "review_dispatch",
+            f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
+        )
+
+    if trigger_reviews:
+        strix_state = strix_evidence_state(pr)
+        if strix_state == "missing":
+            if not review_dispatch_allowed:
+                return Decision(
+                    number,
+                    "wait",
+                    "current head has no completed Strix evidence; review dispatch limit reached",
+                )
+            wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+            if wait_reason:
+                return Decision(
+                    number,
+                    "wait",
+                    f"current head has no completed Strix evidence; {wait_reason}",
+                )
+            dispatch_result = dispatch_strix_evidence(
+                repo,
+                security_workflow,
+                pr,
+                dry_run=dry_run,
+                snapshot_guarded=True,
+            )
+            if dispatch_result == "snapshot_changed":
+                return Decision(
+                    number,
+                    "wait",
+                    "Strix dispatch skipped because a different-head Strix run is active",
+                )
+            if dispatch_result == "already_running":
+                return Decision(
+                    number,
+                    "wait",
+                    "same-head Strix evidence workflow run is already active",
+                )
+            return Decision(
+                number,
+                "security_dispatch",
+                "current head has no completed Strix evidence; same-head Strix dispatched",
+            )
+        if strix_state == "running":
+            return Decision(number, "wait", "same-head Strix evidence is still running")
+        if not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                "current head has completed Strix evidence; review dispatch limit reached",
+            )
+        wait_reason = repository_dispatch_wait_reason(repo, workflow)
+        if wait_reason:
+            return Decision(
+                number,
+                "wait",
+                f"current head has completed Strix evidence; {wait_reason}",
+            )
+        dispatch_result = dispatch_opencode_review(
+            repo,
+            workflow,
+            pr,
+            dry_run=dry_run,
+            snapshot_guarded=True,
+        )
+        if dispatch_result == "snapshot_changed":
+            return Decision(
+                number,
+                "wait",
+                "OpenCode dispatch skipped because a different-head review run is active",
+            )
+        if dispatch_result == "already_running":
+            return Decision(
+                number,
+                "wait",
+                "current head has completed Strix evidence; same-head OpenCode workflow run is already active",
+            )
+        return Decision(
+            number,
+            "review_dispatch",
+            "current head has completed Strix evidence; same-head OpenCode dispatched",
+        )
+
+    return Decision(
+        number,
+        "block",
+        "current head has no OpenCode approval; review dispatch disabled",
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2263,8 +2507,21 @@ def inspect_pr(
     base_branch: str,
     merge_mode: str = "direct_or_auto",
     stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
+    snapshot_guarded: bool = False,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
+    if snapshot_guarded:
+        return inspect_snapshot_bound_review(
+            repo,
+            pr,
+            dry_run=dry_run,
+            trigger_reviews=trigger_reviews,
+            review_dispatch_allowed=review_dispatch_allowed,
+            workflow=workflow,
+            security_workflow=security_workflow,
+            base_branch=base_branch,
+            stale_opencode_minutes=stale_opencode_minutes,
+        )
     number = pr["number"]
     base_ref = pr.get("baseRefName")
 
@@ -3691,6 +3948,68 @@ def self_test() -> None:
     print("self-test passed")
 
 
+def validate_expected_pr_snapshot(
+    prs: Sequence[dict[str, Any]],
+    *,
+    pr_number: int,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    expected_base_branch: str,
+) -> None:
+    """Fail closed when a targeted PR no longer matches its validated refs."""
+
+    expected_values = (
+        expected_head_sha,
+        expected_base_sha,
+        expected_base_branch,
+    )
+    if not any(expected_values):
+        return
+    if not all(expected_values):
+        raise SystemExit(
+            "--expected-head-sha, --expected-base-sha, and --expected-base-branch "
+            "must be supplied together"
+        )
+    if pr_number < 1:
+        raise SystemExit("expected PR snapshot guards require --pr-number")
+    try:
+        expected_head = validate_git_sha(expected_head_sha).lower()
+        expected_base = validate_git_sha(expected_base_sha).lower()
+        expected_branch = validate_git_ref(expected_base_branch)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if len(prs) != 1 or int(prs[0].get("number") or 0) != pr_number:
+        raise SystemExit(
+            f"target PR #{pr_number} snapshot is unavailable or ambiguous"
+        )
+    try:
+        observed_head = validate_git_sha(str(prs[0].get("headRefOid") or "")).lower()
+        observed_base = validate_git_sha(str(prs[0].get("baseRefOid") or "")).lower()
+        observed_branch = validate_git_ref(str(prs[0].get("baseRefName") or ""))
+    except ValueError as exc:
+        raise SystemExit(f"target PR #{pr_number} returned malformed refs: {exc}") from exc
+    observed_state = str(prs[0].get("state") or "").upper()
+    if observed_state != "OPEN":
+        raise SystemExit(
+            f"target PR #{pr_number} is no longer open: observed {observed_state or '<missing>'}"
+        )
+    if observed_head != expected_head:
+        raise SystemExit(
+            f"target PR #{pr_number} head SHA changed: "
+            f"expected {expected_head}, observed {observed_head}"
+        )
+    if observed_base != expected_base:
+        raise SystemExit(
+            f"target PR #{pr_number} base SHA changed: "
+            f"expected {expected_base}, observed {observed_base}"
+        )
+    if observed_branch != expected_branch:
+        raise SystemExit(
+            f"target PR #{pr_number} base branch changed: "
+            f"expected {expected_branch}, observed {observed_branch}"
+        )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse scheduler CLI arguments."""
     parser = argparse.ArgumentParser()
@@ -3699,6 +4018,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument("--pr-number", type=int, default=0)
+    parser.add_argument(
+        "--expected-head-sha",
+        default=os.environ.get("EXPECTED_HEAD_SHA", ""),
+    )
+    parser.add_argument(
+        "--expected-base-sha",
+        default=os.environ.get("EXPECTED_BASE_SHA", ""),
+    )
+    parser.add_argument(
+        "--expected-base-branch",
+        default=os.environ.get("EXPECTED_BASE_BRANCH", ""),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -3750,6 +4081,27 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    validate_expected_pr_snapshot(
+        prs,
+        pr_number=args.pr_number,
+        expected_head_sha=args.expected_head_sha,
+        expected_base_sha=args.expected_base_sha,
+        expected_base_branch=args.expected_base_branch,
+    )
+    snapshot_guarded = bool(
+        args.expected_head_sha
+        or args.expected_base_sha
+        or args.expected_base_branch
+    )
+    if snapshot_guarded:
+        prs = fetch_pr(args.repo, args.pr_number)
+        validate_expected_pr_snapshot(
+            prs,
+            pr_number=args.pr_number,
+            expected_head_sha=args.expected_head_sha,
+            expected_base_sha=args.expected_base_sha,
+            expected_base_branch=args.expected_base_branch,
+        )
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0
@@ -3774,6 +4126,7 @@ def main(argv: list[str]) -> int:
                 security_workflow=args.security_workflow,
                 base_branch=args.base_branch,
                 stale_opencode_minutes=args.stale_opencode_minutes,
+                snapshot_guarded=snapshot_guarded,
             )
         except RuntimeError as exc:
             decision = Decision(
