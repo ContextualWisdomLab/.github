@@ -8,7 +8,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
-- Added Cloud Agent Figma REST helpers `scripts/ci/figma_rest_auth.py` and `scripts/ci/figma_rest_file.py` that verify `FIGMA_ACCESS_TOKEN` against pinned `GET /v1/me` and then read an allowlisted `GET /v1/files/{file_key}` (optional `/nodes` or `/images`) without printing the secret, so design-to-code continues when Figma MCP OAuth is unavailable.
+- Added Cloud Agent Figma REST helpers `scripts/ci/figma_rest_auth.py` and `scripts/ci/figma_rest_file.py` that verify `FIGMA_ACCESS_TOKEN` against pinned `GET /v1/me` and then read an allowlisted `GET /v1/files/{file_key}` (optional `/nodes` or `/images`) without printing the secret, returning geometry, solid fills, text, auto-layout, and optional expiring PNG URLs. Desktop/CLI Figma MCP remains the `get_design_context` path.
 - Added a trusted pull-request comment router for `@cwl-noema-review` and review-only `@opencode-agent` dispatches, with an organization sweep, exact-head receipts, repository allowlisting, fixed runners, immutable checkout pins, and a permanent 100% statement/branch/docstring quality gate.
 - Added exact-base `uv.lock` materialization that reconstructs standalone nested projects with a checksum-pinned official `uv` exporter, isolated frozen/offline execution, strict exact-pin and SHA-256 output validation, and complete Python 3.10/3.14 quality evidence.
 - Added a permanent exact-head contract workflow for the hourly review-repair scheduler, immutable reusable-workflow source, NVIDIA NIM model boundary, credential isolation, and fail-closed unattended-agent permissions.
@@ -40,7 +40,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
-- Pin Figma REST calls to `http.client.HTTPSConnection("api.figma.com")`, allow only the `X-Figma-Token` header, allowlist file keys and node ids, and cap whoami/file bodies so `file://`, `Host` retargeting, and unbounded reads cannot leave the helper.
+- Pin Figma REST calls to `http.client.HTTPSConnection("api.figma.com")`, allow only the `X-Figma-Token` header, allowlist file keys and node ids (CWE-22), parse locators without fetching them (CWE-918), reject control characters in the token (CWE-113), and cap whoami/file bodies so `file://` and unbounded reads cannot leave the helper.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.
 - Snapshot the complete pre-model worktree for ordinary and conflict repair and reject every model-caused created, deleted, modified, mode-changed, retargeted, ignored, dangling, directory-backed, external-link, metadata-race, or out-of-scope path before staging or push.

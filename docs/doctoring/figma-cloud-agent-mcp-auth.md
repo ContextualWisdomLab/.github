@@ -50,8 +50,12 @@ Prefer a **plan access token** for organization Cloud Agent fleets
 (admin-managed, expiry up to one year; Figma, 2026a). Use a personal access
 token only when the operator is acting on their own account (maximum 90 days).
 Both kinds are stored in the same secret name. Whoami and file bodies are
-capped (64 KiB / 8 MiB). The opener refuses every header except
-`X-Figma-Token` so a `Host` override cannot retarget TLS (CWE-22; MITRE, 2026).
+capped (64 KiB / 8 MiB). File keys and node ids are allowlisted before they
+enter the request path (CWE-22; MITRE, 2026a). Locators are parsed and never
+fetched; TLS already pins `api.figma.com` (CWE-918; MITRE, 2026b). Control
+characters in the token are rejected so they cannot split `X-Figma-Token`
+(CWE-113; MITRE, 2026c). The opener still refuses every header except
+`X-Figma-Token`.
 
 ## Operator procedure
 
@@ -88,13 +92,21 @@ capped (64 KiB / 8 MiB). The opener refuses every header except
    python3 scripts/ci/figma_rest_file.py '<file_key>' --node-id 12:34 --images
    ```
 
-   The helper allowlists the file key (10-128 letters or digits) and node
-   ids before they enter the path, opens the same pinned
-   `api.figma.com` origin, and prints a token-free JSON outline (pages and
-   top-level frames at depth 2 by default). `--images` returns HTTPS PNG
-   URLs for those nodes. `file://`, `http://`, and `api.figma.com` locators
-   are refused. Use the outline or image URLs as the next design-to-code
-   input; do not retry MCP Connect.
+   The helper allowlists the file or branch key (10-128 letters or digits)
+   and node ids (including instance ids such as `I12:34;56:78`) before they
+   enter the path, opens the same pinned `api.figma.com` origin, and prints
+   a token-free JSON outline. `GET /v1/files/:key?depth=2` is pages and
+   top-level frames. A URL with `?node-id=` uses `GET /v1/files/:key/nodes`,
+   where `depth` counts levels under the selected node (Figma, 2026c). The
+   outline keeps `absoluteBoundingBox`, SOLID fills, TEXT `characters` and
+   type, auto-layout padding, constraints, `thumbnailUrl`, and bounded
+   component/style names. `--images` returns HTTPS PNG URLs that expire
+   after 30 days (Figma, 2026c). `file://`, `http://`, userinfo, and
+   `api.figma.com` locators are refused. Branch URLs
+   (`/design/<file_key>/branch/<branch_key>/...`) use the branch key.
+   Implement from that outline on Cloud Agents. Desktop/CLI Figma MCP
+   `get_design_context` remains the richer design-to-code path; do not
+   retry MCP Connect here.
 
 ## Why MCP Connect cannot be finished here
 
@@ -130,8 +142,15 @@ authorization framework* (Internet-Draft draft-ietf-oauth-v2-1). Internet
 Engineering Task Force. Retrieved August 16, 2026, from
 https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1
 
-MITRE. (2026). *CWE-22: Improper limitation of a pathname to a restricted
+MITRE. (2026a). *CWE-22: Improper limitation of a pathname to a restricted
 directory ('Path Traversal')*. https://cwe.mitre.org/data/definitions/22.html
+
+MITRE. (2026b). *CWE-918: Server-side request forgery (SSRF)*.
+https://cwe.mitre.org/data/definitions/918.html
+
+MITRE. (2026c). *CWE-113: Improper neutralization of CRLF sequences in HTTP
+headers ('HTTP Request/Response Splitting')*.
+https://cwe.mitre.org/data/definitions/113.html
 
 Neilson, K. (2026, June 10). Reply in *Figma MCP shows "Forbidden" in
 Automations / Cloud Agents*. Cursor Forum. Retrieved August 16, 2026, from

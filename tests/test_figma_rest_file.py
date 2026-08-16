@@ -43,6 +43,9 @@ def test_validate_node_id_accepts_url_hyphen_form() -> None:
     """Figma share URLs use 12-34; the REST API uses 12:34."""
     assert files.validate_node_id("12-34") == "12:34"
     assert files.validate_node_id("12:34") == "12:34"
+    assert files.validate_node_id("I12-34;56-78") == "I12:34;56:78"
+    assert files.validate_node_id("I12:34%3B56:78") == "I12:34;56:78"
+    assert files.validate_node_id("I12:34%3b56:78") == "I12:34;56:78"
     with pytest.raises(auth.FigmaAuthError) as invalid:
         files.validate_node_id("root")
     assert invalid.value.exit_code == files.EXIT_INVALID_TARGET
@@ -66,6 +69,8 @@ def test_parse_file_locator_reads_design_url() -> None:
         "https://www.figma.com/onlykey",
         "https://www.figma.com/unknown/TestFileKey0123456789/x",
         "www.figma.com/design/nope/x",
+        "https://www.figma.com@evil.example/design/TestFileKey0123456789/x",
+        f"https://user:pass@www.figma.com/design/{FILE_KEY}/x",
     ],
 )
 def test_parse_file_locator_refuses_unsafe_or_incomplete_urls(locator: str) -> None:
@@ -82,9 +87,32 @@ def test_parse_file_locator_accepts_host_without_scheme() -> None:
     assert node_ids == []
 
 
+def test_parse_file_locator_uses_branch_key_not_main_file() -> None:
+    """A branch URL must GET the branch key, not silently outline main."""
+    branch_key = "BranchKey901234567890"
+    key, node_ids = files.parse_file_locator(
+        f"https://www.figma.com/design/{FILE_KEY}/branch/{branch_key}/Checkout"
+    )
+    assert key == branch_key
+    assert node_ids == []
+    named = files.parse_file_locator(
+        f"https://figma.com/design/{FILE_KEY}/Checkout/branch/{branch_key}/Alt"
+    )
+    assert named == (branch_key, [])
+
+
 def test_unique_node_ids_preserve_first_seen_order() -> None:
     """Repeated node ids from a URL plus --node-id stay unique."""
     assert files.unique_node_ids(["12-34", "12:34", "1:2"]) == ["12:34", "1:2"]
+
+
+def test_unique_node_ids_reject_unbounded_lists() -> None:
+    """A huge --node-id list cannot build an unbounded images query."""
+    too_many = [f"1:{index}" for index in range(files.MAX_NODE_IDS + 1)]
+    with pytest.raises(auth.FigmaAuthError) as bounded:
+        files.unique_node_ids(too_many)
+    assert bounded.value.exit_code == files.EXIT_INVALID_TARGET
+    assert str(files.MAX_NODE_IDS) in str(bounded.value)
 
 
 def test_build_request_path_emits_only_allowlisted_shapes() -> None:
@@ -98,6 +126,9 @@ def test_build_request_path_emits_only_allowlisted_shapes() -> None:
     image_path = files.build_request_path(FILE_KEY, node_ids=["12:34"], images=True)
     assert image_path == f"/v1/images/{FILE_KEY}?ids=12:34&format=png"
     assert files.ALLOWED_REQUEST_PATH.fullmatch(image_path)
+    instance_path = files.build_request_path(FILE_KEY, node_ids=["I12:34;56:78"], images=True)
+    assert instance_path == f"/v1/images/{FILE_KEY}?ids=I12:34%3B56:78&format=png"
+    assert files.ALLOWED_REQUEST_PATH.fullmatch(instance_path)
 
 
 def test_build_request_path_rejects_images_without_nodes_and_bad_depth() -> None:
@@ -269,11 +300,50 @@ def test_outline_and_image_summary_stay_token_free() -> None:
     assert outline["node_id"] == "0:0"
     assert outline["child_nodes"][0]["node_name"] == "Page 1"
     assert "child_nodes" not in outline["child_nodes"][0]
+    designed = files.outline_node(
+        {
+            "id": "I12:34;56:78",
+            "name": "Hero",
+            "type": "FRAME",
+            "absoluteBoundingBox": {"x": 0, "y": 8, "width": 360, "height": 80},
+            "fills": [
+                {"type": "SOLID", "color": {"r": 0.1, "g": 0.2, "b": 0.3, "a": 1}, "opacity": 0.9},
+                {"type": "IMAGE"},
+                "skip",
+            ],
+            "style": {
+                "fontFamily": "Inter",
+                "fontWeight": 600,
+                "fontSize": 16,
+                "textAlignHorizontal": "CENTER",
+                "letterSpacing": 0.2,
+                "lineHeightPx": 24,
+            },
+            "characters": "Pay now",
+            "layoutMode": "HORIZONTAL",
+            "primaryAxisAlignItems": "CENTER",
+            "counterAxisAlignItems": "CENTER",
+            "paddingLeft": 16,
+            "constraints": {"horizontal": "SCALE", "vertical": "TOP"},
+        },
+        0,
+    )
+    assert designed is not None
+    assert designed["node_id"] == "I12:34;56:78"
+    assert designed["absolute_bounding_box"]["width"] == 360
+    assert designed["solid_fills"][0]["color"]["r"] == 0.1
+    assert designed["text_style"]["font_family"] == "Inter"
+    assert designed["characters"] == "Pay now"
+    assert designed["layout"]["layout_mode"] == "HORIZONTAL"
+    assert designed["constraints"]["horizontal"] == "SCALE"
     assert files.https_image_url(None) is None
     assert files.https_image_url("http://insecure.example/x") is None
     assert files.https_image_url(f"https://x/{TOKEN}") is None
     assert files.https_image_url(f"https://x/{auth.TOKEN_ENV_NAME}") is None
+    assert files.https_image_url("https://evil.example/x.png") is None
+    assert files.https_image_url("https://user:pass@figma-alpha-api.s3.amazonaws.com/x.png") is None
     assert files.https_image_url("https://figma-alpha-api.s3.amazonaws.com/x.png")
+    assert files.https_image_url("https://s3-alpha-sig.figma.com/img/x")
 
 
 def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
@@ -287,9 +357,13 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
             "version": "9",
             "editorType": "figma",
             "role": "viewer",
+            "thumbnailUrl": "https://figma-alpha-api.s3.amazonaws.com/thumb.png",
             "document": {"id": "0:0", "name": "Document", "type": "DOCUMENT"},
+            "components": {"1:9": {"name": "Button"}, "bad": "skip", "1:8": {"name": None}},
+            "styles": {"S:1": {"name": "Ink", "styleType": "FILL"}, "bad": []},
             "nodes": {
                 "12:34": {"document": {"id": "12:34", "name": "Hero", "type": "FRAME"}},
+                "I12:34;56:78": {"document": {"id": "I12:34;56:78", "name": "Instance"}},
                 "skip": {"document": {"id": "9:9"}},
                 "1:2": "not-a-map",
             },
@@ -305,8 +379,12 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
     assert summary["file_version"] == "9"
     assert summary["editor_type"] == "figma"
     assert summary["viewer_role"] == "viewer"
+    assert summary["thumbnail_url"].startswith("https://")
+    assert summary["component_names"][0]["component_name"] == "Button"
+    assert summary["style_catalog"][0]["style_name"] == "Ink"
     assert summary["document_outline"]["node_type"] == "DOCUMENT"
     assert summary["selected_nodes"]["12:34"]["node_name"] == "Hero"
+    assert summary["selected_nodes"]["I12:34;56:78"]["node_name"] == "Instance"
     assert "skip" not in summary["selected_nodes"]
     assert summary["image_urls"]["12:34"].startswith("https://")
     filtered = files.summarize_file_payload(
@@ -436,7 +514,7 @@ def test_main_uses_process_streams_when_unspecified(
     )
     assert files.main(opener=opener) == auth.EXIT_OK
     captured = capsys.readouterr()
-    assert "Home" in captured.out or "image" in captured.out or captured.out
+    assert json.loads(captured.out)["file_name"] == "Home"
     assert TOKEN not in captured.out
 
 
@@ -491,6 +569,8 @@ def test_doctoring_and_entry_docs_pin_file_read_fallback() -> None:
     assert "Retrieved August 16, 2026" in doctoring
     assert "file-endpoints" in doctoring
     assert "CWE-22" in doctoring
+    assert "CWE-918" in doctoring
+    assert "get_design_context" in doctoring
     assert "plan access token" in doctoring
     assert "X-Figma-Token" in changelog
     assert "scripts/ci/figma_rest_file.py" in changelog
@@ -498,3 +578,59 @@ def test_doctoring_and_entry_docs_pin_file_read_fallback() -> None:
     assert "FIGMA_ACCESS_TOKEN" in claude
     assert "docs/doctoring/figma-cloud-agent-mcp-auth.md" in agents
     assert "docs/doctoring/figma-cloud-agent-mcp-auth.md" in master
+
+
+def test_design_field_helpers_stay_bounded_and_token_free() -> None:
+    """Geometry, fill, type, and catalog helpers refuse junk and tokens."""
+    assert files.safe_label(f"keep {TOKEN}") is None
+    assert files.safe_label(auth.TOKEN_ENV_NAME) is None
+    assert files.finite_number(True) is None
+    assert files.finite_number("8") is None
+    assert files.finite_number(float("nan")) is None
+    assert files.finite_number(float("inf")) is None
+    assert files.finite_number(files.MAX_LAYOUT_ABS + 1) is None
+    assert files.finite_number(12) == 12.0
+    assert files.bounding_box("nope") is None
+    assert files.bounding_box({"x": True}) is None
+    assert files.solid_fills("nope") == []
+    assert files.solid_fills([{"type": "SOLID", "color": {"r": True}}]) == []
+    assert files.solid_fills([{"type": "SOLID", "color": "nope"}]) == []
+    overflow = [{"type": "SOLID", "color": {"r": 1}} for _ in range(files.MAX_SOLID_FILLS + 2)]
+    assert len(files.solid_fills(overflow)) == files.MAX_SOLID_FILLS
+    assert files.text_style("nope") is None
+    assert files.text_style({}) is None
+    assert files.constraint_axes("nope") is None
+    assert files.constraint_axes({}) is None
+    assert files.bounded_text("  ") is None
+    long_text = "a" * (files.MAX_TEXT_CHARS + 8)
+    assert files.bounded_text(long_text) == "a" * files.MAX_TEXT_CHARS
+    assert files.named_catalog("nope", "component_name", None) == []
+    assert files.named_catalog({"1": {"name": "Ink"}}, "style_name", "styleType") == [
+        {"style_name": "Ink"}
+    ]
+    catalog = {str(index): {"name": f"C{index}"} for index in range(files.MAX_CATALOG_ITEMS + 3)}
+    assert len(files.named_catalog(catalog, "component_name", None)) == files.MAX_CATALOG_ITEMS
+    assert files.allowed_image_host("figma.com") is True
+    assert files.allowed_image_host("evil.amazonaws.com") is False
+    assert files.encode_node_id_query("I1:2;3:4") == "I1:2%3B3:4"
+    metrics = files.layout_metrics(
+        {
+            "paddingRight": 1,
+            "paddingTop": 2,
+            "paddingBottom": 3,
+            "itemSpacing": 4,
+            "cornerRadius": 5,
+            "opacity": 0.5,
+            "strokeWeight": 1,
+        }
+    )
+    assert metrics["padding_right"] == 1
+    assert metrics["stroke_weight"] == 1
+
+
+def test_live_unauthenticated_file_read_is_rejected_by_figma() -> None:
+    """The real files endpoint rejects a missing token with HTTP 401/403/404."""
+    status, body = files.default_file_opener(files.build_request_path(FILE_KEY), {})
+    assert status in {401, 403, 404}
+    decoded = body.decode("utf-8", errors="replace")
+    assert TOKEN not in decoded

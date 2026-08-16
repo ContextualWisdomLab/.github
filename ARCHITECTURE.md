@@ -112,9 +112,11 @@ flowchart TD
 ```
 
 Cloud Agents never complete Figma MCP OAuth. Whoami alone is not file
-read. The file helper allowlists the file key and node ids, opens a
-pinned `HTTPSConnection("api.figma.com")`, and prints a token-free JSON
-outline the agent can use for the next design-to-code step. See
+read. The file helper allowlists the file or branch key and node ids,
+opens a pinned `HTTPSConnection("api.figma.com")`, and prints a
+token-free JSON outline with geometry, solid fills, text, and
+auto-layout. `--images` returns expiring PNG URLs. Desktop/CLI Figma
+MCP remains the `get_design_context` path. See
 [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).
 
 ## Quality gates
