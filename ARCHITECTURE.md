@@ -39,6 +39,15 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## Auto-rebase GraphQL fallback
+
+`pr_auto_rebase` treats GraphQL `invalid UTF-8 string` and
+`Resource limits for this query exceeded` as transport/capacity
+failures. Those abort to REST so Unicode refs and large queues still
+rebase DIRTY same-repository heads. Schema errors stay fail-closed.
+REST `unknown` mergeable state is refreshed once; the head commit is
+loaded so the human-activity window still applies.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid

@@ -58,7 +58,10 @@ from typing import Any
 
 try:
     from pr_review_merge_scheduler import (
+        REST_MERGEABLE_STATE_MAP,
+        gh_api_json,
         gh_graphql,
+        is_transient_github_api_error,
         parse_github_datetime,
         run,
         run_with_env,
@@ -69,7 +72,10 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover - exercised only via package import
     from scripts.ci.pr_review_merge_scheduler import (
+        REST_MERGEABLE_STATE_MAP,
+        gh_api_json,
         gh_graphql,
+        is_transient_github_api_error,
         parse_github_datetime,
         run,
         run_with_env,
@@ -92,6 +98,10 @@ CONFLICT_COMMENT_MARKER = "<!-- pr-auto-rebase needs-manual-rebase -->"
 BEHIND_MERGE_STATES = {"BEHIND"}
 DIRTY_MERGE_STATES = {"DIRTY", "CONFLICTING"}
 CLEAN_MERGE_STATES = {"CLEAN", "HAS_HOOKS"}
+GRAPHQL_TRANSPORT_FALLBACK_MARKERS = (
+    "invalid UTF-8 string",
+    "Resource limits for this query exceeded",
+)
 # Bot logins whose recent commits are safe to rewrite. Any login ending in
 # "[bot]" is also treated as a bot, so this only needs the app-style accounts
 # that push under a plain login.
@@ -151,27 +161,121 @@ class Decision:
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
+def is_graphql_transport_failure(exc: Exception) -> bool:
+    """Return whether a GraphQL failure is transport/capacity rather than schema or auth."""
+    message = str(exc)
+    folded = message.lower()
+    if any(marker in message or marker.lower() in folded for marker in GRAPHQL_TRANSPORT_FALLBACK_MARKERS):
+        return True
+    return is_transient_github_api_error(exc)
+
+
+def rest_auto_rebase_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
+    """Convert a REST pull request into the GraphQL node the auto-rebase scheduler consumes."""
+    number = int(pr["number"])
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    head_repo = head.get("repo") or {}
+    sha = str(head.get("sha") or "")
+    merge_state = REST_MERGEABLE_STATE_MAP.get(
+        str(pr.get("mergeable_state") or "").lower(),
+        str(pr.get("mergeable_state") or "").upper(),
+    )
+    labels = [{"name": (label or {}).get("name")} for label in (pr.get("labels") or [])]
+    commit_payload = gh_api_json(f"repos/{repo}/commits/{sha}") if sha else {}
+    commit_meta = (commit_payload or {}).get("commit") or {}
+    author_login = ((commit_payload or {}).get("author") or {}).get("login")
+    committed_date = (commit_meta.get("author") or {}).get("date") or (commit_meta.get("committer") or {}).get(
+        "date"
+    )
+    return {
+        "number": number,
+        "title": pr.get("title"),
+        "isDraft": bool(pr.get("draft")),
+        "mergeable": pr.get("mergeable"),
+        "mergeStateStatus": merge_state,
+        "baseRefName": base.get("ref"),
+        "baseRefOid": base.get("sha"),
+        "headRefName": head.get("ref"),
+        "headRefOid": sha,
+        "isCrossRepository": (head_repo.get("full_name") or repo).lower() != repo.lower(),
+        "maintainerCanModify": bool(pr.get("maintainer_can_modify")),
+        "labels": {"nodes": labels},
+        "headRepository": {"nameWithOwner": head_repo.get("full_name") or repo},
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": sha,
+                        "committedDate": committed_date,
+                        "author": {
+                            "name": (commit_meta.get("author") or {}).get("name"),
+                            "user": {"login": author_login} if author_login else None,
+                        },
+                    }
+                }
+            ]
+        },
+    }
+
+
+def fetch_open_prs_rest(repo: str, max_prs: int) -> list[dict[str, Any]]:
+    """Fetch open pull requests through REST when GraphQL transport fails."""
+    prs: list[dict[str, Any]] = []
+    page = 1
+    while len(prs) < max_prs:
+        page_size = min(100, max_prs - len(prs))
+        path = (
+            f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
+            f"&per_page={page_size}&page={page}"
+        )
+        payload = gh_api_json(path)
+        if not payload:
+            break
+        for raw in payload:
+            detail = raw
+            state = str(raw.get("mergeable_state") or "").lower()
+            if state in {"", "unknown"}:
+                detail = gh_api_json(f"repos/{repo}/pulls/{int(raw['number'])}") or raw
+            prs.append(rest_auto_rebase_pr_node(repo, detail))
+            if len(prs) >= max_prs:
+                break
+        if len(payload) < page_size:
+            break
+        page += 1
+    return prs[:max_prs]
+
+
 def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
     """Fetch open pull requests oldest-first, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
     cursor: str | None = None
-    while len(prs) < max_prs:
-        page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
-        fields: dict[str, str | int] = {
-            "owner": owner,
-            "name": name,
-            "pageSize": page_size,
-            "labelPageSize": LABELS_PAGE_SIZE,
-        }
-        if cursor:
-            fields["cursor"] = cursor
-        payload = gh_graphql(OPEN_PRS_QUERY, **fields)
-        pr_page = payload["data"]["repository"]["pullRequests"]
-        prs.extend(pr_page.get("nodes") or [])
-        if not pr_page["pageInfo"]["hasNextPage"]:
-            break
-        cursor = pr_page["pageInfo"]["endCursor"]
+    try:
+        while len(prs) < max_prs:
+            page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
+            fields: dict[str, str | int] = {
+                "owner": owner,
+                "name": name,
+                "pageSize": page_size,
+                "labelPageSize": LABELS_PAGE_SIZE,
+            }
+            if cursor:
+                fields["cursor"] = cursor
+            payload = gh_graphql(OPEN_PRS_QUERY, **fields)
+            pr_page = payload["data"]["repository"]["pullRequests"]
+            prs.extend(pr_page.get("nodes") or [])
+            if not pr_page["pageInfo"]["hasNextPage"]:
+                break
+            cursor = pr_page["pageInfo"]["endCursor"]
+    except RuntimeError as exc:
+        if is_graphql_transport_failure(exc):
+            print(
+                "GraphQL open-PR list failed with a transport/capacity error; falling back to REST",
+                file=sys.stderr,
+            )
+            return fetch_open_prs_rest(repo, max_prs)
+        raise
     return prs[:max_prs]
 
 
