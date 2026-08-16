@@ -37,18 +37,30 @@ def run_dependency_review_support_probe(
     *,
     curl_script: str,
     repository_visibility: str = "public",
+    repository: str = "ContextualWisdomLab/.github",
+    base_sha: str = PROBE_BASE_SHA,
+    head_sha: str = PROBE_HEAD_SHA,
 ) -> subprocess.CompletedProcess:
     """Run the workflow support probe against a controlled curl binary.
 
     The helper places a fake ``curl`` first on ``PATH`` so the extracted
-    workflow script cannot call the real binary, then supplies only the
-    synthetic environment variables the support step reads.
+    workflow script cannot call the real binary, records the exact argv
+    the probe used, then supplies only the synthetic environment
+    variables the support step reads.
     """
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_curl = fake_bin / "curl"
-    fake_curl.write_text(curl_script, encoding="utf-8")
+    argv_path = tmp_path / "curl-argv"
+    shebang, separator, rest = curl_script.partition("\n")
+    if not shebang.startswith("#!"):
+        shebang = "#!/usr/bin/env bash"
+        rest = curl_script
+    elif not separator:
+        rest = ""
+    recorder = f"printf '%s\\0' \"$0\" \"$@\" > {shlex.quote(str(argv_path))}\n"
+    fake_curl.write_text(f"{shebang}\n{recorder}{rest}\n", encoding="utf-8")
     fake_curl.chmod(0o755)
     script = textwrap.dedent(
         workflow_step(
@@ -66,15 +78,38 @@ def run_dependency_review_support_probe(
             "GITHUB_API_URL": "https://api.example.invalid",
             "GITHUB_OUTPUT": str(tmp_path / "github-output"),
             "GH_TOKEN": PROBE_TOKEN,
-            "BASE_SHA": PROBE_BASE_SHA,
-            "HEAD_SHA": PROBE_HEAD_SHA,
-            "REPOSITORY": "ContextualWisdomLab/.github",
+            "BASE_SHA": base_sha,
+            "HEAD_SHA": head_sha,
+            "REPOSITORY": repository,
             "REPOSITORY_VISIBILITY": repository_visibility,
         },
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def assert_dependency_review_compare_invoked(
+    tmp_path: Path,
+    *,
+    repository: str = "ContextualWisdomLab/.github",
+    base_sha: str = PROBE_BASE_SHA,
+    head_sha: str = PROBE_HEAD_SHA,
+) -> None:
+    """Require the probe to request the exact base/head compare URL."""
+
+    argv = [
+        part.decode("utf-8")
+        for part in (tmp_path / "curl-argv").read_bytes().split(b"\0")
+        if part
+    ]
+    expected = (
+        f"https://api.example.invalid/repos/{repository}/"
+        f"dependency-graph/compare/{base_sha}...{head_sha}"
+    )
+    assert expected in argv
+    assert "-o" in argv
+    assert "/dev/null" in argv
 
 
 def assert_dependency_review_probe_failed(
@@ -84,6 +119,8 @@ def assert_dependency_review_probe_failed(
     expected_http: str,
     expected_curl_exit: str,
     expected_visibility: str = "public",
+    expected_base_sha: str = PROBE_BASE_SHA,
+    expected_head_sha: str = PROBE_HEAD_SHA,
 ) -> None:
     """Require a failed probe that records identity without leaking secrets."""
 
@@ -91,7 +128,9 @@ def assert_dependency_review_probe_failed(
     assert result.returncode == 1
     assert f"HTTP {expected_http}; curl exit {expected_curl_exit}" in result.stdout
     assert f"visibility {expected_visibility}" in result.stdout
-    assert f"exact base {PROBE_BASE_SHA} and head {PROBE_HEAD_SHA}" in result.stdout
+    assert (
+        f"exact base {expected_base_sha} and head {expected_head_sha}" in result.stdout
+    )
     assert PROBE_TOKEN not in combined
     assert "Authorization:" not in combined
     assert not (tmp_path / "github-output").exists()
@@ -914,6 +953,10 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     )
     assert "public|private|internal)" in support_probe
     assert "visibility ${visibility}" in support_probe
+    assert 'revision_pattern=' in support_probe
+    assert 'repository_pattern=' in support_probe
+    assert "Malformed revision" in support_probe
+    assert "Malformed repository" in support_probe
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -930,6 +973,11 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert action_first_line.startswith(
         "        uses: actions/dependency-review-action@"
     )
+    action_step = workflow.split("      - name: Dependency review\n", 1)[1].split(
+        "\n  trivy-fs:",
+        1,
+    )[0]
+    assert "if:" not in action_step
     osv_job_header = workflow.split("  osv-scan:\n", 1)[1].split("    steps:", 1)[0]
     trivy_job_header = workflow.split("  trivy-fs:\n", 1)[1].split("    steps:", 1)[0]
     dependency_job_header = workflow.split("  dependency-review:\n", 1)[1].split(
@@ -962,6 +1010,7 @@ def test_dependency_review_http_403_skip_cannot_go_green(tmp_path: Path) -> None
         expected_curl_exit="0",
     )
     assert "skipping dependency-review hard gate" not in result.stdout
+    assert_dependency_review_compare_invoked(tmp_path)
 
 
 def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
@@ -1040,6 +1089,30 @@ def test_dependency_review_success_writes_supported_true(tmp_path: Path) -> None
         "supported=true\n"
     )
     assert PROBE_TOKEN not in combined
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+def test_dependency_review_accepts_sha256_object_ids(tmp_path: Path) -> None:
+    """A 64-character hex object id is a legal Git revision and may be compared."""
+
+    base_sha = "c" * 64
+    head_sha = "d" * 64
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+    assert_dependency_review_compare_invoked(
+        tmp_path,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
 
 
 def test_dependency_review_records_unknown_visibility_when_unset(
@@ -1060,6 +1133,88 @@ def test_dependency_review_records_unknown_visibility_when_unset(
         expected_curl_exit="0",
         expected_visibility="unknown",
     )
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+@pytest.mark.parametrize("visibility", ["public", "private", "internal"])
+def test_dependency_review_records_allowlisted_visibility(
+    tmp_path: Path,
+    visibility: str,
+) -> None:
+    """Allowlisted visibility values must appear in fail-closed diagnostics."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+        repository_visibility=visibility,
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+        expected_visibility=visibility,
+    )
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("base_sha", "head_sha"),
+    [
+        ("", PROBE_HEAD_SHA),
+        (PROBE_BASE_SHA, ""),
+        ("not-a-revision", PROBE_HEAD_SHA),
+        (PROBE_BASE_SHA, "../" + ("c" * 37)),
+        ("d" * 39, PROBE_HEAD_SHA),
+    ],
+)
+def test_dependency_review_rejects_malformed_revision_before_network(
+    tmp_path: Path,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    """Empty or non-hex revisions must fail closed without calling curl."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="unavailable",
+        expected_curl_exit="uncalled",
+        expected_base_sha=base_sha,
+        expected_head_sha=head_sha,
+    )
+    assert "Malformed revision" in result.stdout
+    assert not (tmp_path / "curl-argv").exists()
+
+
+def test_dependency_review_rejects_malformed_repository_before_network(
+    tmp_path: Path,
+) -> None:
+    """A repository name that cannot form a compare URL must not reach curl."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository="../evil/repo",
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="unavailable",
+        expected_curl_exit="uncalled",
+        expected_visibility="public",
+    )
+    assert "Malformed repository" in result.stdout
+    assert not (tmp_path / "curl-argv").exists()
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:

@@ -107,11 +107,13 @@ sequenceDiagram
 ## Dependency-review evidence
 
 The central `Security Scan` job treats GitHub's exact `BASE_SHA...HEAD_SHA`
-comparison as a hard supply-chain evidence boundary. Only transport exit `0`
-plus HTTP `200` may reach the immutably pinned dependency-review action. A
-`403`, `404`, timeout, truncated transfer, or malformed status fails closed
-and records allowlisted repository visibility with the exact revisions. Other
-scanners are complementary; they are not substitutes.
+comparison as a hard supply-chain evidence boundary. Revisions must be 40- or
+64-character hex and the repository must be canonical `owner/name` before the
+probe opens a socket. Only transport exit `0` plus HTTP `200` may reach the
+immutably pinned dependency-review action. A `403`, `404`, timeout, truncated
+transfer, malformed status, or malformed identity fails closed and records
+allowlisted repository visibility with the exact revisions. Other scanners
+are complementary; they are not substitutes.
 
 ```mermaid
 flowchart TD
