@@ -107,19 +107,25 @@ sequenceDiagram
 ## Dependency-review evidence
 
 The central `Security Scan` job treats GitHub's exact `BASE_SHA...HEAD_SHA`
-comparison as a hard supply-chain evidence boundary. Only transport exit `0`
-plus HTTP `200` may reach the immutably pinned dependency-review action. A
+comparison as a hard supply-chain evidence boundary. The probe rejects named
+refs and non-`owner/name` repository values before it calls the compare API,
+because GitHub would otherwise resolve `main` to a moving HEAD. Only an exact
+40- or 64-character hexadecimal object ID pair plus transport exit `0` plus
+HTTP `200` may reach the immutably pinned dependency-review action. A
 `403`, `404`, timeout, truncated transfer, curl `000` sentinel, or malformed
 status fails closed and records allowlisted repository visibility with the
 exact revisions. Other scanners are complementary; they are not substitutes.
 
 ```mermaid
 flowchart TD
+  Identity{"owner/name and 40- or 64-hex SHAs?"}
   Probe["Exact base/head compare probe"]
   Transport{"curl exit 0 and HTTP 200?"}
   Action["Pinned dependency-review action"]
   Fail["Fail closed with repo, visibility, SHAs, status"]
 
+  Identity -->|"yes"| Probe
+  Identity -->|"no"| Fail
   Probe --> Transport
   Transport -->|"yes"| Action
   Transport -->|"no"| Fail

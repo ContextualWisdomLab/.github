@@ -37,12 +37,18 @@ def run_dependency_review_support_probe(
     *,
     curl_script: str,
     repository_visibility: str = "public",
+    base_sha: str = PROBE_BASE_SHA,
+    head_sha: str = PROBE_HEAD_SHA,
+    repository: str = "ContextualWisdomLab/.github",
 ) -> subprocess.CompletedProcess:
     """Run the workflow support probe against a controlled curl binary.
 
     The helper places a fake ``curl`` first on ``PATH`` so the extracted
     workflow script cannot call the real binary, then supplies only the
-    synthetic environment variables the support step reads.
+    synthetic environment variables the support step reads. Optional SHA
+    and repository overrides let identity-validation regressions prove
+    that a named ref or path-injection value cannot reach the compare
+    request.
     """
 
     fake_bin = tmp_path / "bin"
@@ -66,9 +72,9 @@ def run_dependency_review_support_probe(
             "GITHUB_API_URL": "https://api.example.invalid",
             "GITHUB_OUTPUT": str(tmp_path / "github-output"),
             "GH_TOKEN": PROBE_TOKEN,
-            "BASE_SHA": PROBE_BASE_SHA,
-            "HEAD_SHA": PROBE_HEAD_SHA,
-            "REPOSITORY": "ContextualWisdomLab/.github",
+            "BASE_SHA": base_sha,
+            "HEAD_SHA": head_sha,
+            "REPOSITORY": repository,
             "REPOSITORY_VISIBILITY": repository_visibility,
         },
         capture_output=True,
@@ -915,6 +921,21 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "public|private|internal)" in support_probe
     assert "visibility ${visibility}" in support_probe
     assert '000|"") http_status="unavailable"' in support_probe
+    assert '^[0-9a-f]{40}([0-9a-f]{24})?$' in support_probe
+    assert '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' in support_probe
+    assert support_probe.index("^[0-9a-f]{40}") < support_probe.index("curl -sS")
+    assert support_probe.index("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") < support_probe.index(
+        "curl -sS"
+    )
+    assert "continue-on-error:" not in support_probe
+    action_lines = []
+    for line in workflow.split("      - name: Dependency review\n", 1)[1].splitlines():
+        if line and not line.startswith("        "):
+            break
+        action_lines.append(line)
+    action_step = "\n".join(action_lines)
+    assert "if:" not in action_step
+    assert "continue-on-error:" not in action_step
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -1125,6 +1146,114 @@ def test_dependency_review_curl_000_status_is_unavailable(
         expected_http="unavailable",
         expected_curl_exit="6",
     )
+
+
+def test_dependency_review_curl_000_with_exit_0_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A proxy that prints 000 and exits 0 still has no HTTP status."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '000'\nexit 0\n",
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="unavailable",
+        expected_curl_exit="0",
+    )
+
+
+def _successful_probe_curl_script(tmp_path: Path) -> str:
+    """Return a fake curl that would make the probe go green if reached."""
+
+    marker = tmp_path / "curl-invoked"
+    return (
+        "#!/usr/bin/env bash\n"
+        f"printf 'invoked' >{shlex.quote(str(marker))}\n"
+        "printf '200'\n"
+        "exit 0\n"
+    )
+
+
+def test_dependency_review_named_head_revision_cannot_go_green(
+    tmp_path: Path,
+) -> None:
+    """GitHub resolves named revisions to moving HEADs; that is not evidence."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        head_sha="main",
+    )
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert not (tmp_path / "curl-invoked").exists()
+    assert not (tmp_path / "github-output").exists()
+    assert "exact 40- or 64-character hexadecimal" in result.stdout
+    assert "main" not in combined
+    assert PROBE_TOKEN not in combined
+
+
+def test_dependency_review_empty_base_sha_cannot_go_green(
+    tmp_path: Path,
+) -> None:
+    """An empty base revision must not become a compare request."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        base_sha="",
+    )
+
+    assert result.returncode == 1
+    assert not (tmp_path / "curl-invoked").exists()
+    assert not (tmp_path / "github-output").exists()
+    assert "exact 40- or 64-character hexadecimal" in result.stdout
+
+
+def test_dependency_review_sha256_object_id_may_reach_compare(
+    tmp_path: Path,
+) -> None:
+    """A 64-character Git object ID is exact evidence and may be compared."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        base_sha="c" * 64,
+        head_sha="d" * 64,
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "curl-invoked").exists()
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+
+
+def test_dependency_review_rejects_repository_path_injection(
+    tmp_path: Path,
+) -> None:
+    """owner/name is required before the compare path is interpolated."""
+
+    raw_repository = "ContextualWisdomLab/../evil"
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script=_successful_probe_curl_script(tmp_path),
+        repository=raw_repository,
+    )
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert not (tmp_path / "curl-invoked").exists()
+    assert not (tmp_path / "github-output").exists()
+    assert "owner/name repository identity" in result.stdout
+    assert raw_repository not in combined
+    assert "../evil" not in combined
+    assert PROBE_TOKEN not in combined
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
