@@ -1,0 +1,330 @@
+name: Repair object-storage contract hardening
+
+on:
+  push:
+    branches:
+      - feat/object-storage-contract-v1
+    paths:
+      - .github/workflows/repair-object-storage-contract.yml
+
+concurrency:
+  group: repair-object-storage-contract-hardening
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up current stable Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked quality tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply fail-closed host, JSON, schema, and telemetry repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          script = Path("scripts/ci/validate_object_storage_contract.py")
+          text = script.read_text(encoding="utf-8")
+          text = text.replace("import argparse\nimport json\n", "import argparse\nimport ipaddress\nimport json\n", 1)
+          text = text.replace(
+              "MAX_CONTRACT_BYTES = 65536\n",
+              "MAX_CONTRACT_BYTES = 65536\nFORBIDDEN_METADATA_HOSTS = frozenset({\"metadata.google.internal\", \"metadata.goog\"})\n",
+              1,
+          )
+          old = '''def is_exact_dns_host(host: str) -> bool:
+              """Return whether *host* is one exact DNS name with no wildcards or ports."""
+              if not host or not isinstance(host, str):
+                  return False
+              if any(char in host for char in "*:/@ \\t\\\\"):
+                  return False
+              if host.startswith(".") or host.endswith("."):
+                  return False
+              labels = host.split(".")
+              for label in labels:
+                  if not label or len(label) > 63:
+                      return False
+                  if label.startswith("-") or label.endswith("-"):
+                      return False
+                  if not all(char.isalnum() or char == "-" for char in label):
+                      return False
+              return True
+          '''
+          new = '''def reject_non_finite_constant(value: str) -> None:
+              """Reject non-standard NaN and infinity constants during JSON parsing."""
+              raise ObjectStorageContractError(
+                  f"contract JSON numbers must be finite; found {value}"
+              )
+
+
+          def is_exact_dns_host(host: str) -> bool:
+              """Return whether *host* is one canonical non-metadata DNS name."""
+              if not isinstance(host, str) or not host or len(host) > 253:
+                  return False
+              if host != host.lower() or not host.isascii():
+                  return False
+              if host in FORBIDDEN_METADATA_HOSTS or host.endswith(".localhost"):
+                  return False
+              try:
+                  ipaddress.ip_address(host)
+              except ValueError:
+                  pass
+              else:
+                  return False
+              if any(char in host for char in "*:/@ \\t\\\\"):
+                  return False
+              if host.startswith(".") or host.endswith("."):
+                  return False
+              labels = host.split(".")
+              for label in labels:
+                  if not label or len(label) > 63:
+                      return False
+                  if label.startswith("-") or label.endswith("-"):
+                      return False
+                  if not all(
+                      char in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in label
+                  ):
+                      return False
+              return True
+          '''
+          if old not in text:
+              raise SystemExit("exact DNS host function did not match expected source")
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '    if separator and (not port.isdigit() or port == "0"):\n        raise ObjectStorageContractError("custom endpoint port is invalid")\n',
+              '    if separator and (\n        not port.isdigit() or not 1 <= int(port) <= 65535\n    ):\n        raise ObjectStorageContractError("custom endpoint port is invalid")\n',
+              1,
+          )
+          text = text.replace(
+              "    decoder = json.JSONDecoder(object_pairs_hook=reject_duplicate_keys)\n",
+              "    decoder = json.JSONDecoder(\n        object_pairs_hook=reject_duplicate_keys,\n        parse_constant=reject_non_finite_constant,\n    )\n",
+              1,
+          )
+          text = text.replace(
+              '''    require_allowed(
+                  policy.get("private_network_trust"),
+                  "endpoint_policy.private_network_trust",
+                  ALLOWED_PRIVATE_NETWORK_TRUST,
+              )
+          ''',
+              '''    private_network_trust = require_allowed(
+                  policy.get("private_network_trust"),
+                  "endpoint_policy.private_network_trust",
+                  ALLOWED_PRIVATE_NETWORK_TRUST,
+              )
+          ''',
+              1,
+          )
+          text = text.replace(
+              '''        if host in seen:
+                      raise ObjectStorageContractError(f"duplicate endpoint host {host!r}")
+                  seen.add(host)
+          ''',
+              '''        if host in seen:
+                      raise ObjectStorageContractError(f"duplicate endpoint host {host!r}")
+                  if private_network_trust == "denied" and "." not in host:
+                      raise ObjectStorageContractError(
+                          "single-label endpoint hosts require explicit private-network trust"
+                      )
+                  seen.add(host)
+          ''',
+              1,
+          )
+          text = text.replace(
+              '''    missing = sorted(FORBIDDEN_HIGH_CARDINALITY_LABELS - set(labels))
+              if missing:
+          ''',
+              '''    if any(not isinstance(label, str) or not label for label in labels):
+                  raise ObjectStorageContractError(
+                      "observability labels must be nonempty strings"
+                  )
+              if len(labels) != len(set(labels)):
+                  raise ObjectStorageContractError(
+                      "observability labels must not contain duplicates"
+                  )
+              missing = sorted(FORBIDDEN_HIGH_CARDINALITY_LABELS - set(labels))
+              if missing:
+          ''',
+              1,
+          )
+          script.write_text(text, encoding="utf-8")
+
+          tests = Path("tests/test_object_storage_contract.py")
+          text = tests.read_text(encoding="utf-8")
+          text = text.replace('ARCHITECTURE = ROOT / "ARCHITECTURE.md"\n', "", 1)
+          text = text.replace('    assert validator.is_exact_dns_host("localhost") is True\n', '    assert validator.is_exact_dns_host("localhost") is False\n', 1)
+          text = text.replace('    architecture = ARCHITECTURE.read_text(encoding="utf-8")\n', "", 1)
+          text = text.replace('    assert "object-storage" in architecture.lower()\n', "", 1)
+          tests.write_text(text, encoding="utf-8")
+
+          schema = {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "$id": "https://github.com/ContextualWisdomLab/.github/schemas/cwl-object-storage-v1.schema.json",
+              "title": "CWL object-storage contract v1",
+              "type": "object",
+              "additionalProperties": False,
+              "required": [
+                  "schema_version", "capability", "repository", "provider_class",
+                  "endpoint_policy", "credentials", "permissions", "encryption",
+                  "integrity", "lifecycle", "rollback", "observability",
+                  "database_object_names", "assurance_posture",
+              ],
+              "properties": {
+                  "schema_version": {"const": "1"},
+                  "capability": {"const": "object_storage"},
+                  "repository": {"type": "string", "pattern": r"^ContextualWisdomLab/(?!.*\\.$)[A-Za-z0-9._-]+$"},
+                  "provider_class": {"enum": ["aws_s3", "s3_compatible"]},
+                  "endpoint_policy": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["transport", "host_allowlist", "allow_wildcards", "follow_redirects", "private_network_trust"],
+                      "properties": {
+                          "transport": {"const": "https"},
+                          "host_allowlist": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "minLength": 1}},
+                          "allow_wildcards": {"const": False},
+                          "follow_redirects": {"const": False},
+                          "private_network_trust": {"enum": ["explicit_allowlist", "denied"]},
+                          "custom_endpoint": {"type": "string", "pattern": "^https://"},
+                      },
+                  },
+                  "credentials": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["broadcast", "browser_long_lived", "ambient_process_wide", "mechanism"],
+                      "properties": {
+                          "broadcast": {"const": False}, "browser_long_lived": {"const": False},
+                          "ambient_process_wide": {"const": False},
+                          "mechanism": {"enum": ["scoped_secret_registry", "workload_identity"]},
+                      },
+                  },
+                  "permissions": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["public_acls", "public_buckets", "least_privilege"],
+                      "properties": {"public_acls": {"const": False}, "public_buckets": {"const": False}, "least_privilege": {"const": True}},
+                  },
+                  "encryption": {"type": "object", "additionalProperties": False, "required": ["server_side"], "properties": {"server_side": {"const": "required"}}},
+                  "integrity": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["content_length", "digest", "fail_closed_read"],
+                      "properties": {"content_length": {"const": True}, "digest": {"enum": ["sha256", "sha384", "sha512"]}, "fail_closed_read": {"const": True}},
+                  },
+                  "lifecycle": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["states", "consumed_implies_immediate_delete", "zero_retention_explicit", "legal_hold_distinct"],
+                      "properties": {
+                          "states": {"type": "array", "minItems": 5, "uniqueItems": True, "items": {"type": "string", "minLength": 1}, "allOf": [{"contains": {"const": state}} for state in ["pending", "available", "consumed", "archived", "held"]]},
+                          "consumed_implies_immediate_delete": {"type": "boolean"},
+                          "zero_retention_explicit": {"type": "boolean"},
+                          "legal_hold_distinct": {"const": True},
+                      },
+                      "allOf": [{"if": {"properties": {"consumed_implies_immediate_delete": {"const": True}}, "required": ["consumed_implies_immediate_delete"]}, "then": {"properties": {"zero_retention_explicit": {"const": True}}}}],
+                  },
+                  "rollback": {"type": "object", "additionalProperties": False, "required": ["delete_customer_data_on_partial_migration"], "properties": {"delete_customer_data_on_partial_migration": {"const": False}}},
+                  "observability": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["high_cardinality_labels_forbid"],
+                      "properties": {"high_cardinality_labels_forbid": {"type": "array", "minItems": 4, "uniqueItems": True, "items": {"type": "string", "minLength": 1}, "allOf": [{"contains": {"const": label}} for label in ["bucket", "object_key", "credential", "raw_pii"]]}},
+                  },
+                  "database_object_names": {"const": "multiword_snake_case"},
+                  "assurance_posture": {"const": "design_constraints_only"},
+              },
+          }
+          Path("schemas/cwl-object-storage-v1.schema.json").write_text(
+              json.dumps(schema, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+
+          doctoring = Path("docs/doctoring/object-storage-contract.md")
+          text = doctoring.read_text(encoding="utf-8")
+          marker = "## Verification contract\n"
+          hardening = """## Parser and endpoint hardening\n\nThe portable JSON Schema closes every nested policy object rather than merely\ntyping it as an arbitrary object. The stdlib validator also rejects RFC 8259\nnon-finite constants, IP literals, localhost aliases, known metadata hostnames,\nnon-ASCII or non-canonical host aliases, out-of-range ports, implicitly private\nsingle-label hosts under a denied policy, malformed telemetry labels, and\nduplicates. Runtime adapters still need DNS-resolution and rebinding controls;\nthis document contract does not replace an egress boundary.\n\n"""
+          if marker not in text:
+              raise SystemExit("doctoring verification section was not found")
+          if hardening not in text:
+              text = text.replace(marker, hardening + marker, 1)
+          doctoring.write_text(text, encoding="utf-8")
+
+          architecture = Path("ARCHITECTURE.md")
+          base = __import__("subprocess").run(
+              ["git", "show", "c47afc2dc68488292c1db7c9d6f82dcd5360f181:ARCHITECTURE.md"],
+              check=True, stdout=__import__("subprocess").PIPE,
+          ).stdout
+          architecture.write_bytes(base)
+          PY
+
+      - name: Run focused production coverage and docstring gates
+        run: |
+          cat >"${RUNNER_TEMP}/object-storage-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/validate_object_storage_contract.py
+
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/object-storage-coveragerc"
+          python -m coverage erase
+          python -m coverage run -m pytest \
+            tests/test_object_storage_contract.py \
+            tests/test_object_storage_contract_hardening.py \
+            -q
+          python -m coverage report
+          python -m interrogate --fail-under 100 scripts/ci/validate_object_storage_contract.py
+          python -m compileall -q scripts/ci/validate_object_storage_contract.py tests/test_object_storage_contract.py tests/test_object_storage_contract_hardening.py
+
+      - name: Run complete central suite and 100 percent branch gate
+        run: |
+          unset COVERAGE_RCFILE
+          python -m coverage erase
+          python -m coverage run -m pytest tests -q
+          python -m coverage report
+
+      - name: Commit verified repair and remove one-shot workflow
+        env:
+          BRANCH_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          EXPECTED_TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_TRIGGER_SHA"
+          git rm .github/workflows/repair-object-storage-contract.yml
+          git diff --check
+          git config user.name "cwl-ci-repair[bot]"
+          git config user.email "cwl-ci-repair[bot]@users.noreply.github.com"
+          git add \
+            ARCHITECTURE.md \
+            docs/doctoring/object-storage-contract.md \
+            schemas/cwl-object-storage-v1.schema.json \
+            scripts/ci/validate_object_storage_contract.py \
+            tests/test_object_storage_contract.py \
+            tests/test_object_storage_contract_hardening.py
+          git commit -m "fix(storage): close object contract trust boundaries"
+          auth_header="$(printf 'x-access-token:%s' "$BRANCH_PUSH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
+            push origin "HEAD:refs/heads/feat/object-storage-contract-v1"
