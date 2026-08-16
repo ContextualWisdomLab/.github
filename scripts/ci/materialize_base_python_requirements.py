@@ -52,7 +52,7 @@ TRUSTED_UV_ASSET_HOSTS = frozenset(
     }
 )
 TRUSTED_UV_FINAL_HOSTS = frozenset({TRUSTED_UV_RELEASE_HOST, *TRUSTED_UV_ASSET_HOSTS})
-TRUSTED_UV_USER_AGENT = "ContextualWisdomLab-coverage/1.0"
+TRUSTED_UV_DOWNLOAD_USER_AGENT = "cwl-trusted-uv-materializer/1"
 TRUSTED_UV_ARCHIVE_SHA256 = (
     "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 )
@@ -141,7 +141,6 @@ def _install_trusted_uv_url_opener() -> None:
         urllib.request.ProxyHandler({}),
         _TrustedUvReleaseAssetRedirects(),
     )
-    opener.addheaders = [("User-Agent", TRUSTED_UV_USER_AGENT)]
     urllib.request.install_opener(opener)
 
 
@@ -304,12 +303,16 @@ def _download_trusted_uv_archive() -> bytes:
     """Download the fixed uv release archive through one HTTPS trust boundary."""
     _install_trusted_uv_url_opener()
     try:
-        # Keep the audited URL literal at the network sink so static analysis can
-        # prove that neither user data nor repository content selects a scheme,
-        # host, path, query, fragment, method, or request header.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        # Keep the audited URL literal and static request header in this trusted
+        # function so neither user data nor repository content selects the
+        # scheme, host, path, query, fragment, method, or request header.
+        request = urllib.request.Request(
             "https://github.com/astral-sh/uv/releases/download/0.12.1/"
             "uv-x86_64-unknown-linux-gnu.tar.gz",
+            headers={"User-Agent": TRUSTED_UV_DOWNLOAD_USER_AGENT},
+        )
+        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+            request,
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
             if not _is_trusted_uv_final_origin(response.geturl()):

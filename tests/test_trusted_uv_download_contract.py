@@ -53,25 +53,16 @@ def _urlopen_calls() -> list[ast.Call]:
     ]
 
 
-def test_urlopen_receives_one_literal_https_release_url() -> None:
-    """Static analysis can prove repository or user data never selects the URL."""
+def test_urlopen_receives_one_static_release_request() -> None:
+    """Static analysis can prove repository data never selects the request."""
     calls = _urlopen_calls()
 
     assert len(calls) == 1
     assert len(calls[0].args) == 1
-    url_argument = calls[0].args[0]
-    assert isinstance(url_argument, ast.Constant)
-    assert isinstance(url_argument.value, str)
-    assert url_argument.value == _EXPECTED_URL
+    request_argument = calls[0].args[0]
+    assert isinstance(request_argument, ast.Name)
+    assert request_argument.id == "request"
 
-
-def test_literal_network_sink_matches_the_documented_release_constant() -> None:
-    """The scanner-friendly sink literal cannot drift from the release identity."""
-    assert _assigned_literal("TRUSTED_UV_ARCHIVE_URL") == _EXPECTED_URL
-
-
-def test_downloader_never_constructs_a_dynamic_request_object() -> None:
-    """The audited downloader cannot hide a dynamic URL inside ``Request``."""
     request_calls = [
         node
         for node in ast.walk(_download_function())
@@ -79,8 +70,32 @@ def test_downloader_never_constructs_a_dynamic_request_object() -> None:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "Request"
     ]
+    assert len(request_calls) == 1
+    assert len(request_calls[0].args) == 1
+    url_argument = request_calls[0].args[0]
+    assert isinstance(url_argument, ast.Constant)
+    assert isinstance(url_argument.value, str)
+    assert url_argument.value == _EXPECTED_URL
 
-    assert request_calls == []
+    headers = next(
+        keyword.value
+        for keyword in request_calls[0].keywords
+        if keyword.arg == "headers"
+    )
+    assert isinstance(headers, ast.Dict)
+    assert len(headers.keys) == 1
+    assert isinstance(headers.keys[0], ast.Constant)
+    assert headers.keys[0].value == "User-Agent"
+    assert isinstance(headers.values[0], ast.Name)
+    assert headers.values[0].id == "TRUSTED_UV_DOWNLOAD_USER_AGENT"
+    assert _assigned_literal("TRUSTED_UV_DOWNLOAD_USER_AGENT") == (
+        "cwl-trusted-uv-materializer/1"
+    )
+
+
+def test_literal_network_sink_matches_the_documented_release_constant() -> None:
+    """The scanner-friendly sink literal cannot drift from the release identity."""
+    assert _assigned_literal("TRUSTED_UV_ARCHIVE_URL") == _EXPECTED_URL
 
 
 def test_literal_urlopen_sink_has_one_scoped_semgrep_suppression() -> None:

@@ -156,11 +156,7 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
 ) -> None:
     """The dedicated process installs one no-proxy GitHub-origin opener."""
     captured: dict[str, object] = {"builds": 0, "installs": 0}
-
-    class _Opener:
-        """Accept the fixed headers configured on a real urllib opener."""
-
-    sentinel = _Opener()
+    sentinel = object()
 
     def fake_build_opener(*handlers: object) -> object:
         captured["builds"] = int(captured["builds"]) + 1
@@ -186,7 +182,6 @@ def test_trusted_uv_opener_is_cached_and_disables_ambient_proxies(
     assert isinstance(handlers[0], urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], materializer._TrustedUvReleaseAssetRedirects)
-    assert sentinel.addheaders == [("User-Agent", materializer.TRUSTED_UV_USER_AGENT)]
 
 
 @pytest.mark.parametrize(
@@ -235,4 +230,42 @@ def test_base_lock_discovery_excludes_relative_include_files(
 
     assert materializer.base_hash_locks(tmp_path, "a" * 40) == [
         ("requirements-other.txt", pinned)
+    ]
+
+
+def test_base_lock_discovery_publishes_nested_requirements_directory_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Path-aware discovery still publishes standalone ``requirements/ci.txt``."""
+    tree = (
+        b"100644 blob "
+        + (b"0" * 40)
+        + b"\trequirements/ci.txt\0"
+        + b"100644 blob "
+        + (b"1" * 40)
+        + b"\tservice/requirements/package.txt\0"
+        + b"100644 blob "
+        + (b"2" * 40)
+        + b"\trequirements.txt\0"
+    )
+    ci_lock = b"ci-demo==1 --hash=sha256:" + (b"a" * 64) + b"\n"
+    package_lock = b"service-demo==1 --hash=sha256:" + (b"b" * 64) + b"\n"
+
+    def fake_git(_repo_root: Path, *args: str) -> bytes:
+        if args[0] == "ls-tree":
+            return tree
+        if args[0] == "show" and args[-1].endswith(":requirements/ci.txt"):
+            return ci_lock
+        if args[0] == "show" and args[-1].endswith(":service/requirements/package.txt"):
+            return package_lock
+        if args[0] == "show" and args[-1].endswith(":requirements.txt"):
+            return b"-r requirements/ci.txt\n"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+
+    assert materializer.base_hash_locks(tmp_path, "a" * 40) == [
+        ("requirements/ci.txt", ci_lock),
+        ("service/requirements/package.txt", package_lock),
     ]
