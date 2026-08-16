@@ -68,30 +68,13 @@ on:
     - cron: '0 3 * * 1'
   # Default-branch-only retry entrypoint; no caller-selected workflow ref.
   # Remains PR-metadata-bound same-head evidence (quick). It cannot scan a
-  # branch or tag release candidate.
+  # branch or tag release candidate. Do not restore workflow_dispatch here:
+  # GitHub's manual UI/API lets the caller select a branch, and that revision
+  # supplies the workflow YAML (id-token + statuses:write) before any in-job
+  # trusted-source checkout can run. Deep stays unwired on this privileged
+  # file until a separately reviewed default-branch-only dispatcher exists.
   repository_dispatch:
     types: [strix-scan]
-  # Manual official-mode selector for an incomplete RC. Deep is allowed only
-  # on this path. The sole input is scan_mode; callers cannot choose a
-  # target repository or substitute privileged retry metadata. Selecting a
-  # workflow revision still requires write access, matching GitHub's
-  # workflow_dispatch model. Privileged same-head retries stay on
-  # repository_dispatch above.
-  workflow_dispatch:
-    inputs:
-      scan_mode:
-        description: >-
-          Official Strix CLI mode (quick, standard, or deep). Deep is
-          manual-only and raises this job to the GitHub-hosted 360-minute
-          ceiling. CWL does not invent RC tags or GitHub release events;
-          use this input to scan an incomplete release candidate by hand.
-        required: true
-        type: choice
-        default: standard
-        options:
-          - quick
-          - standard
-          - deep
 
 concurrency:
   # Include the event name so default-branch repository_dispatch evidence cannot cancel
@@ -120,12 +103,9 @@ jobs:
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
     # Quick and standard share the honest 120/100/90/95 budget (standard is
-    # 30–60 min). Deep is manual workflow_dispatch only and uses the
-    # GitHub-hosted 360-minute job ceiling, leaving ~20 minutes after the
-    # 340-minute step for artifact and status publication. Required
-    # pull_request_target / repository_dispatch evidence stays on the 120
-    # budget; do not raise that path to 360.
-    timeout-minutes: ${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'deep' && '360' || '120') }}
+    # 30–60 min). Deep is not selected on this privileged workflow. Do not
+    # raise the required pull_request_target / repository_dispatch path to 360.
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -140,11 +120,11 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       # Official CLI modes only (quick|standard|deep). Dual-flow mapping:
       # required PR / repository_dispatch / push develop → quick;
-      # push main|master and weekly schedule → standard;
-      # workflow_dispatch → the scan_mode input (default standard).
+      # push main|master and weekly schedule → standard.
       # repository_dispatch must not inherit standard from github.ref
-      # (dispatch SHA is the default branch, often main).
-      STRIX_SCAN_MODE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_mode || 'standard') || github.event_name == 'schedule' && 'standard' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && 'standard' || 'quick' }}
+      # (dispatch SHA is the default branch, often main). This privileged
+      # workflow never selects deep and never exposes workflow_dispatch.
+      STRIX_SCAN_MODE: ${{ github.event_name == 'schedule' && 'standard' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && 'standard' || 'quick' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -818,7 +798,7 @@ jobs:
 
       - name: Run Strix
         if: steps.gate.outputs.enabled == 'true'
-        timeout-minutes: ${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'deep' && '340' || '100') }}
+        timeout-minutes: 100
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
         # temporary scope with execute bits stripped, then scans that scope as
@@ -869,16 +849,8 @@ jobs:
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
-          # Deep process/total budgets are workflow_dispatch-only. A required
-          # PR or repository_dispatch run must keep the 90/95-minute cap even
-          # if STRIX_SCAN_MODE were ever mis-set to deep.
-          if [ "${STRIX_SCAN_MODE}" = "deep" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            process_budget_seconds="14400"
-            total_budget_seconds="16200"
-          else
-            process_budget_seconds="5400"
-            total_budget_seconds="5700"
-          fi
+          process_budget_seconds="5400"
+          total_budget_seconds="5700"
           printf 'Using official Strix scan mode %s with process budget %ss.\n' \
             "${STRIX_SCAN_MODE}" "$process_budget_seconds"
           export "LLM_${budget_suffix}=900"

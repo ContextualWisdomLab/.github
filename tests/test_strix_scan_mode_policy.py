@@ -3,8 +3,9 @@
 CWL runs both GitHub Flow (main/master) and Git Flow (develop) without a
 consistent RC-tag or prerelease convention. Official Strix CLI modes are only
 ``quick``, ``standard``, and ``deep``. This module pins the dual-flow mapping
-and the Deep-only timeout raise so a revert or a 360-minute required-PR job
-fails closed in CI.
+and keeps Deep unwired on this privileged file so a branch-selected
+``workflow_dispatch`` cannot mint OIDC tokens or publish a fake ``strix``
+status.
 """
 
 from __future__ import annotations
@@ -22,19 +23,9 @@ STRIX_GATE = REPO_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 QUALITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
 
 SCAN_MODE_EXPRESSION = (
-    "STRIX_SCAN_MODE: ${{ github.event_name == 'workflow_dispatch' && "
-    "(github.event.inputs.scan_mode || 'standard') || "
-    "github.event_name == 'schedule' && 'standard' || "
+    "STRIX_SCAN_MODE: ${{ github.event_name == 'schedule' && 'standard' || "
     "github.event_name == 'push' && (github.ref == 'refs/heads/main' || "
     "github.ref == 'refs/heads/master') && 'standard' || 'quick' }}"
-)
-JOB_TIMEOUT_EXPRESSION = (
-    "timeout-minutes: ${{ fromJSON(github.event_name == 'workflow_dispatch' && "
-    "github.event.inputs.scan_mode == 'deep' && '360' || '120') }}"
-)
-STEP_TIMEOUT_EXPRESSION = (
-    "timeout-minutes: ${{ fromJSON(github.event_name == 'workflow_dispatch' && "
-    "github.event.inputs.scan_mode == 'deep' && '340' || '100') }}"
 )
 
 
@@ -109,41 +100,37 @@ def test_quality_trigger_includes_scan_mode_contract_paths() -> None:
 
 
 def test_workflow_pins_official_scan_mode_expression() -> None:
-    """The job must set STRIX_SCAN_MODE from event, ref, and manual input."""
+    """The job must set STRIX_SCAN_MODE from event and protected-branch ref."""
     workflow = _workflow()
 
     assert SCAN_MODE_EXPRESSION in workflow
     assert "client_payload.scan_mode" not in workflow
+    assert "github.event.inputs.scan_mode" not in workflow
     assert "          - normal" not in workflow
     assert "|| 'normal'" not in workflow
+    assert "|| 'deep'" not in workflow
+    assert "&& 'deep'" not in workflow
 
 
 @pytest.mark.parametrize(
-    ("event_name", "ref", "scan_mode_input", "expected"),
+    ("event_name", "ref", "expected"),
     (
-        ("pull_request_target", "refs/heads/main", "", "quick"),
-        ("repository_dispatch", "refs/heads/main", "", "quick"),
-        ("push", "refs/heads/develop", "", "quick"),
-        ("push", "refs/heads/main", "", "standard"),
-        ("push", "refs/heads/master", "", "standard"),
-        ("schedule", "refs/heads/develop", "", "standard"),
-        ("schedule", "refs/heads/main", "", "standard"),
-        ("workflow_dispatch", "refs/heads/release-candidate", "", "standard"),
-        ("workflow_dispatch", "refs/heads/main", "quick", "quick"),
-        ("workflow_dispatch", "refs/heads/main", "standard", "standard"),
-        ("workflow_dispatch", "refs/heads/main", "deep", "deep"),
+        ("pull_request_target", "refs/heads/main", "quick"),
+        ("repository_dispatch", "refs/heads/main", "quick"),
+        ("push", "refs/heads/develop", "quick"),
+        ("push", "refs/heads/main", "standard"),
+        ("push", "refs/heads/master", "standard"),
+        ("schedule", "refs/heads/develop", "standard"),
+        ("schedule", "refs/heads/main", "standard"),
     ),
 )
 def test_dual_flow_event_maps_to_official_mode(
     event_name: str,
     ref: str,
-    scan_mode_input: str,
     expected: str,
 ) -> None:
     """Mirror the pinned workflow expression for the confirmed dual-flow policy."""
-    if event_name == "workflow_dispatch":
-        actual = scan_mode_input or "standard"
-    elif event_name == "schedule":
+    if event_name == "schedule":
         actual = "standard"
     elif event_name == "push" and ref in {"refs/heads/main", "refs/heads/master"}:
         actual = "standard"
@@ -152,9 +139,7 @@ def test_dual_flow_event_maps_to_official_mode(
 
     assert actual == expected
     assert SCAN_MODE_EXPRESSION in _workflow()
-    if expected == "deep":
-        assert event_name == "workflow_dispatch"
-        assert scan_mode_input == "deep"
+    assert expected in {"quick", "standard"}
 
 
 def test_repository_dispatch_cannot_inherit_standard_from_default_branch_ref() -> None:
@@ -174,36 +159,28 @@ def test_required_pr_and_quick_paths_keep_standard_timeout_budget() -> None:
     header = _strix_job_header(workflow)
     step = _run_strix_step(workflow)
 
-    assert JOB_TIMEOUT_EXPRESSION in header
-    assert STEP_TIMEOUT_EXPRESSION in step
+    assert "timeout-minutes: 120" in header
+    assert "timeout-minutes: 100" in step
     assert "timeout-minutes: 360" not in header
     assert "timeout-minutes: 340" not in step
     assert "timeout-minutes: 360" not in step
     assert 'process_budget_seconds="5400"' in step
     assert 'total_budget_seconds="5700"' in step
-    assert (
-        '[ "${STRIX_SCAN_MODE}" = "deep" ] && '
-        '[ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]'
-    ) in step
-    assert 'process_budget_seconds="14400"' in step
-    assert 'total_budget_seconds="16200"' in step
+    assert 'process_budget_seconds="14400"' not in step
+    assert 'total_budget_seconds="16200"' not in step
+    assert "workflow_dispatch" not in step
 
 
-def test_workflow_dispatch_is_scan_mode_only_and_keeps_dispatch_retry() -> None:
-    """Manual deep/standard is not a privileged same-head retry replacement."""
+def test_privileged_strix_workflow_has_no_branch_selected_manual_dispatch() -> None:
+    """Manual Deep must not load this privileged YAML from a caller-selected ref."""
     trigger = _trigger_block(_workflow())
 
-    assert "workflow_dispatch:" in trigger
-    assert "scan_mode:" in trigger
-    assert "default: standard" in trigger
-    assert "          - quick" in trigger
-    assert "          - standard" in trigger
-    assert "          - deep" in trigger
+    assert "workflow_dispatch:" not in trigger
+    assert "github.event.inputs" not in trigger
     assert "types: [strix-scan]" in trigger
     assert "\n  release:" not in trigger
     assert "v*-rc*" not in trigger
-    assert "target_repository:" not in trigger.split("workflow_dispatch:", 1)[1]
-    assert "pr_number:" not in trigger.split("workflow_dispatch:", 1)[1]
+    assert "scan_mode:" not in trigger
 
 
 def test_required_pr_scoping_and_severity_gate_remain() -> None:
