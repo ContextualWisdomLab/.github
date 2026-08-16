@@ -81,13 +81,22 @@ def opencode_review(
     }
 
 
-def strix_check(status="COMPLETED", conclusion="SUCCESS", workflow="Strix Security Scan", details_url=None):
+def strix_check(
+    status="COMPLETED",
+    conclusion="SUCCESS",
+    workflow="Strix Security Scan",
+    details_url=None,
+    event=None,
+):
+    workflow_run = {"workflow": {"name": workflow}}
+    if event is not None:
+        workflow_run["event"] = event
     value = {
         "__typename": "CheckRun",
         "name": "strix",
         "status": status,
         "conclusion": conclusion,
-        "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        "checkSuite": {"workflowRun": workflow_run},
     }
     if details_url:
         value["detailsUrl"] = details_url
@@ -1027,6 +1036,92 @@ def test_context_review_and_check_helpers(monkeypatch):
         sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}))
         == "complete"
     )
+    assert "event\n              workflow { name }" in sched.PULL_REQUEST_FIELDS_FRAGMENT
+    assert sched.workflow_run_event({}) == ""
+    assert sched.workflow_run_event({"checkSuite": {}}) == ""
+    assert sched.workflow_run_event({"checkSuite": {"workflowRun": {}}}) == ""
+    assert (
+        sched.workflow_run_event(
+            {"checkSuite": {"workflowRun": {"event": "  workflow_dispatch  "}}}
+        )
+        == "workflow_dispatch"
+    )
+    assert sched.is_manual_workflow_dispatch(strix_check(event="workflow_dispatch"))
+    assert not sched.is_manual_workflow_dispatch(strix_check(event="pull_request_target"))
+    assert not sched.is_strix_context(strix_check(event="workflow_dispatch"))
+    assert sched.is_strix_context(strix_check(event="pull_request_target"))
+    assert sched.is_strix_context(strix_check(event="repository_dispatch"))
+    running_manual_with_required = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(status="IN_PROGRESS", event="workflow_dispatch"),
+                    strix_check(event="pull_request_target"),
+                    {"context": "strix", "state": "PENDING"},
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(running_manual_with_required) == "complete"
+    assert sched.strix_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [strix_check(status="IN_PROGRESS", event="workflow_dispatch")]
+                }
+            }
+        )
+    ) == "missing"
+    assert sched.strix_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(event="workflow_dispatch")]}})
+    ) == "missing"
+    assert sched.strix_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
+    ) == "complete"
+    failed_manual = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(conclusion="FAILURE", event="workflow_dispatch"),
+                    strix_check(event="pull_request_target"),
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(failed_manual) == []
+    assert sched.action_required_checks(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        strix_check(
+                            conclusion="ACTION_REQUIRED",
+                            event="workflow_dispatch",
+                        )
+                    ]
+                }
+            }
+        )
+    ) == []
+    assert sched.matching_actions_job_id(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        strix_check(
+                            event="workflow_dispatch",
+                            details_url="https://github.com/owner/repo/actions/runs/2/job/99",
+                        ),
+                        strix_check(
+                            event="pull_request_target",
+                            details_url="https://github.com/owner/repo/actions/runs/2/job/22",
+                        ),
+                    ]
+                }
+            }
+        ),
+        sched.is_strix_context,
+    ) == "22"
 
     threaded = make_pr(
         reviewThreads={
@@ -2283,6 +2378,37 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
         "active same-head workflow run(s) ContextualWisdomLab/.github@9301"
         in capsys.readouterr().out
     )
+
+
+def test_active_review_run_refs_ignores_manual_strix_dispatch(monkeypatch):
+    """A same-head Deep workflow_dispatch must not suppress required strix-scan."""
+    head_sha = "a" * 40
+    runs = [
+        {
+            "id": 9500,
+            "name": "Strix Security Scan",
+            "event": "workflow_dispatch",
+            "head_sha": head_sha,
+            "pull_requests": [{"number": 1}],
+        },
+    ]
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): runs,
+    )
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+
+    current, stale = sched.active_review_run_refs(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(headRefOid=head_sha),
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+    )
+
+    assert current == []
+    assert stale == []
 
 
 def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):

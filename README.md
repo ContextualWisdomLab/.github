@@ -140,8 +140,10 @@ Operational cases folded into the central policy:
   `--match-head-commit`; the centralized path keeps that head-SHA guard.
 - `.github`: PRs that edit trusted review workflows can fail because
   `pull_request_target` runs the base branch's trusted scripts. A same-head
-  manual `workflow_dispatch` Strix run may supply evidence for review, but it
-  does not replace required PR checks until the trusted base branch catches up.
+  manual `workflow_dispatch` Strix run may inform a reviewer, but it does not
+  park, fail, or satisfy merge evidence. Required PR checks stay
+  `pull_request_target` and `repository_dispatch` `strix-scan` until the
+  trusted base branch catches up.
 - `naruon#745`: new OpenCode review-flow work improves Mermaid output by
   replacing generic risk sketches with changed-file flow DAGs. The central
   workflow carries that review contract while keeping the self-test drift fix.

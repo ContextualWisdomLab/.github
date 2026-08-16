@@ -73,6 +73,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           detailsUrl
           checkSuite {
             workflowRun {
+              event
               workflow { name }
             }
           }
@@ -953,9 +954,28 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
     return node.get("context") == "opencode-review"
 
 
+def workflow_run_event(node: dict[str, Any]) -> str:
+    """Return the GitHub Actions event that created this check run, if present."""
+    workflow_run = ((node.get("checkSuite") or {}).get("workflowRun") or {})
+    return str(workflow_run.get("event") or "").strip()
+
+
+def is_manual_workflow_dispatch(node: dict[str, Any]) -> bool:
+    """Return whether a check run was created by caller-selected workflow_dispatch."""
+    return workflow_run_event(node) == "workflow_dispatch"
+
+
 def is_strix_context(node: dict[str, Any]) -> bool:
-    """Return whether a check or status context belongs to Strix evidence."""
+    """Return whether a check or status context is required Strix merge evidence.
+
+    Manual ``workflow_dispatch`` check runs can publish the same job name for
+    up to six hours (Deep). They may inform a reviewer but must not park,
+    fail, or satisfy the merge scheduler. A successful ``strix`` commit status
+    can still supersede a failed required check run.
+    """
     if node.get("__typename") == "CheckRun":
+        if is_manual_workflow_dispatch(node):
+            return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
             or {}
@@ -1062,17 +1082,31 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
 
 
 def strix_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, or complete for current-head Strix evidence."""
+    """Return missing, running, or complete for current-head Strix evidence.
+
+    A completed required Strix check run is enough. A later pending
+    ``strix`` commit status from a manual Deep dispatch must not park merge.
+    """
     found = False
+    completed_required_check_run = False
+    running_required = False
     for node in context_nodes(pr):
         if not is_strix_context(node):
             continue
         found = True
         status = (node.get("status") or node.get("state") or "").upper()
-        if status in RUNNING_CHECK_STATES:
-            return "running"
-        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
-            return "running"
+        is_check_run = node.get("__typename") == "CheckRun"
+        if status in RUNNING_CHECK_STATES or (
+            is_check_run and status != "COMPLETED"
+        ):
+            running_required = True
+            continue
+        if is_check_run:
+            completed_required_check_run = True
+    if completed_required_check_run:
+        return "complete"
+    if running_required:
+        return "running"
     return "complete" if found else "missing"
 
 
@@ -1387,6 +1421,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
         if node.get("__typename") != "CheckRun":
             status_contexts.append(node)
             continue
+        if is_manual_workflow_dispatch(node):
+            continue
         workflow = (
             (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
             or ""
@@ -1434,6 +1470,8 @@ def action_required_checks(pr: dict[str, Any]) -> list[str]:
     required: list[str] = []
     for node in context_nodes(pr):
         if node.get("__typename") != "CheckRun":
+            continue
+        if is_manual_workflow_dispatch(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
@@ -1946,6 +1984,8 @@ def active_review_run_refs(
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
             if centralized_dispatch:
+                continue
+            if run_data.get("event") == "workflow_dispatch":
                 continue
             run_head = str(run_data.get("head_sha") or "").lower()
             pull_requests = run_data.get("pull_requests") or []
