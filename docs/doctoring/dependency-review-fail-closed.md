@@ -4,11 +4,11 @@ Status: `active_pr` until the matching workflow and regression contract are pres
 
 ## Decision
 
-Dependency review is a hard supply-chain gate. The central workflow accepts only HTTP `200` from GitHub's exact `BASE_SHA...HEAD_SHA` comparison before invoking the immutably pinned dependency-review action. A `403`, `404`, empty or malformed status, timeout, transport failure, truncated exchange, or other unexpected outcome is unavailable evidence and fails closed.
+Dependency review is a hard supply-chain gate. The central workflow accepts only HTTP `200` from GitHub's exact `BASE_SHA...HEAD_SHA` comparison before invoking the immutably pinned dependency-review action. A `403`, `404`, empty or malformed status, curl `000` sentinel, timeout, transport failure, truncated exchange, or other unexpected outcome is unavailable evidence and fails closed.
 
 The support probe has a 10-second connection limit and 30-second total limit. It preserves curl's transport exit code separately from the bounded HTTP status and requires transport exit `0` plus exact HTTP `200`. It discards the response body and logs only repository identity, allowlisted visibility (`public`, `private`, `internal`, or `unknown`), exact base/head revisions, the normalized HTTP status, and the numeric transport exit. Credentials, response bodies, and raw untrusted visibility strings are never diagnostic output. After a successful probe the pinned action is not independently skippable.
 
-RFC 9110 §15.3.1 defines `200` as a completed successful representation, not as a status that can be inferred after a truncated transfer (Fielding et al., 2022). NIST SP 800-53 Rev. 5 RA-5 and SA-12 require that vulnerability and supply-chain evidence be obtained, not assumed absent (National Institute of Standards and Technology, 2020). SLSA v1.0 likewise treats missing provenance as unverified rather than passing (SLSA, 2023). An HTTP `403` or `404` is therefore unavailable evidence, not a clean skip.
+RFC 9110 §15.3.1 defines `200` as a completed successful representation, not as a status that can be inferred after a truncated transfer (Fielding et al., 2022). curl's `%{http_code}` write-out is the numeric status from the last retrieved transfer; when no HTTP status was received it emits `000` (Stenberg, n.d.). That sentinel is unavailable evidence, not an HTTP status. NIST SP 800-53 Rev. 5 RA-5 and SA-12 require that vulnerability and supply-chain evidence be obtained, not assumed absent (National Institute of Standards and Technology, 2020). SLSA v1.0 likewise treats missing provenance as unverified rather than passing (SLSA, 2023). An HTTP `403` or `404` is therefore unavailable evidence, not a clean skip. GitHub documents `403` as the private-repository response when GitHub Advanced Security is not enabled, or when the comparison targets a fork (GitHub, n.d.). Record the allowlisted visibility and exact revisions, then verify dependency-graph or Advanced Security configuration. Do not infer `not-applicable` from `403`.
 
 ## Identity and authority
 
@@ -19,9 +19,9 @@ Checks, status contexts, review submissions, and merge authorization remain sepa
 ## Failure classification and remediation
 
 - Transport exit `0` plus HTTP `200`: proceed to the pinned dependency-review action.
-- Any other result: fail the job and retain exact repository, allowlisted visibility, base/head, status, and transport-exit evidence. An HTTP `200` emitted by a failed or partial transfer is unavailable evidence. Do not infer a root cause from HTTP `403` or `404`.
+- Any other result: fail the job and retain exact repository, allowlisted visibility, base/head, status, and transport-exit evidence. An HTTP `200` emitted by a failed or partial transfer is unavailable evidence. curl `000` is recorded as `unavailable`. Do not infer a root cause from HTTP `403` or `404`.
 - Public repository failure: verify dependency graph and security configuration, organization policy, token read access, and GitHub service health.
-- Private or internal exception: require a separately reviewed organization policy with explicit entitlement evidence and compensating controls. Never infer `not-applicable` from an unavailable response.
+- HTTP `403` on a private or internal repository: verify whether GitHub Advanced Security / dependency review is entitled for that repository. Keep the job failed until a separately reviewed organization exception with compensating controls exists. Never infer `not-applicable` from an unavailable response.
 
 Retries are operator-initiated only after the capability or service condition changes. Do not rerun unchanged evidence repeatedly and do not convert an unavailable endpoint into a green skip.
 
@@ -42,11 +42,13 @@ Fielding, R., Nottingham, M., & Reschke, J. (Eds.). (2022). *HTTP semantics*
 
 GitHub. (n.d.). *Dependency review*. GitHub Docs. Retrieved August 9, 2026, from https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-review
 
-GitHub. (n.d.). *REST API endpoints for dependency review*. GitHub Docs. Retrieved August 9, 2026, from https://docs.github.com/en/rest/dependency-graph/dependency-review
+GitHub. (n.d.). *REST API endpoints for dependency review*. GitHub Docs. Retrieved August 16, 2026, from https://docs.github.com/en/rest/dependency-graph/dependency-review
 
 GitHub. (n.d.). *Dependency graph*. GitHub Docs. Retrieved August 9, 2026, from https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph
 
 GitHub. (n.d.). *Webhook events and payloads*. GitHub Docs. Retrieved August 16, 2026, from https://docs.github.com/en/webhooks/webhook-events-and-payloads#repository
+
+Stenberg, D. (n.d.). *curl -- write out variables*. curl. Retrieved August 16, 2026, from https://curl.se/docs/manpage.html
 
 National Institute of Standards and Technology. (2020). *Security and
 privacy controls for information systems and organizations* (NIST SP

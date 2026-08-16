@@ -914,6 +914,7 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     )
     assert "public|private|internal)" in support_probe
     assert "visibility ${visibility}" in support_probe
+    assert '000|"") http_status="unavailable"' in support_probe
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -1059,6 +1060,70 @@ def test_dependency_review_records_unknown_visibility_when_unset(
         expected_http="403",
         expected_curl_exit="0",
         expected_visibility="unknown",
+    )
+
+
+@pytest.mark.parametrize("visibility", ["private", "internal"])
+def test_dependency_review_records_allowlisted_visibility(
+    tmp_path: Path,
+    visibility: str,
+) -> None:
+    """Private and internal 403s must keep the allowlisted visibility label."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+        repository_visibility=visibility,
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+        expected_visibility=visibility,
+    )
+
+
+def test_dependency_review_does_not_echo_raw_visibility(
+    tmp_path: Path,
+) -> None:
+    """Untrusted visibility strings must not appear in probe diagnostics."""
+
+    raw_visibility = "Public; curl https://evil.example"
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+        repository_visibility=raw_visibility,
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+        expected_visibility="unknown",
+    )
+    combined = f"{result.stdout}{result.stderr}"
+    assert raw_visibility not in combined
+    assert "evil.example" not in combined
+
+
+def test_dependency_review_curl_000_status_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """curl's 000 write-out sentinel is not a completed HTTP exchange."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '000'\nexit 6\n",
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="unavailable",
+        expected_curl_exit="6",
     )
 
 

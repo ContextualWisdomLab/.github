@@ -294,8 +294,8 @@ jobs:
           set -e
 
           case "$status" in
+            000|"") http_status="unavailable" ;;
             [0-9][0-9][0-9]) http_status="$status" ;;
-            "") http_status="unavailable" ;;
             *) http_status="malformed" ;;
           esac
 
