@@ -7,9 +7,10 @@ import argparse
 import json
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from scripts.ci import implementation_completeness_scan as base_scan
 
@@ -54,6 +55,8 @@ RUNTIME_SOURCE_SUFFIXES = {
 SUPPRESSION_MARKER = "cwl-stub-scan: allow"
 GIT_INVENTORY_TIMEOUT_SECONDS = 300
 MAX_RUNTIME_FILE_BYTES = 4 * 1024 * 1024
+COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+INVENTORY_SCHEMA = "cwl.implementation-completeness/v2"
 
 
 def has_excluded_runtime_part(path: Path) -> bool:
@@ -64,6 +67,68 @@ def has_excluded_runtime_part(path: Path) -> bool:
 def is_runtime_source_path(path: Path) -> bool:
     """Return whether a path is supported production source code."""
     return path.suffix.lower() in RUNTIME_SOURCE_SUFFIXES and not has_excluded_runtime_part(path)
+
+
+def require_commit_sha(value: str, flag_name: str) -> str:
+    """Return a 40-character lowercase Git commit SHA or raise ValueError."""
+    normalized = value.strip().lower()
+    if COMMIT_SHA_PATTERN.fullmatch(normalized) is None:
+        raise ValueError(f"{flag_name} must be a 40-character commit SHA")
+    return normalized
+
+
+def require_repository_name(value: str) -> str:
+    """Return owner/name when the inventory identity has exactly two non-empty parts."""
+    owner, separator, name = value.partition("/")
+    if separator != "/" or not owner or not name or "/" in name:
+        raise ValueError("repository must be owner/name")
+    return value
+
+
+def symlink_rejection_message(relative_path: Path) -> str:
+    """Return the stable fail-closed message for a symbolic-link runtime path."""
+    return f"{relative_path.as_posix()} is a symbolic link and cannot be scanned"
+
+
+def first_symlink_on_relative_path(repo_root: Path, relative_path: Path) -> Path | None:
+    """Return the first symlink from the repository root through the relative path."""
+    current = repo_root
+    for part in relative_path.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def is_inventory_candidate(repo_root: Path, relative_path: Path) -> bool:
+    """Return whether a changed path must be scanned or rejected fail-closed."""
+    if first_symlink_on_relative_path(repo_root, relative_path) is not None:
+        return True
+    return (repo_root / relative_path).is_file()
+
+
+def inventory_payload_is_binding(payload: object) -> bool:
+    """Return whether a parsed object is a usable v2 inventory."""
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("schema") != INVENTORY_SCHEMA:
+        return False
+    if payload.get("result") not in {"pass", "fail"}:
+        return False
+    if not isinstance(payload.get("findings"), list):
+        return False
+    if not isinstance(payload.get("errors"), list):
+        return False
+    return isinstance(payload.get("checked_runtime_source_files"), int)
+
+
+def inventory_payload_is_clean(payload: Mapping[str, Any]) -> bool:
+    """Return whether a valid inventory may close a remediation issue."""
+    return (
+        payload.get("result") == "pass"
+        and payload.get("findings") == []
+        and payload.get("errors") == []
+    )
 
 
 def tracked_runtime_paths(repo_root: Path) -> list[Path]:
@@ -163,7 +228,8 @@ def generic_runtime_findings(relative_path: Path, source: str) -> list[Finding]:
             (
                 re.compile(
                     r"(?:UnsupportedOperationException|NotImplementedException)"
-                    r"\s*\(\s*['\"](?:TODO|not implemented|unimplemented)",
+                    r"\s*\(\s*(?:['\"](?:TODO|not implemented|unimplemented)"
+                    r"[^'\"]*['\"]\s*)?\)",
                     re.IGNORECASE,
                 ),
                 "throws an explicit not-implemented exception",
@@ -202,10 +268,10 @@ def scan_changed_paths(
         if key in seen or not is_runtime_source_path(relative_path):
             continue
         seen.add(key)
-        source_path = repo_root / relative_path
-        if source_path.is_symlink():
-            errors.append(f"{key} is a symbolic link and cannot be scanned")
+        if first_symlink_on_relative_path(repo_root, relative_path) is not None:
+            errors.append(symlink_rejection_message(relative_path))
             continue
+        source_path = repo_root / relative_path
         if not source_path.is_file():
             continue
         if source_path.stat().st_size > MAX_RUNTIME_FILE_BYTES:
@@ -251,18 +317,27 @@ def render_report(findings: list[Finding], errors: list[str], checked_count: int
 
 
 def render_json_report(
-    findings: list[Finding], errors: list[str], checked_count: int
+    findings: list[Finding],
+    errors: list[str],
+    checked_count: int,
+    *,
+    repository: str | None = None,
+    repository_sha: str | None = None,
+    workflow_sha: str | None = None,
 ) -> str:
     """Render a deterministic machine-readable inventory report."""
     ordered_findings = sorted(
         findings, key=lambda item: (item.path, item.line, item.reason)
     )
     payload = {
-        "schema": "cwl.implementation-completeness/v2",
+        "schema": INVENTORY_SCHEMA,
         "result": "fail" if ordered_findings or errors else "pass",
         "checked_runtime_source_files": checked_count,
         "findings": [asdict(item) for item in ordered_findings],
         "errors": sorted(errors),
+        "repository": repository,
+        "repository_sha": repository_sha,
+        "workflow_sha": workflow_sha,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
@@ -275,7 +350,27 @@ def main() -> int:
     inventory.add_argument("--changed-files")
     inventory.add_argument("--all-tracked", action="store_true")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    parser.add_argument("--repository")
+    parser.add_argument("--repository-sha")
+    parser.add_argument("--workflow-sha")
     args = parser.parse_args()
+
+    try:
+        repository = (
+            require_repository_name(args.repository) if args.repository else None
+        )
+        repository_sha = (
+            require_commit_sha(args.repository_sha, "--repository-sha")
+            if args.repository_sha
+            else None
+        )
+        workflow_sha = (
+            require_commit_sha(args.workflow_sha, "--workflow-sha")
+            if args.workflow_sha
+            else None
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     repo_root = Path(args.repo_root).resolve()
     if args.all_tracked:
@@ -285,11 +380,23 @@ def main() -> int:
         runtime_paths = [
             path
             for path in dict.fromkeys(changed_paths)
-            if is_runtime_source_path(path) and (repo_root / path).is_file()
+            if is_runtime_source_path(path) and is_inventory_candidate(repo_root, path)
         ]
     findings, errors = scan_changed_paths(repo_root, runtime_paths)
-    renderer = render_json_report if args.format == "json" else render_report
-    print(renderer(findings, errors, len(runtime_paths)), end="")
+    if args.format == "json":
+        print(
+            render_json_report(
+                findings,
+                errors,
+                len(runtime_paths),
+                repository=repository,
+                repository_sha=repository_sha,
+                workflow_sha=workflow_sha,
+            ),
+            end="",
+        )
+    else:
+        print(render_report(findings, errors, len(runtime_paths)), end="")
     return 1 if findings or errors else 0
 
 

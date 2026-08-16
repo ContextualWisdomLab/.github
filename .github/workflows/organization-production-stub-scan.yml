@@ -15,7 +15,7 @@ permissions:
 
 env:
   SHARD_COUNT: '12'
-  MAX_REPOSITORIES_PER_RUN: '16'
+  MAX_REPOSITORIES_PER_RUN: '12'
 
 jobs:
   discover-repositories:
@@ -286,6 +286,7 @@ jobs:
         env:
           TARGET_REPOSITORY: ${{ matrix.repository_full_name }}
           TARGET_SHA: ${{ matrix.repository_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
           report_path="${GITHUB_WORKSPACE}/production-stub-inventory.json"
@@ -294,15 +295,55 @@ jobs:
               --repo-root "${GITHUB_WORKSPACE}/target-repository" \
               --all-tracked \
               --format json \
+              --repository "$TARGET_REPOSITORY" \
+              --repository-sha "$TARGET_SHA" \
+              --workflow-sha "$WORKFLOW_SHA" \
               >"$report_path"
           scanner_exit_code=$?
           if [ "$scanner_exit_code" -gt 1 ]; then
             jq -n \
               --arg repository "$TARGET_REPOSITORY" \
               --arg repository_sha "$TARGET_SHA" \
+              --arg workflow_sha "$WORKFLOW_SHA" \
               --argjson exit_code "$scanner_exit_code" \
-              '{schema: "cwl.implementation-completeness/v2", result: "fail", checked_runtime_source_files: 0, findings: [], errors: [("scanner failed with exit code " + ($exit_code | tostring))], repository: $repository, repository_sha: $repository_sha}' \
+              '{schema: "cwl.implementation-completeness/v2", result: "fail", checked_runtime_source_files: 0, findings: [], errors: [("scanner failed with exit code " + ($exit_code | tostring))], repository: $repository, repository_sha: $repository_sha, workflow_sha: $workflow_sha}' \
               >"$report_path"
+            scanner_exit_code=1
+          fi
+          REPORT_PATH="$report_path" SCANNER_EXIT_CODE="$scanner_exit_code" \
+            PYTHONPATH="${GITHUB_WORKSPACE}/central-source" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.ci.organization_production_stub_scan import (
+              inventory_payload_is_binding,
+              inventory_payload_is_clean,
+          )
+
+          report_path = Path(os.environ["REPORT_PATH"])
+          try:
+              payload = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              raise SystemExit(2)
+          if not inventory_payload_is_binding(payload):
+              raise SystemExit(2)
+          if os.environ["SCANNER_EXIT_CODE"] == "0" and not inventory_payload_is_clean(
+              payload
+          ):
+              raise SystemExit(1)
+          PY
+          validation_exit=$?
+          if [ "$validation_exit" -ne 0 ]; then
+            if ! jq -e '.schema == "cwl.implementation-completeness/v2"' "$report_path" >/dev/null 2>&1; then
+              jq -n \
+                --arg repository "$TARGET_REPOSITORY" \
+                --arg repository_sha "$TARGET_SHA" \
+                --arg workflow_sha "$WORKFLOW_SHA" \
+                '{schema: "cwl.implementation-completeness/v2", result: "fail", checked_runtime_source_files: 0, findings: [], errors: ["inventory artifact was missing or not valid cwl.implementation-completeness/v2"], repository: $repository, repository_sha: $repository_sha, workflow_sha: $workflow_sha}' \
+                >"$report_path"
+            fi
+            scanner_exit_code=1
           fi
           echo "scanner_exit_code=$scanner_exit_code" >>"$GITHUB_OUTPUT"
           exit 0
@@ -383,21 +424,29 @@ jobs:
                   lines.append(f"- … {len(findings) - 200} additional findings are retained in the run artifact.")
           print("\n".join(lines) + "\n")
           PY
-          body="$(cat "${RUNNER_TEMP}/issue-body.md")"
+          ISSUE_TITLE="$title" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          body = Path(os.environ["RUNNER_TEMP"], "issue-body.md").read_text(encoding="utf-8")
+          Path(os.environ["RUNNER_TEMP"], "issue-payload.json").write_text(
+              json.dumps({"title": os.environ["ISSUE_TITLE"], "body": body}, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PY
           if [ -n "$issue_number" ]; then
             gh api \
               --method PATCH \
               -H "Accept: application/vnd.github+json" \
               "repos/${TARGET_REPOSITORY}/issues/${issue_number}" \
-              -f title="$title" \
-              -f body="$body" >/dev/null
+              --input "${RUNNER_TEMP}/issue-payload.json" >/dev/null
           else
             gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
               "repos/${TARGET_REPOSITORY}/issues" \
-              -f title="$title" \
-              -f body="$body" >/dev/null
+              --input "${RUNNER_TEMP}/issue-payload.json" >/dev/null
           fi
 
       - name: Close resolved remediation issue

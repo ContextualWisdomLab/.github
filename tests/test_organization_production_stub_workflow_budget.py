@@ -69,7 +69,7 @@ def test_workflow_declares_a_hard_selection_budget_and_continuation_receipt() ->
     """Prevent max-parallel from being mistaken for a bound on matrix cardinality."""
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    assert "MAX_REPOSITORIES_PER_RUN: '16'" in text
+    assert "MAX_REPOSITORIES_PER_RUN: '12'" in text
     assert (
         "CONTINUATION_OFFSET: ${{ github.event.client_payload.continuation_offset || '0' }}"
         in text

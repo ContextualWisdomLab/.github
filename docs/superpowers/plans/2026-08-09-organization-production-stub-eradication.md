@@ -1,9 +1,10 @@
 # Organization Production Stub Eradication Implementation Plan
 
-> **Status: CURRENT (cadence reconciled, 2026-08-12).** The accepted operational
+> **Status: CURRENT (cadence reconciled, 2026-08-16).** The accepted operational
 > contract scans one stable SHA-256-assigned twelfth every hour at minute 17,
-> completes the fleet twice per day, and keeps
-> `max-parallel: 4`; repository-dispatch remains the full-fleet replay path.
+> caps each invocation at 12 repositories with `max-parallel: 4`, and continues
+> deferred work through deterministic windows; repository-dispatch remains the
+> full-fleet replay path across those windows.
 > Current authority is
 > `.github/workflows/organization-production-stub-scan.yml`,
 > `tests/test_organization_production_stub_workflow.py`, and
@@ -13,7 +14,7 @@
 
 **Goal:** Remove every success-shaped demo, mock, placeholder, and advertised-but-unimplemented production path across ContextualWisdomLab repositories and prevent recurrence.
 
-**Architecture:** A central multi-language scanner inventories exact default-branch commits with hourly stable SHA-256 sharding and bounded four-repository parallelism, completing two fleet cycles per day while preserving exact-SHA evidence for every finding. When a repository supports Issues, the workflow maintains one remediation issue per affected repository; when Issues are disabled, the failed exact-SHA artifact remains the durable remediation evidence without an impossible issue mutation. Repository owners then replace each finding with a real provider-backed implementation or remove the unsupported capability, using fail-first tests and exact-head quality gates. Declaration-only Protocol/ABC/overload contracts, tests, fixtures, examples, generated code, and vendor code remain outside the production finding set.
+**Architecture:** A central multi-language scanner inventories exact default-branch commits with hourly stable SHA-256 sharding, a preventive 12-repository window, and bounded four-repository parallelism, preserving exact-SHA evidence for every finding. When a shard or full-fleet replay exceeds the window, deferred repositories continue through a deterministic offset. When a repository supports Issues, the workflow maintains one remediation issue per affected repository; when Issues are disabled, the failed exact-SHA artifact remains the durable remediation evidence without an impossible issue mutation. Repository owners then replace each finding with a real provider-backed implementation or remove the unsupported capability, using fail-first tests and exact-head quality gates. Declaration-only Protocol/ABC/overload contracts, tests, fixtures, examples, generated code, and vendor code remain outside the production finding set.
 
 **Tech Stack:** Python 3 AST and deterministic regex scanning, GitHub Actions, GitHub REST API through `gh`, JSON evidence schema, repository-native test and coverage tools.
 

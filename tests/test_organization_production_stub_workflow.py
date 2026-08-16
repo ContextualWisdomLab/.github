@@ -20,7 +20,7 @@ def test_hourly_sharded_scan_uses_exact_repository_and_scanner_revisions() -> No
 
     assert 'cron: "17 * * * *"' in text
     assert "SHARD_COUNT: '12'" in text
-    assert "MAX_REPOSITORIES_PER_RUN: '16'" in text
+    assert "MAX_REPOSITORIES_PER_RUN: '12'" in text
     assert 'if event_name == "schedule":' in text
     assert "hashlib.sha256(full_name.encode(\"utf-8\")).digest()" in text
     assert "repository_shard == scheduled_shard" in text
@@ -75,8 +75,10 @@ def test_operator_documentation_matches_the_hourly_sharded_contract() -> None:
     assert "hourly exact-default-branch production-stub inventory" in changelog
     assert "stable twelfth" in changelog
     assert "one stable twelfth every hour" in doctoring
-    assert "twice per day" in doctoring
+    assert "at most 12 repositories" in doctoring
+    assert "deterministic continuation" in doctoring
     assert "full-fleet repository-dispatch" in doctoring
+    assert "twice per day" not in doctoring
     for stale_claim in (
         "runs the fleet inventory once per day",
         "daily off-peak scanner",
@@ -85,8 +87,9 @@ def test_operator_documentation_matches_the_hourly_sharded_contract() -> None:
     ):
         assert stale_claim not in doctoring
 
-    assert "Status: CURRENT (cadence reconciled, 2026-08-12)" in historical_plan
+    assert "Status: CURRENT (cadence reconciled, 2026-08-16)" in historical_plan
     assert "one stable SHA-256-assigned twelfth every hour" in normalized_plan
+    assert "caps each invocation at 12 repositories" in normalized_plan
     assert "repository-dispatch remains the full-fleet replay path" in normalized_plan
     for stale_instruction in (
         'cron: "17 18 * * *"',
@@ -158,6 +161,14 @@ def test_finding_state_is_never_reclassified_as_a_successful_scan() -> None:
     assert "SCANNER_EXIT_CODE: ${{ steps.scan.outputs.scanner_exit_code }}" in text
     assert 'exit "${SCANNER_EXIT_CODE:-1}"' in text
     assert 'exit "${{ steps.scan.outputs.scanner_exit_code }}"' not in text
+    assert "--repository \"$TARGET_REPOSITORY\"" in text
+    assert "--repository-sha \"$TARGET_SHA\"" in text
+    assert "--workflow-sha \"$WORKFLOW_SHA\"" in text
+    assert "inventory_payload_is_binding" in text
+    assert "inventory_payload_is_clean" in text
+    assert '--input "${RUNNER_TEMP}/issue-payload.json"' in text
+    assert 'body="$(cat "${RUNNER_TEMP}/issue-body.md")"' not in text
+    assert '-f body="$body"' not in text
 
 
 def test_shard_execution_budget_is_observable_and_preventive() -> None:

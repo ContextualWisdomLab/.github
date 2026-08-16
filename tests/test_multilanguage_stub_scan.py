@@ -256,7 +256,24 @@ def test_json_report_is_deterministic_and_machine_readable() -> None:
     assert payload["schema"] == "cwl.implementation-completeness/v2"
     assert payload["result"] == "fail"
     assert [item["path"] for item in payload["findings"]] == ["a.py", "z.js"]
+    assert payload["repository"] is None
+    assert payload["repository_sha"] is None
+    assert payload["workflow_sha"] is None
     assert rendered.endswith("\n")
+
+    bound = json.loads(
+        scan.render_json_report(
+            findings,
+            [],
+            checked_count=3,
+            repository="ContextualWisdomLab/.github",
+            repository_sha="a" * 40,
+            workflow_sha="b" * 40,
+        )
+    )
+    assert bound["repository"] == "ContextualWisdomLab/.github"
+    assert bound["repository_sha"] == "a" * 40
+    assert bound["workflow_sha"] == "b" * 40
 
 
 def test_cli_requires_exactly_one_inventory_source(
@@ -321,3 +338,151 @@ def test_cli_filters_changed_files_and_returns_failure(
     output = capsys.readouterr().out
     assert "- Checked runtime source files: 1" in output
     assert "- Result: FAIL" in output
+
+
+def test_parameterless_not_implemented_exception_fails(tmp_path: Path) -> None:
+    """Inventory the idiomatic empty-argument implementation exception."""
+    relative_path = Path("src/Service.cs")
+    write_source(tmp_path, relative_path.as_posix(), "throw new NotImplementedException();\n")
+
+    findings, errors = scan.scan_changed_paths(tmp_path, [relative_path])
+
+    assert errors == []
+    assert [(item.path, item.line, item.reason) for item in findings] == [
+        (
+            relative_path.as_posix(),
+            1,
+            "throws an explicit not-implemented exception",
+        )
+    ]
+
+
+def test_require_commit_sha_and_repository_name_reject_unbound_identities() -> None:
+    """Keep inventory provenance fail-closed when identity fields are malformed."""
+    assert scan.require_commit_sha("A" * 40, "--repository-sha") == "a" * 40
+    assert (
+        scan.require_repository_name("ContextualWisdomLab/naruon")
+        == "ContextualWisdomLab/naruon"
+    )
+    with pytest.raises(ValueError, match="40-character commit SHA"):
+        scan.require_commit_sha("not-a-sha", "--repository-sha")
+    with pytest.raises(ValueError, match="40-character commit SHA"):
+        scan.require_commit_sha("g" * 40, "--workflow-sha")
+    for bad in ("naruon", "a/b/c", "/naruon", "org/", ""):
+        with pytest.raises(ValueError, match="owner/name"):
+            scan.require_repository_name(bad)
+
+
+def test_inventory_payload_binding_and_clean_gates() -> None:
+    """Close a remediation issue only after a valid empty v2 inventory."""
+    clean = {
+        "schema": "cwl.implementation-completeness/v2",
+        "result": "pass",
+        "findings": [],
+        "errors": [],
+        "checked_runtime_source_files": 0,
+    }
+    assert scan.inventory_payload_is_binding(clean)
+    assert scan.inventory_payload_is_clean(clean)
+    assert not scan.inventory_payload_is_binding([])
+    assert not scan.inventory_payload_is_binding({**clean, "schema": "other"})
+    assert not scan.inventory_payload_is_binding({**clean, "result": "ok"})
+    assert not scan.inventory_payload_is_binding({**clean, "findings": {}})
+    assert not scan.inventory_payload_is_binding({**clean, "errors": {}})
+    assert not scan.inventory_payload_is_binding(
+        {**clean, "checked_runtime_source_files": "1"}
+    )
+    dirty = {**clean, "result": "fail", "findings": [{"path": "a.js"}]}
+    assert scan.inventory_payload_is_binding(dirty)
+    assert not scan.inventory_payload_is_clean(dirty)
+    assert not scan.inventory_payload_is_clean({**clean, "errors": ["x"]})
+
+
+def test_cli_binds_exact_repository_and_workflow_shas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Write repository and scanner revision identity into every JSON inventory."""
+    runtime_path = write_source(tmp_path, "src/ok.py", "def ok():\n    return 1\n")
+    monkeypatch.setattr(
+        scan,
+        "tracked_runtime_paths",
+        lambda _root: [runtime_path.relative_to(tmp_path)],
+    )
+    repository_sha = "a" * 40
+    workflow_sha = "b" * 40
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "scan",
+            "--repo-root",
+            str(tmp_path),
+            "--all-tracked",
+            "--format",
+            "json",
+            "--repository",
+            "ContextualWisdomLab/.github",
+            "--repository-sha",
+            repository_sha,
+            "--workflow-sha",
+            workflow_sha,
+        ],
+    )
+
+    assert scan.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["repository"] == "ContextualWisdomLab/.github"
+    assert payload["repository_sha"] == repository_sha
+    assert payload["workflow_sha"] == workflow_sha
+
+
+def test_cli_rejects_a_malformed_repository_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refuse to emit an inventory whose commit identity cannot be bound."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "scan",
+            "--repo-root",
+            str(tmp_path),
+            "--all-tracked",
+            "--repository-sha",
+            "not-a-sha",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        scan.main()
+    assert exc.value.code == 2
+
+
+def test_cli_changed_files_rejects_a_symlink_without_following(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep the changed-file inventory on the same fail-closed symlink path."""
+    outside_source = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside_source.write_text("def outside():\n    return 1\n", encoding="utf-8")
+    source_path = tmp_path / "src" / "service.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.symlink_to(outside_source)
+    changed_file = tmp_path / "changed-files.txt"
+    changed_file.write_text("src/service.py\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "scan",
+            "--repo-root",
+            str(tmp_path),
+            "--changed-files",
+            str(changed_file),
+        ],
+    )
+
+    assert scan.main() == 1
+    assert "src/service.py is a symbolic link and cannot be scanned" in capsys.readouterr().out
