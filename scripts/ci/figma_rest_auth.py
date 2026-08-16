@@ -9,17 +9,17 @@ the token.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 TOKEN_ENV_NAME = "FIGMA_ACCESS_TOKEN"
 TOKEN_HEADER = "X-Figma-Token"
 WHOAMI_URL = "https://api.figma.com/v1/me"
+REQUEST_TIMEOUT_SECONDS = 20
 EXIT_OK = 0
 EXIT_MISSING_TOKEN = 2
 EXIT_REJECTED = 3
@@ -56,18 +56,34 @@ def read_access_token(environ: Mapping[str, str]) -> str:
 
 
 def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
-    """GET ``url`` with ``headers`` and return ``(status, body)``."""
-    request = urllib.request.Request(url, headers=dict(headers), method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return int(response.status), response.read()
-    except urllib.error.HTTPError as exc:
-        return int(exc.code), exc.read()
-    except urllib.error.URLError as exc:
+    """GET the fixed Figma whoami origin and return ``(status, body)``.
+
+    Host and path are string literals at the TLS sink. Caller ``url`` is
+    accepted only when it equals ``WHOAMI_URL``, so ``file://`` and other
+    schemes never reach the network helper. This path does not call
+    ``urllib.request.urlopen``.
+    """
+    if url != WHOAMI_URL:
         raise FigmaAuthError(
-            f"Figma REST transport failed: {exc.reason}",
+            "Figma REST opener refuses URLs other than the fixed HTTPS "
+            "/v1/me endpoint.",
+            EXIT_TRANSPORT,
+        )
+    connection = http.client.HTTPSConnection(
+        "api.figma.com",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    try:
+        connection.request("GET", "/v1/me", headers=dict(headers))
+        response = connection.getresponse()
+        return int(response.status), response.read()
+    except OSError as exc:
+        raise FigmaAuthError(
+            f"Figma REST transport failed: {exc}",
             EXIT_TRANSPORT,
         ) from exc
+    finally:
+        connection.close()
 
 
 def parse_whoami_payload(body: bytes) -> dict[str, Any]:
