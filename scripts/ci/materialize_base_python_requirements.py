@@ -224,23 +224,26 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether content carries hash pins and is safe to preflight.
+    """Return whether content carries only trusted pins or bounded includes.
 
-    Discovery is content-based rather than name-based so hash-pinned locks in any
-    location (a service subdirectory, ``requirements-dev.txt``,
-    ``requirements-test.txt``) can be considered for offline coverage, while an
-    unpinned or PR-mutable requirements file is still excluded from the networked
-    build context. Hash syntax cannot prove that a file includes every transitive
-    dependency, so the trusted image installer separately preflights every
-    candidate as an independent ``--require-hashes`` closure. An empty file
-    carries no installable dependency and is not materialized.
+    Discovery is content-based rather than name-based so exact hash-pinned locks
+    in service subdirectories and role-specific requirements files can be
+    considered for offline coverage. Candidate syntax is deliberately stricter
+    than a substring search: each package line must be an exact ``==`` pin with
+    one or more complete SHA-256 hashes, or a bounded relative requirements
+    include. A global ``--require-hashes`` directive is not trust evidence by
+    itself. The downstream installer separately preflights every candidate as an
+    independent ``pip --require-hashes`` closure, so syntax eligibility never
+    substitutes for dependency-closure proof.
     """
     lines = _requirement_lines(content)
-    if not lines:
+    requirement_lines = [line for line in lines if line != "--require-hashes"]
+    if not requirement_lines:
         return False
-    return any(line == "--require-hashes" for line in lines) or all(
-        "--hash=" in line or line.startswith(("-r ", "--requirement "))
-        for line in lines
+    return all(
+        _is_fully_hash_pinned_requirement(line)
+        or _is_bounded_requirement_include(line)
+        for line in requirement_lines
     )
 
 
@@ -477,13 +480,13 @@ def _reject_unsupported_uv_workspace(
         ) from exc
 
     try:
-        metadata["tool"]["uv"]["workspace"]
+        workspace = metadata["tool"]["uv"]["workspace"]
     except (KeyError, TypeError):
         return
 
     raise RuntimeError(
-        f"tracked base uv workspace in {pyproject_path} is not supported by "
-        "isolated lock materialization"
+        f"tracked base uv workspace in {pyproject_path} {workspace!r} is not "
+        "supported by isolated lock materialization"
     )
 
 
@@ -589,85 +592,34 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return sorted(locks, key=lambda item: item[0])
 
 
-def _open_output_directory(
-    output_dir: pathlib.Path,
-) -> tuple[int, os.stat_result]:
-    """Atomically create or securely open one non-symlink output directory."""
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        output_dir.mkdir(mode=0o700)
-    except FileExistsError:
-        pass
-    try:
-        descriptor = os.open(
-            output_dir,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        )
-    except OSError as exc:
-        raise ValueError(
-            "output directory must be a non-symlink directory"
-        ) from exc
-    return descriptor, os.fstat(descriptor)
-
-
-def _write_output_file(
-    output_descriptor: int,
-    file_name: str,
-    content: bytes,
-) -> None:
-    """Create one regular output file relative to an open directory."""
-    descriptor = os.open(
-        file_name,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-        dir_fd=output_descriptor,
-    )
-    with os.fdopen(descriptor, "wb") as destination:
-        destination.write(content)
-
-
-def _verify_output_directory(
-    output_dir: pathlib.Path,
-    expected_identity: os.stat_result,
-) -> None:
-    """Reject replacement of the published output path during materialization."""
-    current_identity = output_dir.stat(follow_symlinks=False)
-    if not os.path.samestat(expected_identity, current_identity):
-        raise ValueError("output directory changed during materialization")
-
-
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
-    """Write base lock blobs without following mutable output path entries."""
-    output_descriptor, output_identity = _open_output_directory(output_dir)
-    try:
-        manifest: list[dict[str, str]] = []
-        for index, (source_path, content) in enumerate(
-            base_hash_locks(repo_root.resolve(), base_sha)
-        ):
-            generated_name = f"requirements-{index:03d}.txt"
-            _write_output_file(output_descriptor, generated_name, content)
-            manifest.append({"file": generated_name, "source": source_path})
+    """Write base lock blobs under generated names safe for a Docker build context."""
+    if output_dir.exists() and output_dir.is_symlink():
+        raise ValueError("output directory must not be a symlink")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-        _write_output_file(
-            output_descriptor,
-            "manifest.json",
-            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
-                "utf-8"
-            ),
-        )
-        _write_output_file(
-            output_descriptor,
-            "manifest.txt",
-            "".join(f"{entry['file']}\n" for entry in manifest).encode("utf-8"),
-        )
-        _verify_output_directory(output_dir, output_identity)
-        return manifest
-    finally:
-        os.close(output_descriptor)
+    manifest: list[dict[str, str]] = []
+    for index, (source_path, content) in enumerate(
+        base_hash_locks(repo_root.resolve(), base_sha)
+    ):
+        generated_name = f"requirements-{index:03d}.txt"
+        destination = output_dir / generated_name
+        destination.write_bytes(content)
+        manifest.append({"file": generated_name, "source": source_path})
+
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "manifest.txt").write_text(
+        "".join(f"{entry['file']}\n" for entry in manifest),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
