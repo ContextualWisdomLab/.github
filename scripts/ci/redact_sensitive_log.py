@@ -144,6 +144,11 @@ MAX_RAW_JSON_STRING_BYTES = 32_768
 MAX_RAW_JSON_REPLACEMENTS = 2_048
 MAX_RAW_JSON_WORK = 262_144
 RAW_JSON_SPAN_PREFIXES = frozenset(" \t\r\n{[:,=()]")
+ACTIONS_JOB_LOG_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z "
+)
+JSON_ARRAY_NUMBER_STARTERS = frozenset("0123456789-")
+JSON_ARRAY_CONTAINER_STARTERS = frozenset("{[")
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -892,13 +897,44 @@ def _raw_json_spend(budget: dict[str, int], *, tokens: int = 0, work: int = 0) -
         raise _RawJsonError
 
 
+def _skip_actions_job_log_noise(text: str, cursor: int) -> int:
+    """Advance over JSON whitespace and line-start runner timestamps."""
+    while cursor < len(text):
+        if text[cursor] in " \t\r\n":
+            cursor += 1
+            continue
+        if cursor == 0 or text[cursor - 1] in "\n\r":
+            match = ACTIONS_JOB_LOG_TIMESTAMP_RE.match(text, cursor)
+            if match is not None:
+                cursor = match.end()
+                continue
+        break
+    return cursor
+
+
 def _raw_json_skip_space(text: str, cursor: int, budget: dict[str, int]) -> int:
-    """Advance over JSON whitespace while charging each inspected character."""
+    """Advance over JSON whitespace and runner timestamps while charging work."""
     start = cursor
-    while cursor < len(text) and text[cursor] in " \t\r\n":
-        cursor += 1
+    cursor = _skip_actions_job_log_noise(text, cursor)
     _raw_json_spend(budget, work=cursor - start)
     return cursor
+
+
+def _is_plausible_json_array_start(text: str, index: int) -> bool:
+    """Return whether '[' opens a JSON array rather than a diagnostic label."""
+    cursor = _skip_actions_job_log_noise(text, index + 1)
+    if cursor >= len(text):
+        return False
+    character = text[cursor]
+    if character == "]":
+        return True
+    if character == "t":
+        return text.startswith("true", cursor)
+    if character == "f":
+        return text.startswith("false", cursor)
+    if character == "n":
+        return text.startswith("null", cursor)
+    return character in JSON_ARRAY_NUMBER_STARTERS | JSON_ARRAY_CONTAINER_STARTERS
 
 
 def _raw_json_string(text: str, cursor: int, budget: dict[str, int]) -> int:
@@ -1214,9 +1250,11 @@ def _looks_like_sensitive_json_candidate(text: str) -> bool:
 
 def _is_plausible_raw_json_start(text: str, index: int) -> bool:
     """Return whether a brace or bracket can start a top-level JSON span."""
-    if index == 0:
-        return True
-    return text[index - 1] in RAW_JSON_SPAN_PREFIXES
+    if index > 0 and text[index - 1] not in RAW_JSON_SPAN_PREFIXES:
+        return False
+    if text[index] == "[":
+        return _is_plausible_json_array_start(text, index)
+    return True
 
 
 def _next_plausible_raw_json_start(text: str, index: int) -> int:

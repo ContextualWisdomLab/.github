@@ -29,25 +29,43 @@ def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
     assert "Bray, T. (Ed.). (2017)." in doctoring
     assert "Ecma International. (2017)." in doctoring
     assert "International Organization for Standardization. (2017)." in doctoring
+    assert "RFC 3339" in doctoring
+    assert "Klyne, G., & Newman, C. (2002)." in doctoring
+    assert "https://doi.org/10.17487/RFC3339" in doctoring
+    assert "Using workflow run logs" in doctoring
+    assert "begin-array" in doctoring
     assert "RFC 8259" in architecture
     assert "unpredictable" in architecture
     assert "ECMA-404" in architecture
     assert "ISO/IEC 21778" in architecture
+    assert "RFC 3339" in architecture
+    assert "runner timestamp" in architecture
+
+
+def _timestamped_job_log(lines: tuple[str, ...], *, crlf: bool = False) -> str:
+    """Prefix every Actions job-log line the way downloaded runner logs do."""
+    ending = "\r\n" if crlf else "\n"
+    stamped: list[str] = []
+    for index, line in enumerate(lines):
+        stamped.append(f"2026-08-16T15:22:12.001234{index}Z {line}")
+    return ending.join(stamped) + ending
 
 
 def test_realistic_actions_job_log_preserves_layout_and_hides_secrets() -> None:
     """A pretty-printed Actions evidence dump must keep layout and drop secrets."""
     first = _credential("actions")
     second = _credential("dup")
-    source = (
-        "2026-08-16T15:22:12.001Z ##[group]Runner\n"
-        "{\n"
-        f'  "password": "{first}",\n'
-        '  "status": "failed",\n'
-        f'  "token": "{first}",\n'
-        f'  "token": "{second}"\n'
-        "}\n"
-        "2026-08-16T15:22:12.002Z ##[endgroup]\n"
+    source = _timestamped_job_log(
+        (
+            "##[group]Runner",
+            "{",
+            f'  "password": "{first}",',
+            '  "status": "failed",',
+            f'  "token": "{first}",',
+            f'  "token": "{second}"',
+            "}",
+            "##[endgroup]",
+        )
     )
 
     cleaned = redactor.redact_text(source)
@@ -55,9 +73,53 @@ def test_realistic_actions_job_log_preserves_layout_and_hides_secrets() -> None:
     assert first not in cleaned
     assert second not in cleaned
     assert "##[group]Runner" in cleaned
+    assert "##[endgroup]" in cleaned
     assert '"status": "failed"' in cleaned
     assert cleaned.count('"token"') == 2
     assert cleaned.count(f'"{redactor.REDACTED}"') == 3
+    assert cleaned != redactor.REDACTED
+
+
+def test_crlf_timestamped_job_log_preserves_group_and_status() -> None:
+    """Downloaded Windows-style job logs keep group text after CRLF timestamps."""
+    credential = _credential("crlf")
+    source = _timestamped_job_log(
+        (
+            "##[error]schema",
+            "{",
+            f'  "password": "{credential}",',
+            '  "status": "failed"',
+            "}",
+            "##[endgroup]",
+        ),
+        crlf=True,
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "##[error]schema" in cleaned
+    assert '"status": "failed"' in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+
+
+def test_contiguous_group_marker_still_rewrites_only_credential_leaves() -> None:
+    """Sandbox stdout that prints ##[group] then contiguous JSON stays visible."""
+    credential = _credential("group")
+    source = (
+        "2026-08-16T15:22:12.001Z ##[group]Runner\n"
+        "{\n"
+        f'  "password": "{credential}",\n'
+        '  "status": "failed"\n'
+        "}\n"
+        "2026-08-16T15:22:12.002Z ##[endgroup]\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "##[group]Runner" in cleaned
+    assert '"status": "failed"' in cleaned
 
 
 def test_bracket_diagnostic_does_not_consume_later_sensitive_object() -> None:
@@ -70,6 +132,71 @@ def test_bracket_diagnostic_does_not_consume_later_sensitive_object() -> None:
     assert credential not in cleaned
     assert "retry [timeout]" in cleaned
     assert f'"password": "{redactor.REDACTED}"' in cleaned
+
+
+def test_line_start_info_bracket_does_not_wipe_later_records() -> None:
+    """A line-start [INFO] mentioning password must not erase later JSON."""
+    credential = _credential("info")
+    source = (
+        '[INFO] schema requires "password": string\n'
+        '[timeout] retry "password" probe\n'
+        '{"status": "ok"}\n'
+        f'{{"password": "{credential}"}}\n'
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert cleaned.startswith("[INFO] schema requires")
+    assert "[timeout] retry" in cleaned
+    assert '{"status": "ok"}' in cleaned
+    assert f'"password": "{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
+
+
+def test_json_array_openers_still_parse_after_identifier_guard() -> None:
+    """Literal JSON arrays remain spans after [INFO] is no longer an opener."""
+    credential = _credential("array")
+    source = (
+        "[true,false,null,1]\n"
+        "[false]\n"
+        "[null]\n"
+        f'[{{"password": "{credential}"}}]\n'
+        "[]\n"
+        "[\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "[true,false,null,1]" in cleaned
+    assert "[false]" in cleaned
+    assert "[null]" in cleaned
+    assert "[]" in cleaned
+    assert cleaned.endswith("[\n")
+    assert f'"password": "{redactor.REDACTED}"' in cleaned
+
+
+def test_timestamped_pretty_printed_array_rewrites_only_leaves() -> None:
+    """A downloaded pretty-printed array is one span despite per-line timestamps."""
+    credential = _credential("arrts")
+    source = _timestamped_job_log(
+        (
+            "[",
+            f'  {{"password": "{credential}"}},',
+            "  false,",
+            "  null",
+            "]",
+        )
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "false" in cleaned
+    assert "null" in cleaned
+    assert f'"{redactor.REDACTED}"' in cleaned
+    assert cleaned != redactor.REDACTED
 
 
 def test_multiline_sensitive_value_is_rewritten_before_line_splitting() -> None:
@@ -220,6 +347,7 @@ def test_malformed_sensitive_json_states_fail_closed_without_diagnostics() -> No
     credential = _credential("malformed")
     malformed = (
         '{"password":',
+        '{"password":xyz}',
         '{"password" "' + credential + '","token":}',
         '{"password":"' + credential + '", bad}',
         '{"password":1',
