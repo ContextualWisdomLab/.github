@@ -26,6 +26,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Bound sandbox verification stdout/stderr and long-running web-service evidence to declared final-suffix budgets, terminate isolated POSIX process groups on overflow, and classify resource exhaustion with stable exit code 123 while preserving timeout 124 and readiness 125 precedence.
+- Read service evidence with a bounded seek-from-end operation and apply finite reader-finalization deadlines so excessive output, inherited pipe descriptors, or full log files cannot exhaust parent memory, disk, or workflow runtime before evidence publication.
+- Reject absolute and repository-escaping symbolic links in the copied verification workspace before the untrusted command runs, while retaining safe repository-internal relative links and ignoring excluded paths.
+- Classify copied-workspace path rejection with stable exit code 126 and machine-readable evidence, and force-kill each service process group if bounded capture finalization fails so cleanup errors cannot leave orphaned descendants.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
