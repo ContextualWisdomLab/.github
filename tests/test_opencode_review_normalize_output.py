@@ -892,10 +892,27 @@ def test_approval_must_name_every_current_head_changed_file(tmp_path, monkeypatc
     assert not norm.changed_file_named_in_text(
         "Reviewed scripts/ci/example.py.bak.", "scripts/ci/example.py"
     )
+    assert not norm.changed_file_named_in_text(
+        "Reviewed docs/한.md추가.", "docs/한.md"
+    )
+    assert not norm.changed_file_named_in_text(
+        "Reviewed 추가docs/한.md.", "docs/한.md"
+    )
+    assert not norm.changed_file_named_in_text(
+        "Reviewed docs/한.md.추가.", "docs/한.md"
+    )
+    assert norm.changed_file_named_in_text("Reviewed docs/한.md.", "docs/한.md")
     assert not norm.changed_file_named_in_text("", "scripts/ci/example.py")
     assert not norm.changed_file_named_in_text("scripts/ci/example.py", "")
+    assert norm._path_token_char("한")
+    assert norm._path_token_char("_")
+    assert not norm._path_token_char(" ")
     assert norm._path_token_continues("scripts/ci/example.py.bak", 22)
+    assert norm._path_token_continues("docs/한.md추가", 9)
+    assert norm._path_token_continues("docs/한.md.추가", 9)
+    assert norm._path_token_continues("file.py..bak", 8)
     assert not norm._path_token_continues("scripts/ci/example.py.", 22)
+    assert not norm._path_token_continues("docs/한.md. Next", 9)
     assert not norm._path_token_continues("x", -1)
     assert not norm._path_token_continues("x", 1)
 

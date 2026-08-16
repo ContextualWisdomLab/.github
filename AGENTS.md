@@ -5,4 +5,4 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-OpenCode APPROVE must name every current-head changed file as a whole path token. See [`docs/doctoring/review-contract-per-file-disposition.md`](docs/doctoring/review-contract-per-file-disposition.md).
+OpenCode APPROVE must name every current-head changed file as a whole path token; Unicode prefix/suffix siblings are not a disposition. See [`docs/doctoring/review-contract-per-file-disposition.md`](docs/doctoring/review-contract-per-file-disposition.md).

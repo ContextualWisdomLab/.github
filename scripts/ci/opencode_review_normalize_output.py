@@ -854,9 +854,12 @@ def contradicts_material_changed_file_scope(reason: str, summary: str) -> bool:
     return any(phrase in combined for phrase in MATERIAL_CHANGE_FALSE_PHRASES)
 
 
-_PATH_TOKEN_BODY = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+/"
-)
+_PATH_TOKEN_SEPARATORS = frozenset("_-+/")
+
+
+def _path_token_char(char: str) -> bool:
+    """Return True when ``char`` can appear inside a repository path token."""
+    return char in _PATH_TOKEN_SEPARATORS or char.isalnum()
 
 
 def _path_token_continues(text: str, index: int) -> bool:
@@ -864,19 +867,22 @@ def _path_token_continues(text: str, index: int) -> bool:
     if index < 0 or index >= len(text):
         return False
     char = text[index]
-    if char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+/":
+    if _path_token_char(char):
         return True
-    if char == "." and index + 1 < len(text) and text[index + 1] in _PATH_TOKEN_BODY:
-        return True
+    if char == "." and index + 1 < len(text):
+        nxt = text[index + 1]
+        if nxt == "." or _path_token_char(nxt):
+            return True
     return False
 
 
 def changed_file_named_in_text(text: str, path: str) -> bool:
     """Return True when ``path`` appears as a whole path token in ``text``.
 
-    A longer sibling such as ``example.py.bak`` contains ``example.py`` as a
-    prefix substring. That is not a disposition of the shorter file. A
-    sentence period after ``.yml`` is not a continuation.
+    A longer sibling such as ``example.py.bak`` or ``docs/한.md추가``
+    contains the shorter path as a prefix substring. That is not a
+    disposition of the shorter file. A sentence period after ``.yml`` is
+    not a continuation.
     """
 
     if not path or not text:

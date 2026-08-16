@@ -16,9 +16,12 @@ CodeRabbit” gap.
 `current_changed_files()` that is not named as a whole path token.
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r`
 include; a lone `--require-hashes` line is not lock evidence.
-A longer sibling such as ``example.py.bak`` contains ``example.py`` as a
-prefix substring; that is not a disposition of the shorter file
-(CWE-1288; MITRE, 2026). ``path:line`` still counts. `valid_control`
+A longer sibling such as ``example.py.bak`` or ``docs/한.md추가`` contains
+the shorter path as a prefix substring; that is not a disposition of the
+shorter file (CWE-1288; MITRE, 2026). Path-token continuation uses
+Unicode letters and digits, not an ASCII-only class, so a Hangul suffix
+or prefix sibling cannot stand in for the shorter path (Unicode
+Consortium, 2024). ``path:line`` still counts. `valid_control`
 rejects APPROVE when that tuple is non-empty, both before and after
 bounded-evidence repair. Developer experience / User experience
 section labels were already required; this change only closes the file-walk
@@ -44,6 +47,8 @@ current-head list (`scripts/ci/example.py` and `.github/workflows/strix.yml`).
 Naming only the first file is rejected. Naming both is accepted. A post-repair
 reason that drops the second path is still rejected. Naming only
 ``scripts/ci/example.py.bak`` still leaves ``scripts/ci/example.py`` unnamed.
+Naming only ``docs/한.md추가`` or ``추가docs/한.md`` still leaves
+``docs/한.md`` unnamed.
 
 ## Rollback
 
@@ -66,3 +71,6 @@ https://doi.org/10.1109/ICSE.2013.6606617
 GitHub. (n.d.). *About pull request reviews*. GitHub Docs. Retrieved
 August 13, 2026, from
 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/about-pull-request-reviews
+
+Unicode Consortium. (2024). *The Unicode Standard* (Version 16.0.0).
+https://www.unicode.org/versions/Unicode16.0.0/

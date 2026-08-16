@@ -115,7 +115,7 @@ repeatable compile command.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **OpenCode APPROVE** must name every current-head changed file as a whole path token.
-  Prefix siblings such as `example.py.bak` do not count.
+  Prefix or suffix siblings such as `example.py.bak` or `docs/한.md추가` do not count.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

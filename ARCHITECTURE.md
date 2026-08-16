@@ -28,8 +28,8 @@ flowchart LR
 ## Per-file OpenCode APPROVE
 
 `valid_control` rejects APPROVE unless every current-head changed path
-appears as a whole token. A longer sibling (`example.py.bak`) is not a
-disposition of `example.py`.
+appears as a whole token. A longer sibling (`example.py.bak` or
+`docs/한.md추가`) is not a disposition of the shorter path.
 
 ## Hourly NVIDIA NIM repair gate
 
