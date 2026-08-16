@@ -5,5 +5,7 @@ coverage==7.14.3
 hypothesis>=6.100
 interrogate==1.7.0
 pytest==9.1.1
+pytest-asyncio==1.4.0
 pytest-cov==7.1.0
+typing-extensions==4.16.0
 uv==0.11.25
