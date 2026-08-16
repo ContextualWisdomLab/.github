@@ -13,11 +13,19 @@ from scripts.ci import validate_object_storage_contract as validator
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schemas" / "cwl-object-storage-v1.schema.json"
 EXAMPLE = ROOT / "schemas" / "examples" / "cwl-object-storage-v1.example.json"
+ONE_SHOT_REPAIR_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "repair-object-storage-contract.yml"
+)
 
 
 def _valid_contract() -> dict:
     """Return an independent mutable copy of the published example."""
     return json.loads(EXAMPLE.read_text(encoding="utf-8"))
+
+
+def test_one_shot_repair_workflow_is_absent() -> None:
+    """Completed one-shot writers must not remain to grant contents: write."""
+    assert not ONE_SHOT_REPAIR_WORKFLOW.exists()
 
 
 def test_schema_closes_every_nested_policy_object() -> None:
