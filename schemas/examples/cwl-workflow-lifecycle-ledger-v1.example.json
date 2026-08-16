@@ -1,0 +1,40 @@
+{
+  "organization": "ContextualWisdomLab",
+  "observed_at": "2026-08-16T12:00:00Z",
+  "repositories": [
+    {
+      "name": "appguardrail",
+      "archived": false,
+      "default_branch": "main",
+      "default_branch_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "default_branch_sha_after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tree_paths": [".github/workflows/ci.yml"],
+      "workflow_pages": [
+        {
+          "total_count": 3,
+          "workflows": [
+            {
+              "id": 11,
+              "name": "finalize-once",
+              "path": ".github/workflows/finalize-once.yml",
+              "state": "active"
+            },
+            {
+              "id": 12,
+              "name": "ci",
+              "path": ".github/workflows/ci.yml",
+              "state": "active"
+            },
+            {
+              "id": 13,
+              "name": "pages",
+              "path": "dynamic/pages/pages-build-deployment",
+              "state": "active"
+            }
+          ],
+          "_link_next": false
+        }
+      ]
+    }
+  ]
+}

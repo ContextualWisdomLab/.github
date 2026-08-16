@@ -66,6 +66,17 @@ The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
+## Workflow lifecycle inventory
+
+GitHub persists Actions registry identities independently of the protected
+default-branch tree. `scripts/ci/inventory_orphaned_workflows.py` is a
+read-only classifier: it binds each advertised workflow to one default-branch
+SHA, distinguishes repository YAML from GitHub-owned `dynamic/` identities,
+and fail-closes on incomplete pagination or visibility. It does not disable
+or recreate workflows. Known fleet orphans route to
+ContextualWisdomLab/appguardrail#929, ContextualWisdomLab/clearfolio#423, and
+ContextualWisdomLab/disksage#191.
+
 Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
