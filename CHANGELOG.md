@@ -17,6 +17,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Split central OpenCode publication into distinct surfaces: the formal pull-request review is a source-backed walkthrough of the actual diff, and the issue comment is gate/status only (head SHA, run id, coverage/check results). Coverage-evidence failure no longer replaces the review or cites `.github/workflows/opencode-review.yml:1` on a product repository that did not change that file.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Clearfolio PR review-feedback repair caller at minute 23 of every hour while keeping the shared scheduler free of product-specific timers and repository names for modular reuse by naruon, contextual-orchestrator, Inkspan, and other CWL services.
 - Run the bounded DiskSage repair heartbeat at minute 37 of every hour, dispatch no more than one exact-head repair, and wait two hours before redispatching an unchanged head so legitimate OpenCode or NVIDIA NIM latency does not create duplicate writers.
@@ -26,6 +27,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Stopped the OriginWeave-style coverage sandbox false blocker: the isolated image now installs the repository rustup channel plus `llvm-tools-preview`, prefetches `Cargo.lock` crates, and runs `cargo llvm-cov --offline --locked` instead of Debian rustc 1.85 without llvm-tools (ContextualWisdomLab/OriginWeave#47).
+- Taught the OpenCode mermaid helper `crates/`, `src/`, and Rust/Python/TypeScript layouts so a three-file crate change is labeled as that crate, not `Changed file (3 files)`.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
@@ -55,6 +58,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Documentation
 
+- Added an APA 7 doctoring record for the OriginWeave #47 OpenCode publication failure: coverage-as-review, duplicate formal-review/issue-comment bodies, generic mermaid inventory, and the rustc 1.85 / missing llvm-tools sandbox RCA.
 - Added an APA 7 doctoring record for conflict-control evidence isolation, including the Strix-reported trust-boundary failure, test-first remediation, canonical-path rule, operator contract, rollback, MITRE CWE-22, and current GitHub Actions secure-use guidance.
 - Added operator and APA 7 doctoring records for the hourly cadence, immutable source identity, NVIDIA NIM provider and secret boundary, high-reasoning Mistral Small 4 writer, model-process credential isolation, modular MSA ownership, product-specific caller activation, verification contract, and rollback.
 - Added DiskSage operational documentation for the hourly RCA loop, bounded retry cadence, permission model, standalone and MSA reuse, verification, rollback, and APA 7 references.

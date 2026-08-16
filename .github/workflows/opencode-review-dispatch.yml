@@ -633,6 +633,9 @@ jobs:
               --base-sha "$PR_BASE_SHA" \
               --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_toolchain.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --output-dir "$coverage_build_dir/base-rust"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -646,6 +649,7 @@ jobs:
               libcurl4-openssl-dev \
               libssl-dev \
               libxml2-dev \
+              llvm \
               mesa-vulkan-drivers \
               libvulkan1 \
               pkg-config \
@@ -727,6 +731,39 @@ jobs:
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
+          COPY base-rust /tmp/base-rust
+          RUN set -eu; \
+              if [ ! -f /tmp/base-rust/manifest.json ]; then \
+                echo "Rust coverage manifest.json must exist in the trusted build context." >&2; \
+                exit 1; \
+              fi; \
+              channel="$(jq -r '.rustup_channel // empty' /tmp/base-rust/manifest.json)"; \
+              if [ -n "$channel" ]; then \
+                curl --proto '=https' --tlsv1.2 -fsSLo /tmp/rustup-init \
+                  https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init; \
+                echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c -; \
+                chmod 0755 /tmp/rustup-init; \
+                RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
+                  /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none; \
+                RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
+                  /opt/cargo/bin/rustup toolchain install "$channel" --component llvm-tools-preview --profile minimal; \
+                RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
+                  /opt/cargo/bin/rustup default "$channel"; \
+                chmod -R a+rX /opt/rustup /opt/cargo; \
+                rm -f /tmp/rustup-init; \
+              fi; \
+              if [ -f /tmp/base-rust/Cargo.toml ] && [ -f /tmp/base-rust/Cargo.lock ]; then \
+                mkdir -p /opt/cargo; \
+                if [ -x /opt/cargo/bin/cargo ]; then \
+                  RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
+                    /opt/cargo/bin/cargo fetch --locked --manifest-path /tmp/base-rust/Cargo.toml; \
+                else \
+                  CARGO_HOME=/opt/cargo \
+                    cargo fetch --locked --manifest-path /tmp/base-rust/Cargo.toml; \
+                fi; \
+                chmod -R a+rX /opt/cargo; \
+              fi; \
+              rm -rf /tmp/base-rust
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \
@@ -881,7 +918,9 @@ jobs:
               HOME=/work/.opencode-sandbox-home \
               XDG_CACHE_HOME=/work/.opencode-sandbox-cache \
               CARGO_HOME=/work/.opencode-sandbox-home/.cargo \
-              PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              RUSTUP_HOME=/opt/rustup \
+              CARGO_NET_OFFLINE=true \
+              PATH="/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               "$@" >"$log_file" 2>&1
             local rc=$?
             set -e
@@ -1708,7 +1747,23 @@ jobs:
             fi
           }
 
+          prepare_writable_cargo_home() {
+            if [ -d /opt/cargo ] && [ ! -L /opt/cargo ]; then
+              mkdir -p /work/.opencode-sandbox-home/.cargo
+              cp -R /opt/cargo/. /work/.opencode-sandbox-home/.cargo/
+            fi
+            mkdir -p /work/.opencode-sandbox-home/.cargo
+            chown -R --no-dereference \
+              "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" \
+              /work/.opencode-sandbox-home/.cargo
+            chmod -R u+rwX,go-rwx /work/.opencode-sandbox-home/.cargo
+          }
+
           ensure_rust_toolchain() {
+            if [ -x /opt/cargo/bin/cargo ]; then
+              export PATH="/opt/cargo/bin:${PATH}"
+              export RUSTUP_HOME=/opt/rustup
+            fi
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust coverage toolchain"
               append ""
@@ -1729,6 +1784,17 @@ jobs:
               failures=$((failures + 1))
               return 1
             fi
+            if [ ! -x /opt/cargo/bin/cargo ] && [ ! -x /usr/bin/llvm-cov ]; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: llvm-tools-preview is unavailable and /usr/bin/llvm-cov is missing, so cargo llvm-cov cannot measure coverage."
+              append "- Fix: rebuild the trusted coverage image with rustup llvm-tools-preview or the distribution llvm package."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+            prepare_writable_cargo_home
             ensure_rust_gpu_adapter
             ensure_rust_desktop_deps
           }
@@ -1807,10 +1873,10 @@ jobs:
                   fi
                   if [ "$manifest" = "Cargo.toml" ]; then
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --workspace --all-features --fail-under-lines "$threshold" --show-missing-lines
+                      cargo llvm-cov --offline --locked --workspace --all-features --fail-under-lines "$threshold" --show-missing-lines
                   else
                     run_and_capture "Rust coverage with missing-line report (${manifest})" \
-                      cargo llvm-cov --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
+                      cargo llvm-cov --offline --locked --manifest-path "$manifest" --all-features --fail-under-lines "$threshold" --show-missing-lines
                   fi
                 done <<<"$manifests"
               else
@@ -2294,7 +2360,7 @@ jobs:
 
       - name: Detect central review-process scope
         id: central_review_process_fallback_scope
-        if: needs.coverage-evidence.result == 'success'
+        if: needs.coverage-evidence.result != 'cancelled'
         env:
           GH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
@@ -4275,7 +4341,7 @@ jobs:
 
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
-        if: needs.coverage-evidence.result == 'success'
+        if: needs.coverage-evidence.result != 'cancelled'
         timeout-minutes: 205
         continue-on-error: true
         env:
@@ -4495,6 +4561,8 @@ jobs:
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
+          COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
         run: |
           set -euo pipefail
 
@@ -4566,14 +4634,14 @@ jobs:
           fi
 
           {
-            printf '<!-- opencode-review-overview -->\n'
-            printf '## OpenCode Review Overview\n\n'
-            printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
-            printf -- '- Workflow run: %s\n' "$RUN_ID"
-            printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-            printf -- "- Gate result: \`%s\` (exit %s)\n\n" "${gate_result:-UNKNOWN}" "$gate_status"
-            cat "$comment_body_file"
-            append_mermaid_review_graph
+            python3 scripts/ci/opencode_review_surfaces.py build-status \
+              --result "${gate_result:-UNKNOWN}" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}" \
+              --control-block "$(cat "$comment_body_file")"
             append_merge_conflict_guidance
           } >"$overview_body_file"
 
@@ -5222,16 +5290,13 @@ jobs:
               return 1
             fi
             {
-              printf '<!-- opencode-review-overview -->\n'
-              printf '## OpenCode Review Overview\n\n'
-              printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
-              printf -- '- Workflow run: %s\n' "$RUN_ID"
-              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-              printf -- "- Gate result: \`%s\` (approval step)\n\n" "$result"
-              printf '%s\n' "$body"
-              if ! grep -Fq "## Changed-File Evidence Map" <<<"$body"; then
-                append_mermaid_review_graph
-              fi
+              python3 scripts/ci/opencode_review_surfaces.py build-status \
+                --result "$result" \
+                --head-sha "$HEAD_SHA" \
+                --run-id "$RUN_ID" \
+                --run-attempt "$RUN_ATTEMPT" \
+                --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+                --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}"
               append_merge_conflict_guidance
             } >"$overview_body_file"
 
@@ -5542,7 +5607,7 @@ jobs:
                 "" \
                 "## Findings" \
                 "" \
-                "### 1. HIGH .github/workflows/opencode-review.yml:1 - Unresolved reviewer thread blocks automated approval" \
+                "### 1. HIGH Review process - Unresolved reviewer thread blocks automated approval" \
                 "- Problem: OpenCode reached an APPROVE control result, but the approval step found unresolved, non-outdated human or review-agent thread evidence on the current pull request." \
                 "- Root cause: Reviewer and review-agent feedback can arrive after bounded model evidence is prepared, so the approval step must re-query GitHub immediately before publishing an approval." \
                 "- Fix: Address or resolve the listed reviewer thread(s), then re-run OpenCode on the current head." \
@@ -5571,7 +5636,7 @@ jobs:
               "" \
               "## Findings" \
               "" \
-              "### 1. HIGH .github/workflows/opencode-review.yml:1 - Review thread lookup could not be read before approval" \
+              "### 1. HIGH Review process - Review thread lookup could not be read before approval" \
               "- Problem: GitHub reviewThreads could not be read for the current pull request immediately before approval." \
               "- Root cause: OpenCode cannot safely approve without verifying whether newer unresolved reviewer or review-agent feedback exists." \
               "- Fix: Re-run OpenCode after GitHub reviewThreads are readable." \
@@ -5587,40 +5652,41 @@ jobs:
           build_coverage_evidence_check_failure_body() {
             local body_file="$1"
 
-            {
-              printf '%s\n' \
-                "## Pull request overview" \
-                "" \
-                "OpenCode cannot approve yet because required coverage evidence did not pass." \
-                "" \
-                "## Review outcome" \
-                "" \
-                "### 1. HIGH .github/workflows/opencode-review.yml:1 - Coverage evidence did not prove required test/docstring evidence" \
-                "- Problem: The required coverage-evidence job result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`, so OpenCode cannot establish approval sufficiency for this head." \
-                "- Root cause: Automated approval is only valid when the same-head coverage-evidence job proves supported repository test suites passed and configured docstring gates passed or were advisory, or reports not applicable because no supported source files or package manifests exist. Missing, failed, skipped, unavailable, or unsupported-tooling test evidence is a blocker." \
-                "- Fix: Install or configure the repository test/docstring evidence tooling when source files or package manifests exist, rerun the current-head coverage-evidence job, and approve only after it reports \`success\` with required evidence or explicit no-source not-applicable evidence." \
-                "- Regression test: Keep the approval branch checking \`needs.coverage-evidence.result == success\` before posting APPROVE, and publish REQUEST_CHANGES when coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence are present." \
-                "" \
-                "- Result: REQUEST_CHANGES" \
-                "- Reason: coverage-evidence result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`, so required test/docstring evidence was not proven for current head \`${HEAD_SHA}\`." \
-                "- Head SHA: \`${HEAD_SHA}\`" \
-                "- Workflow run: ${RUN_ID}" \
-                "- Workflow attempt: ${RUN_ATTEMPT}" \
-                "" \
-                "## Coverage evidence" \
-                ""
-              printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" | sed -n '1,240p'
-            } >"$body_file"
+            python3 scripts/ci/opencode_review_surfaces.py build-status \
+              --result "COVERAGE_BLOCKED" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" \
+              >"$body_file"
+          }
+
+          publish_fallback_diff_review() {
+            local body_file event
+            body_file="$(mktemp)"
+            event="COMMENT"
+            python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
+              --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
+              --source-root "${OPENCODE_SOURCE_WORKDIR}" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              >"$body_file"
+            printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
+            create_pull_review "$event" "$(cat "$body_file")"
+            rm -f "$body_file"
           }
 
           request_changes_for_coverage_evidence_failure() {
             local body_file
             body_file="$(mktemp)"
             build_coverage_evidence_check_failure_body "$body_file"
-            create_pull_review "REQUEST_CHANGES" "$(cat "$body_file")"
+            printf '::notice::Coverage evidence did not pass (%s); approval is blocked. A source-backed review of changed product files is still published. record coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence in the status comment and refuse APPROVE while still publishing a source-backed review of changed product files.\n' \
+              "${COVERAGE_EVIDENCE_RESULT:-unknown}"
+            update_review_overview "COVERAGE_BLOCKED" ""
             rm -f "$body_file"
-            echo "::endgroup::"
-            exit 0
           }
 
           create_pull_review_with_payload() {
@@ -5666,7 +5732,7 @@ jobs:
               "" \
               "## Findings" \
               "" \
-              "### 1. HIGH .github/workflows/opencode-review.yml:1 - OpenCode review evidence was missing or invalid" \
+              "### 1. HIGH Review process - OpenCode review evidence was missing or invalid" \
               "- Problem: OpenCode review evidence was missing or invalid." \
               "- Root cause: ${reason}" \
               "- Fix: Re-run the OpenCode review after the current-head evidence and control block are available." \
@@ -7458,6 +7524,11 @@ jobs:
               echo "::endgroup::"
               exit 0
             fi
+            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+              publish_fallback_diff_review
+              echo "::endgroup::"
+              exit 1
+            fi
             stop_without_review_after_model_unavailable
           fi
 
@@ -7545,7 +7616,10 @@ jobs:
           case "$gate_result" in
             APPROVE)
               if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                publish_fallback_diff_review
                 request_changes_for_coverage_evidence_failure
+                echo "::endgroup::"
+                exit 1
               fi
               if request_changes_for_merge_conflict_if_present; then
                 echo "::endgroup::"
@@ -7818,11 +7892,20 @@ jobs:
                 fi
               elif request_changes_for_merge_conflict_if_present; then
                 :
+              elif [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                publish_fallback_diff_review
+                echo "::endgroup::"
+                exit 1
               else
                 stop_without_review_after_model_unavailable
               fi
               ;;
           esac
+          if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+            request_changes_for_coverage_evidence_failure
+            echo "::endgroup::"
+            exit 1
+          fi
           echo "::endgroup::"
 
       - name: Publish repository_dispatch OpenCode status

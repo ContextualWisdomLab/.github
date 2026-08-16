@@ -718,6 +718,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
+    assert "materialize_base_rust_toolchain.py" in measure_step
+    assert "RUSTUP_HOME=/opt/rustup" in measure_step
+    assert "CARGO_NET_OFFLINE=true" in measure_step
+    assert 'PATH="/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' in measure_step
+    assert "llvm-tools-preview" in measure_step
     assert "docker run --rm --init --network=none" in measure_step
     sandbox_runtime = measure_step.split(
         "          export OPENCODE_SANDBOX_UID=65532", 1
@@ -1197,6 +1202,8 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     )
     assert "full-screen blocking layer" in ci_prompt_normalized
     assert "formerly blank sections receive real data" in ci_prompt_normalized
+    assert "Coverage is a gate, not the review" in ci_prompt
+    assert "Never cite `.github/workflows/opencode-review.yml:1`" in ci_prompt
     assert "deliberate empty states" in ci_prompt
     assert "demo/visual-QA mode is isolated" in ci_prompt_normalized
     assert "production API behavior" in ci_prompt
@@ -1468,7 +1475,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "implementation_completeness_scan.py" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
-    assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
+    assert "record coverage-evidence blocker states" in workflow
+    assert "publish_fallback_diff_review" in workflow
+    assert "opencode_review_surfaces.py build-status" in workflow
+    assert "opencode_review_surfaces.py build-fallback-review" in workflow
+    assert "materialize_base_rust_toolchain.py" in workflow
+    assert "llvm-tools-preview" in workflow
+    assert "cargo llvm-cov --offline --locked" in workflow
+    assert ".github/workflows/opencode-review.yml:1" not in workflow
     assert re.search(
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
@@ -1796,6 +1810,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "prefers-reduced-motion: reduce" in prompt_template
     assert "forced smooth scrolling" in prompt_template
+    assert "Coverage execution evidence is a separate gate" in prompt_template
+    assert "Never cite `.github/workflows/opencode-review.yml`" in prompt_template
+    assert "Never label a crate, package, or language surface as `Changed file (N files)`" in prompt_template
 
 
 def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
@@ -2550,7 +2567,10 @@ def test_opencode_model_pool_failure_uses_only_existing_real_model_approval():
         r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
         r"if publish_blockers_after_model_unavailable; then[\s\S]{0,180}"
-        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
+        r"exit 0\s+fi\s+"
+        r'if \[ "\$\{COVERAGE_EVIDENCE_RESULT:-skipped\}" != "success" \]; then[\s\S]{0,240}'
+        r"publish_fallback_diff_review[\s\S]{0,180}"
+        r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
