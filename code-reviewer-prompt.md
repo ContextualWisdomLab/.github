@@ -240,3 +240,7 @@ No open questions.
 
 Use Korean by default for human-facing prose. Keep code identifiers, file
 paths, commands, error messages, and API names in their original language.
+
+When this prompt is used from CI, write the Verdict / Findings / Test Gaps
+review first, then append the workflow sentinel and `opencode-review-control-v1`
+JSON. Do not omit the human review body in favor of control JSON alone.

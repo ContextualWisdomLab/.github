@@ -35,9 +35,10 @@ Coverage remains a fail-closed gate. It is no longer the review.
 1. The formal pull-request review is a source-backed walkthrough of the
    current-head product diff, including a fallback review that names the
    changed crate files when the model pool did not emit a control block.
-2. The issue comment is gate/status only: head SHA, run id, coverage/check
-   results, and the hidden approve-gate control block. It must not repeat
-   `## Pull request overview` or `## Findings`.
+2. The issue comment is gate/status only: head SHA, run id/attempt, coverage
+   result, model-pool outcome, verdict, and a link to the formal review. It
+   must not repeat `## Pull request overview`, `## Findings`, mermaid, or the
+   model walkthrough.
 3. A coverage miss, skip, or unsupported-tooling result blocks approval and
    fails the required review job after the diff review is published. It must
    not cite `.github/workflows/opencode-review.yml:1` unless that file is in
@@ -46,7 +47,16 @@ Coverage remains a fail-closed gate. It is no longer the review.
    `Cargo.lock` / `rust-toolchain.toml` / workspace member manifests, installs
    the declared rustup channel with `llvm-tools-preview` when it is newer than
    Debian rustc 1.85, prefetches the lockfile, and runs
-   `cargo llvm-cov --offline --locked`. A real coverage miss still fails.
+   `cargo llvm-cov --offline --locked`. Repos that ship
+   `scripts/ci/verify_coverage.py` without
+   `workspace.metadata.opencode.coverage` run that verifier instead of the
+   canned `--fail-under-lines 100` default. rustc/cargo identity and the full
+   rust/python/js measure log are published in `coverage_summary`. A real
+   coverage miss still fails.
+5. Coverage-evidence failure is injected into `bounded-review-evidence.md` as
+   a `## Coverage gate` section. The model pool still runs. The publisher does
+   not early-return before the model path. `format_request_changes_body` keeps
+   model walkthrough/diagrams and appends structured findings.
 
 Read-only review-agent permissions, NVIDIA NIM-first routing
 (`NVIDIA_NIM_API_KEY` bound into `NVIDIA_API_KEY`), OpenCode CLI 1.17.13, and
@@ -68,10 +78,13 @@ Regression tests prove that:
    `request_changes_for_coverage_evidence_failure` updates the status comment
    and does not call `create_pull_review`;
 6. the model pool still runs when coverage-evidence failed (`!= cancelled`);
-   and
 7. bounded Rust toolchain materialization copies manifests only, selects
    rustup 1.97 for OriginWeave-style workspaces, and rejects parent-directory
-   members and symlinks.
+   members and symlinks; and
+8. a rust-version 1.97 workspace without opencode coverage metadata does not
+   publish the canned coverage review as the entire PR review. Repos that
+   ship `scripts/ci/verify_coverage.py` use that verifier instead of default
+   `--fail-under-lines 100`.
 
 ## Limitations
 

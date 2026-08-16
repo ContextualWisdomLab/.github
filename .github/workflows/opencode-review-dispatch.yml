@@ -1831,11 +1831,26 @@ jobs:
             python3 "${GITHUB_WORKSPACE}/scripts/ci/rust_coverage_threshold.py" "$manifest"
           }
 
+          rust_coverage_plan_line() {
+            local manifest="$1"
+            python3 "${GITHUB_WORKSPACE}/scripts/ci/rust_coverage_policy.py" \
+              --repo-root . \
+              --manifest "$manifest"
+          }
+
           run_rust_test_coverage() {
             local manifests
             if ! ensure_rust_toolchain; then
               return 0
             fi
+            append "### Rust toolchain identity"
+            append ""
+            append "- rustc: $(rustc --version 2>/dev/null || printf 'unavailable')"
+            append "- cargo: $(cargo --version 2>/dev/null || printf 'unavailable')"
+            if command -v rustup >/dev/null 2>&1; then
+              append "- rustup active: $(rustup show active-toolchain 2>/dev/null || printf 'unavailable')"
+            fi
+            append ""
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust test coverage"
               append ""
@@ -1848,7 +1863,39 @@ jobs:
               manifests="$(rust_coverage_manifests)"
               if [ -n "$manifests" ]; then
                 while IFS= read -r manifest; do
-                  local threshold
+                  local plan_line rust_cov_mode rust_cov_fail_under rust_cov_verifier threshold
+                  if ! plan_line="$(rust_coverage_plan_line "$manifest")"; then
+                    append "### Rust coverage policy (${manifest})"
+                    append ""
+                    append "- Result: FAIL"
+                    append "- Reason: ${manifest} defines an invalid package.metadata.opencode.coverage.minimum_lines or workspace.metadata.opencode.coverage.minimum_lines value."
+                    append "- Fix: set the matching package or workspace metadata key to a numeric line-coverage percentage from 0 to 100, or ship scripts/ci/verify_coverage.py."
+                    append ""
+                    failures=$((failures + 1))
+                    continue
+                  fi
+                  IFS=$'\t' read -r rust_cov_mode rust_cov_fail_under rust_cov_verifier <<<"$plan_line"
+                  if [ "$rust_cov_mode" = "repo-verifier" ]; then
+                    append "### Rust coverage policy (${manifest})"
+                    append ""
+                    append "- Result: PASS"
+                    append "- Reason: ${manifest} has no workspace.metadata.opencode.coverage.minimum_lines, and the repository ships ${rust_cov_verifier}; central review runs that verifier instead of defaulting to --fail-under-lines 100."
+                    append ""
+                    if ! ensure_tauri_frontend_dist "$manifest"; then
+                      continue
+                    fi
+                    case "$rust_cov_verifier" in
+                      *.py)
+                        run_and_capture "Rust repository coverage verifier (${manifest})" \
+                          python3 "$rust_cov_verifier"
+                        ;;
+                      *)
+                        run_and_capture "Rust repository coverage verifier (${manifest})" \
+                          bash "$rust_cov_verifier"
+                        ;;
+                    esac
+                    continue
+                  fi
                   if ! threshold="$(rust_coverage_fail_under_lines "$manifest")"; then
                     append "### Rust coverage threshold (${manifest})"
                     append ""
@@ -1859,14 +1906,14 @@ jobs:
                     failures=$((failures + 1))
                     continue
                   fi
-                  if [ -z "$threshold" ]; then
-                    threshold=100
-                  else
+                  if [ -n "$threshold" ]; then
                     append "### Rust coverage threshold (${manifest})"
                     append ""
                     append "- Result: PASS"
                     append "- Reason: ${manifest} sets a package/workspace opencode coverage minimum_lines value to ${threshold}%, so Rust coverage enforces the repository-owned baseline instead of the central default."
                     append ""
+                  else
+                    threshold="${rust_cov_fail_under:-100}"
                   fi
                   if ! ensure_tauri_frontend_dist "$manifest"; then
                     continue
@@ -2067,15 +2114,13 @@ jobs:
           fi
 
           coverage_output_file="$(mktemp)"
-          awk '
-            /^## Coverage Decision$/ { emit = 1 }
-            emit { print }
-          ' "$summary_file" >"$coverage_output_file"
-          if [ ! -s "$coverage_output_file" ]; then
+          if [ -s "$summary_file" ]; then
+            cp "$summary_file" "$coverage_output_file"
+          else
             {
               printf '## Coverage Decision\n\n'
               printf -- '- Result: FAIL\n'
-              printf -- '- Reason: compact coverage decision could not be extracted from the full measurement log.\n'
+              printf -- '- Reason: the full rust/python/js measurement log was empty.\n'
             } >"$coverage_output_file"
             failures=$((failures + 1))
           fi
@@ -2092,7 +2137,7 @@ jobs:
             cat "$summary_output_file"
             printf '%s\n' "$coverage_output_delimiter"
           } >>"$GITHUB_OUTPUT"
-          printf 'Published compact coverage decision output after sanitization (%s bytes); full command logs remain in the job log and step summary.\n' \
+          printf 'Published full rust/python/js coverage measurement log after sanitization (%s bytes), including rustc/cargo identity; the status comment stays short.\n' \
             "$(wc -c <"$summary_output_file" | tr -d ' ')"
 
           cat "$summary_file"
@@ -2606,6 +2651,7 @@ jobs:
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"
@@ -3183,7 +3229,13 @@ jobs:
             emit_all_reviews_and_comments_evidence
             printf '\n'
 
-            printf '## Coverage execution evidence\n\n'
+            printf '## Coverage gate\n\n'
+            printf -- '- coverage-evidence result: `%s`\n' "${COVERAGE_EVIDENCE_RESULT:-unknown}"
+            printf -- '- Approval blocker: coverage is a gate, not a review skip. Review the product diff even when this result is not success.\n'
+            if [ "${COVERAGE_EVIDENCE_RESULT:-unknown}" != "success" ]; then
+              printf -- '- Gate status: coverage-evidence did not pass; do not approve. Still review the changed product files.\n'
+            fi
+            printf '\n## Coverage execution evidence\n\n'
             printf '%s\n\n' "$COVERAGE_EVIDENCE_SUMMARY"
 
             printf '## Recent deployment evidence\n\n'
@@ -3339,6 +3391,7 @@ jobs:
               append_evidence_section "Current-head authority order" 3000
               append_evidence_section "Other unresolved review thread evidence" 5000
               append_evidence_section "Failed GitHub Check evidence" 7000
+              append_evidence_section "Coverage gate" 2000
               append_evidence_section "Coverage execution evidence" 7000
               append_evidence_section "Changed files" 7000
               append_evidence_section "Adversarial probe source-line receipts" 9000
@@ -4640,9 +4693,8 @@ jobs:
               --run-id "$RUN_ID" \
               --run-attempt "$RUN_ATTEMPT" \
               --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
-              --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}" \
-              --control-block "$(cat "$comment_body_file")"
-            append_merge_conflict_guidance
+              --model-pool-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}" \
+              --verdict "${gate_result:-UNKNOWN}"
           } >"$overview_body_file"
 
           live_head="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>"$gh_error_file" || true)"
@@ -5268,7 +5320,7 @@ jobs:
           . scripts/ci/opencode_review_comment_helpers.sh
 
           update_review_overview() {
-            local result="$1" body="$2"
+            local result="$1"
             local gh_error_file
             local overview_body_file
             local overview_comment_id
@@ -5296,8 +5348,9 @@ jobs:
                 --run-id "$RUN_ID" \
                 --run-attempt "$RUN_ATTEMPT" \
                 --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
-                --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-}"
-              append_merge_conflict_guidance
+                --model-pool-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}" \
+                --verdict "$result" \
+                --formal-review-url "${FORMAL_REVIEW_URL:-}"
             } >"$overview_body_file"
 
             if ! overview_comment_id="$(
@@ -5372,7 +5425,7 @@ jobs:
                 printf '::notice::OpenCode review publication stopped because PR head advanced beyond %s; current-head run remains authoritative.\n' "$HEAD_SHA"
                 return 0
               fi
-              update_review_overview "$event" "$body" || true
+              update_review_overview "$event" || true
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                   {
@@ -5395,12 +5448,19 @@ jobs:
               esac
               exit 1
             fi
+            FORMAL_REVIEW_URL="$(jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
+              if (.id // 0) > 0 then
+                "https://github.com/\($repo)/pull/\($pr)#pullrequestreview-\(.id)"
+              else
+                empty
+              end
+            ' "$review_response_file")"
             rm -f "$gh_error_file" "$review_payload_file" "$review_response_file"
             if [ "$event" = "APPROVE" ]; then
               printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
               return 0
             fi
-            update_review_overview "$event" "$body"
+            update_review_overview "$event"
           }
 
           emit_review_body_to_action_log() {
@@ -5685,7 +5745,7 @@ jobs:
             build_coverage_evidence_check_failure_body "$body_file"
             printf '::notice::Coverage evidence did not pass (%s); approval is blocked. A source-backed review of changed product files is still published. record coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence in the status comment and refuse APPROVE while still publishing a source-backed review of changed product files.\n' \
               "${COVERAGE_EVIDENCE_RESULT:-unknown}"
-            update_review_overview "COVERAGE_BLOCKED" ""
+            update_review_overview "COVERAGE_BLOCKED"
             rm -f "$body_file"
           }
 
@@ -5712,14 +5772,21 @@ jobs:
                 return 1
               fi
               if [ -s "$fallback_body_file" ]; then
-                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$(cat "$fallback_body_file")"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED"
               else
-                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$body"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED"
               fi
               return 1
             fi
+            FORMAL_REVIEW_URL="$(jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
+              if (.id // 0) > 0 then
+                "https://github.com/\($repo)/pull/\($pr)#pullrequestreview-\(.id)"
+              else
+                empty
+              end
+            ' "$review_response_file")"
             rm -f "$gh_error_file" "$review_response_file"
-            update_review_overview "$event" "$body"
+            update_review_overview "$event"
           }
 
           request_changes_for_gate_failure() {
@@ -5749,49 +5816,31 @@ jobs:
           format_request_changes_body() {
             local control_json="$1"
             local body_file="$2"
-            local summary
+            local model_body_file="${3:-}"
+            local findings_json_file
             local reason
-            local findings
-            local adversarial_evidence
+            local format_args
 
-            summary="$(jq -r '.summary // ""' "$control_json")"
+            findings_json_file="$(mktemp)"
+            jq -c '.findings // []' "$control_json" >"$findings_json_file"
             reason="$(jq -r '.reason // ""' "$control_json")"
-            adversarial_evidence="$(jq -c '.adversarial_validation' "$control_json")"
-            findings="$(
-              # shellcheck disable=SC2016
-              jq -r '
-                (.findings // [])
-                | to_entries
-                | map(
-                    "### " + ((.key + 1) | tostring) + ". " + ((.value.severity // "severity") | ascii_upcase) + " " + (.value.path // "unknown") + ":" + ((.value.line // 0) | tostring) + " - " + (.value.title // "Finding") + "\n"
-                    + "- Problem: " + (.value.problem // "") + "\n"
-                    + "- Root cause: " + (.value.root_cause // "") + "\n"
-                    + "- Fix: " + (.value.fix_direction // "") + "\n"
-                    + "- Regression test: " + (.value.regression_test_direction // "") + "\n"
-                    + "- Suggested diff: posted in this finding'\''s inline review thread."
-                  )
-                | join("\n\n")
-              ' "$control_json"
-            )"
-            if [ -z "$findings" ]; then
-              findings="OpenCode returned REQUEST_CHANGES without structured line-specific findings. Re-run the review after fixing the control payload."
+            format_args=(
+              --head-sha "$HEAD_SHA"
+              --run-id "$RUN_ID"
+              --run-attempt "$RUN_ATTEMPT"
+              --reason "$reason"
+              --findings-json-file "$findings_json_file"
+            )
+            if [ -n "$model_body_file" ] && [ -s "$model_body_file" ]; then
+              format_args+=(--model-body-file "$model_body_file")
             fi
-
-            {
-              printf '## Pull request overview\n\n'
-              printf 'OpenCode reviewed the current-head bounded evidence and requested changes before merge.\n\n'
-              printf '## Findings\n\n'
-              printf '%s\n\n' "$findings"
-              printf '## Summary\n\n'
-              printf '%s\n\n' "$summary"
-              printf '## Adversarial validation\n\n'
-              printf '```json\n%s\n```\n\n' "$adversarial_evidence"
-              printf -- '- Result: REQUEST_CHANGES\n'
-              printf -- '- Reason: %s\n\n' "$reason"
-              printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
-              printf -- '- Workflow run: %s\n' "$RUN_ID"
-              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-            } >"$body_file"
+            if [ -n "${OPENCODE_CHANGED_FILES_FILE:-}" ] && [ -s "${OPENCODE_CHANGED_FILES_FILE}" ]; then
+              format_args+=(--changed-files-file "$OPENCODE_CHANGED_FILES_FILE")
+            fi
+            python3 scripts/ci/opencode_review_surfaces.py format-request-changes \
+              "${format_args[@]}" \
+              >"$body_file"
+            rm -f "$findings_json_file"
           }
 
           build_request_changes_review_payload() {
@@ -5842,6 +5891,7 @@ jobs:
 
           publish_request_changes_from_control() {
             local control_json="$1"
+            local model_body_file="${2:-}"
             local body_file
             local payload_file
             local fallback_body_file
@@ -5849,7 +5899,7 @@ jobs:
             body_file="$(mktemp)"
             payload_file="$(mktemp)"
             fallback_body_file="$(mktemp)"
-            format_request_changes_body "$control_json" "$body_file"
+            format_request_changes_body "$control_json" "$body_file" "$model_body_file"
             build_request_changes_review_payload "$control_json" "$body_file" "$payload_file"
             build_inline_comment_failure_body "$body_file" "$fallback_body_file"
             create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$body_file")" "$payload_file" "$fallback_body_file"
@@ -6386,9 +6436,9 @@ jobs:
               printf '<!-- opencode-review-control-v1\n'
               printf '{"head_sha":"%s","run_id":"%s","run_attempt":"%s","result":"REQUEST_CHANGES","reason":"short reason","summary":"short review summary with concrete failed-check evidence","findings":[]}\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
               printf -- '-->\n'
-              printf 'Do not include analysis, planning, tool-call narration, placeholders, or prose before the sentinel.\n'
+              printf 'Write the Verdict / Findings / Test Gaps review first, then append the sentinel and control JSON. Do not include analysis, planning, tool-call narration, placeholders, or prose that is not part of that review structure.\n'
               printf 'The JSON control block must be literal parseable JSON. The result must be REQUEST_CHANGES.\n'
-              printf 'Return only the review body.\n'
+              printf 'Return the review body, then the control block.\n'
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
@@ -6426,7 +6476,7 @@ jobs:
             if [ "$gate_result" != "REQUEST_CHANGES" ]; then
               return 1
             fi
-            format_request_changes_body "$control_json" "$body_file"
+            format_request_changes_body "$control_json" "$body_file" "$opencode_output_file"
             if [ -n "$review_payload_file" ]; then
               build_request_changes_review_payload "$control_json" "$body_file" "$review_payload_file"
             fi
@@ -7508,10 +7558,6 @@ jobs:
             exit 0
           fi
 
-          if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
-            request_changes_for_coverage_evidence_failure
-          fi
-
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
           printf 'OpenCode model-pool outcome=%s model=%s; publish stage performs no duplicate model-catalog pass.\n' \
             "$opencode_review_outcome" "${OPENCODE_MODEL_POOL_MODEL:-none}"
@@ -7616,7 +7662,19 @@ jobs:
           case "$gate_result" in
             APPROVE)
               if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
-                publish_fallback_diff_review
+                if [ -s "$tmp_body" ]; then
+                  model_prose_file="$(mktemp)"
+                  python3 scripts/ci/opencode_review_surfaces.py extract-prose \
+                    --model-body-file "$tmp_body" >"$model_prose_file"
+                  if [ -s "$model_prose_file" ]; then
+                    create_pull_review "COMMENT" "$(cat "$model_prose_file")"
+                  else
+                    publish_fallback_diff_review
+                  fi
+                  rm -f "$model_prose_file"
+                else
+                  publish_fallback_diff_review
+                fi
                 request_changes_for_coverage_evidence_failure
                 echo "::endgroup::"
                 exit 1
@@ -7837,7 +7895,7 @@ jobs:
                   exit 0
                 fi
                 if scripts/ci/validate_opencode_failed_check_review.sh "$control_json" "$failed_checks_file" "$failed_check_evidence_file"; then
-                  publish_request_changes_from_control "$control_json"
+                  publish_request_changes_from_control "$control_json" "$tmp_body"
                 elif run_failed_check_diagnosis "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"; then
                   create_pull_review_with_payload "REQUEST_CHANGES" "$(cat "$failed_check_review_body_file")" "$failed_check_review_payload_file" "$failed_check_inline_failure_body_file"
                 elif build_failed_check_fallback_body "$failed_checks_file" "$failed_check_evidence_file" "$failed_check_review_body_file"; then
@@ -7846,7 +7904,7 @@ jobs:
                   stop_failed_check_fallback_unavailable
                 fi
               else
-                publish_request_changes_from_control "$control_json"
+                publish_request_changes_from_control "$control_json" "$tmp_body"
               fi
               ;;
             *)

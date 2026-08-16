@@ -220,7 +220,9 @@ def test_cli_renders_originweave_surfaces(
     )
     status = capsys.readouterr().out
     assert "## Pull request overview" not in status
-    assert "llvm-tools-preview missing" in status
+    assert "## Findings" not in status
+    assert "llvm-tools-preview missing" not in status
+    assert "Coverage gate: `failure`" in status
 
     assert (
         surfaces.main(
@@ -389,6 +391,258 @@ def test_surfaces_cover_remaining_review_branches(tmp_path: Path) -> None:
     )
     assert "변경 API" in review
     assert "`Once`" in review
+
+
+def test_cargo_toml_is_a_rust_surface() -> None:
+    """Root Cargo.toml is a Rust manifest, not a generic changed file."""
+    classified = surfaces.classify_changed_path("Cargo.toml")
+    assert classified["kind"] == "rust"
+    assert classified["surface"].startswith("Rust manifest:")
+    diagram = surfaces.emit_mermaid(["Cargo.toml", "crates/demo/src/lib.rs"])
+    assert "Changed file" not in diagram
+    assert "demo" in diagram or "Rust" in diagram
+
+
+def test_extract_model_prose_strips_sentinel_and_control() -> None:
+    """Publisher keeps walkthrough text and drops the control-plane trailer."""
+    raw = (
+        "## Verdict\n\nREQUEST_CHANGES\n\n"
+        "Walkthrough of crates/originweave-destination/src/resolution.rs\n"
+        "<!-- opencode-review-gate head_sha=abc run_id=1 run_attempt=1 -->\n"
+        "<!-- opencode-review-control-v1\n"
+        '{"result":"REQUEST_CHANGES"}\n'
+        "-->\n"
+    )
+    prose = surfaces.extract_model_prose(raw)
+    assert "Walkthrough of crates/originweave-destination/src/resolution.rs" in prose
+    assert "opencode-review-gate" not in prose
+    assert "opencode-review-control-v1" not in prose
+
+
+def test_format_request_changes_keeps_model_prose_and_strips_fake_anchor() -> None:
+    """REQUEST_CHANGES keeps the model walkthrough and never cites workflow:1."""
+    body = surfaces.format_request_changes_review(
+        model_prose=(
+            "## Pull request overview\n\n"
+            "Reviewed resolution.rs and the freshness test.\n\n"
+            "```mermaid\nsequenceDiagram\n  Caller->>Crate: resolve\n```\n"
+        ),
+        findings=[
+            {
+                "severity": "HIGH",
+                "path": ".github/workflows/opencode-review.yml",
+                "line": 1,
+                "title": "Coverage evidence failed",
+                "problem": "gate failed",
+                "root_cause": "sandbox",
+                "fix_direction": "fix rustc",
+                "regression_test_direction": "rerun",
+            }
+        ],
+        head_sha=HEAD,
+        run_id="31951179896",
+        run_attempt="1",
+        reason="coverage blocked",
+        changed_files=ORIGINWEAVE_47_FILES,
+    )
+    assert "Reviewed resolution.rs and the freshness test." in body
+    assert "sequenceDiagram" in body
+    assert "## Findings" in body
+    assert ".github/workflows/opencode-review.yml:1" not in body
+    assert "Review process" in body
+
+
+def test_format_request_changes_rebuilds_when_model_prose_missing() -> None:
+    """Without model prose, structured findings still form a review body."""
+    body = surfaces.format_request_changes_review(
+        model_prose="",
+        findings=[
+            {
+                "severity": "P1",
+                "path": "crates/originweave-destination/src/resolution.rs",
+                "line": 12,
+                "title": "Stale snapshot",
+            }
+        ],
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+    )
+    assert "## Verdict" in body
+    assert "crates/originweave-destination/src/resolution.rs:12" in body
+
+
+def test_cli_extract_and_format_request_changes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Workflow CLIs keep model prose and emit a status-safe comment separately."""
+    model = tmp_path / "model.md"
+    model.write_text(
+        "## Verdict\n\nREQUEST_CHANGES\n\nRelated PRs: none\n"
+        "<!-- opencode-review-gate head_sha=h run_id=1 run_attempt=1 -->\n",
+        encoding="utf-8",
+    )
+    findings = tmp_path / "findings.json"
+    findings.write_text(
+        '[{"severity":"HIGH","path":"crates/demo/src/lib.rs","line":4,"title":"Bug"}]',
+        encoding="utf-8",
+    )
+    changed = tmp_path / "changed.txt"
+    changed.write_text("crates/demo/src/lib.rs\n", encoding="utf-8")
+    assert surfaces.main(["extract-prose", "--model-body-file", str(model)]) == 0
+    assert "Related PRs: none" in capsys.readouterr().out
+    assert (
+        surfaces.main(
+            [
+                "format-request-changes",
+                "--head-sha",
+                HEAD,
+                "--run-id",
+                "1",
+                "--run-attempt",
+                "1",
+                "--model-body-file",
+                str(model),
+                "--findings-json-file",
+                str(findings),
+                "--changed-files-file",
+                str(changed),
+                "--reason",
+                "bug",
+            ]
+        )
+        == 0
+    )
+    rendered = capsys.readouterr().out
+    assert "Related PRs: none" in rendered
+    assert "crates/demo/src/lib.rs:4" in rendered
+    assert (
+        surfaces.main(
+            [
+                "build-status",
+                "--result",
+                "REQUEST_CHANGES",
+                "--head-sha",
+                HEAD,
+                "--run-id",
+                "1",
+                "--run-attempt",
+                "1",
+                "--coverage-result",
+                "failure",
+                "--model-pool-outcome",
+                "success",
+                "--verdict",
+                "REQUEST_CHANGES",
+                "--formal-review-url",
+                "https://github.com/ContextualWisdomLab/OriginWeave/pull/47#pullrequestreview-1",
+            ]
+        )
+        == 0
+    )
+    status = capsys.readouterr().out
+    assert "## Findings" not in status
+    assert "Model pool: `success`" in status
+    assert "Verdict: `REQUEST_CHANGES`" in status
+    assert "pullrequestreview-1" in status
+
+
+def test_central_workflow_line_one_kept_when_that_file_changed() -> None:
+    """A real edit to the central workflow may cite that file, including line 1."""
+    body = surfaces.format_request_changes_review(
+        model_prose="Inspected `.github/workflows/opencode-review.yml:1`.\n",
+        findings=[
+            {
+                "path": ".github/workflows/opencode-review.yml",
+                "line": 1,
+                "title": "Workflow contract",
+            }
+        ],
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        changed_files=[".github/workflows/opencode-review.yml"],
+    )
+    assert ".github/workflows/opencode-review.yml:1" in body
+
+
+def test_format_request_changes_keeps_existing_findings_heading() -> None:
+    """Structured findings append under an existing Findings heading."""
+    body = surfaces.format_request_changes_review(
+        model_prose="## Findings\n\nModel already started the findings list.\n",
+        structured_findings="### 1. HIGH crates/demo/src/lib.rs:3 - Extra",
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+    )
+    assert body.count("## Findings") == 1
+    assert "Model already started the findings list." in body
+    assert "crates/demo/src/lib.rs:3" in body
+
+
+def test_format_request_changes_skips_duplicate_identity_and_string_findings() -> None:
+    """Already-rendered identity/reason lines are not duplicated."""
+    prose = (
+        "## Verdict\n\nREQUEST_CHANGES\n\n"
+        f"- Head SHA: `{HEAD}`\n"
+        "- Reason: already stated\n"
+    )
+    body = surfaces.format_request_changes_review(
+        model_prose=prose,
+        structured_findings="### 1. HIGH crates/demo/src/lib.rs:2 - Bug",
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        reason="already stated",
+    )
+    assert body.count(f"- Head SHA: `{HEAD}`") == 1
+    assert body.count("- Reason: already stated") == 1
+    assert "crates/demo/src/lib.rs:2" in body
+
+
+def test_format_request_changes_cli_handles_object_findings_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A non-list findings document is ignored instead of crashing publish."""
+    findings = tmp_path / "findings.json"
+    findings.write_text('{"nope": true}', encoding="utf-8")
+    assert (
+        surfaces.main(
+            [
+                "format-request-changes",
+                "--head-sha",
+                HEAD,
+                "--run-id",
+                "1",
+                "--run-attempt",
+                "1",
+                "--findings-json-file",
+                str(findings),
+            ]
+        )
+        == 0
+    )
+    assert "## Verdict" in capsys.readouterr().out
+    assert (
+        surfaces.main(
+            [
+                "format-request-changes",
+                "--head-sha",
+                HEAD,
+                "--run-id",
+                "1",
+                "--run-attempt",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert "REQUEST_CHANGES" in capsys.readouterr().out
+
+
+def test_format_structured_findings_skips_non_mappings() -> None:
+    """Non-object findings are ignored so a bad control array cannot crash publish."""
+    assert surfaces.format_structured_findings(["skip", 1]) == ""
 
 
 def test_publisher_workflow_cannot_replace_review_with_coverage_finding() -> None:

@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
+from scripts.ci import opencode_review_surfaces as surfaces
+from scripts.ci import rust_coverage_policy as rust_policy
 
 
 def load_opencode_jsonc() -> dict:
@@ -756,6 +758,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "scripts/ci/rust_coverage_threshold.py" in measure_step
+    assert "scripts/ci/rust_coverage_policy.py" in measure_step
+    assert "rust_coverage_plan_line()" in measure_step
+    assert "Rust repository coverage verifier" in measure_step
+    assert "Rust toolchain identity" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
     assert "uv sync --project" not in measure_step
     assert "uv run --no-project" not in measure_step
@@ -1486,6 +1492,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "publish_fallback_diff_review" in workflow
     assert "opencode_review_surfaces.py build-status" in workflow
     assert "opencode_review_surfaces.py build-fallback-review" in workflow
+    assert "opencode_review_surfaces.py format-request-changes" in workflow
+    assert 'update_review_overview "$event" "$body"' not in workflow
+    assert "## Coverage gate" in workflow
     assert "materialize_base_rust_toolchain.py" in workflow
     assert "llvm-tools-preview" in workflow
     assert "cargo llvm-cov --offline --locked" in workflow
@@ -2136,14 +2145,14 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert 'PYTHONPATH=. bash -lc "$2"' not in coverage_job
     assert "COVERAGE_EOF" not in coverage_job
     assert "os.urandom(24).hex()" in coverage_job
-    assert "/^## Coverage Decision$/ { emit = 1 }" in coverage_job
+    assert 'cp "$summary_file" "$coverage_output_file"' in coverage_job
     assert 'scripts/ci/sanitize_github_output_summary.py" \\' in coverage_job
     assert '"$coverage_output_file" "$summary_output_file"' in coverage_job
     assert (
         'grep -Fqx "$coverage_output_delimiter" "$summary_output_file"' in coverage_job
     )
     assert 'cat "$summary_output_file"' in coverage_job
-    assert "Published compact coverage decision output" in coverage_job
+    assert "Published full rust/python/js coverage measurement log" in coverage_job
     assert "actions: read" in coverage_job
     assert "contents: read" not in coverage_job
     assert 'GITHUB_TOKEN: ""' in coverage_job
@@ -2742,3 +2751,62 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert (
         "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
     )
+
+
+def test_originweave_47_review_surfaces_stay_split(tmp_path: Path):
+    """Dispatch run 31951179896: review body, status comment, and mermaid stay distinct."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    changed = [
+        "crates/originweave-destination/src/lib.rs",
+        "crates/originweave-destination/src/resolution.rs",
+        "crates/originweave-destination/tests/resolution_freshness.rs",
+    ]
+    review = surfaces.build_fallback_review(
+        changed_files=changed,
+        head_sha="79cf275686e2376a51783a2d03128eca21e7c0e5",
+        run_id="31951179896",
+        run_attempt="1",
+        coverage_result="failure",
+    )
+    comment = surfaces.build_status_comment(
+        result="COVERAGE_BLOCKED",
+        head_sha="79cf275686e2376a51783a2d03128eca21e7c0e5",
+        run_id="31951179896",
+        run_attempt="1",
+        coverage_result="failure",
+        model_pool_outcome="skipped",
+        verdict="COVERAGE_BLOCKED",
+        formal_review_url=(
+            "https://github.com/ContextualWisdomLab/OriginWeave/pull/47"
+            "#pullrequestreview-1"
+        ),
+    )
+    surfaces.distinct_surfaces(review, comment)
+    assert review != comment
+    assert "## Findings" not in comment
+    assert "needs.coverage-evidence.result != 'cancelled'" in workflow
+    model_pool = workflow.split("Run OpenCode PR Review model pool", 1)[1]
+    model_pool = model_pool.split("\n      - name:", 1)[0]
+    assert "needs.coverage-evidence.result == 'success'" not in model_pool
+    assert ".github/workflows/opencode-review.yml:1" not in review
+    assert ".github/workflows/opencode-review.yml:1" not in workflow
+    diagram = surfaces.emit_mermaid(changed)
+    assert "Changed file (3 files)" not in diagram
+    assert "originweave-destination" in diagram
+
+    manifest = tmp_path / "Cargo.toml"
+    manifest.write_text(
+        '[workspace]\nmembers = ["crates/demo"]\nrust-version = "1.97"\n',
+        encoding="utf-8",
+    )
+    plan = rust_policy.coverage_plan(repo_root=tmp_path, manifest=manifest)
+    assert plan.mode == "llvm-cov-threshold"
+    assert plan.fail_under == 100
+    coverage_fn = workflow.split("request_changes_for_coverage_evidence_failure()", 1)[1]
+    coverage_fn = coverage_fn.split("create_pull_review_with_payload()", 1)[0]
+    assert "create_pull_review" not in coverage_fn
+    assert "build_coverage_evidence_check_failure_body" in coverage_fn
+    assert "crates/originweave-destination/src/resolution.rs" in review
+    assert "opencode-review.yml:1" not in review

@@ -21,6 +21,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Split central OpenCode publication into distinct surfaces: the formal pull-request review is a source-backed walkthrough of the actual diff, and the issue comment is gate/status only (head SHA, run id/attempt, coverage result, model-pool outcome, verdict, and a link to the formal review). Coverage-evidence failure no longer replaces the review or cites `.github/workflows/opencode-review.yml:1` on a product repository that did not change that file. The model pool still reviews the diff when coverage fails; REQUEST_CHANGES keeps model prose plus structured findings.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Quarantine Sandbox Runtime heartbeat at minute 14 without granting the caller model secrets, repository mutation permissions, approval, merge, release, artifact-execution, or final security-verdict authority.
 - Run the bounded Clearfolio PR review-feedback repair caller at minute 23 of every hour while keeping the shared scheduler free of product-specific timers and repository names for modular reuse by naruon, contextual-orchestrator, Inkspan, and other CWL services.
