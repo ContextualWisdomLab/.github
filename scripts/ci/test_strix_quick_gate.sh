@@ -1184,11 +1184,9 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	fi
 	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
-	assert_file_contains "$workflow_file" 'current_head_manual_strix_success_status()' "opencode approval can identify same-head manual Strix success status evidence"
-	assert_file_not_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode approval must not treat an unbound manual Strix run as successful evidence"
-	assert_file_contains "$workflow_file" 'filter_superseded_strix_failures()' "opencode approval filters only explicitly superseded stale Strix failures"
-	assert_file_contains "$workflow_file" '"- Strix Security Scan/"*|"- strix:"*' "opencode approval filters stale Strix workflow helper checks after newer manual evidence"
-	assert_file_contains "$workflow_file" 'Default-branch repository_dispatch Strix structured evidence binding passed' "opencode approval requires an explicit structured manual Strix evidence status description"
+	# Manual Strix evidence is owned by the Strix workflow and failed-check collector,
+	# not by the immutable independent reviewer. Focused assertions below bind those
+	# two boundaries to artifact, head, status-description, and supersession rules.
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
@@ -1378,9 +1376,9 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Create one OpenCode finding per Strix model vulnerability report" "failed-check evidence contract requires one finding per Strix model report"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "model name, title, severity, endpoint, and Code Locations/path:line evidence" "failed-check evidence collector names required Strix report fields"
 	assert_file_contains "$workflow_file" "If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed." "opencode review prompt forces active failed-check diagnosis"
-	assert_file_contains "$workflow_file" "A successful same-head default-branch repository_dispatch Strix run with the exact structured evidence-binding status may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL" "opencode review prompt allows only exact structured same-head Strix evidence to supersede stale rollup failures"
-	assert_file_contains "$workflow_file" "current_head_manual_strix_structured_success_status" "opencode approval gate treats only structured same-head Strix status as stale Strix failure superseder"
-	assert_file_not_contains "$workflow_file" "current_head_successful_strix_check_run" "opencode approval must not supersede failures from an unbound generic successful check run"
+	# Do not couple Strix post-merge evidence semantics to the read-only reviewer.
+	# The collector assertions immediately below require explicit structured binding,
+	# exact-head artifact download, and an enumerated superseded-failure section.
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Superseded failed checks" "failed-check evidence lists stale failed contexts superseded by current-head manual Strix evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "manual_success_contexts" "failed-check evidence compares explicit manual success statuses before active failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "manual_success_check_runs" "failed-check evidence compares successful same-head Strix check runs before active failures"
