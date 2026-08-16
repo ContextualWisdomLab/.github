@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/sandbox-log-redaction-quality-ci.yml"
+      - "ARCHITECTURE.md"
       - "CHANGELOG.md"
       - "docs/doctoring/sandbox-log-redaction.md"
       - "scripts/ci/redact_sensitive_log.py"
@@ -26,6 +27,7 @@ concurrency:
 
 jobs:
   exact-head-redaction-contract:
+    name: Exact-head sandbox redaction contract
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

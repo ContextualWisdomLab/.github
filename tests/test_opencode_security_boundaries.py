@@ -30,8 +30,13 @@ def test_sandbox_redaction_quality_gate_checks_nested_public_callables() -> None
         REPO_ROOT / ".github/workflows/sandbox-log-redaction-quality-ci.yml"
     ).read_text(encoding="utf-8")
 
+    assert "name: Sandbox Log Redaction Quality CI" in workflow
+    assert "name: Exact-head sandbox redaction contract" in workflow
+    assert "name: Verify fail-closed sandbox redaction contract" in workflow
     assert "for node in ast.walk(tree):" in workflow
     assert "for node in tree.body:" not in workflow
+    assert '      - "ARCHITECTURE.md"' in workflow
+    assert '      - "docs/doctoring/sandbox-log-redaction.md"' in workflow
 
 
 def _synthetic_jwt() -> str:

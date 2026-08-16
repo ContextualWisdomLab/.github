@@ -2,12 +2,74 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from scripts.ci import redact_sensitive_log as redactor
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _credential(suffix: str = "731") -> str:
     """Construct opaque credential material only at runtime."""
     return "-".join(("marble", "river", "opaque", suffix))
+
+
+def test_atomic_json_redaction_cites_json_interoperability_standards() -> None:
+    """Operators must find the JSON standards that justify span rewriting."""
+    doctoring = (
+        REPO_ROOT / "docs/doctoring/sandbox-log-redaction.md"
+    ).read_text(encoding="utf-8")
+    architecture = (REPO_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert "RFC 8259" in doctoring
+    assert "unpredictable" in doctoring
+    assert "ECMA-404" in doctoring
+    assert "ISO/IEC 21778:2017" in doctoring
+    assert "https://doi.org/10.17487/RFC8259" in doctoring
+    assert "Bray, T. (Ed.). (2017)." in doctoring
+    assert "Ecma International. (2017)." in doctoring
+    assert "International Organization for Standardization. (2017)." in doctoring
+    assert "RFC 8259" in architecture
+    assert "unpredictable" in architecture
+    assert "ECMA-404" in architecture
+    assert "ISO/IEC 21778" in architecture
+
+
+def test_realistic_actions_job_log_preserves_layout_and_hides_secrets() -> None:
+    """A pretty-printed Actions evidence dump must keep layout and drop secrets."""
+    first = _credential("actions")
+    second = _credential("dup")
+    source = (
+        "2026-08-16T15:22:12.001Z ##[group]Runner\n"
+        "{\n"
+        f'  "password": "{first}",\n'
+        '  "status": "failed",\n'
+        f'  "token": "{first}",\n'
+        f'  "token": "{second}"\n'
+        "}\n"
+        "2026-08-16T15:22:12.002Z ##[endgroup]\n"
+    )
+
+    cleaned = redactor.redact_text(source)
+
+    assert first not in cleaned
+    assert second not in cleaned
+    assert "##[group]Runner" in cleaned
+    assert '"status": "failed"' in cleaned
+    assert cleaned.count('"token"') == 2
+    assert cleaned.count(f'"{redactor.REDACTED}"') == 3
+
+
+def test_bracket_diagnostic_does_not_consume_later_sensitive_object() -> None:
+    """A prose bracket must not fail-closed a later complete password object."""
+    credential = _credential("timeout")
+    source = f'retry [timeout]\n{{"password": "{credential}"}}\n'
+
+    cleaned = redactor.redact_text(source)
+
+    assert credential not in cleaned
+    assert "retry [timeout]" in cleaned
+    assert f'"password": "{redactor.REDACTED}"' in cleaned
 
 
 def test_multiline_sensitive_value_is_rewritten_before_line_splitting() -> None:
