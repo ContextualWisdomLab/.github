@@ -13,6 +13,9 @@ on:
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
       - "tests/test_strix_quality_timeout_fixture_budget.py"
+      - ".github/workflows/pr-review-merge-scheduler.yml"
+      - "scripts/ci/pr_review_merge_scheduler.py"
+      - "tests/test_pr_review_merge_scheduler.py"
 
 permissions:
   contents: read

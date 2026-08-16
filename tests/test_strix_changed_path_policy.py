@@ -11,6 +11,9 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 GATE_SCRIPT = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
+QUALITY_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+)
 START_MARKER = 'python3 - "$REPO_ROOT" "$changed_file" <<\'PY\'\n'
 END_MARKER = "\nPY\n}\n\nnormalize_changed_files_cache()"
 LEGAL_PACKRAT_PATH = (
@@ -88,6 +91,29 @@ class StrixChangedPathPolicyTests(unittest.TestCase):
                 result = _normalize(candidate)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
+
+
+class MergeSchedulerQualityTriggerTests(unittest.TestCase):
+    """Keep scheduler control-plane changes inside an exact-head full-suite gate."""
+
+    def test_scheduler_source_workflow_and_tests_trigger_quality_ci(self) -> None:
+        """Every central merge-scheduler surface must trigger the permanent gate."""
+
+        workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+        for path in (
+            ".github/workflows/pr-review-merge-scheduler.yml",
+            "scripts/ci/pr_review_merge_scheduler.py",
+            "tests/test_pr_review_merge_scheduler.py",
+            "tests/test_strix_changed_path_policy.py",
+        ):
+            self.assertEqual(workflow.count(f'      - "{path}"'), 1)
+
+        self.assertIn(
+            "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn("python -m coverage run -m pytest tests -q", workflow)
+        self.assertIn("git diff --exit-code", workflow)
 
 
 if __name__ == "__main__":
