@@ -90,6 +90,30 @@ sequenceDiagram
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 
+## Head-matched review gold
+
+```mermaid
+flowchart LR
+  Inv["Strict inventory"]
+  Samp["Seeded sampler"]
+  EA["Expert A"]
+  EB["Expert B"]
+  Adj["Blinded adjudicator"]
+  Freeze["gold.json + freeze_sha256"]
+  Score["Receipt-bound scorer"]
+
+  Inv --> Samp --> EA
+  Samp --> EB
+  EA --> Adj
+  EB --> Adj
+  Adj --> Freeze --> Score
+```
+
+Sampling and freeze are offline. Empty expert findings freeze only with
+`no_defects_confirmed`. The scorer rejects gold that lacks freeze receipts.
+Writers refuse a symlink parent and use exclusive `O_NOFOLLOW` temporaries.
+See [`docs/doctoring/opencode-review-annotation-guide.md`](docs/doctoring/opencode-review-annotation-guide.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.

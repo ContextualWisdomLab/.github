@@ -129,6 +129,13 @@ def test_adjudication_record_rejects_version_and_empty_decisions() -> None:
     with pytest.raises(adjudicate.AdjudicationError, match="must not be empty"):
         adjudicate.validate_adjudication(record)
 
+    _, _, record = valid_inputs()
+    record["decisions"] = []
+    record["no_defects_confirmed"] = True
+    validated = adjudicate.validate_adjudication(record)
+    assert validated["no_defects_confirmed"] is True
+    assert validated["reviewer_outputs_hidden"] is True
+
 
 def test_uncovered_diagnostics_cover_each_expert_side() -> None:
     """Incomplete adjudication diagnostics must identify A-only and B-only omissions."""

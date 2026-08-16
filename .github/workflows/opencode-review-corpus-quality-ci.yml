@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - feat/opencode-review-quality-gate
     paths:
       - ".github/workflows/opencode-review-corpus-quality-ci.yml"
       - "scripts/ci/opencode_review_sample.py"
@@ -12,10 +11,12 @@ on:
       - "scripts/ci/opencode_review_adjudication_primitives.py"
       - "scripts/ci/opencode_review_adjudication_annotations.py"
       - "scripts/ci/opencode_review_adjudication_decisions.py"
+      - "scripts/ci/opencode_review_safe_io.py"
       - "tests/test_opencode_review_sample.py"
       - "tests/test_opencode_review_sample_coverage.py"
       - "tests/test_opencode_review_adjudicate.py"
       - "tests/test_opencode_review_adjudicate_coverage.py"
+      - "tests/test_opencode_review_safe_io.py"
       - "docs/doctoring/opencode-review-annotation-guide.md"
       - "benchmarks/opencode_review/head_matched_v1/**"
       - "CHANGELOG.md"
@@ -76,9 +77,10 @@ jobs:
             tests/test_opencode_review_sample_coverage.py \
             tests/test_opencode_review_adjudicate.py \
             tests/test_opencode_review_adjudicate_coverage.py \
+            tests/test_opencode_review_safe_io.py \
             -q
           python -m coverage report \
-            --include='scripts/ci/opencode_review_sample.py,scripts/ci/opencode_review_adjudicate.py,scripts/ci/opencode_review_adjudication_primitives.py,scripts/ci/opencode_review_adjudication_annotations.py,scripts/ci/opencode_review_adjudication_decisions.py' \
+            --include='scripts/ci/opencode_review_sample.py,scripts/ci/opencode_review_adjudicate.py,scripts/ci/opencode_review_adjudication_primitives.py,scripts/ci/opencode_review_adjudication_annotations.py,scripts/ci/opencode_review_adjudication_decisions.py,scripts/ci/opencode_review_safe_io.py' \
             --fail-under=100 \
             --show-missing
           python -m compileall -q \
@@ -87,8 +89,10 @@ jobs:
             scripts/ci/opencode_review_adjudication_primitives.py \
             scripts/ci/opencode_review_adjudication_annotations.py \
             scripts/ci/opencode_review_adjudication_decisions.py \
+            scripts/ci/opencode_review_safe_io.py \
             tests/test_opencode_review_sample.py \
             tests/test_opencode_review_sample_coverage.py \
             tests/test_opencode_review_adjudicate.py \
-            tests/test_opencode_review_adjudicate_coverage.py
+            tests/test_opencode_review_adjudicate_coverage.py \
+            tests/test_opencode_review_safe_io.py
           git diff --exit-code

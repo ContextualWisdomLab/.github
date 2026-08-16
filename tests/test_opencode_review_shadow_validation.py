@@ -409,3 +409,32 @@ def test_module_entrypoints_and_public_docstrings(
             and not getattr(value, "__doc__", None)
         ]
         assert missing == []
+
+
+def test_shadow_primitives_register_fail_closed_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path-based primitives load must import the exclusive writer."""
+    import importlib.util
+
+    primitives_path = SHADOW_PATH.with_name("opencode_review_shadow_primitives.py")
+    module_dir = str(primitives_path.parent)
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != module_dir])
+    spec = importlib.util.spec_from_file_location(
+        "opencode_review_shadow_primitives_direct", primitives_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert sys.path[0] == module_dir
+
+
+def test_shadow_atomic_write_refuses_symlink_parent(tmp_path: Path) -> None:
+    """Shadow JSON publication must not follow a swapped parent directory."""
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    link_parent = tmp_path / "link"
+    link_parent.symlink_to(real_parent)
+    with pytest.raises(ValueError, match="parent directory must not be a symbolic link"):
+        shadow.atomic_write_json(link_parent / "plan.json", {"ok": True})
+    assert not (real_parent / "plan.json").exists()

@@ -93,7 +93,23 @@ def benchmark(mode: str = "historical_lifecycle", count: int = 1) -> dict[str, A
                 **({"base_sha": BASE_SHA, "head_sha": HEAD_SHA} if head_match else {}),
                 "diff_size_bucket": ("small", "medium", "large")[index % 3],
                 "primary_language": ("python", "rust", "typescript", "go")[index % 4],
-                "gold_findings": ([{"finding_id": gold_id, "severity": "high"}] if head_match else []),
+                "gold_findings": (
+                    [
+                        {
+                            "finding_id": gold_id,
+                            "severity": "high",
+                            "path": "scripts/ci/example.py",
+                            "line": 12,
+                        }
+                    ]
+                    if head_match
+                    else []
+                ),
+                **(
+                    {"freeze_sha256": f"sha256:{index:064x}"}
+                    if head_match
+                    else {}
+                ),
                 "reviewers": {
                     "opencode": reviewer(
                         [finding(f"opencode-{index}", gold_id)]
@@ -343,6 +359,26 @@ def test_gold_validation_and_head_match_contracts() -> None:
     value["cases"][0]["gold_findings"].append(copy.deepcopy(value["cases"][0]["gold_findings"][0]))
     with pytest.raises(quality.BenchmarkValidationError, match="duplicates"):
         quality.validate_benchmark(value)
+    value = benchmark("head_matched_gold")
+    del value["cases"][0]["freeze_sha256"]
+    with pytest.raises(quality.BenchmarkValidationError, match="freeze_sha256"):
+        quality.validate_benchmark(value)
+    value = benchmark("head_matched_gold")
+    value["cases"][0]["gold_findings"][0]["path"] = "../secret"
+    with pytest.raises(quality.BenchmarkValidationError, match="relative source path"):
+        quality.validate_benchmark(value)
+    value = benchmark()
+    value["cases"][0]["freeze_sha256"] = f"sha256:{'0' * 64}"
+    with pytest.raises(quality.BenchmarkValidationError, match="freeze_sha256"):
+        quality.validate_benchmark(value)
+    value = benchmark("head_matched_gold")
+    value["cases"][0]["gold_findings"][0]["line"] = 0
+    with pytest.raises(quality.BenchmarkValidationError, match="must be positive"):
+        quality.validate_benchmark(value)
+    value = benchmark("head_matched_gold")
+    value["cases"][0]["freeze_sha256"] = "sha256:not-a-digest"
+    with pytest.raises(quality.BenchmarkValidationError, match="sha256"):
+        quality.validate_benchmark(value)
 
 
 def test_markdown_and_cli_outputs_are_deterministic(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -382,6 +418,14 @@ def test_markdown_and_cli_outputs_are_deterministic(tmp_path: Path, capsys: pyte
     assert "benchmark rejected" in capsys.readouterr().err
     with pytest.raises(quality.BenchmarkValidationError, match="cannot load"):
         quality.load_json(tmp_path / "missing.json")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text('{"schema_version":"1.0","schema_version":"1.0"}')
+    with pytest.raises(quality.BenchmarkValidationError, match="duplicate JSON key"):
+        quality.load_json(duplicate)
+    nonfinite = tmp_path / "nonfinite.json"
+    nonfinite.write_text('{"line": Infinity}')
+    with pytest.raises(quality.BenchmarkValidationError, match="non-finite JSON number"):
+        quality.load_json(nonfinite)
 
     monkeypatch.setattr(
         sys,
@@ -448,6 +492,21 @@ def test_cli_confines_paths_to_explicit_roots(tmp_path: Path) -> None:
             "input",
             must_exist=True,
         )
+
+
+def test_direct_module_load_registers_its_support_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path-based invocation must make the fail-closed writer importable."""
+    module_dir = str(MODULE_PATH.parent)
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != module_dir])
+    spec = importlib.util.spec_from_file_location(
+        "opencode_review_quality_score_direct", MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert sys.path[0] == module_dir
 
 
 def test_all_production_callables_are_documented() -> None:

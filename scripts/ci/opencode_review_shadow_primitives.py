@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
+
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from opencode_review_safe_io import atomic_write_text  # noqa: E402
 
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -56,11 +62,13 @@ def strict_load_json(path: Path, error_type: type[Exception]) -> Any:
 
 
 def atomic_write_json(path: Path, value: Any) -> None:
-    """Atomically replace a UTF-8 JSON output without leaving a stable temp file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(canonical_json(value) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    """Atomically replace a UTF-8 JSON output without following a planted symlink."""
+    atomic_write_text(path, canonical_json(value) + "\n", _reject_io)
+
+
+def _reject_io(message: str) -> None:
+    """Convert a fail-closed write rejection into a shadow validation error."""
+    raise ValueError(message)
 
 
 def require_object(value: Any, label: str, error_type: type[Exception]) -> dict[str, Any]:

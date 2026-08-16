@@ -117,11 +117,27 @@ A finding is not accepted merely because it is plausible or because a tool made
 the same claim. Unsupported style preferences, desired enhancements, missing CI
 results, rate limits, and infrastructure availability are not source defects.
 
+An expert may legally return `findings: []` when the exact head contains no
+substantiated defect. That empty annotation is a true-negative observation, not
+an incomplete review. The expert still certifies `no_additional_findings: true`
+and `reviewer_outputs_hidden: true`. Those flags are **attestations**, not
+cryptographic proof that automated reviewer output was unseen (Schulz & Grimes,
+2002). The freeze tool rejects a missing or false flag; it cannot inspect the
+annotator's screen.
+
 ## Blinded adjudication procedure
 
 The adjudicator receives the exact case evidence and both pseudonymous expert
-annotations, but not OpenCode or CodeRabbit identity or output. Every expert
-finding must appear in exactly one adjudication decision.
+annotations, but not OpenCode or CodeRabbit identity or output. The adjudication
+record must set `reviewer_identities_hidden: true` and
+`reviewer_outputs_hidden: true`. Those fields are attested role constraints.
+Every expert finding must appear in exactly one adjudication decision.
+
+When both experts report zero findings, freeze the case with
+`no_defects_confirmed: true` and `decisions: []`. Do not invent a dummy
+decision. Precision and false-positive measurement require these true-negative
+cases. If either expert reported a finding, `no_defects_confirmed` must be
+false and every finding must be accepted or rejected exactly once.
 
 For each decision, the adjudicator must:
 
@@ -151,10 +167,19 @@ python scripts/ci/opencode_review_adjudicate.py \
 ```
 
 The output contains deterministic annotation receipts, an adjudication receipt,
-agreement counts, canonical accepted gold findings, and a freeze SHA-256. The
-source annotation and adjudication records remain immutable evidence; corrected
-records create a new corpus version and freeze rather than overwriting published
-test evidence.
+agreement counts, canonical accepted gold findings, an explicit
+`no_defects_confirmed` flag, and a freeze SHA-256. The source annotation and
+adjudication records remain immutable evidence; corrected records create a new
+corpus version and freeze rather than overwriting published test evidence.
+
+The empirical scorer accepts `head_matched_gold` input only when every case
+carries that `freeze_sha256` and every gold finding carries a repository-relative
+`path` and positive `line`. A `{finding_id, severity}` list is not expert gold.
+
+Sampler, adjudicator, scorer, and shadow writers refuse a symbolic-link parent
+and create `.{name}.tmp` with `O_NOFOLLOW|O_EXCL` so a pre-planted temporary
+symlink cannot redirect the freeze (MITRE, 2024, CWE-367). The sampler default
+seed is `opencode-review-head-matched-v1`.
 
 ## Reviewer capture after gold freeze
 
@@ -212,7 +237,8 @@ A case may enter a frozen benchmark version only when all answers are yes:
 
 - Are the repository, pull request, base, head, diff, and context identities
   immutable and mutually consistent?
-- Did both experts review the same complete context without reviewer outputs?
+- Did both experts review the same complete context and attest that reviewer outputs stayed hidden?
+- If both experts reported zero findings, is `no_defects_confirmed` true and `decisions` empty?
 - Are the experts and adjudicator distinct?
 - Did each expert certify completion and enumerate all substantiated findings?
 - Was every source finding adjudicated exactly once?
@@ -244,3 +270,7 @@ Kumar, S. P., Bararia, S., & Raj, K. (2026). *Bigger isn't always better: A comp
 Sun, T., Xu, J., Li, Y., Yan, Z., Zhang, G., Xie, L., Geng, L., Wang, Z., Chen, Y., Lin, Q., Duan, W., & Sui, K. (2025). BitsAI-CR: Automated code review via LLM in practice. In *Proceedings of the 33rd ACM International Conference on the Foundations of Software Engineering*. https://doi.org/10.1145/3696630.3728552
 
 Zhang, L., Yu, Y., Yu, M., Guo, X., Zhuang, Z., Rong, G., Shao, D., Shen, H., Kuang, H., Li, Z., Wang, B., Zhang, G., Xiang, B., & Xu, X. (2026). *AACR-Bench: Evaluating automatic code review with holistic repository-level context* (arXiv:2601.19494). arXiv. https://arxiv.org/abs/2601.19494
+
+MITRE. (2024). *CWE-367: Time-of-check time-of-use (TOCTOU) race condition*. https://cwe.mitre.org/data/definitions/367.html
+
+Schulz, K. F., & Grimes, D. A. (2002). Blinding in randomised trials: Hiding who got what. *The Lancet, 359*(9307), 696–700. https://doi.org/10.1016/S0140-6736(02)07816-9

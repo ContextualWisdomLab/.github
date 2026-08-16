@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - feat/opencode-review-gold-corpus
     paths:
       - ".github/workflows/opencode-review-decision-quality-ci.yml"
       - "scripts/ci/opencode_review_decision.py"

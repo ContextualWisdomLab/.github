@@ -113,7 +113,9 @@ def decision(
     }
 
 
-def adjudication(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+def adjudication(
+    decisions: list[dict[str, Any]], *, no_defects_confirmed: bool = False
+) -> dict[str, Any]:
     """Build one identity-blinded adjudication record."""
     return {
         "schema_version": "1.0",
@@ -121,6 +123,8 @@ def adjudication(decisions: list[dict[str, Any]]) -> dict[str, Any]:
         "adjudicator_id": "adjudicator_gamma",
         "case": case_identity(),
         "reviewer_identities_hidden": True,
+        "reviewer_outputs_hidden": True,
+        "no_defects_confirmed": no_defects_confirmed,
         "decisions": decisions,
     }
 
@@ -233,6 +237,14 @@ def test_adjudication_freezes_complete_gold_with_receipts_and_agreement() -> Non
             lambda a, b, d: d.update({"reviewer_identities_hidden": False}),
             "reviewer_identities_hidden",
         ),
+        (
+            lambda a, b, d: d.update({"reviewer_outputs_hidden": False}),
+            "reviewer_outputs_hidden",
+        ),
+        (
+            lambda a, b, d: d.update({"no_defects_confirmed": True}),
+            "no_defects_confirmed",
+        ),
     ],
 )
 def test_adjudicator_rejects_extensible_or_unblinded_evidence(
@@ -282,6 +294,27 @@ def test_adjudicator_requires_every_source_finding_exactly_once() -> None:
     decision_record["decisions"][0]["expert_a_finding_ids"] = ["unknown"]
     with pytest.raises(adjudicate.AdjudicationError, match="unknown expert"):
         adjudicate.adjudicate_case(expert_a, expert_b, decision_record)
+
+
+def test_adjudicator_freezes_true_negative_when_both_experts_find_nothing() -> None:
+    """A clean exact-head case must freeze with empty gold and an explicit confirmation."""
+    expert_a = expert("annotation_a", "expert_alpha", [])
+    expert_b = expert("annotation_b", "expert_beta", [])
+    decision_record = adjudication([], no_defects_confirmed=True)
+    report = adjudicate.adjudicate_case(expert_a, expert_b, decision_record)
+    assert report["gold_findings"] == []
+    assert report["no_defects_confirmed"] is True
+    assert report["agreement_metrics"]["accepted_gold_findings"] == 0
+    assert report["freeze_sha256"].startswith("sha256:")
+
+    with pytest.raises(adjudicate.AdjudicationError, match="no_defects_confirmed"):
+        adjudicate.adjudicate_case(expert_a, expert_b, adjudication([]))
+
+    expert_a, expert_b, leftover = valid_inputs()
+    leftover["decisions"] = []
+    leftover["no_defects_confirmed"] = True
+    with pytest.raises(adjudicate.AdjudicationError, match="zero findings"):
+        adjudicate.adjudicate_case(expert_a, expert_b, leftover)
 
 
 def test_adjudicator_rejects_empty_decisions_and_duplicate_ids() -> None:

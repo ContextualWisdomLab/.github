@@ -35,6 +35,7 @@ from opencode_review_adjudication_annotations import (  # noqa: E402
 from opencode_review_adjudication_decisions import (  # noqa: E402
     validate_adjudication,
 )
+from opencode_review_safe_io import atomic_write_text  # noqa: E402
 
 def reference_once(
     identifier: str,
@@ -108,6 +109,8 @@ def adjudicate_case(
             rejected_sources += len(item["expert_a_finding_ids"]) + len(
                 item["expert_b_finding_ids"]
             )
+    if decision_record["no_defects_confirmed"] and (a_known or b_known):
+        reject("no_defects_confirmed requires both experts to report zero findings")
     uncovered_a = sorted(a_known - a_used)
     uncovered_b = sorted(b_known - b_used)
     if uncovered_a or uncovered_b:
@@ -143,6 +146,7 @@ def adjudicate_case(
         "schema_version": "1.0",
         "case": expert_a["case"],
         "gold_findings": gold,
+        "no_defects_confirmed": decision_record["no_defects_confirmed"],
         "agreement_metrics": {
             "expert_a_findings": len(a_known),
             "expert_b_findings": len(b_known),
@@ -175,11 +179,8 @@ def load_json(path: Path) -> Any:
 
 
 def write_text(path: Path, content: str) -> None:
-    """Atomically replace one UTF-8 output after creating its parent directory."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    """Atomically replace one UTF-8 output without following a planted symlink."""
+    atomic_write_text(path, content, reject)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

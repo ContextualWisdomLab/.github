@@ -14,7 +14,7 @@ The immediate decision is therefore to:
 
 1. measure operational review yield from directly observed organization pull requests;
 2. keep historical lifecycle evidence separate from head-matched defect precision and recall;
-3. require a minimum of 50 head-matched pull requests and 50 expert-gold findings before parity can be evaluated;
+3. require a minimum of 50 head-matched pull requests and 50 expert-gold findings, including true-negative (no-defect) freezes, before parity can be evaluated; every gold case must carry a freeze receipt and source-anchored findings;
 4. compare the OpenCode candidate against CodeRabbit with Wilson 95% confidence intervals and a five-percentage-point non-inferiority margin;
 5. require 100% recall for expert-labeled critical and high findings;
 6. keep semantic review verdicts separate from CI and merge-readiness evidence;
@@ -186,7 +186,7 @@ The reference is a moving commercial product. Benchmark snapshots must record Co
 
 1. **Baseline** — land the scorer, pilot, CI, and doctoring with parity unavailable.
 2. **Collection** — sample pull requests by language, size, and risk; capture both reviewers on identical heads.
-3. **Expert gold** — use two independent reviewers plus adjudication; retain evidence and disagreement reason.
+3. **Expert gold** — use two independent reviewers plus adjudication; retain evidence, disagreement reason, freeze SHA-256 receipts, and explicit no-defect confirmations. A `{finding_id, severity}` list without those receipts is not expert gold.
 4. **Shadow orchestration** — run detector/verifier topologies without publishing blockers.
 5. **Calibration** — tune routing, verifier thresholds, duplicate suppression, and severity mapping against the development split only.
 6. **Frozen test** — evaluate once on a held-out benchmark; publish confidence intervals and failures.
@@ -227,3 +227,7 @@ Tantithamthavorn, K., Zou, Y., Wong, A., Gupta, M., Wang, Z., Buller, M., Jiang,
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *TRINITY: An evolved LLM coordinator* (arXiv:2512.04695). arXiv. https://arxiv.org/abs/2512.04695
 
 Zhang, L., Yu, Y., Yu, M., Guo, X., Zhuang, Z., Rong, G., Shao, D., Shen, H., Kuang, H., Li, Z., Wang, B., Zhang, G., Xiang, B., & Xu, X. (2026). *AACR-Bench: Evaluating automatic code review with holistic repository-level context* (arXiv:2601.19494). arXiv. https://arxiv.org/abs/2601.19494
+
+MITRE. (2024). *CWE-367: Time-of-check time-of-use (TOCTOU) race condition*. https://cwe.mitre.org/data/definitions/367.html
+
+Schulz, K. F., & Grimes, D. A. (2002). Blinding in randomised trials: Hiding who got what. *The Lancet, 359*(9307), 696–700. https://doi.org/10.1016/S0140-6736(02)07816-9

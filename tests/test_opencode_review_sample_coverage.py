@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import runpy
+import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -109,6 +110,21 @@ def test_sampler_round_robin_fills_remaining_capacity() -> None:
     report = sample.sample_inventory(inventory(sample_size=8), seed="fill-seed")
     assert report["sample_size"] == 8
     assert sum(item["case_count"] for item in report["stratum_counts"]) == 8
+
+
+def test_direct_module_load_registers_its_support_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path-based invocation must make the fail-closed writer importable."""
+    module_dir = str(MODULE_PATH.parent)
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != module_dir])
+    spec = importlib.util.spec_from_file_location(
+        "opencode_review_sample_direct", MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert sys.path[0] == module_dir
 
 
 def test_load_json_wraps_syntax_and_filesystem_errors(tmp_path: Path) -> None:

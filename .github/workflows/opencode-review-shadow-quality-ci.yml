@@ -4,11 +4,11 @@ on:
   pull_request:
     branches:
       - main
-      - feat/opencode-review-decision-envelope
     paths:
       - ".github/workflows/opencode-review-shadow-quality-ci.yml"
       - "scripts/ci/opencode_review_shadow.py"
       - "scripts/ci/opencode_review_shadow_primitives.py"
+      - "scripts/ci/opencode_review_safe_io.py"
       - "scripts/ci/opencode_review_verify.py"
       - "scripts/ci/run_opencode_semantic_review_pool.sh"
       - "tests/opencode_review_shadow_test_support.py"
@@ -72,9 +72,10 @@ jobs:
             tests/test_opencode_review_shadow_execution.py \
             tests/test_opencode_review_shadow_verification.py \
             tests/test_opencode_review_shadow_validation.py \
+            tests/test_opencode_review_safe_io.py \
             -q
           python -m coverage report \
-            --include='scripts/ci/opencode_review_shadow.py,scripts/ci/opencode_review_shadow_primitives.py,scripts/ci/opencode_review_verify.py' \
+            --include='scripts/ci/opencode_review_shadow.py,scripts/ci/opencode_review_shadow_primitives.py,scripts/ci/opencode_review_verify.py,scripts/ci/opencode_review_safe_io.py' \
             --fail-under=100 \
             --show-missing
           bash -n scripts/ci/run_opencode_semantic_review_pool.sh
@@ -82,9 +83,11 @@ jobs:
             scripts/ci/opencode_review_shadow.py \
             scripts/ci/opencode_review_shadow_primitives.py \
             scripts/ci/opencode_review_verify.py \
+            scripts/ci/opencode_review_safe_io.py \
             tests/opencode_review_shadow_test_support.py \
             tests/test_opencode_review_shadow_routing.py \
             tests/test_opencode_review_shadow_execution.py \
             tests/test_opencode_review_shadow_verification.py \
-            tests/test_opencode_review_shadow_validation.py
+            tests/test_opencode_review_shadow_validation.py \
+            tests/test_opencode_review_safe_io.py
           git diff --exit-code

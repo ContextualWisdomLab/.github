@@ -13,6 +13,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from opencode_review_safe_io import atomic_write_text  # noqa: E402
+
 VALID_BUCKETS = {"small", "medium", "large"}
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -469,11 +475,8 @@ def load_json(path: Path) -> Any:
 
 
 def write_text(path: Path, content: str) -> None:
-    """Atomically replace one UTF-8 output after creating its parent directory."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    """Atomically replace one UTF-8 output without following a planted symlink."""
+    atomic_write_text(path, content, reject)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -481,7 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--seed", default="opencode-review-corpus-v1")
+    parser.add_argument("--seed", default="opencode-review-head-matched-v1")
     arguments = parser.parse_args(argv)
     try:
         report = sample_inventory(load_json(arguments.input), seed=arguments.seed)

@@ -71,8 +71,14 @@ def benchmark(count: int = 50) -> dict[str, Any]:
                 "diff_size_bucket": ("small", "medium", "large")[index % 3],
                 "primary_language": ("python", "rust", "typescript")[index % 3],
                 "gold_findings": [
-                    {"finding_id": gold_identifier, "severity": "high"}
+                    {
+                        "finding_id": gold_identifier,
+                        "severity": "high",
+                        "path": "scripts/ci/example.py",
+                        "line": 12,
+                    }
                 ],
+                "freeze_sha256": f"sha256:{index:064x}",
                 "reviewers": {
                     "opencode": reviewer(
                         f"opencode-{index}", gold_identifier, head_sha
@@ -167,6 +173,7 @@ def test_lifecycle_missing_candidate_remains_insufficient_evidence() -> None:
     del case["base_sha"]
     del case["head_sha"]
     case["gold_findings"] = []
+    del case["freeze_sha256"]
     del case["reviewers"]["opencode"]
     case["reviewers"]["coderabbit"]["findings"] = []
     report = quality.score_benchmark(value)

@@ -9,14 +9,21 @@ import math
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from opencode_review_safe_io import atomic_write_text  # noqa: E402
 
 VALID_MODES = {"historical_lifecycle", "head_matched_gold"}
 VALID_BUCKETS = {"small", "medium", "large"}
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class BenchmarkValidationError(ValueError):
@@ -91,6 +98,42 @@ def unique_text(value: Any, path: str, seen: set[str]) -> str:
         reject(f"{path} duplicates {result!r}")
     seen.add(result)
     return result
+
+
+def digest_value(value: Any, path: str) -> str:
+    """Return one canonical SHA-256 freeze receipt."""
+    result = text_value(value, path)
+    if not DIGEST_RE.fullmatch(result):
+        reject(f"{path} must use sha256:<64 lowercase hex characters>")
+    return result
+
+
+def source_path_value(value: Any, path: str) -> str:
+    """Return a safe repository-relative POSIX source path."""
+    result = text_value(value, path)
+    pure = PurePosixPath(result)
+    if (
+        pure.is_absolute()
+        or "\\" in result
+        or any(part in {"", ".", ".."} for part in pure.parts)
+    ):
+        reject(f"{path} must be a safe relative source path")
+    return pure.as_posix()
+
+
+def strict_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting duplicate member names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            reject(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_constant(value: str) -> None:
+    """Reject non-finite constants accepted by Python's permissive JSON parser."""
+    reject(f"non-finite JSON number: {value}")
 
 
 def commit_sha_value(value: Any, path: str, *, required: bool) -> str | None:
@@ -303,6 +346,7 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
                 "primary_language",
                 "gold_findings",
                 "reviewers",
+                "freeze_sha256",
             },
         )
         case_id = unique_text(case.get("case_id"), f"{path}.case_id", seen_cases)
@@ -323,27 +367,43 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
         ).casefold()
         if bucket not in VALID_BUCKETS:
             reject(f"{path}.diff_size_bucket is invalid")
+        freeze_sha256 = None
+        if head_match:
+            freeze_sha256 = digest_value(
+                case.get("freeze_sha256"), f"{path}.freeze_sha256"
+            )
+        elif case.get("freeze_sha256") is not None:
+            reject(f"{path}.freeze_sha256 requires head_match=true")
         gold_seen: set[str] = set()
-        gold_findings: list[dict[str, str]] = []
+        gold_findings: list[dict[str, Any]] = []
+        gold_fields = {"finding_id", "severity"}
+        if mode == "head_matched_gold":
+            gold_fields = {"finding_id", "severity", "path", "line"}
         for gold_index, raw_gold in enumerate(
             array_value(case.get("gold_findings"), f"{path}.gold_findings")
         ):
             gold_path = f"{path}.gold_findings[{gold_index}]"
             gold = object_value(raw_gold, gold_path)
-            require_exact_fields(gold, gold_path, {"finding_id", "severity"})
+            require_exact_fields(gold, gold_path, gold_fields)
             severity = text_value(
                 gold.get("severity"), f"{gold_path}.severity"
             ).casefold()
             if severity not in VALID_SEVERITIES:
                 reject(f"{gold_path}.severity is invalid")
-            gold_findings.append(
-                {
-                    "finding_id": unique_text(
-                        gold.get("finding_id"), f"{gold_path}.finding_id", gold_seen
-                    ),
-                    "severity": severity,
-                }
-            )
+            finding: dict[str, Any] = {
+                "finding_id": unique_text(
+                    gold.get("finding_id"), f"{gold_path}.finding_id", gold_seen
+                ),
+                "severity": severity,
+            }
+            if mode == "head_matched_gold":
+                finding["path"] = source_path_value(
+                    gold.get("path"), f"{gold_path}.path"
+                )
+                finding["line"] = count_value(
+                    gold.get("line"), f"{gold_path}.line", positive=True
+                )
+            gold_findings.append(finding)
         if gold_findings and not head_match:
             reject(f"{path}.gold_findings require head_match=true")
         reviewers_value = object_value(case.get("reviewers"), f"{path}.reviewers")
@@ -385,6 +445,7 @@ def validate_benchmark(raw_value: Any) -> dict[str, Any]:
                     case.get("primary_language"), f"{path}.primary_language"
                 ).casefold(),
                 "gold_findings": gold_findings,
+                "freeze_sha256": freeze_sha256,
                 "reviewers": reviewers,
             }
         )
@@ -659,19 +720,20 @@ def confined_path(
 
 
 def load_json(path: Path) -> Any:
-    """Load one UTF-8 JSON document with stable errors."""
+    """Load one UTF-8 JSON document while rejecting duplicate keys and non-finite numbers."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=strict_pairs,
+            parse_constant=reject_constant,
+        )
     except (OSError, json.JSONDecodeError) as error:
         reject(f"cannot load benchmark: {error}")
 
 
 def write_text(path: Path, content: str) -> None:
-    """Atomically replace an output file after creating its parent."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    """Atomically replace an output file without following a planted symlink."""
+    atomic_write_text(path, content, reject)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -716,7 +778,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BenchmarkValidationError as error:
         print(f"review-quality benchmark rejected: {error}", file=sys.stderr)
         return 2
-    json_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    json_text = (
+        json.dumps(
+            report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        )
+        + "\n"
+    )
     if json_output:
         write_text(json_output, json_text)
     else:

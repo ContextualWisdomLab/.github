@@ -120,6 +120,8 @@ def validate_adjudication(raw_value: Any, path: str = "adjudication") -> dict[st
             "adjudicator_id",
             "case",
             "reviewer_identities_hidden",
+            "reviewer_outputs_hidden",
+            "no_defects_confirmed",
             "decisions",
         },
     )
@@ -130,6 +132,17 @@ def validate_adjudication(raw_value: Any, path: str = "adjudication") -> dict[st
         f"{path}.reviewer_identities_hidden",
     ):
         reject(f"{path}.reviewer_identities_hidden must be true")
+    if not bool_value(
+        value.get("reviewer_outputs_hidden"),
+        f"{path}.reviewer_outputs_hidden",
+    ):
+        reject(f"{path}.reviewer_outputs_hidden must be true")
+    raw_no_defects = value.get("no_defects_confirmed")
+    no_defects_confirmed = (
+        False
+        if raw_no_defects is None
+        else bool_value(raw_no_defects, f"{path}.no_defects_confirmed")
+    )
     decisions: list[dict[str, Any]] = []
     decision_ids: set[str] = set()
     gold_ids: set[str] = set()
@@ -149,7 +162,13 @@ def validate_adjudication(raw_value: Any, path: str = "adjudication") -> dict[st
             gold_ids.add(gold_id)
         decisions.append(decision)
     if not decisions:
-        reject(f"{path}.decisions must not be empty")
+        if not no_defects_confirmed:
+            reject(
+                f"{path}.decisions must not be empty unless "
+                "no_defects_confirmed is true"
+            )
+    elif no_defects_confirmed:
+        reject(f"{path}.no_defects_confirmed must be false when decisions are present")
     return {
         "schema_version": "1.0",
         "adjudication_id": text_value(
@@ -160,6 +179,8 @@ def validate_adjudication(raw_value: Any, path: str = "adjudication") -> dict[st
         ),
         "case": validate_case(value.get("case"), f"{path}.case"),
         "reviewer_identities_hidden": True,
+        "reviewer_outputs_hidden": True,
+        "no_defects_confirmed": no_defects_confirmed,
         "decisions": decisions,
     }
 
