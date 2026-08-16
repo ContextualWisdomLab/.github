@@ -111,10 +111,16 @@ same RED→GREEN exact-head verification sequence.
 3. `ensure_rust_toolchain` requires live `LLVM_COV` / `LLVM_PROFDATA` equality
    and executability before coverage;
 4. the helper extract hardcodes the same paths and rejects caller overrides;
-5. the helper exits `1` when the reviewed env is unbound or retargeted; and
+5. the helper exits `1` when the reviewed env is unbound or retargeted;
 6. the permanent quality workflow watches
    `.github/workflows/opencode-review-dispatch.yml` so a later blob rewrite
-   cannot drop the guard without retriggering this contract.
+   cannot drop the guard without retriggering this contract; and
+7. `REVIEW_DISPATCH_BLOB_SHA` in
+   `tests/test_pr_review_autofix_nvidia_nim_contract.py` equals
+   `git hash-object` of the trusted dispatch workflow, so a producer-pin
+   rewrite cannot leave the independent review-dispatch identity stale. The
+   hourly NVIDIA NIM quality workflow does not watch `opencode-review-dispatch.yml`,
+   so this pairing check lives in the workflow that does.
 
 The permanent quality workflow runs on Python 3.14, checks out the exact PR head,
 executes the focused contract, compiles the test, and applies `git diff --check`.
