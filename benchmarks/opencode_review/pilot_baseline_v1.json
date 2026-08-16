@@ -1,0 +1,186 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "cwl-opencode-lifecycle-pilot-2026-08-08",
+  "evaluation_mode": "historical_lifecycle",
+  "limitations": [
+    "The three pull requests were deliberately selected because both OpenCode and CodeRabbit evidence was observable; this is not a random organization-wide sample.",
+    "Reviewer outputs were produced on different lifecycle heads, so actionable yield is an operational contrast rather than a head-matched precision or recall comparison.",
+    "Actionable means that the reviewer emitted a concrete source-oriented finding; this pilot does not label each finding as an expert-verified true positive.",
+    "CodeRabbit rate-limited evidence is counted only when a GitHub record was directly observed, so availability may be overestimated.",
+    "No parity claim is permitted until a stratified head-matched expert-gold benchmark satisfies the configured sample-size floor."
+  ],
+  "parity_policy": {
+    "candidate_reviewer": "opencode",
+    "reference_reviewer": "coderabbit",
+    "minimum_head_matched_cases": 50,
+    "minimum_gold_findings": 50,
+    "non_inferiority_margin": 0.05,
+    "required_critical_high_recall": 1.0
+  },
+  "cases": [
+    {
+      "case_id": "disksage-pr-140",
+      "repository": "ContextualWisdomLab/disksage",
+      "pull_request_number": 140,
+      "head_match": false,
+      "diff_size_bucket": "small",
+      "primary_language": "rust",
+      "gold_findings": [],
+      "reviewers": {
+        "opencode": {
+          "triggered_attempts": 4,
+          "completed_attempts": 4,
+          "rate_limited_attempts": 0,
+          "infrastructure_only_reviews": 4,
+          "duplicate_reviews": 3,
+          "findings": []
+        },
+        "coderabbit": {
+          "triggered_attempts": 2,
+          "completed_attempts": 1,
+          "rate_limited_attempts": 1,
+          "infrastructure_only_reviews": 0,
+          "duplicate_reviews": 0,
+          "findings": [
+            {
+              "finding_id": "coderabbit-disk-140-publish-boundary",
+              "gold_finding_id": null,
+              "severity": "medium",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "egressweave-pr-62",
+      "repository": "ContextualWisdomLab/EgressWeave",
+      "pull_request_number": 62,
+      "head_match": false,
+      "diff_size_bucket": "medium",
+      "primary_language": "python",
+      "gold_findings": [],
+      "reviewers": {
+        "opencode": {
+          "triggered_attempts": 2,
+          "completed_attempts": 2,
+          "rate_limited_attempts": 0,
+          "infrastructure_only_reviews": 2,
+          "duplicate_reviews": 1,
+          "findings": []
+        },
+        "coderabbit": {
+          "triggered_attempts": 1,
+          "completed_attempts": 1,
+          "rate_limited_attempts": 0,
+          "infrastructure_only_reviews": 0,
+          "duplicate_reviews": 0,
+          "findings": [
+            {
+              "finding_id": "coderabbit-egress-62-intermediate-symlink",
+              "gold_finding_id": null,
+              "severity": "high",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            },
+            {
+              "finding_id": "coderabbit-egress-62-positive-regression",
+              "gold_finding_id": null,
+              "severity": "medium",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "inkspan-pr-65",
+      "repository": "ContextualWisdomLab/inkspan",
+      "pull_request_number": 65,
+      "head_match": false,
+      "diff_size_bucket": "large",
+      "primary_language": "typescript",
+      "gold_findings": [],
+      "reviewers": {
+        "opencode": {
+          "triggered_attempts": 2,
+          "completed_attempts": 2,
+          "rate_limited_attempts": 0,
+          "infrastructure_only_reviews": 2,
+          "duplicate_reviews": 1,
+          "findings": []
+        },
+        "coderabbit": {
+          "triggered_attempts": 1,
+          "completed_attempts": 1,
+          "rate_limited_attempts": 0,
+          "infrastructure_only_reviews": 0,
+          "duplicate_reviews": 0,
+          "findings": [
+            {
+              "finding_id": "coderabbit-inkspan-65-doctoring-dates",
+              "gold_finding_id": null,
+              "severity": "low",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            },
+            {
+              "finding_id": "coderabbit-inkspan-65-security-doc-sync",
+              "gold_finding_id": null,
+              "severity": "medium",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            },
+            {
+              "finding_id": "coderabbit-inkspan-65-memory-claim",
+              "gold_finding_id": null,
+              "severity": "medium",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            },
+            {
+              "finding_id": "coderabbit-inkspan-65-plan-count",
+              "gold_finding_id": null,
+              "severity": "low",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            },
+            {
+              "finding_id": "coderabbit-inkspan-65-word-fixture-budget",
+              "gold_finding_id": null,
+              "severity": "high",
+              "actionable": true,
+              "source_backed": true,
+              "line_anchored": true,
+              "has_fix_direction": true,
+              "has_regression_test_direction": true
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
