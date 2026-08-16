@@ -39,8 +39,8 @@ def test_noema_public_dns_result_reaches_valid_model_response(
         def __exit__(self, *_args: object) -> bool:
             return False
 
-        def read(self) -> bytes:
-            return json.dumps(
+        def read(self, size: int = -1) -> bytes:
+            encoded = json.dumps(
                 {
                     "choices": [
                         {
@@ -57,6 +57,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
                     ]
                 }
             ).encode()
+            return encoded if size < 0 else encoded[:size]
 
     class Opener:
         """Open one deterministic provider response."""

@@ -41,6 +41,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_LLM_RESPONSE_BYTES = 1_048_576
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -449,32 +450,30 @@ def call_llm(
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
-        raise ValueError(
-            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
-            "with http:// or https:// to prevent SSRF vulnerabilities"
-        )
+    if not api_url.lower().startswith("https://"):
+        raise ValueError("NOEMA_LLM_API_URL must use HTTPS")
     parsed = urllib.parse.urlparse(api_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
+    if parsed.scheme.lower() != "https":
+        raise ValueError("NOEMA_LLM_API_URL must use HTTPS")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
-        addrinfo = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        pass
-    else:
-        for result in addrinfo:
-            ip_str = result[4][0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                raise ValueError("URL cannot target internal IP addresses")
+        addrinfo = socket.getaddrinfo(hostname, parsed.port)
+    except socket.gaierror as exc:
+        raise ValueError("URL hostname DNS resolution failed") from exc
+    if not addrinfo:
+        raise ValueError("URL hostname DNS resolution returned no addresses")
+    for result in addrinfo:
+        ip_str = result[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError as exc:
+            raise ValueError("URL hostname DNS resolution returned an invalid IP address") from exc
+        if not ip.is_global or ip.is_multicast:
+            raise ValueError("URL cannot target internal IP addresses")
 
     prompt = {
         "role": "user",
@@ -516,7 +515,10 @@ def call_llm(
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
     with opener.open(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+        raw_bytes = response.read(MAX_LLM_RESPONSE_BYTES + 1)
+    if len(raw_bytes) > MAX_LLM_RESPONSE_BYTES:
+        raise RuntimeError("Noema LLM response exceeded the byte limit")
+    raw = raw_bytes.decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)
