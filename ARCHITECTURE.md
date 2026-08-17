@@ -36,6 +36,10 @@ only established scheduler credentials, and grants job-scoped
 
 `nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
 16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
+## newsdom-api hourly caller
+
+`newsdom-api-hourly-review-repair.yml` is a thin, read-only caller at minute
+43. It names `ContextualWisdomLab/newsdom-api` and protected `develop`, maps
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
