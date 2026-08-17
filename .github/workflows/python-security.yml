@@ -239,10 +239,17 @@ jobs:
             echo "::group::pip-audit -r ${req}"
             # The Strix 1.5.3 lock keeps cryptography==50.0.0. pip-audit's
             # resolver re-applies the stale upstream cryptography<49 bound and
-            # labels that ResolutionImpossible as a vulnerability. Audit the
-            # complete hashed lock without re-resolving PyPI metadata.
-            if [ "$(basename "${req}")" = "requirements-strix-ci-hashes.txt" ]; then
-              pip-audit --strict --desc=on --disable-pip -r "${req}" || status=1
+            # labels that ResolutionImpossible as a vulnerability. The
+            # unhashed compile input is not an audit target. The hashed lock
+            # is a URL pin; --disable-pip cannot read that form, so rewrite
+            # it to name==version from the PEP 427 filename first.
+            if [ "$(basename "${req}")" = "requirements-strix-ci.txt" ]; then
+              echo "Skipping unhashed Strix compile input; hashed sibling is the audit target."
+            elif [ "$(basename "${req}")" = "requirements-strix-ci-hashes.txt" ]; then
+              prepared="${RUNNER_TEMP}/strix-pip-audit.txt"
+              python3 scripts/ci/prepare_strix_lock_for_pip_audit.py \
+                --input "${req}" --output "${prepared}"
+              pip-audit --strict --desc=on --disable-pip -r "${prepared}" || status=1
             else
               pip-audit --strict --desc=on -r "${req}" || status=1
             fi

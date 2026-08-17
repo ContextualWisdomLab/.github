@@ -61,9 +61,12 @@ also sits above CVE-2026-39892 (non-contiguous buffer overflow, fixed in
    fetch the official PyPI artifact and fail the hash check. Main's
    resolver can then install
    `strix-agent==1.5.3` and `cryptography==50.0.0` together. pip-audit
-   audits this hashed lock with `--disable-pip` so it cannot re-query the
-   stale PyPI metadata and label `ResolutionImpossible` as a
-   vulnerability.
+   skips the unhashed compile input and audits a prepared copy of this
+   hashed lock with `--disable-pip`. `--disable-pip` cannot pin a URL
+   requirement, so `scripts/ci/prepare_strix_lock_for_pip_audit.py`
+   rewrites `strix-agent @ <url>` to `strix-agent==1.5.3` from the PEP
+   427 filename. That keeps pip-audit from re-querying the stale PyPI
+   metadata and labeling `ResolutionImpossible` as a vulnerability.
 5. Do not scrape console TUI lines as a substitute report. The gate still
    requires a durable artifact and still fail-closes on warning / fatal /
    denied / timeout report signals.
@@ -93,8 +96,9 @@ non-interactive “exits on completion” path), and loaded
 the singleton override, both versions in the compiled lock, the compile
 script flags, the `--no-deps` install line, the post-install
 `strix-agent==1.5.3` / `cryptography==50.0.0` metadata check, pip-audit
-`--disable-pip` on this hashed lock, and that quality CI retriggers when
-any of those files change.
+skipping the unhashed compile input, `--disable-pip` on a prepared
+`name==version` copy of this hashed lock, and that quality CI retriggers
+when any of those files change.
 `tests/test_rewrite_strix_agent_cryptography_bound.py` proves the
 METADATA-only wheel rewrite, RECORD update, direct-URL lock rewrite,
 and that the committed wheel no longer declares `cryptography<49`.

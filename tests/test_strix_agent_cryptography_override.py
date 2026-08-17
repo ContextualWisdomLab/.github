@@ -85,7 +85,10 @@ def test_strix_workflow_installs_the_complete_lock_without_re_resolving() -> Non
     assert 'expected = {"strix-agent": "1.5.3", "cryptography": "50.0.0"}' in install
     assert "metadata.version(name)" in install
     security = SECURITY.read_text(encoding="utf-8")
+    assert 'basename "${req}")" = "requirements-strix-ci.txt"' in security
     assert 'basename "${req}")" = "requirements-strix-ci-hashes.txt"' in security
+    assert "prepare_strix_lock_for_pip_audit.py" in security
+    assert "Skipping unhashed Strix compile input" in security
     assert "pip-audit --strict --desc=on --disable-pip -r" in security
 
 
@@ -96,7 +99,9 @@ def test_quality_workflow_reruns_when_the_override_contract_changes() -> None:
     assert "docs/doctoring/strix-agent-cryptography-override.md" in trigger
     assert "requirements-strix-ci-overrides.txt" in trigger
     assert "scripts/ci/compile_strix_ci_lock.sh" in trigger
+    assert "scripts/ci/prepare_strix_lock_for_pip_audit.py" in trigger
     assert "scripts/ci/rewrite_strix_agent_cryptography_bound.py" in trigger
+    assert "tests/test_prepare_strix_lock_for_pip_audit.py" in trigger
     assert "tests/test_strix_agent_cryptography_override.py" in trigger
     assert "vendor/strix/" in trigger
     assert ".github/workflows/strix.yml" in trigger
