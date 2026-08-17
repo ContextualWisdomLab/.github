@@ -646,6 +646,7 @@ jobs:
               libcurl4-openssl-dev \
               libssl-dev \
               libxml2-dev \
+              llvm \
               mesa-vulkan-drivers \
               libvulkan1 \
               pkg-config \
@@ -656,7 +657,14 @@ jobs:
               util-linux \
               vulkan-tools \
               xz-utils \
-            && rm -rf /var/lib/apt/lists/*
+            && rm -rf /var/lib/apt/lists/* \
+            && LLVM_COV_BIN="$(command -v llvm-cov || ls /usr/bin/llvm-cov-* 2>/dev/null | sort -V | tail -n1)" \
+            && LLVM_PROFDATA_BIN="$(command -v llvm-profdata || ls /usr/bin/llvm-profdata-* 2>/dev/null | sort -V | tail -n1)" \
+            && test -n "$LLVM_COV_BIN" && test -n "$LLVM_PROFDATA_BIN" \
+            && ln -sf "$LLVM_COV_BIN" /usr/local/bin/llvm-cov \
+            && ln -sf "$LLVM_PROFDATA_BIN" /usr/local/bin/llvm-profdata
+          ENV LLVM_COV=/usr/local/bin/llvm-cov \
+              LLVM_PROFDATA=/usr/local/bin/llvm-profdata
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
               https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
             && echo '55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  /tmp/node-linux-x64.tar.xz' | sha256sum -c - \
@@ -1709,6 +1717,15 @@ jobs:
           }
 
           ensure_rust_toolchain() {
+            # Prefer rustup llvm-tools-preview when present; otherwise use system
+            # llvm-cov/llvm-profdata installed in the trusted coverage image so
+            # cargo-llvm-cov can measure line coverage without rustup components.
+            if [ -z "${LLVM_COV:-}" ] && command -v llvm-cov >/dev/null 2>&1; then
+              export LLVM_COV="$(command -v llvm-cov)"
+            fi
+            if [ -z "${LLVM_PROFDATA:-}" ] && command -v llvm-profdata >/dev/null 2>&1; then
+              export LLVM_PROFDATA="$(command -v llvm-profdata)"
+            fi
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust coverage toolchain"
               append ""
