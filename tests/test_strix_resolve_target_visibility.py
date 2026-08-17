@@ -301,6 +301,8 @@ def test_cli_writes_visibility_and_fails_closed(
     """The workflow entrypoint writes ``is_private`` or exits 1 fail-closed."""
     output = tmp_path / "github-output"
     output.write_text("existing=1\n", encoding="utf-8")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("TARGET_REPOSITORY", raising=False)
     monkeypatch.setattr(
         visibility,
         "fetch_repository_visibility",
