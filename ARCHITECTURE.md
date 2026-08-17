@@ -39,6 +39,13 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## Hashed-lock pip-audit
+
+`scripts/ci/pip_audit_requirements.py` audits complete hashed locks with
+`--disable-pip`. Resolver flags such as `--index-url` are not package
+lines. `-r` includes and directory-symlink parents fail closed so pip
+cannot relabel `ResolutionImpossible` as a known vulnerability.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
