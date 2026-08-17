@@ -103,7 +103,9 @@ uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-
 Note the per-file Python versions differ (bandit/pip-audit: 3.12; strix: 3.13; OpenCode
 review: 3.14). The Strix generator records itself as the lock's repeatable compile command
 and applies `requirements-strix-ci-overrides.txt` so `strix-agent==1.5.3` can keep
-`cryptography==50.0.0`. The OpenCode review generator always passes `--upgrade` so an
+`cryptography==50.0.0`. After compile it rewrites the official 1.5.3 manylinux
+wheel metadata and lock `--find-links` so a resolver-based `pip install
+--require-hashes` can still install cryptography 50.0.0. The OpenCode review generator always passes `--upgrade` so an
 existing output file cannot preserve hashes from the previous Python target, and records
 itself as the lock's repeatable compile command.
 

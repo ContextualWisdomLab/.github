@@ -13,6 +13,7 @@ LOCK = ROOT / "requirements-strix-ci-hashes.txt"
 COMPILE = ROOT / "scripts" / "ci" / "compile_strix_ci_lock.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
 QUALITY = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+SECURITY = ROOT / ".github" / "workflows" / "python-security.yml"
 DOCTORING = ROOT / "docs" / "doctoring" / "strix-agent-cryptography-override.md"
 
 _PIN_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\\\s]+)", re.MULTILINE)
@@ -21,9 +22,16 @@ _PIN_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\\\s]+)", re.MU
 def _lock_pins() -> dict[str, str]:
     """Return exact name==version pins from the compiled Strix lock."""
 
+    text = LOCK.read_text(encoding="utf-8")
     pins: dict[str, str] = {}
-    for match in _PIN_RE.finditer(LOCK.read_text(encoding="utf-8")):
+    for match in _PIN_RE.finditer(text):
         pins[match.group("name")] = match.group("version")
+    if re.search(
+        r"^strix-agent @ \S+strix_agent-1\.5\.3-py3-none-manylinux_2_17_x86_64\.whl",
+        text,
+        re.MULTILINE,
+    ):
+        pins["strix-agent"] = "1.5.3"
     return pins
 
 
@@ -76,6 +84,9 @@ def test_strix_workflow_installs_the_complete_lock_without_re_resolving() -> Non
     assert "--require-hashes -r requirements-strix-ci-hashes.txt\n" not in install
     assert 'expected = {"strix-agent": "1.5.3", "cryptography": "50.0.0"}' in install
     assert "metadata.version(name)" in install
+    security = SECURITY.read_text(encoding="utf-8")
+    assert 'basename "${req}")" = "requirements-strix-ci-hashes.txt"' in security
+    assert "pip-audit --strict --desc=on --disable-pip -r" in security
 
 
 def test_quality_workflow_reruns_when_the_override_contract_changes() -> None:
@@ -85,7 +96,9 @@ def test_quality_workflow_reruns_when_the_override_contract_changes() -> None:
     assert "docs/doctoring/strix-agent-cryptography-override.md" in trigger
     assert "requirements-strix-ci-overrides.txt" in trigger
     assert "scripts/ci/compile_strix_ci_lock.sh" in trigger
+    assert "scripts/ci/rewrite_strix_agent_cryptography_bound.py" in trigger
     assert "tests/test_strix_agent_cryptography_override.py" in trigger
+    assert "vendor/strix/" in trigger
     assert ".github/workflows/strix.yml" in trigger
 
 

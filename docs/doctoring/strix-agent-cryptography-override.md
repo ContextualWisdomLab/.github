@@ -50,7 +50,21 @@ also sits above CVE-2026-39892 (non-contiguous buffer overflow, fixed in
    uninstallable. Immediately after install, the workflow fail-closes
    unless `importlib.metadata` reports `strix-agent==1.5.3` and
    `cryptography==50.0.0`.
-4. Do not scrape console TUI lines as a substitute report. The gate still
+4. Because required Strix is `pull_request_target`, protected `main` still
+   installs this PR-head lock without `--no-deps` until
+   ContextualWisdomLab/.github#969 merges. The official 1.5.3 manylinux
+   x86_64 wheel is therefore rewritten by
+   `scripts/ci/rewrite_strix_agent_cryptography_bound.py` so its
+   `Requires-Dist` line is `cryptography>=48.0.1` (Apache-2.0 upstream
+   bytes otherwise unchanged). The hashed lock pins that wheel through a
+   direct raw GitHub URL at the commit that published it, so pip cannot
+   fetch the official PyPI artifact and fail the hash check. Main's
+   resolver can then install
+   `strix-agent==1.5.3` and `cryptography==50.0.0` together. pip-audit
+   audits this hashed lock with `--disable-pip` so it cannot re-query the
+   stale PyPI metadata and label `ResolutionImpossible` as a
+   vulnerability.
+5. Do not scrape console TUI lines as a substitute report. The gate still
    requires a durable artifact and still fail-closes on warning / fatal /
    denied / timeout report signals.
 
@@ -58,13 +72,18 @@ A live `pip`/`uv` install of this hashed lock with `--require-hashes
 --no-deps` imported `strix`, ran `strix --help` (including the
 non-interactive “exits on completion” path), and loaded
 `cryptography==50.0.0` together with `strix-agent==1.5.3` on CPython
-3.12.3 and 3.13.15.
+3.12.3 and 3.13.15. The same lock with `--require-hashes` and no
+`--no-deps` now dry-runs to `Would install ... cryptography-50.0.0
+... strix-agent-1.5.3` instead of `ResolutionImpossible`.
 
 ## Trust boundary
 
 - The fail-closed missing-artifact rule is unchanged.
 - The override file may contain only `cryptography==50.0.0`.
 - Hashes remain required. `--no-deps` is not an unhashed install.
+- The vendored wheel changes only the cryptography `Requires-Dist` line
+  and its `RECORD` digest. The official source URL and SHA-256 stay in
+  `vendor/strix/SOURCE.json`.
 - NVIDIA NIM / OpenCode credentials are untouched. This path never uses
   `COPILOT_GITHUB_TOKEN`.
 
@@ -73,8 +92,12 @@ non-interactive “exits on completion” path), and loaded
 `tests/test_strix_agent_cryptography_override.py` proves the input pin,
 the singleton override, both versions in the compiled lock, the compile
 script flags, the `--no-deps` install line, the post-install
-`strix-agent==1.5.3` / `cryptography==50.0.0` metadata check, and that
-quality CI retriggers when any of those files change.
+`strix-agent==1.5.3` / `cryptography==50.0.0` metadata check, pip-audit
+`--disable-pip` on this hashed lock, and that quality CI retriggers when
+any of those files change.
+`tests/test_rewrite_strix_agent_cryptography_bound.py` proves the
+METADATA-only wheel rewrite, RECORD update, direct-URL lock rewrite,
+and that the committed wheel no longer declares `cryptography<49`.
 
 ## Rollback
 

@@ -12,10 +12,13 @@ on:
       - "docs/doctoring/strix-quality-timeout-fixtures.md"
       - "requirements-strix-ci-overrides.txt"
       - "scripts/ci/compile_strix_ci_lock.sh"
+      - "scripts/ci/rewrite_strix_agent_cryptography_bound.py"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"
+      - "tests/test_rewrite_strix_agent_cryptography_bound.py"
       - "tests/test_strix_agent_cryptography_override.py"
       - "tests/test_strix_changed_path_policy.py"
+      - "vendor/strix/"
       - "tests/test_strix_workflow_dependency_hashes.py"
       - "tests/test_strix_quality_timeout_fixture_budget.py"
 
@@ -71,6 +74,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python -m coverage run -m pytest tests -q
           bash scripts/ci/test_strix_quick_gate.sh
-          python -m compileall -q tests/test_strix_agent_cryptography_override.py tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py
+          python -m compileall -q tests/test_rewrite_strix_agent_cryptography_bound.py tests/test_strix_agent_cryptography_override.py tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py
           bash -n scripts/ci/strix_quick_gate.sh
           git diff --exit-code

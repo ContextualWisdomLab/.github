@@ -237,7 +237,15 @@ jobs:
           # Audit every discovered requirements file.
           while IFS= read -r req; do
             echo "::group::pip-audit -r ${req}"
-            pip-audit --strict --desc=on -r "${req}" || status=1
+            # The Strix 1.5.3 lock keeps cryptography==50.0.0. pip-audit's
+            # resolver re-applies the stale upstream cryptography<49 bound and
+            # labels that ResolutionImpossible as a vulnerability. Audit the
+            # complete hashed lock without re-resolving PyPI metadata.
+            if [ "$(basename "${req}")" = "requirements-strix-ci-hashes.txt" ]; then
+              pip-audit --strict --desc=on --disable-pip -r "${req}" || status=1
+            else
+              pip-audit --strict --desc=on -r "${req}" || status=1
+            fi
             echo "::endgroup::"
           done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
 

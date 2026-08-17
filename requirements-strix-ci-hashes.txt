@@ -2178,13 +2178,8 @@ starlette==1.6.0 \
     # via
     #   mcp
     #   sse-starlette
-strix-agent==1.5.3 \
-    --hash=sha256:1a6207b493162049e9d651306798533fd4ece4dc2d2956f722ad1966ddc66647 \
-    --hash=sha256:675c6f357f1cbddd1786299f42c9fc03743f7b597ba6416e695848f1eb4be280 \
-    --hash=sha256:a5babe4e6d42cb24a10d4508bcd3c477bd369ff7194c95a7c58de6d6e4c3be18 \
-    --hash=sha256:ba0b6b13f13f41e45f3eb4dba515641d1bc71363ca6e758d0cd05c20ff56b6ea \
-    --hash=sha256:da35ae6e9a6ae0bf5cc662012608cf0aa671479129ba94052a3f893bff74c43f \
-    --hash=sha256:e89cc335b379f42b1a1b53ebbb414d6ffceccea202a2bcdfc2e9df83a55a5a7d
+strix-agent @ https://raw.githubusercontent.com/ContextualWisdomLab/.github/b3a5ab4d1e202f8450cdfefa382d602e76b792b6/vendor/strix/strix_agent-1.5.3-py3-none-manylinux_2_17_x86_64.whl \
+    --hash=sha256:a85640b27564ae65716a6e0fc2a8f384e4499400b3786319add3c7b8f1806f2b
     # via -r requirements-strix-ci.txt
 tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
