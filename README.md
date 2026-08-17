@@ -75,7 +75,6 @@ Checked-in operator facts:
   so it keeps the workflow files; siblings should not.
 - Public profile, DIKW checkpoints, project catalog, and the existing APA 7th
   DIKW citations stay in [profile/README.md](profile/README.md#references).
-  This README does not invent additional citations.
 - Control-plane trust boundaries and the hourly NVIDIA NIM repair gate are
   diagrammed in [ARCHITECTURE.md](ARCHITECTURE.md).
 
