@@ -33,6 +33,8 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "analyze-merge:" in workflow
     assert "merge_commit_sha != ''" in workflow
     assert "CodeQL merge preview" in workflow
+    assert workflow.count("Wait for GitHub API before CodeQL init") == 2
+    assert "GitHub API stayed unavailable; CodeQL init cannot determine feature enablement." in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "github.event.pull_request.merge_commit_sha" in workflow
     assert "refs/pull/{0}/head" in workflow

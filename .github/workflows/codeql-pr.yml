@@ -89,6 +89,26 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Wait for GitHub API before CodeQL init
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=8
+          sleep_seconds=15
+          while [ "$attempt" -le "$max_attempts" ]; do
+            if gh api rate_limit --jq '.resources.core.limit' >/dev/null; then
+              echo "GitHub API is reachable on attempt ${attempt}."
+              exit 0
+            fi
+            echo "GitHub API was unavailable on attempt ${attempt}; retrying in ${sleep_seconds}s."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done
+          echo "::error::GitHub API stayed unavailable; CodeQL init cannot determine feature enablement."
+          exit 1
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
@@ -195,6 +215,26 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
+
+      - name: Wait for GitHub API before CodeQL init
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=8
+          sleep_seconds=15
+          while [ "$attempt" -le "$max_attempts" ]; do
+            if gh api rate_limit --jq '.resources.core.limit' >/dev/null; then
+              echo "GitHub API is reachable on attempt ${attempt}."
+              exit 0
+            fi
+            echo "GitHub API was unavailable on attempt ${attempt}; retrying in ${sleep_seconds}s."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done
+          echo "::error::GitHub API stayed unavailable; CodeQL init cannot determine feature enablement."
+          exit 1
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0

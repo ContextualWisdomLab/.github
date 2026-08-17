@@ -181,6 +181,17 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("gpt-5.6-luna", workflow)
+        self.assertIn("models: read", workflow)
+        self.assertIn("Prepare GitHub Models fallback credentials", workflow)
+        self.assertIn(
+            "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+            "github_models/openai/o3 github_models/openai/gpt-5-chat",
+            workflow,
+        )
+        self.assertIn(
+            "name: Prepare GitHub Models fallback credentials\n        if: false",
+            workflow,
+        )
         self.assertNotIn("github_models/", workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0])
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
