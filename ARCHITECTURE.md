@@ -113,7 +113,7 @@ allowlists, tenant-purpose binding, server-side encryption, SHA-256-or-stronger
 integrity, distinct lifecycle states, and non-destructive rollback are
 required. Denied private-network trust also rejects special-use internal
 and Kubernetes `.svc` suffixes. DNS pinning is mandatory; rebinding helper
-suffixes and embedded IPv4 or 32-bit numeric aliases are never allowlist
+suffixes and embedded or hyphenated IPv4 or 32-bit numeric aliases are never allowlist
 members. CSAP and SOC 2 remain design
 constraints, not certification claims.
 Operational PII is not blanket-masked. Product adapters prove write/read/delete

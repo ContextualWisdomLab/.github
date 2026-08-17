@@ -206,6 +206,9 @@ def test_dns_rebinding_helper_suffixes_are_never_exact_hosts(host: str) -> None:
         "0xa.0xb.0xc.0xd.objects.example",
         "2851992574.attacker.example",
         "0x7f000001.attacker.example",
+        "169-254-169-254.attacker.example",
+        "ip-169-254-169-254.ec2.internal",
+        "0x7f-0x0-0x0-0x1.attacker.example",
     ],
 )
 def test_embedded_ipv4_aliases_are_never_exact_hosts(host: str) -> None:
@@ -229,6 +232,12 @@ def test_embedded_ip_helper_keeps_octet_labels_and_oversize_integers() -> None:
     assert validator.host_embeds_ip_alias("1.2.3.example.com") is False
     assert validator.host_embeds_ip_alias("1.2.3.4294967296.example.com") is False
     assert validator.is_exact_dns_host("1.2.3.4294967296.example.com") is True
+    assert validator._label_is_hyphenated_ipv4("1-2-3") is False
+    assert validator._label_is_hyphenated_ipv4("build-1-2-3-4") is False
+    assert validator._label_is_hyphenated_ipv4("256-1-1-1") is False
+    assert validator.host_embeds_ip_alias("1-2-3.example.com") is False
+    assert validator.host_embeds_ip_alias("build-1-2-3-4.example.com") is False
+    assert validator.is_exact_dns_host("1-2-3.example.com") is True
 
 
 def test_dns_pinning_is_mandatory() -> None:

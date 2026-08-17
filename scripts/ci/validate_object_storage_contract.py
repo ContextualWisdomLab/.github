@@ -175,18 +175,31 @@ def _is_ip_literal_or_alias(host: str) -> bool:
     return all(_label_is_integer_token(label) for label in host.split("."))
 
 
+def _label_is_hyphenated_ipv4(label: str) -> bool:
+    """Return whether *label* is a hyphenated IPv4 or ``ip-A-B-C-D`` alias."""
+    candidate = label[3:] if label.startswith("ip-") else label
+    parts = candidate.split("-")
+    if len(parts) != 4:
+        return False
+    octets = [_integer_token_value(part) for part in parts]
+    return all(value is not None and value <= 255 for value in octets)
+
+
 def host_embeds_ip_alias(host: str) -> bool:
     """Return whether *host* embeds an IPv4 literal or a 32-bit numeric alias.
 
     A single numeric DNS label is still allowed when it is an octet (0-255).
-    A 32-bit decimal or hexadecimal alias, or four consecutive octet labels,
-    is a rebinding hostname even when the remaining labels are ordinary DNS.
-    Integers above ``0xFFFFFFFF`` are not IPv4 aliases.
+    A 32-bit decimal or hexadecimal alias, four consecutive octet labels, or
+    a hyphenated ``A-B-C-D`` / ``ip-A-B-C-D`` label is a rebinding hostname
+    even when the remaining labels are ordinary DNS. Integers above
+    ``0xFFFFFFFF`` are not IPv4 aliases.
     """
     labels = host.split(".")
     for label in labels:
         value = _integer_token_value(label)
         if value is not None and 255 < value <= 0xFFFFFFFF:
+            return True
+        if _label_is_hyphenated_ipv4(label):
             return True
     for index in range(len(labels) - 3):
         octets = [_integer_token_value(label) for label in labels[index : index + 4]]
@@ -215,7 +228,7 @@ def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
     Localhost, link-local metadata names, IP literals, decimal or hexadecimal
-    IP aliases, embedded IPv4 sequences, Unicode, case aliases, RFC 6761
+    IP aliases, embedded or hyphenated IPv4 sequences, Unicode, case aliases, RFC 6761
     ``.test`` / ``.invalid``, and DNS-rebinding helper suffixes are not exact
     allowlist members.
     """
