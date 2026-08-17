@@ -1,0 +1,37 @@
+name: RankWeave Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 18 avoids pg-llm-batch (1), aFIPC (2), kaefa (3), LineageWeave (4),
+    # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
+    # psychometrics-commons (9), OriginWeave (10), naruon (11),
+    # DiagramWeave (12), pg-erd-cloud (13), mhtml-etl-gateway (14),
+    # html4tree (15), nonnest2 (16), orchestrator (17), noema (19),
+    # Clearfolio (23), Keyverse (29), Scopeweave (31), DiskSage (37),
+    # Appguardrail (41), newsdom-api (43), Inkspan (47), fast-mlsirm (49),
+    # BandScope (53), and semantic-data-portal (59).
+    - cron: "18 * * * *"
+
+concurrency:
+  group: rankweave-hourly-review-repair
+  # A later heartbeat must not cancel an in-flight fusion or TREC RCA.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/RankWeave
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
