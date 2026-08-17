@@ -63,6 +63,7 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
   dependency sets (see below). `requirements-strix-ci-overrides.txt` documents one deliberate
   `uv pip compile --override` (strix-agent's declared `cryptography<49` vs. this repo's
   `cryptography==50.0.0` security pin; see #952) — re-verify it whenever strix-agent bumps again.
+  dependency sets (see below).
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
@@ -99,6 +100,7 @@ e.g.:
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-bandit-ci.txt -o requirements-bandit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-pip-audit-ci.txt -o requirements-pip-audit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --override requirements-strix-ci-overrides.txt --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
+uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
 ./scripts/ci/compile_opencode_review_lock.sh
 ```
 
@@ -117,6 +119,7 @@ repeatable compile command.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
+- **Product hourly callers** stay thin. Do not hard-code kaefa, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
