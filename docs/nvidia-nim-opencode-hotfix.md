@@ -66,3 +66,11 @@ REQUEST_CHANGES / status) instead of falling through to GitHub Models or
 Luna. Concurrency stays PR-number scoped with `cancel-in-progress: true`;
 pool max cycles and attempts stay at 1 so the dispatch queue does not
 multiply unbounded parallel two-hour jobs.
+
+## Next provider: contextual-orchestrator
+
+NIM-direct is the current default. The long-term OpenCode provider is
+ContextualWisdomLab/contextual-orchestrator. Dispatch may attach one
+optional provider block when `CONTEXTUAL_ORCHESTRATOR_URL` is set; it
+does not start the sidecar and never falls back to GitHub Models. See
+[`docs/doctoring/opencode-contextual-orchestrator-sidecar.md`](doctoring/opencode-contextual-orchestrator-sidecar.md).

@@ -3355,6 +3355,10 @@ jobs:
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          # Optional. Unset keeps NIM-direct. When set, attach one
+          # OpenAI-compatible provider pointing at ContextualWisdomLab/contextual-orchestrator.
+          # Do not start the sidecar in this job; GitHub Models is never a fallback.
+          CONTEXTUAL_ORCHESTRATOR_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_URL || '' }}
         run: |
           set -euo pipefail
           mkdir -p "$OPENCODE_REVIEW_WORKDIR"
@@ -4182,6 +4186,8 @@ jobs:
             }
           }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
+          python3 "$GITHUB_WORKSPACE/scripts/ci/attach_contextual_orchestrator_provider.py" \
+            "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
           if ! grep -Fq 'nvidia-nim' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
             || ! grep -Fq 'integrate.api.nvidia.com' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then

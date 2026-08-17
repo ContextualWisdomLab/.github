@@ -147,8 +147,16 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
     assert "github-models" not in generated_config["provider"]
+    assert "contextual-orchestrator" not in generated_config["provider"]
+    assert generated_config["enabled_providers"][0] == "nvidia-nim"
     assert "STRIX_GITHUB_MODELS_TOKEN:" not in workflow
     assert "secrets.STRIX_GITHUB_MODELS_TOKEN" not in workflow
+    assert "attach_contextual_orchestrator_provider.py" in workflow
+    assert (
+        "CONTEXTUAL_ORCHESTRATOR_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_URL || '' }}"
+        in workflow
+    )
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
     nvidia_provider = generated_config["provider"]["nvidia-nim"]
     assert nvidia_provider["options"] == {
         "baseURL": "https://integrate.api.nvidia.com/v1",

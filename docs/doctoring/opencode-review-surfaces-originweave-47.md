@@ -63,11 +63,13 @@ Read-only review-agent permissions, NVIDIA NIM-first routing
 the existing review-bot identity are unchanged. `COPILOT_GITHUB_TOKEN` is not
 introduced. The same dispatch file now gives NIM (and matching cadence /
 dynamic-cap) a 7200s run window instead of the 180s kill that skipped
-reviews on ContextualWisdomLab/fast-mlsirm#290, keeps GPT-5 / free-tier
-short, and removes GitHub Models entirely. If `NVIDIA_NIM_API_KEY` is
+reviews on ContextualWisdomLab/fast-mlsirm#290, keeps free-tier short,
+and removes GitHub Models entirely. If `NVIDIA_NIM_API_KEY` is
 unset, the pool and Strix fail closed instead of falling through to
 GitHub Models or Luna. Concurrency remains PR-number scoped with
-`cancel-in-progress: true`.
+`cancel-in-progress: true`. NIM-direct remains the default until a later
+change starts the ContextualWisdomLab/contextual-orchestrator sidecar;
+see [`opencode-contextual-orchestrator-sidecar.md`](opencode-contextual-orchestrator-sidecar.md).
 
 ## Verification contract
 
