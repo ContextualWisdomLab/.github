@@ -1041,13 +1041,22 @@ def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
 
 
 def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
-    """The supplemental OSV diff must not duplicate the central SARIF upload."""
+    """The supplemental OSV scan must not duplicate the central SARIF upload."""
     standalone = workflow_text("osv-scanner-pr.yml")
     central = workflow_text("security-scan.yml")
 
-    assert "upload-sarif: false" in standalone
-    assert "pinned upstream reusable workflow declares this permission" in standalone
-    assert "security-events: write" in standalone
+    assert (
+        "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml"
+        not in standalone
+    )
+    assert "osv-reporter-action" not in standalone
+    assert "github/codeql-action/upload-sarif" not in standalone
+    assert "security-events: write" not in standalone
+    assert (
+        "google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a"
+        in standalone
+    )
+    assert "continue-on-error: true" in standalone
     assert "--fail-on-vuln=true" in central
     assert "Print OSV findings being compared" in central
     assert "Upload OSV SARIF to code scanning" in central

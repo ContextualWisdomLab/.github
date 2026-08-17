@@ -1,7 +1,7 @@
-# Keeps the upstream OSV base/head diff check available on every PR. The
-# central Security Scan workflow owns the blocking OSV result, finding logs,
-# and SARIF upload so this supplemental check does not duplicate installation
-# API calls or fail an otherwise clean PR when GitHub's upload quota is spent.
+# Keeps a supplemental current-head OSV scan on every PR. The central Security
+# Scan workflow owns the blocking OSV result, finding logs, and SARIF upload so
+# this check does not duplicate installation API calls or fail an otherwise
+# clean PR when GitHub rate-limits action downloads.
 name: OSV-Scanner PR
 
 on:
@@ -18,9 +18,7 @@ concurrency:
 
 permissions:
   # Scorecard Token-Permissions (alert #41): keep the workflow-level token
-  # read-only. SARIF upload needs security-events:write, but the osv-scan job
-  # below already grants it at job scope, so it is redundant (and over-broad)
-  # here.
+  # read-only. This supplemental job never uploads SARIF.
   actions: read
   contents: read
 
@@ -33,35 +31,40 @@ jobs:
 
   osv-scan:
     if: github.event.action != 'closed'
-    # ponytail: use upstream reusable PR workflow, don't hand-roll the diff scan
-    # Pinned to v2.3.8 + 1 commit (3a7550f) which gates the JSON job outputs
-    # behind the new `export-results` input (default false). v2.3.8 dumped the
-    # full old/new osv-scanner JSON into job outputs unconditionally, tripping
-    # GitHub's 1,048,576-byte job-outputs cap and failing the run. Same nested
-    # action pins as v2.3.8; only the Export step is now conditional.
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@3a7550f43ba5b58905a821ce3a0ed24c4858b3f4 # v2.3.8 + export-results gate
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
-      # The pinned upstream reusable workflow declares this permission at its
-      # top level, so GitHub validates it even when upload-sarif is false.
-      security-events: write
-    with:
-      # Keep the PR code-scanning upload deterministic: direct manifest
-      # vulnerabilities are uploaded, but public registry rate limits cannot
-      # make the required upload check fail before SARIF reaches GitHub.
-      # The security-scan workflow still performs the full base/head OSV pass
-      # first and logs its --no-resolve fallback reason when registries are
-      # transiently unavailable.
-      scan-args: |-
-        --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-        --no-resolve
-        -r
-        ./
-      # The required central security-scan.yml job uploads the comprehensive
-      # current-head OSV SARIF. Avoid a second upload through the reusable
-      # workflow because installation rate-limit failures are not findings.
-      upload-sarif: false
-      # Merge gating is done by central security-scan.yml with
-      # --fail-on-vuln=true after printing package, version, OSV ID and aliases.
-      fail-on-vuln: false
+    steps:
+      - name: Checkout current PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Local scanner pin matches security-scan.yml. Do not call the upstream
+      # reusable PR workflow: it downloads the reporter action at job setup
+      # even when SARIF upload is disabled, and a GitHub 429 then fails this
+      # supplemental check before a non-blocking scan setting can apply.
+      - name: Scan current head with OSV
+        id: osv_head
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        with:
+          # Keep the PR scan deterministic: public registry rate limits cannot
+          # make this supplemental check fail. The security-scan workflow still
+          # performs the full base/head OSV pass first and logs its --no-resolve
+          # fallback reason when registries are transiently unavailable.
+          scan-args: |-
+            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+            --no-resolve
+            -r
+            ./
+
+      - name: Defer merge gating to central Security Scan
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.osv_head.outcome }}" = "failure" ]; then
+            echo "::warning::Supplemental OSV PR scan did not finish. Merge gating stays on security-scan.yml with --fail-on-vuln=true after printing package, version, OSV ID and aliases. Action-download or registry rate limits are not findings."
+          else
+            echo "Supplemental OSV PR scan finished. Merge gating stays on security-scan.yml."
+          fi
