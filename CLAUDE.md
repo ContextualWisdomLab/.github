@@ -69,6 +69,7 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
   `scorecard-governance.md`, SBOM inventory. Doctoring records live under
   `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
   diagram for review, hourly NVIDIA NIM repair, and merge trust boundaries.
+  naruon's platform caller is `naruon-hourly-review-repair.yml` (minute 11, `develop`).
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 

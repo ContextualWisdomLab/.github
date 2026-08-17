@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `naruon-hourly-review-repair.yml` owns naruon's platform heartbeat at minute 11
+  of every hour against protected `develop`.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
@@ -33,6 +35,28 @@ retry_hours: "1"
 The scheduled heartbeat is `23 * * * *`. Repository-scoped concurrency and
 `cancel-in-progress: true` ensure that a superseded Clearfolio queue scan does
 not overlap its successor. At most one repair dispatch is created per run.
+
+The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
+`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
+OpenCode execution steps in the separately reviewed autofix worker.
+
+## naruon execution contract
+
+The naruon caller provides the following immutable operating parameters:
+
+```yaml
+target_repository: ContextualWisdomLab/naruon
+base_branch: develop
+max_prs: "50"
+max_dispatches: "1"
+retry_hours: "2"
+```
+
+The scheduled heartbeat is `11 * * * *`. The caller job grants `id-token: write`
+so the reusable NVIDIA NIM scheduler can mint its OpenCode App fallback from
+GitHub OIDC. It does not receive or forward `NVIDIA_NIM_API_KEY` and never
+introduces `COPILOT_GITHUB_TOKEN`.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
