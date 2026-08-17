@@ -1,0 +1,4 @@
+{
+  "name": "ContextualWisdomLab .github CI",
+  "install": "python3 -m pip install --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt"
+}
