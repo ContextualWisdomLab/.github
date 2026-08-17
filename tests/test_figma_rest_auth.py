@@ -55,8 +55,11 @@ def test_identity_summary_omits_unknown_fields() -> None:
         "(handle=seonghobae, id=123, email=user@example.com)."
     )
     assert auth.identity_summary({"handle": "  ", "id": 17}) == (
-        "Figma REST authentication succeeded."
+        "Figma REST authentication succeeded (id=17)."
     )
+    assert auth.identity_field(True) is None
+    assert auth.identity_field({"id": "x"}) is None
+    assert auth.identity_field("  hello   world  ") == "hello world"
 
 
 def test_parse_whoami_payload_rejects_non_objects() -> None:
@@ -126,9 +129,11 @@ class _FakeWhoamiResponse:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
-        """Return the canned body."""
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        """Return the canned body, honoring an optional byte limit."""
+        if amt is None:
+            return self._body
+        return self._body[:amt]
 
 
 class _FakeWhoamiConnection:
@@ -167,6 +172,47 @@ class _FakeWhoamiConnection:
     def close(self) -> None:
         """Mark the connection closed."""
         self.closed = True
+
+
+def test_sanitize_request_headers_allows_only_figma_token() -> None:
+    """A caller ``Host`` header must not reach ``HTTPSConnection.request``."""
+    assert auth.sanitize_request_headers({auth.TOKEN_HEADER: TOKEN}) == {
+        auth.TOKEN_HEADER: TOKEN
+    }
+    with pytest.raises(auth.FigmaAuthError) as refused:
+        auth.sanitize_request_headers({"Host": "evil.example", auth.TOKEN_HEADER: TOKEN})
+    assert refused.value.exit_code == auth.EXIT_TRANSPORT
+    assert "Host" in str(refused.value)
+    assert TOKEN not in str(refused.value)
+    with pytest.raises(auth.FigmaAuthError) as blank:
+        auth.sanitize_request_headers({auth.TOKEN_HEADER: "  "})
+    assert blank.value.exit_code == auth.EXIT_TRANSPORT
+
+
+def test_read_bounded_body_rejects_oversize_and_nonpositive_limits() -> None:
+    """Whoami bodies stay inside the 64 KiB cap."""
+    assert auth.read_bounded_body(lambda amt: b"ok"[:amt], 8) == b"ok"
+    with pytest.raises(auth.FigmaAuthError) as oversize:
+        auth.read_bounded_body(lambda amt: b"x" * amt, 4)
+    assert oversize.value.exit_code == auth.EXIT_TRANSPORT
+    with pytest.raises(auth.FigmaAuthError) as invalid_limit:
+        auth.read_bounded_body(lambda amt: b"", 0)
+    assert invalid_limit.value.exit_code == auth.EXIT_TRANSPORT
+
+
+def test_default_opener_refuses_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Header sanitization runs before the pinned whoami request."""
+    constructed: list[object] = []
+
+    def forbidden_connection(*args: object, **kwargs: object) -> object:
+        constructed.append((args, kwargs))
+        return _FakeWhoamiConnection(*args, **kwargs)
+
+    monkeypatch.setattr(auth.http.client, "HTTPSConnection", forbidden_connection)
+    with pytest.raises(auth.FigmaAuthError) as refused:
+        auth.default_opener(auth.WHOAMI_URL, {"Host": "evil.example"})
+    assert refused.value.exit_code == auth.EXIT_TRANSPORT
+    assert constructed == []
 
 
 def test_default_opener_rejects_non_whoami_urls() -> None:
@@ -319,5 +365,7 @@ def test_doctoring_and_entry_docs_pin_cloud_agent_fallback() -> None:
     assert "not supported in Cloud agents" in doctoring
     assert "https://api.figma.com/v1/me" in doctoring
     assert "scripts/ci/figma_rest_auth.py" in doctoring
+    assert "scripts/ci/figma_rest_file.py" in doctoring
+    assert "scripts/ci/figma_rest_file.py" in agents
     assert "docs/doctoring/figma-cloud-agent-mcp-auth.md" in agents
     assert "docs/doctoring/figma-cloud-agent-mcp-auth.md" in master

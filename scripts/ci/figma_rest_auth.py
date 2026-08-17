@@ -21,11 +21,13 @@ TOKEN_ENV_NAME = "FIGMA_ACCESS_TOKEN"
 TOKEN_HEADER = "X-Figma-Token"
 WHOAMI_URL = "https://api.figma.com/v1/me"
 REQUEST_TIMEOUT_SECONDS = 20
+MAX_WHOAMI_BODY_BYTES = 65_536
 EXIT_OK = 0
 EXIT_MISSING_TOKEN = 2
 EXIT_REJECTED = 3
 EXIT_TRANSPORT = 4
 Opener = Callable[[str, Mapping[str, str]], tuple[int, bytes]]
+BoundedReader = Callable[[int], bytes]
 
 
 class FigmaAuthError(Exception):
@@ -56,6 +58,41 @@ def read_access_token(environ: Mapping[str, str]) -> str:
     return token
 
 
+def sanitize_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Allow only ``X-Figma-Token`` so a ``Host`` header cannot retarget TLS."""
+    sanitized: dict[str, str] = {}
+    for name, value in headers.items():
+        if name.lower() != TOKEN_HEADER.lower():
+            raise FigmaAuthError(
+                f"Figma REST opener refuses header {name!s} other than "
+                f"{TOKEN_HEADER}.",
+                EXIT_TRANSPORT,
+            )
+        if not value.strip():
+            raise FigmaAuthError(
+                "Figma REST token header is empty.",
+                EXIT_TRANSPORT,
+            )
+        sanitized[TOKEN_HEADER] = value
+    return sanitized
+
+
+def read_bounded_body(read: BoundedReader, limit: int) -> bytes:
+    """Read at most ``limit`` bytes or raise ``FigmaAuthError``."""
+    if limit < 1:
+        raise FigmaAuthError(
+            "Figma REST body limit must be a positive byte count.",
+            EXIT_TRANSPORT,
+        )
+    payload = read(limit + 1)
+    if len(payload) > limit:
+        raise FigmaAuthError(
+            f"Figma REST response exceeded {limit} bytes.",
+            EXIT_TRANSPORT,
+        )
+    return payload
+
+
 def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
     """GET the fixed Figma whoami origin and return ``(status, body)``.
 
@@ -74,15 +111,23 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
             "/v1/me endpoint.",
             EXIT_TRANSPORT,
         )
+    request_headers = sanitize_request_headers(headers)
     connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
         "api.figma.com",
         timeout=REQUEST_TIMEOUT_SECONDS,
         context=ssl.create_default_context(),
     )
     try:
-        connection.request("GET", "/v1/me", headers=dict(headers))
+        connection.request(
+            "GET",
+            "/v1/me",
+            headers=request_headers,
+        )
         response = connection.getresponse()
-        return int(response.status), response.read()
+        return int(response.status), read_bounded_body(
+            response.read,
+            MAX_WHOAMI_BODY_BYTES,
+        )
     except OSError as exc:
         raise FigmaAuthError(
             f"Figma REST transport failed: {exc}",
@@ -109,18 +154,32 @@ def parse_whoami_payload(body: bytes) -> dict[str, Any]:
     return payload
 
 
+def identity_field(value: object) -> str | None:
+    """Return a single-line identity token, including numeric Figma ids."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        return None
+    return cleaned
+
+
 def identity_summary(payload: Mapping[str, Any]) -> str:
     """Return a token-free identity line from a ``/v1/me`` object."""
-    handle = payload.get("handle")
-    account_id = payload.get("id")
-    email = payload.get("email")
     parts: list[str] = []
-    if isinstance(handle, str) and handle.strip():
-        parts.append(f"handle={handle.strip()}")
-    if isinstance(account_id, str) and account_id.strip():
-        parts.append(f"id={account_id.strip()}")
-    if isinstance(email, str) and email.strip():
-        parts.append(f"email={email.strip()}")
+    handle = identity_field(payload.get("handle"))
+    account_id = identity_field(payload.get("id"))
+    email = identity_field(payload.get("email"))
+    if handle is not None:
+        parts.append(f"handle={handle}")
+    if account_id is not None:
+        parts.append(f"id={account_id}")
+    if email is not None:
+        parts.append(f"email={email}")
     if not parts:
         return "Figma REST authentication succeeded."
     return "Figma REST authentication succeeded (" + ", ".join(parts) + ")."
