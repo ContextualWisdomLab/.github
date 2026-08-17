@@ -96,19 +96,39 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
 
 
 def _redact_assignments(text: str) -> str:
-    """Redact sensitive key/value assignments without backtracking regexes."""
+    """Redact sensitive key/value assignments without backtracking regexes, optimized with regex search."""
     output: list[str] = []
     cursor = 0
     last_append = 0
     while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
+        search_match = SENSITIVE_KEY_RE.search(text, cursor)
+        if not search_match:
+            break
+
+        word_start = search_match.start()
+        while word_start > cursor and text[word_start - 1] in KEY_CHARS:
+            word_start -= 1
+
+        start_idx = word_start
+        if word_start > cursor and text[word_start - 1] in "\"'":
+            start_idx = word_start - 1
+
+        match = _consume_sensitive_assignment(text, start_idx)
+        if match is None and start_idx != word_start:
+            match = _consume_sensitive_assignment(text, word_start)
+            if match is not None:
+                start_idx = word_start
+
         if match is None:
-            cursor += 1
+            cursor = search_match.start() + 1
             continue
-        output.append(text[last_append:cursor])
-        replacement, cursor = match
+
+        output.append(text[last_append:start_idx])
+        replacement, next_cursor = match
         output.append(replacement)
+        cursor = next_cursor
         last_append = cursor
+
     output.append(text[last_append:])
     return "".join(output)
 
