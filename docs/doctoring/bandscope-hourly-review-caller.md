@@ -18,14 +18,17 @@ and release semantics.
 
 ## Authority and secret contract
 
-The caller keeps `GITHUB_TOKEN` at `contents: read` and maps only
-`PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN`. It never uses
-`secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
-`COPILOT_GITHUB_TOKEN`. CWE-250 forbids executing the caller with write
-or model privileges it does not need (MITRE, 2026). Model credentials
-remain scoped to the separately reviewed repair worker. The worker cannot
-approve, merge, release, resolve review findings by inference, change
-protection, or manufacture passing checks.
+The caller keeps workflow `GITHUB_TOKEN` at `contents: read` and grants
+the reusable job `id-token: write` so the central scheduler can mint the
+OpenCode GitHub App token from GitHub OIDC when the mapped PAT is absent
+(GitHub, n.d.-c). It maps only `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN`. It never uses `secrets: inherit`, receives
+`NVIDIA_NIM_API_KEY`, or introduces `COPILOT_GITHUB_TOKEN`. CWE-250
+forbids executing the caller with write or model privileges it does not
+need (MITRE, 2026). Model credentials remain scoped to the separately
+reviewed repair worker. The worker cannot approve, merge, release,
+resolve review findings by inference, change protection, or manufacture
+passing checks.
 
 Before protected-main activation, the repository variable
 `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain the exact
@@ -54,9 +57,10 @@ qualifying independent non-author approval.
 
 Machine-checkable contracts require the exact target/base, minute 53 cadence,
 non-cancelling single-flight group, one dispatch, one-hour retry floor, explicit
-secret mapping, read-only permissions, focused path-filter coverage, and absence
-of model or Copilot credentials. The full owned suite and hosted security and
-review gates must pass on the unchanged exact head.
+secret mapping, read-only contents plus job-scoped `id-token: write`, focused
+path-filter coverage, and absence of model or Copilot credentials. The full
+owned suite and hosted security and review gates must pass on the unchanged
+exact head.
 
 Rollback removes the BandScope caller, its focused test, doctoring, and central
 path-filter/documentation entries. It must not remove scheduler dispatch
@@ -74,6 +78,10 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-t
 GitHub, Inc. (n.d.-b). *Reuse workflows*. GitHub Docs. Retrieved August 12,
 2026, from
 https://docs.github.com/en/actions/how-tos/sharing-automations/reuse-workflows
+
+GitHub, Inc. (n.d.-c). *Automatic token authentication*. GitHub Docs.
+Retrieved August 17, 2026, from
+https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
 
 National Institute of Standards and Technology. (2022). *Secure software
 development framework (SSDF) version 1.1* (NIST SP 800-218).

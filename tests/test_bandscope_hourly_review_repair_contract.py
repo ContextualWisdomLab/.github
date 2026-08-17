@@ -14,6 +14,42 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _yaml_path_entries(block: str) -> set[str]:
+    """Return dashed YAML path entries from one trigger or compileall block."""
+    entries: set[str] = set()
+    for raw_line in block.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("- "):
+            entries.add(stripped[2:].strip())
+        elif stripped.startswith("tests/") or stripped.startswith("scripts/"):
+            entries.add(stripped.rstrip(" \\"))
+    return entries
+
+
+def _trigger_path_block(quality: str, trigger: str) -> str:
+    """Return the dashed path list under one named workflow trigger."""
+    marker = f"  {trigger}:\n    paths:\n"
+    start = quality.index(marker) + len(marker)
+    lines: list[str] = []
+    for line in quality[start:].splitlines():
+        if line.startswith("      - "):
+            lines.append(line)
+            continue
+        if line.strip() == "":
+            continue
+        break
+    return "\n".join(lines)
+
+
+def _compileall_block(quality: str) -> str:
+    """Return the compileall argument list from the focused quality job."""
+    marker = "python -m compileall -q \\"
+    start = quality.index(marker)
+    remainder = quality[start:]
+    end = remainder.find("\n          git ")
+    return remainder if end < 0 else remainder[:end]
+
+
 def test_bandscope_caller_is_hourly_bounded_and_non_cancelling() -> None:
     """BandScope receives one bounded repair opportunity without cancellation."""
     caller = _read(CALLER)
@@ -35,7 +71,10 @@ def test_bandscope_caller_preserves_read_only_explicit_secret_scope() -> None:
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n" not in jobs_scope
+    assert (
+        "\n    permissions:\n      contents: read\n      id-token: write\n"
+        in jobs_scope
+    )
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
@@ -67,16 +106,55 @@ def test_bandscope_doctoring_records_fail_closed_activation() -> None:
         "independent non-author approval",
         "NVIDIA_NIM_API_KEY",
         "COPILOT_GITHUB_TOKEN",
+        "id-token: write",
         "protected-main operational acceptance",
         "APA 7th references",
     ):
         assert phrase in doctoring
 
 
+def test_path_block_helpers_keep_trigger_and_compileall_sets_disjoint() -> None:
+    """A path listed only under push or compileall must not satisfy pull_request."""
+    quality = (
+        "on:\n"
+        "  pull_request:\n"
+        "    paths:\n"
+        "      - .github/workflows/bandscope-hourly-review-repair.yml\n"
+        "  push:\n"
+        "    paths:\n"
+        "      - docs/doctoring/bandscope-hourly-review-caller.md\n"
+        "          python -m compileall -q \\\n"
+        "            tests/test_bandscope_hourly_review_repair_contract.py\n"
+        "          git diff --check\n"
+    )
+
+    pull_request_paths = _yaml_path_entries(_trigger_path_block(quality, "pull_request"))
+    push_paths = _yaml_path_entries(_trigger_path_block(quality, "push"))
+    compileall_paths = _yaml_path_entries(_compileall_block(quality))
+
+    assert pull_request_paths == {".github/workflows/bandscope-hourly-review-repair.yml"}
+    assert push_paths == {"docs/doctoring/bandscope-hourly-review-caller.md"}
+    assert compileall_paths == {"tests/test_bandscope_hourly_review_repair_contract.py"}
+    assert "docs/doctoring/bandscope-hourly-review-caller.md" not in pull_request_paths
+    assert ".github/workflows/bandscope-hourly-review-repair.yml" not in compileall_paths
+
+
 def test_focused_quality_workflow_tracks_bandscope_contracts() -> None:
     """Caller, test, and doctoring edits always rerun the focused gate."""
     quality = _read(QUALITY_WORKFLOW)
+    pull_request_paths = _yaml_path_entries(_trigger_path_block(quality, "pull_request"))
+    push_paths = _yaml_path_entries(_trigger_path_block(quality, "push"))
+    compileall_paths = _yaml_path_entries(_compileall_block(quality))
+    caller = ".github/workflows/bandscope-hourly-review-repair.yml"
+    doctoring = "docs/doctoring/bandscope-hourly-review-caller.md"
+    contract = "tests/test_bandscope_hourly_review_repair_contract.py"
 
-    assert quality.count(".github/workflows/bandscope-hourly-review-repair.yml") == 2
-    assert quality.count("docs/doctoring/bandscope-hourly-review-caller.md") == 2
-    assert quality.count("tests/test_bandscope_hourly_review_repair_contract.py") == 3
+    assert caller in pull_request_paths
+    assert doctoring in pull_request_paths
+    assert contract in pull_request_paths
+    assert caller in push_paths
+    assert doctoring in push_paths
+    assert contract in push_paths
+    assert contract in compileall_paths
+    assert caller not in compileall_paths
+    assert doctoring not in compileall_paths
