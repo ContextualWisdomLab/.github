@@ -78,6 +78,9 @@ concurrency:
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
+# models: read is unused. GitHub Models is not a provider or fallback. The
+# required-workflow smoke on main still requires that exact permission line
+# until this NIM-only smoke replacement merges (ContextualWisdomLab/.github#1052).
 permissions:
   actions: read
   contents: read
