@@ -43,6 +43,13 @@ CHANGES_REQUESTED on any commit first, then previous-head re-reviews,
 then current-head verdicts. COMMENTED-only evidence is not a verdict and
 keeps the empty-Reviews priority.
 
+A second same-head `repository_dispatch` used to cancel the first through
+workflow `cancel-in-progress` because `active_review_run_refs` compared
+the GitHub `name` field to the short alias `OpenCode Review Dispatch`.
+Live runs set `name` to the interpolated run-name. The matcher now
+accepts that prefix so a queued or in-progress same-head review is
+`already_running`.
+
 ## Draft pull-request review contract
 
 Draft status is a merge-readiness signal, not a request to suppress early

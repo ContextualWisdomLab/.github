@@ -2214,6 +2214,77 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
+def test_workflow_run_name_matches_accepts_github_run_name_prefix():
+    aliases = frozenset({"OpenCode Review Dispatch", "Required OpenCode Review"})
+    assert sched.workflow_run_name_matches(
+        "OpenCode Review Dispatch", "OpenCode Review", aliases
+    )
+    assert sched.workflow_run_name_matches(
+        "OpenCode Review Dispatch ContextualWisdomLab/.github#1002@" + ("a" * 40),
+        "OpenCode Review",
+        aliases,
+    )
+    assert not sched.workflow_run_name_matches(
+        "Strix Security Scan ContextualWisdomLab/.github#1002@" + ("a" * 40),
+        "OpenCode Review",
+        aliases,
+    )
+
+
+def test_dispatch_opencode_review_deduplicates_github_run_name_as_display_title(
+    monkeypatch, capsys
+):
+    calls = []
+    head_sha = "a" * 40
+    live_name = f"OpenCode Review Dispatch owner/repo#1@{head_sha}"
+    current_dispatch = {
+        "id": 9101,
+        "name": live_name,
+        "event": "repository_dispatch",
+        "head_sha": "default-branch-sha",
+        "display_title": live_name,
+        "pull_requests": [],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/ContextualWisdomLab/.github/actions/runs",
+        ]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": [current_dispatch]})
+            return json.dumps({"workflow_runs": []})
+        if "/actions/runs" in " ".join(args):
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    result = sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert result == "already_running"
+    assert (
+        "active same-head workflow run(s) ContextualWisdomLab/.github@9101"
+        in capsys.readouterr().out
+    )
+    assert not any(call[-2:] == ["--input", "-"] for call in calls)
+
+
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
     calls = []
     head_sha = "a" * 40

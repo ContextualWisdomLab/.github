@@ -1923,6 +1923,22 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
+def workflow_run_name_matches(
+    run_name: str, workflow: str, workflow_aliases: frozenset[str]
+) -> bool:
+    """Return whether a GitHub run name is the workflow or a run-name prefix of it.
+
+    Workflow runs use ``run-name:`` as ``name``. OpenCode Review Dispatch therefore
+    appears as ``OpenCode Review Dispatch owner/repo#1@sha``, which is not equal to
+    the short alias. Exact-only matching misses the live run, a second dispatch is
+    posted, and ``cancel-in-progress`` kills the review that was about to finish.
+    """
+    names = {workflow, *workflow_aliases}
+    if run_name in names:
+        return True
+    return any(run_name.startswith(f"{candidate} ") for candidate in names)
+
+
 def active_review_run_refs(
     repo: str,
     workflow: str,
@@ -1954,13 +1970,17 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            display_title = str(run_data.get("display_title") or "")
+            if not workflow_run_name_matches(
+                run_name, workflow, workflow_aliases
+            ) and not workflow_run_name_matches(
+                display_title, workflow, workflow_aliases
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
             run_ref = (run_repo, str(run_id))
-            display_title = str(run_data.get("display_title") or "")
             dispatch_title_prefix = next(
                 (
                     prefix
