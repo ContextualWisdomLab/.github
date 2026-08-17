@@ -2797,5 +2797,28 @@ def test_originweave_47_review_surfaces_stay_split(tmp_path: Path):
     coverage_fn = coverage_fn.split("create_pull_review_with_payload()", 1)[0]
     assert "create_pull_review" not in coverage_fn
     assert "build_coverage_evidence_check_failure_body" in coverage_fn
+    assert 'update_review_overview "COVERAGE_BLOCKED"' in coverage_fn
+    fallback_fn = workflow.split("publish_fallback_diff_review()", 1)[1]
+    fallback_fn = fallback_fn.split("request_changes_for_coverage_evidence_failure()", 1)[0]
+    assert "create_pull_review" in fallback_fn
+    assert "request_changes_for_coverage_evidence_failure" in fallback_fn
+    assert fallback_fn.index("create_pull_review") < fallback_fn.index(
+        "request_changes_for_coverage_evidence_failure"
+    )
+    rust_source = tmp_path / "crates/originweave-destination/src/resolution.rs"
+    rust_source.parent.mkdir(parents=True)
+    rust_source.write_text(
+        "pub struct FreshResolutionSnapshot {}\npub fn resolve_fresh() {}\n",
+        encoding="utf-8",
+    )
+    class_diagram = surfaces.emit_mermaid(
+        ["crates/originweave-destination/src/resolution.rs"],
+        source_root=tmp_path,
+    )
+    assert "classDiagram" in class_diagram
+    assert "class FreshResolutionSnapshot" in class_diagram
+    assert "class resolve_fresh" in class_diagram
+    assert "FreshResolutionSnapshot --> resolve_fresh" not in class_diagram
+    assert " --> " not in class_diagram
     assert "crates/originweave-destination/src/resolution.rs" in review
     assert "opencode-review.yml:1" not in review

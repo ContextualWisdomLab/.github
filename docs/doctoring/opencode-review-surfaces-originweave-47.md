@@ -88,7 +88,12 @@ Regression tests prove that:
 8. a rust-version 1.97 workspace without opencode coverage metadata does not
    publish the canned coverage review as the entire PR review. Repos that
    ship `scripts/ci/verify_coverage.py` use that verifier instead of default
-   `--fail-under-lines 100`.
+   `--fail-under-lines 100`;
+9. `publish_fallback_diff_review` restores `COVERAGE_BLOCKED` on the status
+   comment after the COMMENT product-file review, so a coverage miss never
+   looks finished as `Gate result: COMMENT`; and
+10. mermaid class diagrams list extracted public Rust API names only and do
+    not invent a `FirstType --> SecondType` class edge.
 
 ## Limitations
 

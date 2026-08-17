@@ -61,6 +61,11 @@ def test_mermaid_uses_public_rust_api_when_source_exists(tmp_path: Path) -> None
     )
     assert "classDiagram" in diagram
     assert "FreshResolutionSnapshot" in diagram
+    assert "resolve_fresh" in diagram
+    assert "class FreshResolutionSnapshot" in diagram
+    assert "class resolve_fresh" in diagram
+    assert "FreshResolutionSnapshot --> resolve_fresh" not in diagram
+    assert " --> " not in diagram
     assert "Changed file" not in diagram
 
 
@@ -658,6 +663,14 @@ def test_publisher_workflow_cannot_replace_review_with_coverage_finding() -> Non
     coverage_fn = coverage_fn.split("create_pull_review_with_payload()", 1)[0]
     assert "create_pull_review" not in coverage_fn
     assert "update_review_overview" in coverage_fn
+    assert 'update_review_overview "COVERAGE_BLOCKED"' in coverage_fn
+    fallback_fn = workflow.split("publish_fallback_diff_review()", 1)[1]
+    fallback_fn = fallback_fn.split("request_changes_for_coverage_evidence_failure()", 1)[0]
+    assert "create_pull_review" in fallback_fn
+    assert "request_changes_for_coverage_evidence_failure" in fallback_fn
+    assert fallback_fn.index("create_pull_review") < fallback_fn.index(
+        "request_changes_for_coverage_evidence_failure"
+    )
     model_skip = workflow.split("if [ \"$opencode_review_outcome\" != \"success\" ]; then", 1)[1]
     model_skip = model_skip.split("selected_review_output_file=", 1)[0]
     assert "publish_fallback_diff_review" in model_skip
