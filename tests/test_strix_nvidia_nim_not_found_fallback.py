@@ -2,8 +2,8 @@
 
 The central Strix workflow must not turn a provider-side model-catalog 404 into a
 security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate before using the existing GitHub Models
-fallbacks, while ordinary application 404 output remains non-retryable.
+approved free NVIDIA NIM candidate. GitHub Models is not a fallback. Ordinary
+application 404 output remains non-retryable.
 """
 
 from __future__ import annotations
@@ -172,23 +172,19 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Prefer a documented hosted NIM and another NIM before GitHub."""
+        """Default Strix scans to hosted NIM and keep NIM-only fallbacks."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        default_expression = (
-            "steps.target_visibility.outputs.is_private == 'false' && "
-            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.6-luna'"
-        )
-        self.assertIn(default_expression, workflow)
         self.assertIn(
-            f'[ "$strix_model" = "{DEFAULT_NVIDIA_MODEL}" ] '
-            '&& [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]',
+            "github.event.client_payload.strix_llm || "
+            f"'{DEFAULT_NVIDIA_MODEL}'",
             workflow,
         )
+        self.assertNotIn("gpt-5.6-luna", workflow)
+        self.assertNotIn("github_models/", workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0])
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} github_models/openai/o3 "
-            "github_models/openai/gpt-5-chat'",
+            f"'{FREE_NVIDIA_FALLBACK}'",
             workflow,
         )
 

@@ -64,8 +64,10 @@ the existing review-bot identity are unchanged. `COPILOT_GITHUB_TOKEN` is not
 introduced. The same dispatch file now gives NIM (and matching cadence /
 dynamic-cap) a 7200s run window instead of the 180s kill that skipped
 reviews on ContextualWisdomLab/fast-mlsirm#290, keeps GPT-5 / free-tier
-short, and omits `opencode/gpt-5.6-terra` and `github-models/*` from the
-pool. Concurrency remains PR-number scoped with `cancel-in-progress: true`.
+short, and removes GitHub Models entirely. If `NVIDIA_NIM_API_KEY` is
+unset, the pool and Strix fail closed instead of falling through to
+GitHub Models or Luna. Concurrency remains PR-number scoped with
+`cancel-in-progress: true`.
 
 ## Verification contract
 

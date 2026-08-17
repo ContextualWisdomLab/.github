@@ -3704,7 +3704,7 @@ permissions_block = re.search(r"(?ms)^permissions:\n(?:(?:[ \t]+[A-Za-z-]+:[ \t]
 if not permissions_block:
     raise SystemExit(1)
 permissions_text = permissions_block.group(0)
-required_permissions = {"actions", "contents", "models"}
+required_permissions = {"actions", "contents"}
 observed_permissions = set(re.findall(r"^[ \t]+([A-Za-z-]+):[ \t]+read[ \t]*$", permissions_text, re.MULTILINE))
 if not required_permissions.issubset(observed_permissions):
     raise SystemExit(1)
@@ -3719,7 +3719,7 @@ counterevidence = [
     "umask 077",
     '[[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]',
     '[[ "$PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]',
-    "STRIX_LLM must select GitHub Models openai/gpt-5 or newer",
+    "STRIX_LLM must select NVIDIA NIM Nemotron, direct OpenAI GPT-5.4 or newer",
 ]
 if not all(needle in text for needle in counterevidence):
     raise SystemExit(1)

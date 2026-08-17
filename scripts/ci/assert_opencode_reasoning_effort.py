@@ -102,7 +102,7 @@ def validate_candidate(config: dict[str, Any], candidate: str) -> list[str]:
         return [str(exc)]
 
     if not config_for_model:
-        if provider == "github-models" or is_known_reasoning_capable(model_name):
+        if provider in {"github-models", "nvidia-nim"} or is_known_reasoning_capable(model_name):
             return [
                 f"OpenCode candidate {candidate} is not defined in opencode.jsonc "
                 f"under provider {provider}."

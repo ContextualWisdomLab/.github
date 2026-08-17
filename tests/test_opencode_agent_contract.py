@@ -30,9 +30,8 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert reviewer["color"] == "#7c3aed"
     # Reasoning effort is model-level only (see the model configs below and the
     # ci-autofix agent). An agent-level reasoningEffort is applied to every
-    # candidate the agent runs, including non-reasoning models like
-    # github-models/openai/gpt-4.1, whose OpenAI backend rejects the
-    # reasoning_effort request argument outright.
+    # candidate the agent runs, including non-reasoning NVIDIA NIM models whose
+    # backends reject the reasoning_effort request argument outright.
     assert "reasoningEffort" not in reviewer
     assert "model" not in reviewer
     assert "Reviews only; never edits code" in reviewer["description"]
@@ -67,84 +66,26 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert config["permission"]["bash"] == "deny"
     assert config["permission"]["task"] == "deny"
 
-    models = config["provider"]["github-models"]["models"]
-    high_reasoning_models = {
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/gpt-5-mini",
-        "openai/gpt-5-nano",
-        "deepseek/deepseek-r1",
-        "deepseek/deepseek-r1-0528",
-        "openai/o3",
-        "openai/o3-mini",
-        "openai/o4-mini",
-    }
-    for model_name in high_reasoning_models:
-        assert models[model_name]["reasoning"] is True
-        assert models[model_name]["options"]["reasoningEffort"] == "high"
-        assert models[model_name]["variants"]["high"]["reasoningEffort"] == "high"
-    for model_name, model_config in models.items():
-        if model_config.get("reasoning") is True:
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
+    assert "github-models" not in config["provider"]
+    assert "STRIX_GITHUB_MODELS_TOKEN" not in Path("opencode.jsonc").read_text(encoding="utf-8")
+    assert config["enabled_providers"] == ["nvidia-nim"]
+    assert config["model"].startswith("nvidia-nim/")
+    assert config["small_model"].startswith("nvidia-nim/")
+    nim_models = config["provider"]["nvidia-nim"]["models"]
+    assert "nvidia/llama-3.3-nemotron-super-49b-v1.5" in nim_models
+    assert "meta/llama-3.3-70b-instruct" in nim_models
 
 
 def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     """Guard every review-pool candidate against silent reasoning-effort drift."""
     config = load_opencode_jsonc()
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    github_models = config["provider"]["github-models"]["models"]
+    assert "github-models" not in config["provider"]
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
-    conditional_public_candidate = (
-        "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
-        "nvidia-nim/meta/llama-3.3-70b-instruct "
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
-        "opencode-free/nemotron-3-ultra-free "
-        "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
-        "opencode-free/ling-3.0-flash-free "
-        "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/hy3-free "
-        "opencode-free/minimax-m3-free "
-        "opencode-free/glm-5-free "
-        "opencode-free/kimi-k2.5-free "
-        "opencode-free/qwen3.6-plus-free ' || '' }}"
-    )
     candidates_text = candidates_match.group(1)
-    assert candidates_text.startswith(conditional_public_candidate)
-    candidates = [
-        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
-        "nvidia-nim/meta/llama-3.3-70b-instruct",
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro",
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1",
-        "opencode-free/nemotron-3-ultra-free",
-        "opencode-free/deepseek-v4-flash-free",
-        "opencode-free/north-mini-code-free",
-        "opencode-free/laguna-s-2.1-free",
-        "opencode-free/ling-3.0-flash-free",
-        "opencode-free/big-pickle",
-        "opencode-free/mimo-v2.5-free",
-        "opencode-free/hy3-free",
-        "opencode-free/minimax-m3-free",
-        "opencode-free/glm-5-free",
-        "opencode-free/kimi-k2.5-free",
-        "opencode-free/qwen3.6-plus-free",
-        *candidates_text.removeprefix(conditional_public_candidate).split(),
-    ]
+    candidates = candidates_text.split()
     candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
     direct_openai_models = [
         model_name for provider, model_name in candidate_pairs if provider == "openai"
@@ -162,10 +103,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     ]
 
     assert candidate_pairs
-    assert all(
-        not candidate.startswith("nvidia-nim/")
-        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
-    )
+    assert candidates[0].startswith("nvidia-nim/")
     assert candidate_pairs == [
         ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
         ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
@@ -199,7 +137,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
     ]
-    assert set(github_candidate_models).issubset(set(github_models))
     assert '"context": 256000' in workflow
     assert '"output": 64000' in workflow
     generated_config_match = re.search(
@@ -209,6 +146,9 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     )
     assert generated_config_match is not None
     generated_config = json.loads(generated_config_match.group(1))
+    assert "github-models" not in generated_config["provider"]
+    assert "STRIX_GITHUB_MODELS_TOKEN:" not in workflow
+    assert "secrets.STRIX_GITHUB_MODELS_TOKEN" not in workflow
     nvidia_provider = generated_config["provider"]["nvidia-nim"]
     assert nvidia_provider["options"] == {
         "baseURL": "https://integrate.api.nvidia.com/v1",
@@ -310,16 +250,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
                 model_name
             )
-    catalog_github_models = [
-        "deepseek/deepseek-v3-0324",
-        "openai/gpt-4.1",
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/o3",
-        "deepseek/deepseek-r1-0528",
-        "deepseek/deepseek-r1",
-    ]
-    assert set(catalog_github_models).issubset(set(github_models))
     banned_review_candidates = {
         "gpt-5-nano",
         "openai/gpt-5-nano",
@@ -346,19 +276,6 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
             or model_name.startswith("openai/o4")
             or model_name.startswith("deepseek/deepseek-r1")
         )
-
-    for model_name in catalog_github_models:
-        model_config = github_models[model_name]
-        if is_reasoning_capable(model_name):
-            assert model_config["reasoning"] is True, model_name
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
-        else:
-            assert model_config.get("reasoning") is not True, model_name
-            assert "reasoningEffort" not in model_config.get("options", {}), model_name
-            assert "variants" not in model_config, model_name
 
 
 def test_model_pool_cannot_synthesize_approval_after_provider_exhaustion():
@@ -1543,8 +1460,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert (
-        "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
@@ -1562,8 +1478,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/minimax-m3-free "
         "opencode-free/glm-5-free "
         "opencode-free/kimi-k2.5-free "
-        "opencode-free/qwen3.6-plus-free ' || ''"
+        "opencode-free/qwen3.6-plus-free "
+        "openai/gpt-5.6-luna "
+        "openrouter/deepseek/deepseek-v3.2 "
+        "openrouter/qwen/qwen3-coder"
     ) in workflow
+    assert "needs.validate-pr-metadata.outputs.is_private == 'false' &&" not in workflow.split(
+        "OPENCODE_MODEL_CANDIDATES:", 1
+    )[1].split("OPENCODE_MODEL_ATTEMPTS:", 1)[0]
     assert (
         "openai/gpt-5.6-luna "
         "openrouter/deepseek/deepseek-v3.2 "
@@ -1600,7 +1522,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "7200"' in workflow
     assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "7200"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
+    assert "OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS" not in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
@@ -1628,7 +1550,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
         not in publish_step
     )
-    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
+    assert "MODEL: nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" in publish_step
+    assert "MODEL: github-models/" not in publish_step
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in publish_step
     assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" in publish_step
     assert (
@@ -1692,6 +1615,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         "OpenCode model pool has no configured model candidates." in model_pool_runner
     )
+    assert (
+        "OpenCode model pool requires NVIDIA_NIM_API_KEY; failing closed "
+        "without GitHub Models fallback."
+    ) in model_pool_runner
     assert "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500" in model_pool_runner
     assert (
         "completed a full model-candidate cycle without a valid control conclusion"

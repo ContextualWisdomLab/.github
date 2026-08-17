@@ -130,29 +130,12 @@ count_changed_files_for_cadence() {
 	awk 'NF { count += 1 } END { printf "%d\n", count + 0 }' "$changed_files_file"
 }
 
-should_inline_prompt_evidence_excerpt() {
-	local model_candidate="$1"
-
-	# GitHub Models OpenAI review endpoints currently reject request bodies
-	# above roughly 4000 tokens. Keep full evidence available as workspace
-	# files, but do not inline the excerpt for those candidates.
-	case "$model_candidate" in
-	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat | github-models/openai/o3)
-		return 1
-		;;
-	*)
-		return 0
-		;;
-	esac
-}
-
 write_prompt() {
 	local model_candidate="$1"
 	local prompt_file="$2"
 	local intro
 	local contract_file
 	local evidence_excerpt_file
-	local evidence_file_in_workdir
 
 	if [ -n "${OPENCODE_REVIEW_INTRO:-}" ]; then
 		intro="$OPENCODE_REVIEW_INTRO"
@@ -163,7 +146,6 @@ write_prompt() {
 	# names that Windows and actions/upload-artifact reject.
 	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//[\/:]/-}.md"
 	evidence_excerpt_file="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
-	evidence_file_in_workdir="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
 	cp "$GITHUB_WORKSPACE/scripts/ci/opencode_review_prompt_template.md" "$contract_file"
 	OPENCODE_REVIEW_INTRO="$intro" \
 		PROMPT_MODEL_CANDIDATE="$model_candidate" \
@@ -174,17 +156,9 @@ write_prompt() {
 		printf 'Follow the complete review contract in `%s`; use this launcher as a packet-first entry point, not as a reduced policy.\n' "$contract_file"
 		printf 'Read bounded review evidence from `%s` and source files from `%s` when tool access works.\n' "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_SOURCE_WORKDIR"
 		printf 'Use the trusted review workspace `%s` for scripts, prompts, policy files, CodeGraph config, and validation helpers.\n\n' "$OPENCODE_REVIEW_WORKDIR"
-		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-			printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
-		else
-			printf 'The current-head evidence excerpt is not inlined for this GitHub Models OpenAI candidate because that provider rejects large request bodies. First read `%s`, `%s`, changed files, focused related code, and configured structural/search tools before any conclusion.\n' "$evidence_file_in_workdir" "$evidence_excerpt_file"
-		fi
+		printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
 		printf 'Never emit raw tool-call markup, MCP call syntax, function-call JSON, tool_call text, or a JSON array of tool calls. If tool calls or file reads are unavailable, do not emit progress notes or raw tool-call text.\n'
-		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-			printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
-		else
-			printf 'If file reads do not execute for this non-inlined prompt, do not approve from memory or generic confidence. REQUEST_CHANGES only when the visible launcher text or executed file reads provide current-head evidence tied to a positive source/evidence line.\n'
-		fi
+		printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
 		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and copy exactly one source-line-sha256=<64 lowercase hex> receipt with its matching path and line from the trusted receipt section; generic source-inspection or coverage-verification claims are invalid.\n'
@@ -193,8 +167,7 @@ write_prompt() {
 		printf 'Before returning, verify: exactly one top-level current-run control object; non-empty reason, summary, and residual_risk; the required number of complete probes; APPROVE has status=passed, only falsified probes, and findings=[]; REQUEST_CHANGES has status=failed, a confirmed probe, and a same-location source-backed finding.\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
-			if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-				python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
+			python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
 import pathlib
 import sys
 
@@ -214,9 +187,6 @@ else:
     )
     sys.stdout.buffer.write(tail)
 PY
-			else
-				printf '[Evidence excerpt omitted for `%s` to stay under the GitHub Models OpenAI request-body limit. Read `%s` and `%s` from the review workspace before returning a control block.]\n' "$model_candidate" "$evidence_file_in_workdir" "$evidence_excerpt_file"
-			fi
 			printf '\n'
 		fi
 	} >"$prompt_file"
@@ -387,8 +357,7 @@ fi
 
 is_low_sensitivity_candidate() {
 	case "$1" in
-	openai/*-mini | openai/*-nano | \
-		github-models/openai/*-mini | github-models/openai/*-nano)
+	openai/*-mini | openai/*-nano)
 		return 0
 		;;
 	*)
@@ -430,9 +399,6 @@ cap_model_run_timeout() {
 		;;
 	opencode-free/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
-		;;
-	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
-		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
 		;;
 	*)
 		printf '%s\n' "$run_timeout_seconds"
@@ -476,8 +442,8 @@ run_one_model_attempt() {
 		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
-	# Some providers (github-models ContextOverflowError) log a fatal error and
-	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
+	# Some providers log a fatal error and then hang instead of exiting,
+	# burning the whole run timeout. Watch the JSON
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
@@ -608,6 +574,20 @@ main() {
 	read -r -a model_candidates <<<"${OPENCODE_MODEL_CANDIDATES:-}"
 	if [ "${#model_candidates[@]}" -eq 0 ]; then
 		printf 'OpenCode model pool has no configured model candidates.\n'
+		if finish_pool_without_model; then
+			exit 0
+		fi
+		exit 1
+	fi
+	has_nim_candidate=0
+	for model_candidate in "${model_candidates[@]}"; do
+		if is_nvidia_nim_candidate "$model_candidate"; then
+			has_nim_candidate=1
+			break
+		fi
+	done
+	if [ "$has_nim_candidate" -eq 1 ] && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+		printf 'OpenCode model pool requires NVIDIA_NIM_API_KEY; failing closed without GitHub Models fallback.\n'
 		if finish_pool_without_model; then
 			exit 0
 		fi

@@ -11,7 +11,7 @@ def write_config(tmp_path, models):
     """Write a minimal OpenCode config and return its path."""
     path = tmp_path / "opencode.jsonc"
     path.write_text(
-        json.dumps({"provider": {"github-models": {"models": models}}}),
+        json.dumps({"provider": {"nvidia-nim": {"models": models}}}),
         encoding="utf-8",
     )
     return path
@@ -46,29 +46,29 @@ def test_validate_candidate_accepts_high_effort_and_non_reasoning_models(tmp_pat
     )
     config = guard.load_config(config_path)
 
-    assert guard.validate_candidate(config, "github-models/openai/o3") == []
+    assert guard.validate_candidate(config, "nvidia-nim/openai/o3") == []
     assert (
-        guard.validate_candidate(config, "github-models/deepseek/deepseek-v3-0324")
+        guard.validate_candidate(config, "nvidia-nim/deepseek/deepseek-v3-0324")
         == []
     )
 
 
 def test_validate_candidate_reports_missing_and_unqualified_models():
     """Unknown and unqualified candidates fail with actionable messages."""
-    config = {"provider": {"github-models": {"models": {}}}}
+    config = {"provider": {"nvidia-nim": {"models": {}}}}
 
     assert guard.validate_candidate(config, "openai-o3") == [
         "OpenCode candidate openai-o3 is not provider-qualified."
     ]
-    assert guard.validate_candidate(config, "github-models/openai/o3") == [
-        "OpenCode candidate github-models/openai/o3 is not defined in opencode.jsonc "
-        "under provider github-models."
+    assert guard.validate_candidate(config, "nvidia-nim/openai/o3") == [
+        "OpenCode candidate nvidia-nim/openai/o3 is not defined in opencode.jsonc "
+        "under provider nvidia-nim."
     ]
 
 
 def test_validate_candidate_skips_unknown_non_reasoning_provider_fallbacks():
     """Unknown provider fallbacks pass when no reasoning-effort support is known."""
-    config = {"provider": {"github-models": {"models": {}}}}
+    config = {"provider": {"nvidia-nim": {"models": {}}}}
 
     assert guard.validate_candidate(config, "vertex_ai/fallback-one") == []
 
@@ -77,7 +77,7 @@ def test_validate_candidate_reports_each_missing_high_effort_field():
     """Reasoning-capable models must opt into high effort in every required field."""
     config = {
         "provider": {
-            "github-models": {
+            "nvidia-nim": {
                 "models": {
                     "openai/o3": {
                         "reasoning": True,
@@ -90,18 +90,18 @@ def test_validate_candidate_reports_each_missing_high_effort_field():
         }
     }
 
-    assert guard.validate_candidate(config, "github-models/openai/o3") == [
-        "OpenCode reasoning-capable candidate github-models/openai/o3 must set "
+    assert guard.validate_candidate(config, "nvidia-nim/openai/o3") == [
+        "OpenCode reasoning-capable candidate nvidia-nim/openai/o3 must set "
         "options.reasoningEffort=high in opencode.jsonc.",
-        "OpenCode reasoning-capable candidate github-models/openai/o3 must set "
+        "OpenCode reasoning-capable candidate nvidia-nim/openai/o3 must set "
         "variants.high.reasoningEffort=high in opencode.jsonc.",
     ]
-    assert guard.validate_candidate(config, "github-models/deepseek/deepseek-r1-0528") == [
-        "OpenCode reasoning-capable candidate github-models/deepseek/deepseek-r1-0528 "
+    assert guard.validate_candidate(config, "nvidia-nim/deepseek/deepseek-r1-0528") == [
+        "OpenCode reasoning-capable candidate nvidia-nim/deepseek/deepseek-r1-0528 "
         "must set reasoning=true in opencode.jsonc.",
-        "OpenCode reasoning-capable candidate github-models/deepseek/deepseek-r1-0528 "
+        "OpenCode reasoning-capable candidate nvidia-nim/deepseek/deepseek-r1-0528 "
         "must set options.reasoningEffort=high in opencode.jsonc.",
-        "OpenCode reasoning-capable candidate github-models/deepseek/deepseek-r1-0528 "
+        "OpenCode reasoning-capable candidate nvidia-nim/deepseek/deepseek-r1-0528 "
         "must set variants.high.reasoningEffort=high in opencode.jsonc.",
     ]
 
@@ -188,8 +188,8 @@ def test_main_reports_all_candidate_errors(tmp_path, capsys):
             [
                 "--config",
                 str(config_path),
-                "github-models/openai/o3",
-                "github-models/mistral-ai/mistral-medium-2505",
+                "nvidia-nim/openai/o3",
+                "nvidia-nim/mistral-ai/mistral-medium-2505",
             ]
         )
         == 1
@@ -207,7 +207,7 @@ def test_module_entrypoint_success(monkeypatch, tmp_path):
             "assert_opencode_reasoning_effort.py",
             "--config",
             str(config_path),
-            "github-models/openai/gpt-5",
+            "nvidia-nim/openai/gpt-5",
         ],
     )
 

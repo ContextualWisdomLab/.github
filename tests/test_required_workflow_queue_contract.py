@@ -391,7 +391,7 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
-def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
+def test_nvidia_nim_defaults_fail_closed_without_secret(
     tmp_path: Path,
 ) -> None:
     strix_output = tmp_path / "strix-output"
@@ -413,18 +413,16 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
             "STRIX_OPENROUTER_API_KEY": "",
             "STRIX_NVIDIA_NIM_API_KEY": "",
             "STRIX_VERTEX_CREDENTIALS": "",
-            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
             "TARGET_REPOSITORY_PRIVATE": "false",
         },
         capture_output=True,
         text=True,
         check=False,
     )
-    assert strix.returncode == 0, strix.stderr
-    assert {
-        "provider_mode=openai_direct",
-        "strix_model=gpt-5.6-luna",
-    } <= set(strix_output.read_text().splitlines())
+    assert strix.returncode != 0
+    assert "NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans" in (
+        strix.stdout + strix.stderr
+    )
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
         in workflow_text("strix.yml")

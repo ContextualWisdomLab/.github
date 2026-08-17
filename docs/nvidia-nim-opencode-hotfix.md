@@ -6,20 +6,23 @@ OpenCode Agent failed to produce a usable review on the PR thread starting at
 ContextualWisdomLab/fast-mlsirm#290 (`opencode-review` check **skipped**, no
 `opencode-agent[bot]` review comment). Central review therefore prioritizes
 **NVIDIA NIM** models as additional catalog candidates so the model pool can
-still emit APPROVE / REQUEST_CHANGES when GitHub Models / free tiers stall.
+still emit APPROVE / REQUEST_CHANGES when a hosted NIM session can complete.
 
 ## Changes
 
 1. `opencode.jsonc`
-   - `enabled_providers`: `nvidia-nim` first, then `github-models`
-   - default `model` / `small_model` prefer NIM Nemotron / Llama 3.3
-   - new OpenAI-compatible provider `nvidia-nim` → `https://integrate.api.nvidia.com/v1`
+   - `enabled_providers`: `nvidia-nim` only
+   - default `model` / `small_model` are NIM Nemotron / Llama 3.3
+   - OpenAI-compatible provider `nvidia-nim` → `https://integrate.api.nvidia.com/v1`
      with `apiKey: {env:NVIDIA_API_KEY}`
+   - no `github-models` provider and no `STRIX_GITHUB_MODELS_TOKEN`
 2. `.github/workflows/opencode-review-dispatch.yml`
-   - `OPENCODE_MODEL_CANDIDATES` prefixes six NIM models before existing pool
-   - binds `NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}`
+   - `OPENCODE_MODEL_CANDIDATES` is NIM-first; GitHub Models and Terra are omitted
+   - binds `NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}`
+   - if `NVIDIA_NIM_API_KEY` is unset the pool fails closed
 3. `scripts/ci/run_opencode_review_model_pool.sh`
-   - skips `nvidia-nim/*` when `NVIDIA_API_KEY` is unset (same pattern as OpenRouter)
+   - if NIM candidates are configured and `NVIDIA_NIM_API_KEY` is unset, fail
+     closed instead of falling through to GitHub Models
 
 ## Temporary permission bypass (hotfix only)
 
@@ -31,19 +34,19 @@ For this merge-aid hotfix only:
   CodeQL gates.
 - **Do not** flip OpenCode agent `permission.edit` / `bash` from `deny` to
   `allow` permanently; review agents remain read-only.
-- Org secret `NVIDIA_API_KEY` must be set on ContextualWisdomLab for NIM pool
-  entries to execute; without it the pool falls through to prior candidates.
+- Org secret `NVIDIA_NIM_API_KEY` must be set on ContextualWisdomLab for NIM
+  pool entries to execute; without it the pool and Strix fail closed.
 
 ## Rollback
 
-Remove the `nvidia-nim/*` prefixes from `OPENCODE_MODEL_CANDIDATES`, drop the
-`nvidia-nim` provider block, and delete this note once GitHub Models / OpenCode
-catalog reliability is restored.
+Remove the `nvidia-nim/*` prefixes from `OPENCODE_MODEL_CANDIDATES` only if a
+later policy names a different required provider. Do not restore GitHub
+Models. Delete this note once the NIM-only catalog is the standing contract.
 
 ## Secret name
 
 Org secret is **`NVIDIA_NIM_API_KEY`**. Workflows bind it to process env `NVIDIA_API_KEY`
-(fallback: `secrets.NVIDIA_API_KEY` if present) so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.
+with no `secrets.NVIDIA_API_KEY` fallback so `opencode.jsonc` `{env:NVIDIA_API_KEY}` resolves.
 
 ## Large-repo OpenCode timeouts (NIM ≥7200s)
 
@@ -55,12 +58,11 @@ dispatch now sets:
   `OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS` to **7200** (one two-hour NIM
   attempt, then skip remaining NIM so seven 7200s candidates cannot stack)
 - generic / cadence / dynamic-cap / central-fallback run timeouts to **7200**
-- GPT-5 at **45s** and free-tier at **3600s** (unchanged short caps)
+- free-tier at **3600s** (unchanged short cap; no GitHub Models GPT-5 path)
 
-`opencode/gpt-5.6-terra` and `github-models/*` are omitted from
-`OPENCODE_MODEL_CANDIDATES` so a Copilot-class fallback cannot win the pool
-after a NIM kill. They may still appear in `opencode.jsonc` / isolated
-catalog definitions and in the short publish-stage diagnosis. Concurrency
-stays PR-number scoped with `cancel-in-progress: true`; pool max cycles and
-attempts stay at 1 so the 8997-run dispatch queue does not multiply
-unbounded parallel two-hour jobs.
+GitHub Models is removed from the review catalog and Strix path. If
+`NVIDIA_NIM_API_KEY` is unset, OpenCode and Strix fail closed (skip /
+REQUEST_CHANGES / status) instead of falling through to GitHub Models or
+Luna. Concurrency stays PR-number scoped with `cancel-in-progress: true`;
+pool max cycles and attempts stay at 1 so the dispatch queue does not
+multiply unbounded parallel two-hour jobs.

@@ -956,20 +956,20 @@ extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
 
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna'" \
-	"Strix public scans must default to NVIDIA NIM while private scans retain the contracted provider" \
+	"github.event.client_payload.strix_llm || 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b'" \
+	"Strix PR scans must default to NVIDIA NIM Nemotron" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" \
+	"STRIX_LLM must select NVIDIA NIM Nemotron, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" \
 	"Strix unsupported-model errors must name the allowed providers" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"MODEL: github-models/openai/gpt-5" \
-	"OpenCode review must try GitHub Models GPT-5 first" \
+	"MODEL: nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"OpenCode failed-check diagnosis must use NVIDIA NIM" \
 	".github/workflows/opencode-review.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"
 emit_known_unexpected_string_finding \

@@ -121,7 +121,7 @@ def run_failed_model(
     evidence_excerpt: str = "",
     changed_files: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
-    model_candidates: str = "github-models/openai/gpt-5",
+    model_candidates: str = "opencode-free/nemotron-3-ultra-free",
     prompt_capture: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one fake provider failure through the real model-pool launcher."""
@@ -431,6 +431,7 @@ def test_configured_provider_retry_uses_bounded_backoff(tmp_path: Path) -> None:
         stderr_line="provider unavailable",
         extra_env={
             "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_SCHEMA_REPAIR_ATTEMPTS": "0",
             "OPENCODE_BACKOFF_INITIAL_SECONDS": "1",
             "OPENCODE_BACKOFF_MAX_SECONDS": "1",
         },
@@ -714,6 +715,7 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
             "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "99",
             "OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS": "7",
             "OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS": "11",
+            "OPENCODE_SCHEMA_REPAIR_ATTEMPTS": "0",
             "OPENCODE_DYNAMIC_MAX_CYCLES": "1",
         },
     )
@@ -724,7 +726,7 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
         "for 2 changed file(s); max-cycles=1."
     ) in result.stdout
     attempt_budget = re.search(
-        r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
+        r"OpenCode opencode-free/nemotron-3-ultra-free attempt 1/1 using (\d+)s run timeout "
         r"with (\d+)s retry budget remaining\.",
         result.stdout,
     )
@@ -749,7 +751,7 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
             "OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS": "7200",
             "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
         },
-        model_candidates="github-models/deepseek/deepseek-v3-0324",
+        model_candidates="opencode-free/nemotron-3-ultra-free",
     )
 
     assert result.returncode == 1
@@ -774,32 +776,6 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
 
-def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
-    """Known constrained GitHub GPT-5 endpoints cannot consume a full cadence slot."""
-    result = run_failed_model(
-        tmp_path,
-        extra_env={
-            "OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS": "3",
-            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
-        },
-    )
-
-    assert result.returncode == 1
-    assert (
-        "OpenCode github-models/openai/gpt-5 runtime cap selected 3s instead of 9s "
-        "because this provider has a bounded failover window."
-    ) in result.stdout
-    attempt_budget = re.search(
-        r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
-        r"with (\d+)s retry budget remaining\.",
-        result.stdout,
-    )
-    assert attempt_budget is not None
-    run_timeout, remaining_budget = map(int, attempt_budget.groups())
-    assert run_timeout == 3
-    assert run_timeout <= remaining_budget <= 30
-
-
 def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     """A stalled free provider cannot consume a full paid-provider cadence slot."""
     result = run_failed_model(
@@ -821,7 +797,7 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
 def test_nvidia_nim_candidate_requires_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """NVIDIA NIM is skipped cleanly when its scoped credential is unavailable."""
+    """NVIDIA NIM absence fails closed instead of falling through to GitHub Models."""
     monkeypatch.setenv("NVIDIA_NIM_API_KEY", "ambient-scoped-key")
     monkeypatch.setenv("NVIDIA_API_KEY", "ambient-provider-key")
     result = run_failed_model(
@@ -831,7 +807,10 @@ def test_nvidia_nim_candidate_requires_key(
     )
 
     assert result.returncode == 1
-    assert "scoped NVIDIA_NIM_API_KEY is not configured" in result.stdout
+    assert (
+        "OpenCode model pool requires NVIDIA_NIM_API_KEY; failing closed "
+        "without GitHub Models fallback."
+    ) in result.stdout
     assert "attempt 1/1" not in result.stdout
 
 
@@ -890,10 +869,8 @@ def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
     assert "schema-repair attempt 2/2" not in result.stdout
 
 
-def test_github_models_openai_prompt_references_evidence_without_inlining(
-    tmp_path: Path,
-) -> None:
-    """Small-request GitHub Models OpenAI candidates keep evidence as files."""
+def test_nim_only_prompt_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
+    """NIM-only review prompts keep the current-head evidence packet inline."""
     prompt_capture = tmp_path / "captured-prompt.md"
     evidence_excerpt = "UNIQUE_CURRENT_HEAD_EVIDENCE_PACKET"
 
@@ -905,21 +882,20 @@ def test_github_models_openai_prompt_references_evidence_without_inlining(
 
     assert result.returncode == 1
     prompt = prompt_capture.read_text(encoding="utf-8")
-    assert evidence_excerpt not in prompt
-    assert "Evidence excerpt omitted for `github-models/openai/gpt-5`" in prompt
-    assert "bounded-review-evidence.md" in prompt
-    assert "bounded-review-evidence-excerpt.md" in prompt
+    assert evidence_excerpt in prompt
+    assert "Evidence excerpt omitted" not in prompt
+    assert "First review the current-head evidence excerpt in this prompt." in prompt
 
 
 def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
-    """Large-context DeepSeek candidates retain the current-head prompt packet."""
+    """Large-context free-tier candidates retain the current-head prompt packet."""
     prompt_capture = tmp_path / "captured-prompt.md"
     evidence_excerpt = "UNIQUE_DEEPSEEK_INLINE_EVIDENCE_PACKET"
 
     result = run_failed_model(
         tmp_path,
         evidence_excerpt=evidence_excerpt,
-        model_candidates="github-models/deepseek/deepseek-v3-0324",
+        model_candidates="opencode-free/nemotron-3-nano-free",
         prompt_capture=prompt_capture,
     )
 

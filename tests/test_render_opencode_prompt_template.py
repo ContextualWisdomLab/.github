@@ -22,13 +22,13 @@ def test_render_prompt_replaces_only_explicit_placeholders():
             "PR_NUMBER": "193",
             "OPENCODE_SOURCE_WORKDIR": "/tmp/pr-head",
             "OPENCODE_REVIEW_INTRO": "Use the shared review template.",
-            "PROMPT_MODEL_CANDIDATE": "github-models/openai/o4-mini",
+            "PROMPT_MODEL_CANDIDATE": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
         },
     )
 
     assert rendered.startswith("Use the shared review template.")
     assert "Review PR #193 in /tmp/pr-head" in rendered
-    assert "github-models/openai/o4-mini" in rendered
+    assert "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" in rendered
     assert '"$OPENCODE_SOURCE_WORKDIR"' in rendered
     assert "`python3 scripts/ci/sandboxed_verify.py" in rendered
     assert "$(echo should_not_run)" in rendered
