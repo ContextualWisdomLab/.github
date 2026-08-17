@@ -2646,6 +2646,18 @@ is_llm_service_unavailable_error() {
 	return 1
 }
 
+is_model_behavior_error() {
+	# Classify only one bounded SDK exception line that names
+	# ModelBehaviorError. A source-file mention without the trusted
+	# pydantic_ai or litellm exception prefix is not infrastructure.
+	# Vulnerabilities [1-9] stay fail-closed in the outer workflow.
+	if grep -Eiq '(pydantic_ai\.exceptions\.ModelBehaviorError|litellm(\.exceptions)?\.[A-Za-z]+Error[^[:cntrl:]]*ModelBehaviorError)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 is_nvidia_nim_not_found_error() {
 	# Classify only one bounded LiteLLM provider-error line that also
 	# carries NVIDIA NIM context and model-catalog not-found evidence.
@@ -2973,6 +2985,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 
@@ -3823,6 +3839,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 
