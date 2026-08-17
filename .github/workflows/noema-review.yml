@@ -287,13 +287,13 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
           fi
-          if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
+          if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
             export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
             export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
-            export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY:-}"
+            export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY}"
           fi
-          if [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
-            echo "::error::Noema LLM is unconfigured: NOEMA_LLM_API_URL, NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY (or OPENAI_API_KEY) are required."
+          if [ -z "${NVIDIA_NIM_API_KEY:-}" ] || [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
+            echo "::error::Noema LLM is unconfigured: NVIDIA_NIM_API_KEY is required so a green Noema check is a real NIM review."
             exit 1
           fi
           python3 scripts/ci/noema_review_gate.py \

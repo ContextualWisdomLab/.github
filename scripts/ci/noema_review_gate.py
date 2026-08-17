@@ -42,10 +42,13 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+NIM_CHAT_HOST = "integrate.api.nvidia.com"
+FORBIDDEN_NOEMA_MODEL_MARKERS = ("gpt-5.6", "github-models", "copilot")
 TRANSIENT_GH_ERROR_RE = re.compile(
-    r"HTTP 503|No server is currently available to service your request",
+    r"HTTP 429|HTTP 502|HTTP 503|No server is currently available to service your request",
     re.IGNORECASE,
 )
+TRANSIENT_GITHUB_STATUS_RE = TRANSIENT_GH_ERROR_RE
 GH_TRANSIENT_RETRY_ATTEMPTS = 6
 GH_TRANSIENT_RETRY_SLEEP_SECONDS = 5
 
@@ -100,7 +103,13 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
             attempt < attempts
             and TRANSIENT_GH_ERROR_RE.search(last_stderr)
         ):
-            time.sleep(GH_TRANSIENT_RETRY_SLEEP_SECONDS)
+            sleep_s = float(
+                os.environ.get(
+                    "NOEMA_GH_RETRY_SLEEP", str(GH_TRANSIENT_RETRY_SLEEP_SECONDS)
+                )
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
             attempt += 1
             continue
         break
@@ -108,6 +117,76 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     raise RuntimeError(
         f"Command failed ({last_returncode}): {argv[0]}\n{scrubbed_stderr}"
     )
+
+
+def is_transient_github_error(message: str) -> bool:
+    """Return whether a gh failure looks like a retryable GitHub outage."""
+    return bool(TRANSIENT_GH_ERROR_RE.search(str(message or "")))
+
+
+def run_github(args: Sequence[str], *, stdin: str | None = None, attempts: int = 3) -> str:
+    """Run gh and retry transient 429/502/503 failures a bounded number of times."""
+    if isinstance(args, str):
+        raise TypeError("run_github() requires argv, not a shell command string")
+    sleep_s = float(os.environ.get("NOEMA_GH_RETRY_SLEEP", "1"))
+    last_error: RuntimeError | None = None
+    for attempt in range(attempts):
+        try:
+            return run(args, stdin=stdin)
+        except RuntimeError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts or not is_transient_github_error(str(exc)):
+                raise
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+    raise last_error or RuntimeError("GitHub request failed")
+
+
+def emit_noema_failure(exc: BaseException) -> None:
+    """Publish a scrubbed Noema exception to the job log and step summary."""
+    detail = scrub_sensitive_data(str(exc)) or "Noema review failed"
+    print(f"::error::{detail}", file=sys.stderr)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("## Noema review failure\n\n")
+            handle.write(f"{detail}\n")
+
+
+def allowed_noema_llm_hosts() -> set[str]:
+    """Return NIM plus an optional contextual-orchestrator hostname."""
+    hosts = {NIM_CHAT_HOST}
+    orchestrator = os.environ.get("CONTEXTUAL_ORCHESTRATOR_URL", "").strip()
+    if orchestrator:
+        parsed = urllib.parse.urlparse(orchestrator)
+        hostname = (parsed.hostname or "").lower()
+        if hostname:
+            hosts.add(hostname)
+    return hosts
+
+
+def require_nim_runtime() -> None:
+    """Fail closed unless Noema is pointed at NVIDIA NIM or the optional orchestrator."""
+    api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
+    api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip()
+    if not api_url or not api_key or not model:
+        raise RuntimeError(
+            "Noema NIM runtime is unconfigured: NOEMA_LLM_API_URL, "
+            "NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY are required."
+        )
+    lowered_model = model.casefold()
+    if any(marker in lowered_model for marker in FORBIDDEN_NOEMA_MODEL_MARKERS):
+        raise RuntimeError(
+            f"Noema must not use GitHub Models, Copilot, or gpt-5.6; observed model {model!r}."
+        )
+    parsed = urllib.parse.urlparse(api_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in allowed_noema_llm_hosts():
+        raise RuntimeError(
+            "Noema LLM URL must target integrate.api.nvidia.com or the optional "
+            f"contextual-orchestrator host; observed {hostname or '<empty>'}."
+        )
 
 
 def split_repo(repo: str) -> tuple[str, str]:
@@ -574,6 +653,8 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     head_sha = str(pr.get("headRefOid") or "")
     decision = str(verdict.get("decision") or "comment").lower()
     event = "APPROVE" if decision == "approve" else "REQUEST_CHANGES" if decision == "request_changes" else "COMMENT"
+    if event == "APPROVE" and pr.get("isDraft"):
+        raise RuntimeError("draft must never receive bot APPROVE")
     source = os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") or "NOEMA_REVIEW_TOKEN"
     summary = str(verdict.get("summary") or "Noema completed an independent LLM review.").strip()
     findings = format_findings(verdict.get("findings"))
@@ -608,40 +689,45 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 def inspect_and_review(repo: str, number: int) -> int:
     """Inspect PR state and submit Noema's LLM review when gates are clean."""
-    pr = fetch_pr(repo, number)
-    actor = current_actor()
-    if actor in PRIMARY_REVIEW_AUTHORS:
-        print(
-            f"Current token actor {actor!r} is already a primary review actor; "
-            "Noema review skipped so GitHub receives an independent reviewer."
-        )
+    try:
+        pr = fetch_pr(repo, number)
+        actor = current_actor()
+        if actor in PRIMARY_REVIEW_AUTHORS:
+            print(
+                f"Current token actor {actor!r} is already a primary review actor; "
+                "Noema review skipped so GitHub receives an independent reviewer."
+            )
+            return 1
+        if pr.get("isDraft"):
+            print("PR is draft; Noema review skipped.")
+            return 1
+        if existing_noema_review(pr, actor):
+            print("Current head already has a Noema review; nothing to do.")
+            return 0
+        if not current_primary_approval(pr):
+            print("Current head does not have a primary OpenCode approval; Noema review skipped.")
+            return 1
+        if has_current_changes_requested(pr):
+            print("Current head has requested changes; Noema review skipped.")
+            return 1
+        if has_unresolved_threads(pr):
+            print("PR has unresolved review threads; Noema review skipped.")
+            return 1
+        blockers = blocking_checks(pr)
+        if blockers:
+            print("Blocking checks remain; Noema review skipped:")
+            for blocker in blockers:
+                print(f"- {blocker}")
+            return 1
+        require_nim_runtime()
+        diff, truncated = fetch_diff(repo, number)
+        review_context = build_review_context(repo, number, pr)
+        verdict = call_llm(repo, number, pr, diff, truncated, review_context)
+        submit_review(repo, number, pr, actor, verdict)
         return 0
-    if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
-        return 0
-    if existing_noema_review(pr, actor):
-        print("Current head already has a Noema review; nothing to do.")
-        return 0
-    if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
-        return 0
-    if has_current_changes_requested(pr):
-        print("Current head has requested changes; Noema review skipped.")
-        return 0
-    if has_unresolved_threads(pr):
-        print("PR has unresolved review threads; Noema review skipped.")
-        return 0
-    blockers = blocking_checks(pr)
-    if blockers:
-        print("Blocking checks remain; Noema review skipped:")
-        for blocker in blockers:
-            print(f"- {blocker}")
-        return 0
-    diff, truncated = fetch_diff(repo, number)
-    review_context = build_review_context(repo, number, pr)
-    verdict = call_llm(repo, number, pr, diff, truncated, review_context)
-    submit_review(repo, number, pr, actor, verdict)
-    return 0
+    except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        emit_noema_failure(exc)
+        return 1
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

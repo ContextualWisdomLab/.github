@@ -471,7 +471,8 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     monkeypatch.setenv("TARGET_REPOSITORY_TOKEN", "target")
     monkeypatch.setenv("AGENT_DISPATCH_TOKEN", "dispatch")
     monkeypatch.setenv(
-        "OPENCODE_REPOSITORY_DISPATCH_TARGETS", "ContextualWisdomLab/example"
+        "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
+        "ContextualWisdomLab/example,ContextualWisdomLab/Orgmetra",
     )
     monkeypatch.setattr(sweep, "sweep", lambda **kwargs: captured.append(kwargs) or 0)
     assert (
@@ -494,3 +495,4 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+    assert "ContextualWisdomLab/Orgmetra" in captured[0]["opencode_allowlist"]

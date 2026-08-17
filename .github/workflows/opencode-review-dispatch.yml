@@ -2664,6 +2664,12 @@ jobs:
             --env-file "$context_env_file"
           # shellcheck source=/dev/null
           . "$context_env_file"
+          quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
+          COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
+            --repo "$GH_REPOSITORY" \
+            --head-sha "$PR_HEAD_SHA" \
+            --quoted-result "$quoted_coverage")"
+          export COVERAGE_EVIDENCE_RESULT
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
 
@@ -4910,6 +4916,12 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
+          quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
+          COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
+            --repo "$GH_REPOSITORY" \
+            --head-sha "$HEAD_SHA" \
+            --quoted-result "$quoted_coverage")"
+          export COVERAGE_EVIDENCE_RESULT
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
           configured_review_write_token="${GH_TOKEN:-}"
@@ -5198,6 +5210,11 @@ jobs:
             review_payload_file="$(mktemp)"
             review_response_file="$(mktemp)"
             if [ "$event" = "APPROVE" ]; then
+              live_draft="$(gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.draft')"
+              if [ "$live_draft" = "true" ]; then
+                printf '::error::draft must never receive bot APPROVE for head %s.\n' "$HEAD_SHA"
+                return 1
+              fi
               printf '::notice::OpenCode APPROVE review skips the non-authoritative changed-file graph before publication so the required approval check can finish promptly.\n'
             else
               body="$(ensure_review_body_has_change_graph "$body")"

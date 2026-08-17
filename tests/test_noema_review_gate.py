@@ -65,8 +65,10 @@ def test_run_retries_transient_github_503(monkeypatch) -> None:
 
     monkeypatch.setattr(noema.subprocess, "run", fake_run)
     monkeypatch.setattr(noema.time, "sleep", lambda _seconds: None)
+    monkeypatch.setenv("NOEMA_GH_RETRY_SLEEP", "0")
     assert noema.run(["gh", "api", "graphql"]).strip() == "ok"
     assert calls["n"] == 3
+    assert noema.is_transient_github_error("HTTP 429 Too Many Requests")
 
 
 def test_run_does_not_retry_non_transient_gh_errors(monkeypatch) -> None:
@@ -588,6 +590,9 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
     clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
     calls = []
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "nim-key")
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -598,21 +603,124 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
 
-    cases = [
+    existing = make_pr(
+        reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}
+    )
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=existing: pr)
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+
+    skip_cases = [
         (make_pr(), "noema"),
         (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
         (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
         (clean_pr, "opencode-agent"),
     ]
-    for pr, actor in cases:
+    for pr, actor in skip_cases:
         calls.clear()
         monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=pr: pr)
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
-        assert noema.inspect_and_review("owner/repo", 7) == 0
+        assert noema.inspect_and_review("owner/repo", 7) == 1
         assert calls == []
+
+
+def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("NOEMA_LLM_API_URL", raising=False)
+    monkeypatch.delenv("NOEMA_LLM_MODEL", raising=False)
+    monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_URL", raising=False)
+    with pytest.raises(RuntimeError, match="unconfigured"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://api.openai.com/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "sk-test")
+    with pytest.raises(RuntimeError, match="must not use"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+    with pytest.raises(RuntimeError, match="integrate.api.nvidia.com"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+    noema.require_nim_runtime()
+
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_URL", "https://orchestrator.example.test/v1")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://orchestrator.example.test/v1/chat")
+    noema.require_nim_runtime()
+    assert "orchestrator.example.test" in noema.allowed_noema_llm_hosts()
+
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    noema.emit_noema_failure(RuntimeError("token sk-abc-123 leaked"))
+    err = capsys.readouterr().err
+    assert "::error::" in err
+    assert "sk-abc-123" not in err
+    assert "Noema review failure" in summary.read_text(encoding="utf-8")
+
+
+def test_run_github_retries_transient_503(monkeypatch):
+    monkeypatch.setenv("NOEMA_GH_RETRY_SLEEP", "0")
+    attempts = {"n": 0}
+
+    def flaky(args, stdin=None):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("Command failed (1): gh\nHTTP 503")
+        return '{"ok":true}'
+
+    monkeypatch.setattr(noema, "run", flaky)
+    assert noema.run_github(["gh", "api", "graphql"]) == '{"ok":true}'
+    assert attempts["n"] == 3
+    assert noema.is_transient_github_error("HTTP 502 Bad Gateway")
+    assert not noema.is_transient_github_error("HTTP 404")
+    with pytest.raises(TypeError):
+        noema.run_github("gh api")  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="GitHub request failed"):
+        noema.run_github(["gh", "api", "user"], attempts=0)
+
+    def permanent(args, stdin=None):
+        raise RuntimeError("Command failed (1): gh\nHTTP 404")
+
+    monkeypatch.setattr(noema, "run", permanent)
+    with pytest.raises(RuntimeError, match="404"):
+        noema.run_github(["gh", "api", "user"])
+
+    slept: list[float] = []
+    monkeypatch.setenv("NOEMA_GH_RETRY_SLEEP", "0.01")
+    monkeypatch.setattr(noema.time, "sleep", lambda seconds: slept.append(seconds))
+    attempts["n"] = 0
+
+    def flaky_then_ok(args, stdin=None):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("HTTP 429")
+        return "ok"
+
+    monkeypatch.setattr(noema, "run", flaky_then_ok)
+    assert noema.run_github(["gh", "api", "user"]) == "ok"
+    assert slept == [0.01]
+
+
+def test_submit_review_refuses_draft_approve(monkeypatch):
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "")
+    with pytest.raises(RuntimeError, match="never receive bot APPROVE"):
+        noema.submit_review(
+            "owner/repo",
+            7,
+            make_pr(isDraft=True),
+            "noema",
+            {"decision": "approve", "summary": "ok"},
+        )
+
+
+def test_inspect_and_review_emits_fetch_failure(monkeypatch, tmp_path):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: (_ for _ in ()).throw(RuntimeError("HTTP 503")))
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert "HTTP 503" in summary.read_text(encoding="utf-8")
 
 
 def test_parse_args_and_main(monkeypatch):
