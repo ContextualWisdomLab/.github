@@ -20,8 +20,10 @@ policy and the fail-closed check that leaf repositories can cite.
    capability.
 2. Require HTTPS, exact-host allowlists, no wildcards, no automatic
    redirects, and DNS pinning for the request lifetime (CWE-918; Jackson
-   et al., 2009). DNS-rebinding helper suffixes and RFC 6761 `.test` /
-   `.invalid` names are never allowlist members.
+   et al., 2009). DNS-rebinding helper suffixes, RFC 6761 `.test` /
+   `.invalid` names, and hosts that embed a dotted IPv4 address or a 32-bit
+   numeric alias (for example `169.254.169.254.attacker.example`) are never
+   allowlist members.
 3. Require explicit private-network trust. Implicit RFC1918, metadata-service,
    multicast `.local` (Cheshire & Krochmal, 2013b), Kubernetes `.svc`
    names (The Kubernetes Authors, n.d.), or special-use internal suffixes
@@ -67,8 +69,9 @@ multicast `.local` names, a denied private-network policy rejects
 single-label, Kubernetes `.svc`, and special-use internal hosts, custom
 endpoints reject ports above 65535, schema value constraints match the
 validator including the consumed/zero-retention coupling, tenant-purpose
-binding and DNS pinning are mandatory, DNS-rebinding helper suffixes stay
-off the allowlist, and malformed observability labels raise policy errors
+binding and DNS pinning are mandatory, DNS-rebinding helper suffixes and
+embedded IPv4 or 32-bit numeric aliases stay off the allowlist, and
+malformed observability labels raise policy errors
 instead of TypeError. Local quality remains 100% statement/branch coverage
 and 100% docstrings.
 

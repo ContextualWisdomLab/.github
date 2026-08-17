@@ -198,6 +198,39 @@ def test_dns_rebinding_helper_suffixes_are_never_exact_hosts(host: str) -> None:
         validator.validate_contract(contract)
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "169.254.169.254.attacker.example",
+        "127.0.0.1.evil.example",
+        "0xa.0xb.0xc.0xd.objects.example",
+        "2851992574.attacker.example",
+        "0x7f000001.attacker.example",
+    ],
+)
+def test_embedded_ipv4_aliases_are_never_exact_hosts(host: str) -> None:
+    """An IPv4 sequence or 32-bit alias remains a rebinding host on any suffix."""
+    assert validator.host_embeds_ip_alias(host) is True
+    assert validator.is_exact_dns_host(host) is False
+    contract = _valid_contract()
+    contract["endpoint_policy"]["private_network_trust"] = "explicit_allowlist"
+    contract["endpoint_policy"]["host_allowlist"] = [host]
+    contract["endpoint_policy"].pop("custom_endpoint", None)
+    with pytest.raises(validator.ObjectStorageContractError, match="exact DNS"):
+        validator.validate_contract(contract)
+
+
+def test_embedded_ip_helper_keeps_octet_labels_and_oversize_integers() -> None:
+    """Octet DNS labels stay valid; integers above 0xFFFFFFFF are not IPv4 aliases."""
+    assert validator._integer_token_value("s3") is None
+    assert validator._integer_token_value("1") == 1
+    assert validator._integer_token_value("0x7f") == 127
+    assert validator.host_embeds_ip_alias("1.s3.amazonaws.com") is False
+    assert validator.host_embeds_ip_alias("1.2.3.example.com") is False
+    assert validator.host_embeds_ip_alias("1.2.3.4294967296.example.com") is False
+    assert validator.is_exact_dns_host("1.2.3.4294967296.example.com") is True
+
+
 def test_dns_pinning_is_mandatory() -> None:
     """A later DNS TTL flip must not retarget an in-flight object transfer."""
     contract = _valid_contract()

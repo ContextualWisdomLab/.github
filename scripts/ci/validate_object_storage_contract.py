@@ -155,6 +155,15 @@ def _label_is_integer_token(label: str) -> bool:
     )
 
 
+def _integer_token_value(label: str) -> int | None:
+    """Return the integer value of a decimal or ``0x`` hex DNS label."""
+    if not _label_is_integer_token(label):
+        return None
+    if label.startswith("0x"):
+        return int(label, 16)
+    return int(label)
+
+
 def _is_ip_literal_or_alias(host: str) -> bool:
     """Return whether *host* is an IP literal or a numeric IP alias."""
     try:
@@ -164,6 +173,26 @@ def _is_ip_literal_or_alias(host: str) -> bool:
     else:
         return True
     return all(_label_is_integer_token(label) for label in host.split("."))
+
+
+def host_embeds_ip_alias(host: str) -> bool:
+    """Return whether *host* embeds an IPv4 literal or a 32-bit numeric alias.
+
+    A single numeric DNS label is still allowed when it is an octet (0-255).
+    A 32-bit decimal or hexadecimal alias, or four consecutive octet labels,
+    is a rebinding hostname even when the remaining labels are ordinary DNS.
+    Integers above ``0xFFFFFFFF`` are not IPv4 aliases.
+    """
+    labels = host.split(".")
+    for label in labels:
+        value = _integer_token_value(label)
+        if value is not None and 255 < value <= 0xFFFFFFFF:
+            return True
+    for index in range(len(labels) - 3):
+        octets = [_integer_token_value(label) for label in labels[index : index + 4]]
+        if all(value is not None and value <= 255 for value in octets):
+            return True
+    return False
 
 
 def host_matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
@@ -186,8 +215,9 @@ def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
     Localhost, link-local metadata names, IP literals, decimal or hexadecimal
-    IP aliases, Unicode, case aliases, RFC 6761 ``.test`` / ``.invalid``, and
-    DNS-rebinding helper suffixes are not exact allowlist members.
+    IP aliases, embedded IPv4 sequences, Unicode, case aliases, RFC 6761
+    ``.test`` / ``.invalid``, and DNS-rebinding helper suffixes are not exact
+    allowlist members.
     """
     if not isinstance(host, str) or not host or len(host) > MAX_DNS_HOST_LENGTH:
         return False
@@ -201,7 +231,7 @@ def is_exact_dns_host(host: str) -> bool:
         host, ALWAYS_FORBIDDEN_HOST_SUFFIXES
     ):
         return False
-    if _is_ip_literal_or_alias(host):
+    if _is_ip_literal_or_alias(host) or host_embeds_ip_alias(host):
         return False
     labels = host.split(".")
     for label in labels:
