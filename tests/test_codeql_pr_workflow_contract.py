@@ -34,8 +34,13 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "merge_commit_sha != ''" in workflow
     assert "CodeQL merge preview" in workflow
     assert workflow.count("Retry Initialize CodeQL after GitHub API outage") == 2
+    assert workflow.count("Second retry Initialize CodeQL after GitHub API outage") == 2
     assert workflow.count("No server is currently available") == 2
-    assert workflow.count("id: init-codeql") == 2
+    assert workflow.count("id: init-codeql\n") == 2
+    assert workflow.count("id: init-codeql-retry\n") == 2
+    assert workflow.count("id: init-codeql-retry-2\n") == 2
+    assert workflow.count("sleep 30") == 2
+    assert workflow.count("sleep 60") == 2
     assert "github.event.pull_request.head.sha" in workflow
     assert "github.event.pull_request.merge_commit_sha" in workflow
     assert "refs/pull/{0}/head" in workflow

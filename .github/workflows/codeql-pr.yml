@@ -99,18 +99,37 @@ jobs:
 
       # Feature-enablement GET /code-scanning/codeql-action/features returns
       # HTTP 503 "No server is currently available" during GitHub API outages.
+      # One 20s retry was not enough when sibling CodeQL jobs recovered later.
       - name: Wait before CodeQL init retry
         if: steps.init-codeql.outcome == 'failure'
-        run: sleep 20
+        run: sleep 30
 
       - name: Retry Initialize CodeQL after GitHub API outage
+        id: init-codeql-retry
         if: steps.init-codeql.outcome == 'failure'
+        continue-on-error: true
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Wait before CodeQL init second retry
+        if: steps.init-codeql.outcome == 'failure' && steps.init-codeql-retry.outcome == 'failure'
+        run: sleep 60
+
+      - name: Second retry Initialize CodeQL after GitHub API outage
+        id: init-codeql-retry-2
+        if: steps.init-codeql.outcome == 'failure' && steps.init-codeql-retry.outcome == 'failure'
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Perform CodeQL Analysis
+        if: >-
+          steps.init-codeql.outcome == 'success' ||
+          steps.init-codeql-retry.outcome == 'success' ||
+          steps.init-codeql-retry-2.outcome == 'success'
         uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:${{ matrix.language }}"
@@ -221,18 +240,37 @@ jobs:
 
       # Feature-enablement GET /code-scanning/codeql-action/features returns
       # HTTP 503 "No server is currently available" during GitHub API outages.
+      # One 20s retry was not enough when sibling CodeQL jobs recovered later.
       - name: Wait before CodeQL init retry
         if: steps.init-codeql.outcome == 'failure'
-        run: sleep 20
+        run: sleep 30
 
       - name: Retry Initialize CodeQL after GitHub API outage
+        id: init-codeql-retry
         if: steps.init-codeql.outcome == 'failure'
+        continue-on-error: true
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Wait before CodeQL init second retry
+        if: steps.init-codeql.outcome == 'failure' && steps.init-codeql-retry.outcome == 'failure'
+        run: sleep 60
+
+      - name: Second retry Initialize CodeQL after GitHub API outage
+        id: init-codeql-retry-2
+        if: steps.init-codeql.outcome == 'failure' && steps.init-codeql-retry.outcome == 'failure'
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Perform CodeQL Analysis
+        if: >-
+          steps.init-codeql.outcome == 'success' ||
+          steps.init-codeql-retry.outcome == 'success' ||
+          steps.init-codeql-retry-2.outcome == 'success'
         uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           category: "/language:${{ matrix.language }}-merge"
