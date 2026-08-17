@@ -3,10 +3,13 @@
 
 The required Strix job used a single ``gh api`` call. A transient GitHub API
 flake (timeout, 5xx, 429, empty/non-boolean body, or authenticated HTTP 403
-rate-limit) aborted the scan before it started. This helper retries those
-transient failures a few times with short backoff. A real 401/403/404 on a
-missing or unauthorized repository stays fail-closed and is never treated as
-success or as a source finding.
+rate-limit) aborted the scan before it started. Generic flakes retry a few
+times with short backoff. Authenticated HTTP 403 rate-limits use a shorter
+attempt budget and a longer bounded wait, honoring Retry-After /
+X-RateLimit-Reset from ``gh`` output when present and capping the sleep so
+the job cannot stall. A real 401/403/404 on a missing or unauthorized
+repository stays fail-closed and is never treated as success or as a source
+finding.
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ from pathlib import Path
 TARGET_REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HTTP_STATUS_RE = re.compile(r"\bHTTP[ /](\d{3})\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"(gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)")
+RETRY_AFTER_RE = re.compile(r"(?i)\bretry-after\s*[:=]\s*(\d+)\b")
+RATE_LIMIT_RESET_RE = re.compile(r"(?i)\bx-ratelimit-reset\s*[:=]\s*(\d+)\b")
 PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404})
 TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 RATE_LIMIT_MARKERS = (
@@ -45,8 +50,11 @@ TRANSIENT_MARKERS = (
     "service unavailable",
 )
 DEFAULT_MAX_ATTEMPTS = 4
+RATE_LIMIT_MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUT_SECONDS = 20.0
 MAX_BACKOFF_SECONDS = 4.0
+RATE_LIMIT_BASE_BACKOFF_SECONDS = 15.0
+RATE_LIMIT_MAX_BACKOFF_SECONDS = 20.0
 
 
 class VisibilityResolutionError(RuntimeError):
@@ -118,8 +126,6 @@ def run_gh_visibility(
             check=False,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
-        raise
     except OSError as exc:
         raise VisibilityCommandError(
             scrub_sensitive_data(f"gh api could not start: {exc}")
@@ -139,11 +145,50 @@ def backoff_seconds(attempt: int) -> float:
     return min(float(2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
 
 
+def parse_rate_limit_wait_seconds(
+    message: str, *, now: float | None = None
+) -> float | None:
+    """Return a wait from Retry-After or X-RateLimit-Reset when present."""
+    text = message or ""
+    retry_after = RETRY_AFTER_RE.search(text)
+    if retry_after is not None:
+        return float(retry_after.group(1))
+    reset = RATE_LIMIT_RESET_RE.search(text)
+    if reset is None:
+        return None
+    current = time.time() if now is None else now
+    delay = float(reset.group(1)) - current
+    if delay <= 0:
+        return None
+    return delay
+
+
+def rate_limit_backoff_seconds(
+    attempt: int, message: str = "", *, now: float | None = None
+) -> float:
+    """Return a bounded rate-limit wait, honoring headers when present."""
+    parsed = parse_rate_limit_wait_seconds(message, now=now)
+    if parsed is None:
+        parsed = min(
+            RATE_LIMIT_BASE_BACKOFF_SECONDS * float(2 ** (attempt - 1)),
+            RATE_LIMIT_MAX_BACKOFF_SECONDS,
+        )
+    if parsed > RATE_LIMIT_MAX_BACKOFF_SECONDS:
+        print(
+            "GitHub visibility rate-limit retry sleep capped from "
+            f"{parsed:g} to {RATE_LIMIT_MAX_BACKOFF_SECONDS:g} seconds.",
+            file=sys.stderr,
+        )
+        return RATE_LIMIT_MAX_BACKOFF_SECONDS
+    return parsed
+
+
 def fetch_repository_visibility(
     repository: str,
     *,
     run_gh: Callable[[str], str] | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.time,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> str:
     """Return exact ``true``/``false`` visibility after bounded retries."""
@@ -154,8 +199,10 @@ def fetch_repository_visibility(
         )
     runner = run_gh or run_gh_visibility
     last_error = "Target repository visibility did not resolve to true or false."
+    attempt_limit = max_attempts
     for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failure raises
         kind = "transient"
+        rate_limited = False
         try:
             parsed = parse_private_flag(runner(target))
         except subprocess.TimeoutExpired as exc:
@@ -165,6 +212,7 @@ def fetch_repository_visibility(
         except VisibilityCommandError as exc:
             last_error = str(exc)
             kind = classify_gh_failure(last_error)
+            rate_limited = is_github_rate_limit_failure(last_error)
             if kind == "permanent":
                 raise VisibilityResolutionError(
                     "Target repository visibility lookup was denied or missing: "
@@ -176,12 +224,19 @@ def fetch_repository_visibility(
             last_error = (
                 "Target repository visibility did not resolve to true or false."
             )
-        if attempt >= max_attempts or kind != "transient":
+        if rate_limited:
+            attempt_limit = min(max_attempts, RATE_LIMIT_MAX_ATTEMPTS)
+        if attempt >= attempt_limit or kind != "transient":
             break
-        delay = backoff_seconds(attempt)
+        if rate_limited:
+            delay = rate_limit_backoff_seconds(attempt, last_error, now=now())
+            label = "rate-limit"
+        else:
+            delay = backoff_seconds(attempt)
+            label = "transient"
         print(
-            "Transient GitHub visibility lookup failure on attempt "
-            f"{attempt}/{max_attempts}; retrying in {delay:g}s.",
+            f"{label.capitalize()} GitHub visibility lookup failure on attempt "
+            f"{attempt}/{attempt_limit}; retrying in {delay:g}s.",
             file=sys.stderr,
         )
         sleep(delay)

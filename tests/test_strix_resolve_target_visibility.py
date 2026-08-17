@@ -20,6 +20,8 @@ NOEMA_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "noema-review.yml"
 def _workflow_step(workflow: str, name: str) -> str:
     """Return one named GitHub Actions step from a workflow document."""
     marker = f"      - name: {name}\n"
+    if marker not in workflow:
+        raise AssertionError(f"workflow step not found: {name}")
     start = workflow.index(marker)
     try:
         end = workflow.index("\n      - name:", start + len(marker))
@@ -183,7 +185,7 @@ def test_installation_rate_limit_403_retries_then_preserves_visibility() -> None
         == "false"
     )
     assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
-    assert sleeps == [1.0]
+    assert sleeps == [15.0]
 
 
 def test_secondary_rate_limit_403_retries_then_preserves_visibility() -> None:
@@ -206,13 +208,13 @@ def test_secondary_rate_limit_403_retries_then_preserves_visibility() -> None:
         == "true"
     )
     assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
-    assert sleeps == [1.0]
+    assert sleeps == [15.0]
 
 
 def test_exhausted_rate_limit_403_stays_typed_infrastructure_failure() -> None:
     """Quota exhaustion must stay non-passing and must not look like a finding."""
     runner = _ScriptedGh(
-        [visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403)] * 4
+        [visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403)] * 3
     )
     sleeps: list[float] = []
 
@@ -227,8 +229,8 @@ def test_exhausted_rate_limit_403_stays_typed_infrastructure_failure() -> None:
         )
     assert "installation ID 141441800" in str(excinfo.value)
     assert "denied or missing" not in str(excinfo.value)
-    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 4
-    assert sleeps == [1.0, 2.0, 4.0]
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 3
+    assert sleeps == [15.0, 20.0]
 
 
 def test_rate_limit_403_is_not_confused_with_authorization_403() -> None:
@@ -241,6 +243,95 @@ def test_rate_limit_403_is_not_confused_with_authorization_403() -> None:
         == "transient"
     )
     assert visibility.classify_gh_failure("gh: HTTP 403: Forbidden") == "permanent"
+
+
+def test_rate_limit_retry_after_is_honored_and_capped() -> None:
+    """Honor Retry-After from gh output, but never sleep an unbounded reset."""
+    assert visibility.parse_rate_limit_wait_seconds("Retry-After: 12") == 12.0
+    assert (
+        visibility.parse_rate_limit_wait_seconds(
+            "X-RateLimit-Reset: 1700000010",
+            now=1_700_000_000.0,
+        )
+        == 10.0
+    )
+    assert (
+        visibility.rate_limit_backoff_seconds(
+            1,
+            "gh: HTTP 403: API rate limit exceeded\nRetry-After: 12",
+        )
+        == 12.0
+    )
+    assert (
+        visibility.rate_limit_backoff_seconds(
+            1,
+            "gh: HTTP 403: API rate limit exceeded\nRetry-After: 90",
+        )
+        == 20.0
+    )
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(
+                INSTALLATION_RATE_LIMIT_403 + "\nRetry-After: 12"
+            ),
+            "false",
+        ]
+    )
+    sleeps: list[float] = []
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "false"
+    )
+    assert sleeps == [12.0]
+
+
+def test_rate_limit_reset_header_and_past_reset_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Honor X-RateLimit-Reset when present; a past reset uses the default wait."""
+    monkeypatch.setattr(visibility.time, "time", lambda: 100.0)
+    assert visibility.parse_rate_limit_wait_seconds("X-RateLimit-Reset: 112") == 12.0
+    assert visibility.parse_rate_limit_wait_seconds("X-RateLimit-Reset: 90") is None
+    assert visibility.parse_rate_limit_wait_seconds("") is None
+    assert (
+        visibility.rate_limit_backoff_seconds(
+            1,
+            INSTALLATION_RATE_LIMIT_403 + "\nX-RateLimit-Reset: 1",
+            now=8.0,
+        )
+        == 15.0
+    )
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(
+                INSTALLATION_RATE_LIMIT_403 + "\nX-RateLimit-Reset: 18"
+            ),
+            "false",
+        ]
+    )
+    sleeps: list[float] = []
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+            now=lambda: 8.0,
+        )
+        == "false"
+    )
+    assert sleeps == [10.0]
+
+
+def test_generic_transient_backoff_stays_short() -> None:
+    """A 502 flake must keep the original 1/2/4s schedule."""
+    assert visibility.backoff_seconds(1) == 1.0
+    assert visibility.rate_limit_backoff_seconds(1, INSTALLATION_RATE_LIMIT_403) == 15.0
+    assert visibility.RATE_LIMIT_MAX_ATTEMPTS == 3
+    assert visibility.DEFAULT_MAX_ATTEMPTS == 4
 
 
 def test_public_and_private_booleans_are_preserved() -> None:
@@ -414,13 +505,11 @@ def test_cli_writes_visibility_and_fails_closed(
     assert output.read_text(encoding="utf-8") == "existing=1\nis_private=false\n"
 
     assert visibility.main(["--repository", "ContextualWisdomLab/naruon"]) == 1
-    monkeypatch.setattr(
-        visibility,
-        "fetch_repository_visibility",
-        lambda _repository: (_ for _ in ()).throw(
-            visibility.VisibilityResolutionError("denied")
-        ),
-    )
+
+    def deny(_repository: str) -> str:
+        raise visibility.VisibilityResolutionError("denied")
+
+    monkeypatch.setattr(visibility, "fetch_repository_visibility", deny)
     assert (
         visibility.main(
             [
@@ -457,6 +546,12 @@ def test_cli_main_module_uses_environment(
 
     assert excinfo.value.code == 0
     assert output.read_text(encoding="utf-8") == "is_private=true\n"
+
+
+def test_workflow_step_parser_names_a_missing_step() -> None:
+    """A missing step name must fail with the requested name, not IndexError."""
+    with pytest.raises(AssertionError, match="workflow step not found: Missing Step"):
+        _workflow_step("jobs:\n  strix:\n    steps: []\n", "Missing Step")
 
 
 def test_strix_workflow_uses_helper_and_keeps_token_order() -> None:
