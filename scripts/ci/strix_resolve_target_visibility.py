@@ -2,10 +2,11 @@
 """Resolve Strix target-repository visibility with fail-closed retries.
 
 The required Strix job used a single ``gh api`` call. A transient GitHub API
-flake (timeout, 5xx, 429, or an empty/non-boolean body) aborted the scan
-before it started. This helper retries those transient failures a few times
-with short backoff. A real 401/403/404 on a missing or unauthorized
-repository stays fail-closed and is never treated as success.
+flake (timeout, 5xx, 429, empty/non-boolean body, or authenticated HTTP 403
+rate-limit) aborted the scan before it started. This helper retries those
+transient failures a few times with short backoff. A real 401/403/404 on a
+missing or unauthorized repository stays fail-closed and is never treated as
+success or as a source finding.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ HTTP_STATUS_RE = re.compile(r"\bHTTP[ /](\d{3})\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"(gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)")
 PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404})
 TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+RATE_LIMIT_MARKERS = (
+    "api rate limit exceeded",
+    "secondary rate limit",
+)
 TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
@@ -75,8 +80,16 @@ def parse_private_flag(raw: str | None) -> str | None:
     return None
 
 
+def is_github_rate_limit_failure(message: str) -> bool:
+    """Return whether a GitHub error is authenticated quota exhaustion."""
+    folded = (message or "").lower()
+    return any(marker in folded for marker in RATE_LIMIT_MARKERS)
+
+
 def classify_gh_failure(message: str) -> str:
     """Classify a ``gh api`` failure as permanent, transient, or unknown."""
+    if is_github_rate_limit_failure(message):
+        return "transient"
     status_match = HTTP_STATUS_RE.search(message or "")
     if status_match is not None:
         status = int(status_match.group(1))
@@ -172,6 +185,12 @@ def fetch_repository_visibility(
             file=sys.stderr,
         )
         sleep(delay)
+    if is_github_rate_limit_failure(last_error):
+        raise VisibilityResolutionError(
+            "Target repository visibility lookup hit a GitHub API rate-limit; "
+            "this is infrastructure, not a source finding: "
+            f"{last_error}"
+        )
     raise VisibilityResolutionError(last_error)
 
 

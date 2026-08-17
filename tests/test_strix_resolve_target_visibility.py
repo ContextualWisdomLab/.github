@@ -121,13 +121,24 @@ def test_permanent_invalid_visibility_fails_closed() -> None:
     assert sleeps == [1.0, 2.0, 4.0]
 
 
+# Exact downstream wording from ContextualWisdomLab/inkspan#160 required
+# Strix job 95492526891 (run 32064279893) at 2026-08-17 20:12:47 UTC.
+INSTALLATION_RATE_LIMIT_403 = (
+    "gh: HTTP 403: API rate limit exceeded for installation ID 141441800 "
+    "(https://api.github.com/repos/ContextualWisdomLab/inkspan)"
+)
+SECONDARY_RATE_LIMIT_403 = (
+    "gh: HTTP 403: You have exceeded a secondary rate limit. "
+    "Please wait a few minutes before you try again."
+)
+AUTH_DENIED_403 = "gh: HTTP 403: Resource not accessible by integration"
+
+
 def test_http_404_and_403_are_not_success_and_are_not_retried() -> None:
     """A missing or unauthorized repository must fail closed immediately."""
     sleeps: list[float] = []
     missing = _ScriptedGh([visibility.VisibilityCommandError("gh: HTTP 404: Not Found")])
-    denied = _ScriptedGh(
-        [visibility.VisibilityCommandError("gh: HTTP 403: Resource not accessible")]
-    )
+    denied = _ScriptedGh([visibility.VisibilityCommandError(AUTH_DENIED_403)])
 
     with pytest.raises(
         visibility.VisibilityResolutionError,
@@ -140,7 +151,7 @@ def test_http_404_and_403_are_not_success_and_are_not_retried() -> None:
         )
     with pytest.raises(
         visibility.VisibilityResolutionError,
-        match="denied or missing: gh: HTTP 403",
+        match="denied or missing: gh: HTTP 403: Resource not accessible",
     ):
         visibility.fetch_repository_visibility(
             "ContextualWisdomLab/private-denied",
@@ -150,6 +161,86 @@ def test_http_404_and_403_are_not_success_and_are_not_retried() -> None:
     assert missing.calls == ["ContextualWisdomLab/missing-repo"]
     assert denied.calls == ["ContextualWisdomLab/private-denied"]
     assert sleeps == []
+
+
+def test_installation_rate_limit_403_retries_then_preserves_visibility() -> None:
+    """Inkspan installation-budget 403 is transient, not an auth/missing repo."""
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403),
+            "false\n",
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert visibility.classify_gh_failure(INSTALLATION_RATE_LIMIT_403) == "transient"
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "false"
+    )
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
+    assert sleeps == [1.0]
+
+
+def test_secondary_rate_limit_403_retries_then_preserves_visibility() -> None:
+    """Secondary-rate-limit 403 wording is the same transient family."""
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(SECONDARY_RATE_LIMIT_403),
+            "true",
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert visibility.classify_gh_failure(SECONDARY_RATE_LIMIT_403) == "transient"
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "true"
+    )
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
+    assert sleeps == [1.0]
+
+
+def test_exhausted_rate_limit_403_stays_typed_infrastructure_failure() -> None:
+    """Quota exhaustion must stay non-passing and must not look like a finding."""
+    runner = _ScriptedGh(
+        [visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403)] * 4
+    )
+    sleeps: list[float] = []
+
+    with pytest.raises(
+        visibility.VisibilityResolutionError,
+        match="GitHub API rate-limit; this is infrastructure, not a source finding",
+    ) as excinfo:
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+    assert "installation ID 141441800" in str(excinfo.value)
+    assert "denied or missing" not in str(excinfo.value)
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 4
+    assert sleeps == [1.0, 2.0, 4.0]
+
+
+def test_rate_limit_403_is_not_confused_with_authorization_403() -> None:
+    """Only the authenticated quota family is retryable; other 403s stay closed."""
+    assert visibility.classify_gh_failure(INSTALLATION_RATE_LIMIT_403) == "transient"
+    assert visibility.classify_gh_failure(SECONDARY_RATE_LIMIT_403) == "transient"
+    assert visibility.classify_gh_failure(AUTH_DENIED_403) == "permanent"
+    assert (
+        visibility.classify_gh_failure("gh: HTTP 403: API rate limit exceeded")
+        == "transient"
+    )
+    assert visibility.classify_gh_failure("gh: HTTP 403: Forbidden") == "permanent"
 
 
 def test_public_and_private_booleans_are_preserved() -> None:
