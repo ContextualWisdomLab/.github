@@ -1490,6 +1490,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	local scheduler_file="$REPO_ROOT/scripts/ci/pr_review_merge_scheduler.py"
 	local fix_scheduler_file="$REPO_ROOT/scripts/ci/pr_review_fix_scheduler.py"
 	local readme_file="$REPO_ROOT/README.md"
+	local procedure_file="$REPO_ROOT/docs/pr-review-and-merge-procedure.md"
 
 	assert_file_contains "$autofix_workflow_file" "Autofix allowed paths, authoritative:" "autofix prompt includes allowed paths outside the truncated review context"
 	assert_file_contains "$autofix_workflow_file" "<autofix-allowed-paths>" "autofix prompt has a dedicated allowed-paths block"
@@ -1552,7 +1553,8 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$scheduler_file" "same-head OpenCode dispatched" "scheduler records review dispatch after completed security evidence"
 	assert_file_contains "$workflow_file" "--pr-number" "scheduler scopes required-workflow PR events to the current pull request"
 	assert_file_contains "$workflow_file" "--review-workflow \"Required OpenCode Review\"" "scheduler dispatches the canonical required OpenCode Review workflow"
-	assert_file_contains "$readme_file" "PR_REVIEW_MERGE_TOKEN" "README documents that mechanical branch updates and merges use the central mutation credential"
+	assert_file_contains "$readme_file" "docs/pr-review-and-merge-procedure.md" "README points operators to the bot/agent review procedure instead of embedding it"
+	assert_file_contains "$procedure_file" "PR_REVIEW_MERGE_TOKEN" "review procedure documents that mechanical branch updates and merges use the central mutation credential"
 	assert_file_contains "$fix_workflow_file" 'workflow_call:' "fix scheduler can run as the central reusable autofix-dispatch workflow"
 	assert_file_contains "$fix_workflow_file" 'repository: ContextualWisdomLab/.github' "fix scheduler checks out the canonical implementation instead of relying on repo-local scheduler code"
 	assert_file_contains "$fix_workflow_file" 'AUTOFIX_REPOSITORY' "fix scheduler can dispatch the central autofix worker without per-repository workflow copies"
@@ -1568,10 +1570,10 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$fix_scheduler_file" '"target_repository": repo' "fix scheduler passes the target repository in the central repository-dispatch JSON payload"
 	assert_file_contains "$fix_scheduler_file" "recent autofix marker exists for this head" "fix scheduler avoids repeated autofix loops for the same head"
 	assert_file_contains "$fix_scheduler_file" "external PR head is not writable" "fix scheduler refuses external heads for bot autofix"
-	assert_file_contains "$readme_file" "PR Review Fix Scheduler" "README documents the central autofix scheduler contract"
-	assert_file_contains "$readme_file" "Scratch PoC files are not" "README documents PoC proof artifacts are scratch evidence, not committed changes"
-	assert_file_contains "$readme_file" "committed." "README documents scratch PoC proof artifacts are not committed"
-	assert_file_contains "$readme_file" "Failed GitHub Checks are not reviewed as URL lists." "README documents failed-check reviews require explanations, not URL-only bullets"
+	assert_file_contains "$procedure_file" "PR Review Fix Scheduler" "review procedure documents the central autofix scheduler contract"
+	assert_file_contains "$procedure_file" "Scratch PoC files are not" "review procedure documents PoC proof artifacts are scratch evidence, not committed changes"
+	assert_file_contains "$procedure_file" "committed." "review procedure documents scratch PoC proof artifacts are not committed"
+	assert_file_contains "$procedure_file" "Failed GitHub Checks are not reviewed as URL lists." "review procedure documents failed-check reviews require explanations, not URL-only bullets"
 }
 
 assert_opencode_review_normalizer_accepts_transcript_json() {

@@ -148,8 +148,8 @@ needed. The central helper is
 line when the helper is used. Use `--network required`, `--allow-env NAME`,
 and `--evidence-note "why"` only for repository-required verification. This
 helper does not replace the existing bash, task, webfetch, websearch, lsp,
-CodeGraph, DeepWiki, Context7, or web_search review policy. Scratch PoC files
-are not committed.
+CodeGraph, DeepWiki, Context7, or web_search review policy.
+Scratch PoC files are not committed.
 
 For web applications with both backend and frontend surfaces, the preferred
 execution proof is the central E2E helper:
