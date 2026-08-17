@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## nonnest2 hourly caller
+
+`nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
+16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
