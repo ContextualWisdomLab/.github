@@ -1,0 +1,33 @@
+name: Appguardrail Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 41 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
+    # BandScope (53), naruon (11), Inkspan (47), orchestrator (17),
+    # Wardnet (7), codec-carver (5), pg-erd-cloud (13), Keyverse (29),
+    # noema (19), and Scopeweave (31).
+    - cron: "41 * * * *"
+
+concurrency:
+  group: appguardrail-hourly-review-repair
+  # A later heartbeat must not cancel an in-flight SAST or assurance RCA.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/appguardrail
+      base_branch: develop
+      max_prs: "50"
+      max_dispatches: "1"
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
