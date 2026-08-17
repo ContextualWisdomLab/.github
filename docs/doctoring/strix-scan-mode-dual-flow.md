@@ -29,6 +29,12 @@ Confirmed event → official mode mapping:
 
 `workflow_dispatch` is restored with a single `scan_mode` choice so an incomplete release candidate can be scanned by hand. Deep is allowed only on that manual path. The required PR job stays on the 120-minute budget. Deep uses the GitHub-hosted 360-minute ceiling and leaves about 20 minutes after the 340-minute step for artifact and status publication.
 
+## Residual: workflow_dispatch revision selection
+
+GitHub's manual-run UI and `gh workflow run --ref` let a repository writer choose which revision supplies the workflow definition *before* the trusted-source checkout (GitHub, n.d., *Manually running a workflow*). After this YAML is on the default branch, that selected revision runs with scanner secrets and `id-token: write`. A job-level `if:` on `main` does not stop a malicious selected revision. Write access is the only control.
+
+This residual is accepted because CWL has no RC-tag convention and Deep must remain available by hand on this file. Do not add `target_repository` or `pr_number` inputs to "fix" it; those would widen the privileged surface. Privileged same-head retries stay on default-branch `repository_dispatch` type `strix-scan`.
+
 `require_safe_scan_mode` now allowlists `quick|standard|deep` and rejects `normal` and every other string, including charset-valid aliases.
 
 Fail-closed behavior is unchanged: missing artifact, unmapped findings, infrastructure errors, PR scoping, and severity gating stay as they were. The hashed-lock installer line is not part of this change.

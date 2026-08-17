@@ -20,6 +20,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 STRIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "strix.yml"
 STRIX_GATE = REPO_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 QUALITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+DOCTORING = REPO_ROOT / "docs" / "doctoring" / "strix-scan-mode-dual-flow.md"
+SCAN_MODE_EXPRESSION_PREFIX = "STRIX_SCAN_MODE: ${{ "
+SCAN_MODE_EXPRESSION_SUFFIX = " }}"
 
 SCAN_MODE_EXPRESSION = (
     "STRIX_SCAN_MODE: ${{ github.event_name == 'workflow_dispatch' && "
@@ -73,6 +76,146 @@ def _function_block(source: str, function_name: str) -> str:
     return match.group(0)
 
 
+def _pinned_scan_mode_expression() -> str:
+    """Return the inner GitHub expression pinned by ``SCAN_MODE_EXPRESSION``."""
+    if not SCAN_MODE_EXPRESSION.startswith(SCAN_MODE_EXPRESSION_PREFIX):
+        raise AssertionError("scan-mode pin lost its GitHub expression prefix")
+    if not SCAN_MODE_EXPRESSION.endswith(SCAN_MODE_EXPRESSION_SUFFIX):
+        raise AssertionError("scan-mode pin lost its GitHub expression suffix")
+    return SCAN_MODE_EXPRESSION[
+        len(SCAN_MODE_EXPRESSION_PREFIX) : -len(SCAN_MODE_EXPRESSION_SUFFIX)
+    ]
+
+
+def _github_expression_tokens(expression: str) -> list[str]:
+    """Tokenize a GitHub Actions ``&&`` / ``||`` / ``==`` string expression."""
+    tokens: list[str] = []
+    index = 0
+    length = len(expression)
+    while index < length:
+        current = expression[index]
+        if current.isspace():
+            index += 1
+            continue
+        if expression.startswith("&&", index) or expression.startswith("||", index):
+            tokens.append(expression[index : index + 2])
+            index += 2
+            continue
+        if expression.startswith("==", index):
+            tokens.append("==")
+            index += 2
+            continue
+        if current in "()":
+            tokens.append(current)
+            index += 1
+            continue
+        if current == "'":
+            end = expression.find("'", index + 1)
+            if end < 0:
+                raise AssertionError("unterminated GitHub expression string")
+            tokens.append(expression[index : end + 1])
+            index = end + 1
+            continue
+        if current == "." or current.isalpha() or current == "_":
+            end = index + 1
+            while end < length and (
+                expression[end].isalnum() or expression[end] in "._"
+            ):
+                end += 1
+            tokens.append(expression[index:end])
+            index = end
+            continue
+        raise AssertionError(f"unsupported GitHub expression token at {index}")
+    return tokens
+
+
+def _github_value_is_truthy(value: str) -> bool:
+    """Return whether a GitHub Actions operand continues ``&&`` / ``||``."""
+    return value not in {"", "false", "0", "null"}
+
+
+def _eval_github_or_and(expression: str, bindings: dict[str, str]) -> str:
+    """Evaluate the pinned scan-mode expression with GitHub ``&&`` / ``||`` rules."""
+    tokens = _github_expression_tokens(expression)
+    index = 0
+
+    def peek() -> str | None:
+        if index >= len(tokens):
+            return None
+        return tokens[index]
+
+    def consume(expected: str | None = None) -> str:
+        nonlocal index
+        if index >= len(tokens):
+            raise AssertionError("unexpected end of GitHub expression")
+        token = tokens[index]
+        if expected is not None and token != expected:
+            raise AssertionError(f"expected {expected!r}, found {token!r}")
+        index += 1
+        return token
+
+    def parse_primary() -> str:
+        token = peek()
+        if token == "(":
+            consume("(")
+            value = parse_or()
+            consume(")")
+            return value
+        if token is None:
+            raise AssertionError("missing GitHub expression operand")
+        consume()
+        if token.startswith("'") and token.endswith("'"):
+            return token[1:-1]
+        if token not in bindings:
+            raise AssertionError(f"unbound GitHub expression identifier: {token}")
+        return bindings[token]
+
+    def parse_comparison() -> str:
+        left = parse_primary()
+        if peek() != "==":
+            return left
+        consume("==")
+        right = parse_primary()
+        return "true" if left == right else "false"
+
+    def parse_and() -> str:
+        value = parse_comparison()
+        while peek() == "&&":
+            consume("&&")
+            if not _github_value_is_truthy(value):
+                parse_comparison()
+                continue
+            value = parse_comparison()
+        return value
+
+    def parse_or() -> str:
+        value = parse_and()
+        while peek() == "||":
+            consume("||")
+            if _github_value_is_truthy(value):
+                parse_and()
+                continue
+            value = parse_and()
+        return value
+
+    result = parse_or()
+    if index != len(tokens):
+        raise AssertionError(f"trailing GitHub expression tokens: {tokens[index:]}")
+    return result
+
+
+def _eval_pinned_scan_mode(event_name: str, ref: str, scan_mode_input: str) -> str:
+    """Evaluate the exact pinned workflow expression against one event."""
+    return _eval_github_or_and(
+        _pinned_scan_mode_expression(),
+        {
+            "github.event_name": event_name,
+            "github.event.inputs.scan_mode": scan_mode_input,
+            "github.ref": ref,
+        },
+    )
+
+
 def _require_safe_scan_mode_rc(scan_mode: str) -> int:
     """Execute the production allowlist against one candidate mode."""
     function_source = _function_block(
@@ -108,6 +251,25 @@ def test_quality_trigger_includes_scan_mode_contract_paths() -> None:
     assert "tests/test_strix_scan_mode_policy.py" in workflow
 
 
+def test_pinned_scan_mode_expression_evaluator_uses_github_or_and_rules() -> None:
+    """A remade Python if/elif must not be able to hide pin drift."""
+    expression = _pinned_scan_mode_expression()
+
+    assert "github.event_name == 'workflow_dispatch'" in expression
+    assert "github.event_name == 'push'" in expression
+    assert (
+        _eval_github_or_and(
+            expression,
+            {
+                "github.event_name": "repository_dispatch",
+                "github.event.inputs.scan_mode": "",
+                "github.ref": "refs/heads/main",
+            },
+        )
+        == "quick"
+    )
+
+
 def test_workflow_pins_official_scan_mode_expression() -> None:
     """The job must set STRIX_SCAN_MODE from event, ref, and manual input."""
     workflow = _workflow()
@@ -140,18 +302,9 @@ def test_dual_flow_event_maps_to_official_mode(
     scan_mode_input: str,
     expected: str,
 ) -> None:
-    """Mirror the pinned workflow expression for the confirmed dual-flow policy."""
-    if event_name == "workflow_dispatch":
-        actual = scan_mode_input or "standard"
-    elif event_name == "schedule":
-        actual = "standard"
-    elif event_name == "push" and ref in {"refs/heads/main", "refs/heads/master"}:
-        actual = "standard"
-    else:
-        actual = "quick"
-
-    assert actual == expected
+    """Evaluate the pinned workflow expression, not a parallel Python remake."""
     assert SCAN_MODE_EXPRESSION in _workflow()
+    assert _eval_pinned_scan_mode(event_name, ref, scan_mode_input) == expected
     if expected == "deep":
         assert event_name == "workflow_dispatch"
         assert scan_mode_input == "deep"
@@ -187,6 +340,16 @@ def test_required_pr_and_quick_paths_keep_standard_timeout_budget() -> None:
     ) in step
     assert 'process_budget_seconds="14400"' in step
     assert 'total_budget_seconds="16200"' in step
+
+
+def test_doctoring_records_workflow_dispatch_revision_residual() -> None:
+    """Write access remains the only control after restoring manual dispatch."""
+    doctoring = DOCTORING.read_text(encoding="utf-8")
+
+    assert "gh workflow run --ref" in doctoring
+    assert "Write access is the only control" in doctoring
+    assert "job-level `if:`" in doctoring
+    assert "Do not add `target_repository` or `pr_number` inputs" in doctoring
 
 
 def test_workflow_dispatch_is_scan_mode_only_and_keeps_dispatch_retry() -> None:
