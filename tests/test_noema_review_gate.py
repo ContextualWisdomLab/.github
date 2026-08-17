@@ -1,5 +1,6 @@
 import base64
 import json
+import subprocess
 import sys
 
 import pytest
@@ -45,6 +46,77 @@ def test_run_split_repo_graphql_and_fetch_pr(monkeypatch):
         noema.run([sys.executable, "-c", "import sys; sys.exit(5)"])
 
     assert noema.split_repo("owner/repo") == ("owner", "repo")
+
+
+def test_run_retries_transient_github_503(monkeypatch) -> None:
+    """A GitHub 503 on gh is retried instead of failing the Noema verdict."""
+    calls = {"n": 0}
+
+    def fake_run(argv, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                stdout="",
+                stderr="gh: No server is currently available to service your request. (HTTP 503)",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    monkeypatch.setattr(noema.time, "sleep", lambda _seconds: None)
+    assert noema.run(["gh", "api", "graphql"]).strip() == "ok"
+    assert calls["n"] == 3
+
+
+def test_run_does_not_retry_non_transient_gh_errors(monkeypatch) -> None:
+    """Permanent gh failures still fail on the first attempt."""
+    calls = {"n": 0}
+
+    def fake_run(argv, **_kwargs):
+        calls["n"] += 1
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        noema.run(["gh", "api", "graphql"])
+    assert calls["n"] == 1
+
+
+def test_run_exhausts_transient_github_503(monkeypatch) -> None:
+    """A persistent GitHub 503 fails after the bounded retry budget."""
+    calls = {"n": 0}
+
+    def fake_run(argv, **_kwargs):
+        calls["n"] += 1
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr="HTTP 503",
+        )
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    monkeypatch.setattr(noema.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(noema, "GH_TRANSIENT_RETRY_ATTEMPTS", 2)
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        noema.run(["gh", "api", "user"])
+    assert calls["n"] == 2
+
+
+def test_run_clamps_zero_github_retry_budget(monkeypatch) -> None:
+    """A zero retry budget still makes one gh attempt."""
+    calls = {"n": 0}
+
+    def fake_run(argv, **_kwargs):
+        calls["n"] += 1
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="HTTP 503")
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    monkeypatch.setattr(noema, "GH_TRANSIENT_RETRY_ATTEMPTS", 0)
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        noema.run(["gh", "api", "user"])
+    assert calls["n"] == 1
 
 def test_scrub_sensitive_data():
     assert noema.scrub_sensitive_data(None) is None

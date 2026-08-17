@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,12 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+TRANSIENT_GH_ERROR_RE = re.compile(
+    r"HTTP 503|No server is currently available to service your request",
+    re.IGNORECASE,
+)
+GH_TRANSIENT_RETRY_ATTEMPTS = 6
+GH_TRANSIENT_RETRY_SLEEP_SECONDS = 5
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -68,21 +75,39 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     """Run a command without invoking a shell and return stdout."""
     if isinstance(args, str):
         raise TypeError("run() requires argv, not a shell command string")
-    completed = subprocess.run(
-        list(args),
-        input=stdin,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        shell=False,
-    )
-    if completed.returncode != 0:
-        scrubbed_stderr = scrub_sensitive_data(completed.stderr.strip())
-        raise RuntimeError(
-            f"Command failed ({completed.returncode}): {args[0]}\n{scrubbed_stderr}"
+    argv = list(args)
+    last_stderr = ""
+    last_returncode = 1
+    attempts = 1
+    if argv and argv[0] == "gh":
+        attempts = max(1, GH_TRANSIENT_RETRY_ATTEMPTS)
+    attempt = 1
+    while True:
+        completed = subprocess.run(
+            argv,
+            input=stdin,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            shell=False,
         )
-    return completed.stdout
+        if completed.returncode == 0:
+            return completed.stdout
+        last_returncode = completed.returncode
+        last_stderr = completed.stderr.strip()
+        if (
+            attempt < attempts
+            and TRANSIENT_GH_ERROR_RE.search(last_stderr)
+        ):
+            time.sleep(GH_TRANSIENT_RETRY_SLEEP_SECONDS)
+            attempt += 1
+            continue
+        break
+    scrubbed_stderr = scrub_sensitive_data(last_stderr)
+    raise RuntimeError(
+        f"Command failed ({last_returncode}): {argv[0]}\n{scrubbed_stderr}"
+    )
 
 
 def split_repo(repo: str) -> tuple[str, str]:

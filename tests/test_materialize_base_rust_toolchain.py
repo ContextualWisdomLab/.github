@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,20 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import materialize_base_rust_toolchain as materializer
+
+
+def _git_index(names: list[bytes], *, version: int = 2, extended: bool = False) -> bytes:
+    """Build a minimal git index for parser tests."""
+    entries = b""
+    for name in names:
+        flags = (0x0FFF if len(name) >= 0x0FFF else len(name)) | (0x4000 if extended else 0)
+        header = b"\0" * 60 + struct.pack(">H", flags)
+        if extended:
+            header += b"\0\0"
+        payload = header + name + b"\0"
+        payload += b"\0" * ((8 - (len(payload) % 8)) % 8)
+        entries += payload
+    return b"DIRC" + struct.pack(">II", version, len(names)) + entries
 
 
 def git(repo: Path, *args: str) -> str:
@@ -359,6 +374,99 @@ def test_declared_version_without_manifest_and_unsafe_tracked_paths(
         lambda *_args, **_kwargs: b"../escape\0/abs/Cargo.toml\0Cargo.toml\0",
     )
     assert materializer.tracked_paths(tmp_path) == {"Cargo.toml"}
+
+
+def test_git_index_reader_rejects_unsafe_and_truncated_trees(tmp_path: Path) -> None:
+    """Tracked-path evidence fails closed when the git dir or index is unusable."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(RuntimeError, match="not a git repository"):
+        materializer.tracked_paths(repo)
+
+    git_link = repo / ".git"
+    git_link.symlink_to(tmp_path)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        materializer.tracked_paths(repo)
+    git_link.unlink()
+
+    git_link.write_text("not a pointer\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid gitdir pointer"):
+        materializer.tracked_paths(repo)
+
+    missing_dir = tmp_path / "missing-git"
+    git_link.write_text(f"gitdir: {missing_dir}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not a regular directory"):
+        materializer.tracked_paths(repo)
+
+    linked_dir = tmp_path / "linked-git"
+    linked_dir.symlink_to(tmp_path)
+    git_link.write_text("gitdir: linked-git\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not a regular directory"):
+        materializer.tracked_paths(repo)
+    git_link.unlink()
+    linked_dir.unlink()
+
+    git_dir = repo / ".git"
+    git_dir.mkdir()
+    with pytest.raises(RuntimeError, match="git index is not a regular file"):
+        materializer.tracked_paths(repo)
+    index = git_dir / "index"
+    index.symlink_to(tmp_path / "outside-index")
+    with pytest.raises(RuntimeError, match="git index is not a regular file"):
+        materializer.tracked_paths(repo)
+    index.unlink()
+
+    index.write_bytes(b"NOPE")
+    with pytest.raises(RuntimeError, match="header is invalid"):
+        materializer.tracked_paths(repo)
+    index.write_bytes(_git_index([b"Cargo.toml"], version=4))
+    with pytest.raises(RuntimeError, match="unsupported git index version"):
+        materializer.tracked_paths(repo)
+    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1))
+    with pytest.raises(RuntimeError, match="truncated git index"):
+        materializer.tracked_paths(repo)
+    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 0x4000))
+    with pytest.raises(RuntimeError, match="truncated git index"):
+        materializer.tracked_paths(repo)
+    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 20))
+    with pytest.raises(RuntimeError, match="truncated git index path"):
+        materializer.tracked_paths(repo)
+    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 0x0FFF))
+    with pytest.raises(RuntimeError, match="truncated git index path"):
+        materializer.tracked_paths(repo)
+
+    with pytest.raises(RuntimeError, match="unsupported invocation"):
+        materializer._git(repo, "status")
+    with pytest.raises(RuntimeError, match="unsupported invocation"):
+        materializer._git(repo)
+    index.write_bytes(_git_index([]))
+    assert materializer.tracked_paths(repo) == set()
+
+
+def test_git_index_reader_parses_extended_and_long_names(tmp_path: Path) -> None:
+    """Index v3 extended entries and 0xFFF-length names still yield bounded paths."""
+    repo = tmp_path / "repo"
+    git_dir = repo / ".git"
+    git_dir.mkdir(parents=True)
+    long_name = b"crates/" + (b"a" * 20) + b"/Cargo.toml"
+    (git_dir / "index").write_bytes(_git_index([long_name], version=3, extended=True))
+    assert materializer.tracked_paths(repo) == {long_name.decode("ascii")}
+
+    flags = 0x0FFF
+    header = b"\0" * 60 + struct.pack(">H", flags)
+    payload = header + long_name + b"\0"
+    payload += b"\0" * ((8 - (len(payload) % 8)) % 8)
+    (git_dir / "index").write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + payload)
+    assert materializer.tracked_paths(repo) == {long_name.decode("ascii")}
+
+
+def test_gitdir_pointer_reads_real_index(tmp_path: Path) -> None:
+    """A gitdir pointer file still exposes tracked rust inputs."""
+    repo = rust_workspace(tmp_path)
+    moved = tmp_path / "real-git"
+    (repo / ".git").rename(moved)
+    (repo / ".git").write_text(f"gitdir: {moved}\n", encoding="utf-8")
+    assert "Cargo.toml" in materializer.tracked_paths(repo)
 
 
 def test_invalid_toml_decode_fails_cli(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ import argparse
 import json
 import re
 import shutil
-import subprocess
+import struct
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -30,18 +30,77 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
 RUST_INPUT_NAMES = ("rust-toolchain.toml", "rust-toolchain", "Cargo.toml", "Cargo.lock")
 
 
+def _resolve_git_dir(repo_root: Path) -> Path:
+    """Return the git directory for a regular checkout or gitdir pointer file."""
+    git_path = repo_root / ".git"
+    if git_path.is_symlink():
+        raise RuntimeError("git ls-files failed: .git is a symbolic link")
+    if git_path.is_file():
+        match = re.search(
+            r"(?m)^gitdir:\s*(.+?)\s*$",
+            git_path.read_text(encoding="utf-8"),
+        )
+        if match is None:
+            raise RuntimeError("git ls-files failed: invalid gitdir pointer")
+        raw = match.group(1)
+        candidate = Path(raw) if Path(raw).is_absolute() else git_path.parent / raw
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise RuntimeError("git ls-files failed: gitdir is not a regular directory")
+        return candidate
+    if git_path.is_dir():
+        return git_path
+    raise RuntimeError("git ls-files failed: not a git repository")
+
+
+def _read_git_index_paths(repo_root: Path) -> bytes:
+    """Return ``git ls-files -z`` bytes by parsing the on-disk git index."""
+    index_path = _resolve_git_dir(repo_root) / "index"
+    if index_path.is_symlink() or not index_path.is_file():
+        raise RuntimeError("git ls-files failed: git index is not a regular file")
+    data = index_path.read_bytes()
+    if len(data) < 12 or data[:4] != b"DIRC":
+        raise RuntimeError("git ls-files failed: git index header is invalid")
+    version, count = struct.unpack(">II", data[4:12])
+    if version not in {2, 3}:
+        raise RuntimeError(f"git ls-files failed: unsupported git index version {version}")
+    offset = 12
+    names: list[bytes] = []
+    for _ in range(count):
+        if offset + 62 > len(data):
+            raise RuntimeError("git ls-files failed: truncated git index")
+        flags = struct.unpack(">H", data[offset + 60 : offset + 62])[0]
+        header_len = 64 if flags & 0x4000 else 62
+        if offset + header_len > len(data):
+            raise RuntimeError("git ls-files failed: truncated git index")
+        name_len = flags & 0x0FFF
+        name_start = offset + header_len
+        if name_len == 0x0FFF:
+            nul = data.find(b"\0", name_start)
+            if nul < 0:
+                raise RuntimeError("git ls-files failed: truncated git index path")
+            name = data[name_start:nul]
+            consumed = nul + 1 - offset
+        else:
+            name_end = name_start + name_len
+            if name_end > len(data):
+                raise RuntimeError("git ls-files failed: truncated git index path")
+            name = data[name_start:name_end]
+            consumed = name_end + 1 - offset
+        padding = (8 - (consumed % 8)) % 8
+        offset += consumed + padding
+        names.append(name)
+    return b"\0".join(names) + (b"\0" if names else b"")
+
+
 def _git(repo_root: Path, *args: str) -> bytes:
-    """Run one read-only git command in the materialized merge tree."""
-    completed = subprocess.run(
-        ["git", "-C", str(repo_root), *args],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if completed.returncode != 0:
-        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"git {args[0]} failed: {stderr}")
-    return completed.stdout
+    """Return one read-only git listing from the materialized merge tree.
+
+    Only ``ls-files -z`` is supported. The coverage image must not spawn a
+    shell or ``git`` child; tracked paths come from the on-disk index.
+    """
+    if args != ("ls-files", "-z"):
+        raise RuntimeError(f"git {args[0] if args else 'command'} failed: unsupported invocation")
+    return _read_git_index_paths(repo_root)
 
 
 def parse_rust_version(value: str) -> tuple[int, int, int] | None:
