@@ -26,6 +26,22 @@ SKIP_DISCOVERY_PARTS = frozenset(
     {".git", ".venv", "venv", "node_modules", "__pycache__"}
 )
 _HASH_FIELD = re.compile(r"--hash=sha256:[0-9a-f]{64}")
+_RESOLVER_CONFIG_TOKENS = frozenset(
+    {
+        "--require-hashes",
+        "--index-url",
+        "--extra-index-url",
+        "-i",
+        "--trusted-host",
+        "--find-links",
+        "-f",
+        "--no-index",
+        "--pre",
+        "--prefer-binary",
+        "--only-binary",
+        "--no-binary",
+    }
+)
 
 
 class AuditConfigurationError(RuntimeError):
@@ -45,6 +61,50 @@ def _require_regular_file(path: pathlib.Path) -> None:
         raise AuditConfigurationError(
             "requirements input must be a regular non-symlink file"
         )
+    _require_no_symlink_ancestors(path)
+
+
+def _ancestor_in_scope(
+    ancestor: pathlib.Path, stop: pathlib.Path | None
+) -> bool:
+    """Return whether *ancestor* is a repository parent that must be inspected."""
+
+    if stop is None:
+        return len(ancestor.parts) > 2
+    if ancestor == stop:
+        return False
+    try:
+        ancestor.relative_to(stop)
+    except ValueError:
+        return False
+    return True
+
+
+def _require_no_symlink_ancestors(
+    path: pathlib.Path, *, stop: pathlib.Path | None = None
+) -> None:
+    """Reject a path whose intermediate parent is a directory symlink."""
+
+    for ancestor in path.parents:
+        if not _ancestor_in_scope(ancestor, stop):
+            continue
+        try:
+            metadata = ancestor.lstat()
+        except OSError:
+            raise AuditConfigurationError(
+                "requirements input could not be inspected safely"
+            ) from None
+        if stat.S_ISLNK(metadata.st_mode):
+            raise AuditConfigurationError(
+                "requirements input must be a regular non-symlink file"
+            )
+
+
+def _is_resolver_config_line(line: str) -> bool:
+    """Return whether a logical line is pip resolver config, not a package pin."""
+
+    token = re.split(r"[\s=]", line, maxsplit=1)[0]
+    return token in _RESOLVER_CONFIG_TOKENS
 
 
 def _requirement_lines(path: pathlib.Path) -> list[str]:
@@ -89,13 +149,16 @@ def is_hashed_lock(path: pathlib.Path) -> bool:
 
     A ``*-hashes.txt`` name, a lone ``--require-hashes`` directive, a pip
     option carrying hash-shaped text, or a mixed hashed-plus-unhashed file is
-    not sufficient. Every substantive package line must be an exact ``==`` pin
+    not sufficient. Resolver-config lines such as ``--index-url`` are not
+    package pins. Every substantive package line must be an exact ``==`` pin
     carrying one or more complete SHA-256 hashes before ``--disable-pip`` is
     allowed to bypass pip's resolver.
     """
 
     lines = _requirement_lines(path)
-    package_lines = [line for line in lines if line != "--require-hashes"]
+    package_lines = [
+        line for line in lines if not _is_resolver_config_line(line)
+    ]
     return bool(package_lines) and all(
         _is_exact_hashed_requirement(line) for line in package_lines
     )
@@ -175,6 +238,7 @@ def discover_requirement_files(root: pathlib.Path) -> list[pathlib.Path]:
             raise AuditConfigurationError(
                 "requirements input must be a regular non-symlink file"
             )
+        _require_no_symlink_ancestors(path, stop=root)
         found.append(path)
     return found
 

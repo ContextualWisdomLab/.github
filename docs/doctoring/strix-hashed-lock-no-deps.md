@@ -55,12 +55,15 @@ requires `--disable-pip` for that file, a skip for the override/input pair,
 and the `--no-deps` installer line on `strix.yml`. A `*-hashes.txt` name
 or a lone `--require-hashes` directive without `--hash=` is not treated
 as a complete lock. A mixed file with one hashed line beside unhashed
-packages, a filename-only wheel path, or a pip option carrying hash-shaped
-text also stays on the resolver path. An unhashed compile input is skipped
-only when its regular, non-symlink sibling is itself a valid complete lock.
-Invalid UTF-8 and symlink/special-file requirement inputs fail before any
-audit command. Repository-controlled filenames are JSON-escaped before
-GitHub Actions group titles. Discovery skips `.venv` trees.
+packages, a filename-only wheel path, a ``-r`` include, or a pip option
+carrying hash-shaped text also stays on the resolver path. A complete lock
+that only adds resolver config such as ``--index-url`` still uses
+``--disable-pip``. An unhashed compile input is skipped only when its
+regular, non-symlink sibling is itself a valid complete lock. Invalid UTF-8,
+symlink/special-file inputs, and paths whose intermediate parent is a
+directory symlink fail before any audit command. Repository-controlled
+filenames are JSON-escaped before GitHub Actions group titles. Discovery
+skips `.venv` trees.
 
 ## References (APA 7th)
 

@@ -81,6 +81,39 @@ def test_pip_option_with_hash_is_not_a_complete_lock(tmp_path: pathlib.Path) -> 
     assert "--disable-pip" not in (module.audit_command(requirements) or [])
 
 
+def test_index_url_with_hashed_packages_stays_on_disable_pip(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Resolver config is not a package line and must not recreate ResolutionImpossible."""
+
+    module = load_module()
+    requirements = tmp_path / "requirements-index.txt"
+    requirements.write_text(
+        "--index-url https://example.invalid/simple\n"
+        "strix-agent==1.5.3 --hash=sha256:" + ("a" * 64) + "\n"
+        "cryptography==50.0.0 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.is_hashed_lock(requirements) is True
+    assert "--disable-pip" in (module.audit_command(requirements) or [])
+
+
+def test_requirement_include_cannot_earn_disable_pip(tmp_path: pathlib.Path) -> None:
+    """A ``-r`` include is not resolver config and must keep pip's resolver."""
+
+    module = load_module()
+    requirements = tmp_path / "requirements-include.txt"
+    requirements.write_text(
+        "-r other-hashes.txt\n"
+        "demo==1.0.0 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.is_hashed_lock(requirements) is False
+    assert "--disable-pip" not in (module.audit_command(requirements) or [])
+
+
 def test_invalid_utf8_fails_before_any_audit_command(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -117,6 +150,80 @@ def test_requirement_symlink_is_rejected_instead_of_followed(
 
     with pytest.raises(error_type, match="regular non-symlink file"):
         module.discover_requirement_files(tmp_path)
+
+
+def test_nested_regular_lock_is_still_discovered(tmp_path: pathlib.Path) -> None:
+    """An intermediate regular directory must not block hashed-lock discovery."""
+
+    module = load_module()
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+    lock = nested / "requirements-nested.txt"
+    _write_valid_lock(lock)
+
+    assert [path.name for path in module.discover_requirement_files(tmp_path)] == [
+        "requirements-nested.txt"
+    ]
+    assert "--disable-pip" in (module.audit_command(lock) or [])
+
+
+def test_ancestor_outside_the_audit_root_is_not_inspected(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Parents above the audit root are host paths, not repository input."""
+
+    module = load_module()
+    stop = tmp_path / "stop"
+    stop.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    presented = other / "requirements-outside.txt"
+    _write_valid_lock(presented)
+
+    module._require_no_symlink_ancestors(presented, stop=stop)
+
+
+def test_unstatable_intermediate_parent_fails_before_audit(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """A parent that cannot be lstat'd cannot enter the audited set."""
+
+    module = load_module()
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+    presented = nested / "requirements-nested.txt"
+    _write_valid_lock(presented)
+    original = pathlib.Path.lstat
+
+    def boom(self: pathlib.Path) -> Any:
+        if self.name == "pkg":
+            raise OSError("gone")
+        return original(self)
+
+    monkeypatch.setattr(pathlib.Path, "lstat", boom)
+    error_type = getattr(module, "AuditConfigurationError", RuntimeError)
+    with pytest.raises(error_type, match="could not be inspected"):
+        module._require_no_symlink_ancestors(presented, stop=tmp_path)
+
+
+def test_intermediate_symlink_parent_is_rejected_before_audit(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A directory symlink in the presented path cannot redirect the install set."""
+
+    module = load_module()
+    real = tmp_path / "real"
+    (real / "sub").mkdir(parents=True)
+    _write_valid_lock(real / "sub" / "requirements-hidden.txt")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    presented = link / "sub" / "requirements-hidden.txt"
+    error_type = getattr(module, "AuditConfigurationError", RuntimeError)
+
+    with pytest.raises(error_type, match="regular non-symlink file"):
+        module.is_hashed_lock(presented)
+    with pytest.raises(error_type, match="regular non-symlink file"):
+        module.audit_command(presented)
 
 
 def test_symlink_hash_sibling_cannot_suppress_source_audit(
