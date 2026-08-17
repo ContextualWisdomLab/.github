@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## OriginWeave hourly caller
+
+`originweave-hourly-review-repair.yml` is a thin, read-only caller at minute
+10. It names `ContextualWisdomLab/OriginWeave` and protected `main`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
