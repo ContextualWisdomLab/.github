@@ -185,6 +185,7 @@ jobs:
           test -f "$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
           test -f "$trusted_strix_source/scripts/ci/test_strix_quick_gate.sh"
           test -f "$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"
+          test -f "$trusted_strix_source/scripts/ci/strix_resolve_target_visibility.py"
           {
             echo "TRUSTED_STRIX_SOURCE=$trusted_strix_source"
             echo "TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh"
@@ -265,19 +266,7 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
         run: |
           set -euo pipefail
-          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Strix target repository must belong to ContextualWisdomLab."
-            exit 1
-          fi
-          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
-          case "$is_private" in
-            true | false) ;;
-            *)
-              echo "::error::Target repository visibility did not resolve to true or false."
-              exit 1
-              ;;
-          esac
-          echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
+          python3 "$TRUSTED_STRIX_SOURCE/scripts/ci/strix_resolve_target_visibility.py"
 
       - name: Materialize target workspace
         if: github.event_name != 'repository_dispatch'
