@@ -6,6 +6,7 @@ from pathlib import Path
 REUSABLE = Path(".github/workflows/pr-review-fix-scheduler.yml")
 CLEARFOLIO = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
 DISKSAGE = Path(".github/workflows/disksage-hourly-review-repair.yml")
+WARDNET = Path(".github/workflows/wardnet-hourly-review-repair.yml")
 QUALITY = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 
 
@@ -25,8 +26,8 @@ def test_queue_scanner_has_a_bounded_superseding_runtime() -> None:
 
 
 def test_product_callers_do_not_cancel_an_in_flight_rca() -> None:
-    """Clearfolio and DiskSage preserve the non-cancelling product lease."""
-    for caller_path in (CLEARFOLIO, DISKSAGE):
+    """Clearfolio, DiskSage, and Wardnet preserve the non-cancelling product lease."""
+    for caller_path in (CLEARFOLIO, DISKSAGE, WARDNET):
         caller = _read(caller_path)
         assert "cancel-in-progress: false" in caller
         assert "cancel-in-progress: true" not in caller

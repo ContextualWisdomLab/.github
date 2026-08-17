@@ -124,3 +124,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/wardnet-hourly-review-caller.md`](docs/doctoring/wardnet-hourly-review-caller.md)
+  — Wardnet AI-SOC hourly NVIDIA NIM repair heartbeat.
