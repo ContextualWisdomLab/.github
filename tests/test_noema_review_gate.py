@@ -658,6 +658,10 @@ def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys)
     assert "::error::" in err
     assert "sk-abc-123" not in err
     assert "Noema review failure" in summary.read_text(encoding="utf-8")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    noema.emit_noema_failure(RuntimeError("HTTP 503"))
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_URL", "not-a-url")
+    assert noema.allowed_noema_llm_hosts() == {noema.NIM_CHAT_HOST}
 
 
 def test_run_github_retries_transient_503(monkeypatch):

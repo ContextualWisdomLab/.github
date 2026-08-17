@@ -52,6 +52,8 @@ def test_identity_helpers_cover_malformed_and_noncanonical_checks() -> None:
     assert identity.check_workflow_name({"checkSuite": {"workflowRun": {}}}) == ""
     assert identity.check_workflow_name({"app": {"name": "GitHub Actions"}}) == "GitHub Actions"
     assert identity.check_workflow_name({"check_suite": "bad"}) == ""
+    assert identity.check_workflow_name({"check_suite": {"workflow_run": "bad"}}) == ""
+    assert identity.check_workflow_name({"app": "nope"}) == ""
     head = identity.KAEFA_78_HEAD
     with pytest.raises(identity.CoverageQuoteError, match="40-character"):
         identity.terminal_coverage_result([], "deadbeef")
@@ -93,6 +95,7 @@ def test_load_and_cli_verify_quoted_success(tmp_path: Path, capsys, monkeypatch)
     assert "does not match" in err
     assert "Coverage identity failure" in summary.read_text(encoding="utf-8")
 
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert identity.main(["--head-sha", head, "--quoted-result", "success"]) == 1
     array_path = tmp_path / "array.json"
     array_path.write_text(json.dumps([coverage_check(head=head)]), encoding="utf-8")
@@ -167,6 +170,26 @@ def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
 
     monkeypatch.setattr(identity.subprocess, "run", fake_list_objects)
     assert identity.fetch_check_runs("ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD)
+
+    def fake_mixed_pages(args, **kwargs):
+        return type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        {"check_runs": [coverage_check(head=identity.KAEFA_78_HEAD)]},
+                        coverage_check(head=identity.KAEFA_78_HEAD),
+                        "skip",
+                    ]
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(identity.subprocess, "run", fake_mixed_pages)
+    assert len(identity.fetch_check_runs("ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD)) == 2
 
     monkeypatch.setattr(
         identity,

@@ -144,6 +144,7 @@ def evaluate_receipts(
             return None, reason
         if reason.startswith("stale"):
             stale_hits += 1
+            continue
     if stale_hits:
         return (
             None,

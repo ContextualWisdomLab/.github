@@ -106,12 +106,23 @@ def test_status_comment_and_mention_payloads_are_not_receipts() -> None:
         ),
     )
     assert receipt.review_matches_head(mismatched_body, receipt.AFIPC_230_HEAD) is False
+    found, reason = receipt.evaluate_receipts([mismatched_body], receipt.AFIPC_230_HEAD)
+    assert found is None
+    assert "stale" in reason
+    ok, reason = receipt.is_formal_receipt(
+        mismatched_body, receipt.AFIPC_230_HEAD, is_draft=False
+    )
+    assert ok is False
+    assert "stale" in reason
 
 
 def test_receipt_helpers_cover_graphql_and_invalid_identity() -> None:
     """GraphQL-shaped reviews and missing identity fields fail closed."""
     assert receipt.review_author({}) == ""
+    assert receipt.review_author({"user": "bad"}) == ""
     assert receipt.review_commit({}) == ""
+    assert receipt.review_commit({"commit": "bad"}) == ""
+    assert receipt.review_matches_head(review(commit=receipt.AFIPC_230_HEAD), "") is False
     graphql = {
         "id": 7,
         "state": "COMMENTED",
@@ -123,8 +134,32 @@ def test_receipt_helpers_cover_graphql_and_invalid_identity() -> None:
     assert receipt.review_commit(graphql) == receipt.AFIPC_230_HEAD
     ok, _ = receipt.is_formal_receipt(graphql, receipt.AFIPC_230_HEAD, is_draft=False)
     assert ok is True
-    found, reason = receipt.evaluate_receipts(["skip", review(commit=receipt.AFIPC_230_HEAD)], receipt.AFIPC_230_HEAD)
+    found, reason = receipt.evaluate_receipts(
+        [review(commit=receipt.AFIPC_230_HEAD), "skip"],
+        receipt.AFIPC_230_HEAD,
+    )
     assert found is not None
+    human_then_formal = receipt.evaluate_receipts(
+        [
+            review(commit=receipt.AFIPC_230_HEAD, review_id=2),
+            review(commit=receipt.AFIPC_230_HEAD, login="seonghobae", review_id=3),
+        ],
+        receipt.AFIPC_230_HEAD,
+    )
+    assert human_then_formal[0] is not None
+    stale_body = review(
+        commit=receipt.AFIPC_230_HEAD,
+        body=(
+            "## Pull request overview\n\n"
+            f"- Head SHA: `{next(iter(receipt.AFIPC_230_STALE_HEADS))}`\n"
+        ),
+    )
+    found, reason = receipt.evaluate_receipts(
+        ["skip", stale_body, stale_body],
+        receipt.AFIPC_230_HEAD,
+    )
+    assert found is None
+    assert "stale" in reason
     found, reason = receipt.evaluate_receipts([], "deadbeef")
     assert found is None
     assert "40-character" in reason
@@ -183,6 +218,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         "no current-head" in capsys.readouterr().err
     )
 
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert receipt.main(["--head-sha", receipt.AFIPC_230_HEAD]) == 1
 
     def fake_run(args, **kwargs):
