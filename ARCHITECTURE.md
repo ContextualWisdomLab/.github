@@ -38,6 +38,14 @@ only established scheduler credentials, and grants job-scoped
 16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
+## html4tree hourly caller
+
+`html4tree-hourly-review-repair.yml` is a thin, read-only caller at
+minute 15. It names `ContextualWisdomLab/html4tree` and protected
+`master`, maps only established scheduler credentials, and grants
+job-scoped `id-token: write`. The reusable engine stays product-neutral.
+html4tree remains a standalone public-fork module; mutation stays
+capability-gated per head.
 
 ## Hourly NVIDIA NIM repair gate
 
@@ -66,9 +74,10 @@ The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
-Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
-fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
-repair, and delegates all privileged logic to the same sealed scheduler.
+Product callers stagger html4tree at minute 15, Clearfolio at minute 23,
+DiskSage at minute 37, and fast-mlsirm at minute 49. Each caller is
+read-only, dispatches at most one repair, and delegates all privileged
+logic to the same sealed scheduler.
 
 ## Control-plane data flow
 
@@ -124,3 +133,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/html4tree-hourly-review-caller.md`](docs/doctoring/html4tree-hourly-review-caller.md)
+  — public-fork directory-index repair heartbeat on protected `master`.
