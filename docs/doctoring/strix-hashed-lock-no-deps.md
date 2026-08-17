@@ -61,7 +61,8 @@ that only adds resolver config such as ``--index-url`` still uses
 ``--disable-pip``. An unhashed compile input is skipped only when its
 regular, non-symlink sibling is itself a valid complete lock. Invalid UTF-8,
 symlink/special-file inputs, and paths whose intermediate parent is a
-directory symlink fail before any audit command. Repository-controlled
+directory symlink fail before any audit command. A pylock-shaped symlink
+or directory is not a project manifest. Repository-controlled
 filenames are JSON-escaped before GitHub Actions group titles. Discovery
 skips `.venv` trees.
 

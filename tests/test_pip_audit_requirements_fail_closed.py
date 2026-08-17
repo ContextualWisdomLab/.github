@@ -266,6 +266,18 @@ def test_filename_only_requirement_is_not_a_complete_lock(
     assert "--disable-pip" not in (module.audit_command(requirements) or [])
 
 
+def test_non_regular_pylock_name_is_not_a_project_manifest(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A pylock-shaped symlink or directory cannot earn the project-manifest audit."""
+
+    module = load_module()
+    (tmp_path / "pylock.alias.toml").symlink_to(tmp_path / "missing.toml")
+    (tmp_path / "pylock.dir.toml").mkdir()
+
+    assert module.should_audit_project_manifest(tmp_path) is False
+
+
 def test_valid_regular_hash_sibling_still_suppresses_compile_input(
     tmp_path: pathlib.Path,
 ) -> None:
