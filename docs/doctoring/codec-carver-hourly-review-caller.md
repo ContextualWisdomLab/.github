@@ -15,8 +15,9 @@ per heartbeat.
 A paying buyer of the codec would feel live codec-carver pull requests
 stalling while hourly NVIDIA NIM repair scanned only Clearfolio, DiskSage,
 and fast-mlsirm. Live heads such as ContextualWisdomLab/codec-carver#435
-(HMAC Unicode DoS), #437 (SQLite WAL journal), and #434 (search
-performance) target `main` and never enter those other callers.
+(HMAC Unicode DoS), ContextualWisdomLab/codec-carver#437 (SQLite WAL
+journal), and ContextualWisdomLab/codec-carver#434 (search performance)
+target `main` and never enter those other callers.
 
 The caller does not implement review or mutation logic itself.
 Codec-carver remains standalone; naruon consumes converted media without

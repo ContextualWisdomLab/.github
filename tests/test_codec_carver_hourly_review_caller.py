@@ -112,6 +112,8 @@ def test_codec_carver_doctoring_records_codec_activation_and_credentials() -> No
         "protected-main operational acceptance",
         "APA 7th references",
         "ContextualWisdomLab/codec-carver#435",
+        "ContextualWisdomLab/codec-carver#437",
+        "ContextualWisdomLab/codec-carver#434",
     ):
         assert phrase in doctoring
 
