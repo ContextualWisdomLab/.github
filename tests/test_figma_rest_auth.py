@@ -16,6 +16,9 @@ DOCTORING = ROOT / "docs" / "doctoring" / "figma-cloud-agent-mcp-auth.md"
 AGENTS = ROOT / "AGENTS.md"
 MASTER = ROOT / "docs" / "CWL-MASTER-CONTEXT.md"
 TOKEN = "figd_test_token_must_never_appear"
+_SEMGREP_HTTPSCONNECTION_RULE = (
+    "python.lang.security.audit.httpsconnection-detected.httpsconnection-detected"
+)
 
 
 def _whoami_body(**fields: str) -> bytes:
@@ -133,10 +136,16 @@ class _FakeWhoamiConnection:
 
     last: _FakeWhoamiConnection | None = None
 
-    def __init__(self, host: str, timeout: int = 0) -> None:
-        """Capture the TLS host and timeout."""
+    def __init__(
+        self,
+        host: str,
+        timeout: int = 0,
+        context: object | None = None,
+    ) -> None:
+        """Capture the TLS host, timeout, and explicit SSL context."""
         self.host = host
         self.timeout = timeout
+        self.context = context
         self.method = ""
         self.path = ""
         self.headers: dict[str, str] = {}
@@ -175,9 +184,14 @@ def test_default_opener_returns_http_error_bodies(monkeypatch: pytest.MonkeyPatc
     class ForbiddenConnection(_FakeWhoamiConnection):
         """Return HTTP 403 from the pinned origin."""
 
-        def __init__(self, host: str, timeout: int = 0) -> None:
+        def __init__(
+            self,
+            host: str,
+            timeout: int = 0,
+            context: object | None = None,
+        ) -> None:
             """Initialize a 403 canned response."""
-            super().__init__(host, timeout)
+            super().__init__(host, timeout, context=context)
             self._status = 403
             self._body = b"nope"
 
@@ -199,6 +213,7 @@ def test_default_opener_reads_success_body(monkeypatch: pytest.MonkeyPatch) -> N
     assert connection is not None
     assert connection.host == "api.figma.com"
     assert connection.timeout == auth.REQUEST_TIMEOUT_SECONDS
+    assert connection.context is not None
     assert connection.method == "GET"
     assert connection.path == "/v1/me"
     assert connection.headers == {auth.TOKEN_HEADER: TOKEN}
@@ -229,8 +244,12 @@ def test_default_opener_wraps_os_errors(monkeypatch: pytest.MonkeyPatch) -> None
 def test_helper_pins_https_origin_instead_of_dynamic_urllib() -> None:
     """Semgrep ``dynamic-urllib-use-detected`` must not apply to this helper."""
     source = Path(auth.__file__).read_text(encoding="utf-8")
+    source_lines = source.splitlines()
+    sink_lines = [line for line in source_lines if "http.client.HTTPSConnection(" in line]
     assert "urlopen(" not in source
-    assert "http.client.HTTPSConnection" in source
+    assert len(sink_lines) == 1
+    assert f"# nosemgrep: {_SEMGREP_HTTPSCONNECTION_RULE}" in sink_lines[0]
+    assert "ssl.create_default_context()" in source
     assert '"api.figma.com"' in source
     assert '"/v1/me"' in source
 

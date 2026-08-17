@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import ssl
 import sys
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
@@ -61,7 +62,11 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
     Host and path are string literals at the TLS sink. Caller ``url`` is
     accepted only when it equals ``WHOAMI_URL``, so ``file://`` and other
     schemes never reach the network helper. This path does not call
-    ``urllib.request.urlopen``.
+    ``urllib.request.urlopen``. ``ssl.create_default_context()`` makes
+    certificate and hostname verification explicit; CI Python is 3.12+,
+    which already verifies by default. The scoped Semgrep suppression is
+    only for the historical ``httpsconnection-detected`` audit (pre-3.4.3
+    default-verify gap), not for a dynamic host or scheme.
     """
     if url != WHOAMI_URL:
         raise FigmaAuthError(
@@ -69,9 +74,10 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
             "/v1/me endpoint.",
             EXIT_TRANSPORT,
         )
-    connection = http.client.HTTPSConnection(
+    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
         "api.figma.com",
         timeout=REQUEST_TIMEOUT_SECONDS,
+        context=ssl.create_default_context(),
     )
     try:
         connection.request("GET", "/v1/me", headers=dict(headers))

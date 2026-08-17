@@ -64,9 +64,12 @@ authorizes the REST API. Do not commit the token. Do not put it in
 
    Success prints a handle/id/email line. Missing or rejected tokens exit
    non-zero and never echo the secret. The helper opens a pinned
-   `http.client.HTTPSConnection("api.figma.com")` to `GET /v1/me` and refuses
-   any other URL, so Semgrep `dynamic-urllib-use-detected` does not apply
-   (`urllib.request.urlopen` is not used).
+   `http.client.HTTPSConnection("api.figma.com")` with
+   `ssl.create_default_context()` to `GET /v1/me` and refuses any other URL, so
+   Semgrep `dynamic-urllib-use-detected` does not apply
+   (`urllib.request.urlopen` is not used). The historical
+   `httpsconnection-detected` audit (pre-3.4.3 default-verify gap) is
+   suppressed only at that literal sink.
 
 ## Why MCP Connect cannot be finished here
 
