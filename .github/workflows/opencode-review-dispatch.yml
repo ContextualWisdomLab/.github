@@ -653,6 +653,7 @@ jobs:
               r-cran-covr \
               r-cran-testthat \
               rustc \
+              llvm \
               util-linux \
               vulkan-tools \
               xz-utils \
@@ -1725,6 +1726,24 @@ jobs:
               append "- Result: FAIL"
               append "- Reason: the trusted offline coverage image is missing cargo-llvm-cov 0.8.7."
               append "- Fix: rebuild the trusted coverage image before rerunning current-head evidence."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
+            # cargo-llvm-cov needs llvm-cov/llvm-profdata. Prefer env overrides, else
+            # Debian llvm tools baked into the offline image (no network installers).
+            if [ -z "${LLVM_COV:-}" ] && command -v llvm-cov >/dev/null 2>&1; then
+              export LLVM_COV="$(command -v llvm-cov)"
+            fi
+            if [ -z "${LLVM_PROFDATA:-}" ] && command -v llvm-profdata >/dev/null 2>&1; then
+              export LLVM_PROFDATA="$(command -v llvm-profdata)"
+            fi
+            if [ -z "${LLVM_COV:-}" ] || [ -z "${LLVM_PROFDATA:-}" ]; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: llvm-cov/llvm-profdata are unavailable (llvm-tools-preview / LLVM_COV not set)."
+              append "- Fix: bake llvm tools into the trusted offline coverage image, then rerun current-head evidence."
               append ""
               failures=$((failures + 1))
               return 1
