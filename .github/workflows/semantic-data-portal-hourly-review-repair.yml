@@ -1,0 +1,33 @@
+name: semantic-data-portal Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 59 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
+    # BandScope (53), naruon (11), Inkspan (47), orchestrator (17),
+    # Wardnet (7), codec-carver (5), pg-erd-cloud (13), Keyverse (29),
+    # noema (19), Scopeweave (31), Appguardrail (41), and newsdom-api (43).
+    - cron: "59 * * * *"
+
+concurrency:
+  group: semantic-data-portal-hourly-review-repair
+  # A later heartbeat must not cancel in-flight catalog or governance RCA.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/semantic-data-portal
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}

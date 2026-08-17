@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `semantic-data-portal-hourly-review-repair.yml` owns SDP's catalog-plane
+  heartbeat at minute 59 of every hour.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit

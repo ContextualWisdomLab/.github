@@ -38,6 +38,12 @@ only established scheduler credentials, and grants job-scoped
 16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
+## semantic-data-portal hourly caller
+
+`semantic-data-portal-hourly-review-repair.yml` is a thin, read-only caller
+at minute 59. It names `ContextualWisdomLab/semantic-data-portal` and
+protected `main`, maps only established scheduler credentials, and grants
+job-scoped `id-token: write`. The reusable engine stays product-neutral.
 
 ## Hourly NVIDIA NIM repair gate
 
@@ -66,9 +72,10 @@ The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
-Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
-fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
-repair, and delegates all privileged logic to the same sealed scheduler.
+Product callers stagger Clearfolio at minute 23, DiskSage at minute 37,
+fast-mlsirm at minute 49, and semantic-data-portal at minute 59. Each
+caller is read-only, dispatches at most one repair, and delegates all
+privileged logic to the same sealed scheduler.
 
 ## Control-plane data flow
 
