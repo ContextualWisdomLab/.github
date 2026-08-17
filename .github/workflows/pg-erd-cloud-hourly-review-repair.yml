@@ -1,0 +1,32 @@
+name: pg-erd-cloud Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 13 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
+    # BandScope (53), naruon (11), Inkspan (47), orchestrator (17),
+    # Wardnet (7), Keyverse (29), and codec-carver (5).
+    - cron: "13 * * * *"
+
+concurrency:
+  group: pg-erd-cloud-hourly-review-repair
+  # A later heartbeat must not cancel an in-flight ERD RCA or repair.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/pg-erd-cloud
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}

@@ -15,6 +15,7 @@ on:
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/nonnest2-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
+      - .github/workflows/pg-erd-cloud-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
@@ -27,6 +28,7 @@ on:
       - tests/test_nonnest2_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_pg_erd_cloud_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_control_files.py
@@ -51,6 +53,7 @@ on:
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/pg-erd-cloud-hourly-review-caller.md
   push:
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
@@ -65,6 +68,7 @@ on:
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/nonnest2-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
+      - .github/workflows/pg-erd-cloud-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
@@ -77,6 +81,7 @@ on:
       - tests/test_nonnest2_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_pg_erd_cloud_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_control_files.py
@@ -101,6 +106,7 @@ on:
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/pg-erd-cloud-hourly-review-caller.md
 
 permissions:
   contents: read
@@ -157,6 +163,7 @@ jobs:
             tests/test_nonnest2_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
             tests/test_quarantine_sandbox_hourly_review_caller.py \
+            tests/test_pg_erd_cloud_hourly_review_caller.py \
             tests/test_pr_review_conflict_scope_control_files.py \
             tests/test_hourly_autofix_context_quality_gate.py \
             tests/test_pr_review_conflict_scope_git_executable.py \
