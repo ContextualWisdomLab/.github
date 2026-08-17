@@ -1,0 +1,11 @@
+strix-agent 1.5.3
+Copyright the Strix authors
+License: Apache-2.0
+Upstream: https://github.com/usestrix/strix
+
+This directory redistributes one official manylinux x86_64 wheel with a
+single METADATA change: the cryptography Requires-Dist upper bound `<49`
+is removed so ContextualWisdomLab required Strix can keep
+cryptography==50.0.0 (CVE-2026-69247 / CVE-2026-39892). See SOURCE.json
+for the official URL and SHA-256. The Apache-2.0 license text remains
+inside the wheel's .dist-info directory.

@@ -1,0 +1,11 @@
+{
+  "package": "strix-agent",
+  "version": "1.5.3",
+  "license": "Apache-2.0",
+  "upstream": "https://github.com/usestrix/strix",
+  "filename": "strix_agent-1.5.3-py3-none-manylinux_2_17_x86_64.whl",
+  "source_url": "https://files.pythonhosted.org/packages/63/11/17a38cedceee7dc63d10f0728139a73576fe6f651a6108f3b5f70f2930c1/strix_agent-1.5.3-py3-none-manylinux_2_17_x86_64.whl",
+  "source_sha256": "ba0b6b13f13f41e45f3eb4dba515641d1bc71363ca6e758d0cd05c20ff56b6ea",
+  "patched_sha256": "a85640b27564ae65716a6e0fc2a8f384e4499400b3786319add3c7b8f1806f2b",
+  "metadata_change": "Requires-Dist: cryptography<49,>=48.0.1 -> cryptography>=48.0.1"
+}
