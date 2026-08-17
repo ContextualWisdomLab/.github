@@ -11,6 +11,9 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PROBE_TOKEN = "synthetic-read-token"
+PROBE_BASE_SHA = "a" * 40
+PROBE_HEAD_SHA = "b" * 40
 
 
 def workflow_text(name: str) -> str:
@@ -32,18 +35,30 @@ def run_dependency_review_support_probe(
     *,
     curl_script: str,
     repository_visibility: str = "public",
+    repository: str = "ContextualWisdomLab/.github",
+    base_sha: str = PROBE_BASE_SHA,
+    head_sha: str = PROBE_HEAD_SHA,
 ) -> subprocess.CompletedProcess:
     """Run the workflow support probe against a controlled curl binary.
 
     The helper places a fake ``curl`` first on ``PATH`` so the extracted
-    workflow script cannot call the real binary, then supplies only the
-    synthetic environment variables the support step reads.
+    workflow script cannot call the real binary, records the exact argv
+    the probe used, then supplies only the synthetic environment
+    variables the support step reads.
     """
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_curl = fake_bin / "curl"
-    fake_curl.write_text(curl_script, encoding="utf-8")
+    argv_path = tmp_path / "curl-argv"
+    shebang, separator, rest = curl_script.partition("\n")
+    if not shebang.startswith("#!"):
+        shebang = "#!/usr/bin/env bash"
+        rest = curl_script
+    elif not separator:
+        rest = ""
+    recorder = f"printf '%s\\0' \"$0\" \"$@\" > {shlex.quote(str(argv_path))}\n"
+    fake_curl.write_text(f"{shebang}\n{recorder}{rest}\n", encoding="utf-8")
     fake_curl.chmod(0o755)
     script = textwrap.dedent(
         workflow_step(
@@ -51,23 +66,94 @@ def run_dependency_review_support_probe(
             "Check dependency review support",
         ).split("        run: |\n", 1)[1]
     )
+    bash = shutil.which("bash")
+    assert bash is not None
     return subprocess.run(
-        ["bash", "-c", script],
+        [bash, "-c", script],
         env={
-            **os.environ,
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin')}",
+            "HOME": str(tmp_path),
             "GITHUB_API_URL": "https://api.example.invalid",
             "GITHUB_OUTPUT": str(tmp_path / "github-output"),
-            "GH_TOKEN": "synthetic-read-token",
-            "BASE_SHA": "a" * 40,
-            "HEAD_SHA": "b" * 40,
-            "REPOSITORY": "ContextualWisdomLab/.github",
+            "GH_TOKEN": PROBE_TOKEN,
+            "BASE_SHA": base_sha,
+            "HEAD_SHA": head_sha,
+            "REPOSITORY": repository,
             "REPOSITORY_VISIBILITY": repository_visibility,
         },
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def assert_dependency_review_compare_invoked(
+    tmp_path: Path,
+    *,
+    repository: str = "ContextualWisdomLab/.github",
+    base_sha: str = PROBE_BASE_SHA,
+    head_sha: str = PROBE_HEAD_SHA,
+) -> None:
+    """Require the probe to request the exact base/head compare URL."""
+
+    argv = [
+        part.decode("utf-8")
+        for part in (tmp_path / "curl-argv").read_bytes().split(b"\0")
+        if part
+    ]
+    expected = (
+        f"https://api.example.invalid/repos/{repository}/"
+        f"dependency-graph/compare/{base_sha}...{head_sha}"
+    )
+    assert expected in argv
+    assert "-o" in argv
+    assert "/dev/null" in argv
+
+
+def assert_dependency_review_probe_failed(
+    result: subprocess.CompletedProcess,
+    tmp_path: Path,
+    *,
+    expected_http: str,
+    expected_curl_exit: str,
+    expected_visibility: str = "public",
+    expected_base_sha: str = PROBE_BASE_SHA,
+    expected_head_sha: str = PROBE_HEAD_SHA,
+) -> None:
+    """Require a failed probe that records identity without leaking secrets."""
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert f"HTTP {expected_http}; curl exit {expected_curl_exit}" in result.stdout
+    assert f"visibility {expected_visibility}" in result.stdout
+    assert (
+        f"exact base {expected_base_sha} and head {expected_head_sha}" in result.stdout
+    )
+    assert PROBE_TOKEN not in combined
+    assert "Authorization:" not in combined
+    assert not (tmp_path / "github-output").exists()
+
+
+def assert_dependency_review_identity_rejected(
+    result: subprocess.CompletedProcess,
+    tmp_path: Path,
+    *,
+    expected_visibility: str = "public",
+    forbidden_substrings: tuple[str, ...] = (),
+) -> None:
+    """Require identity rejection before curl, without echoing raw values."""
+
+    combined = f"{result.stdout}{result.stderr}"
+    assert result.returncode == 1
+    assert "HTTP unavailable; curl exit uncalled" in result.stdout
+    assert f"visibility {expected_visibility}" in result.stdout
+    assert PROBE_TOKEN not in combined
+    assert "Authorization:" not in combined
+    assert not (tmp_path / "github-output").exists()
+    assert not (tmp_path / "curl-argv").exists()
+    for needle in forbidden_substrings:
+        assert needle
+        assert needle not in combined
 
 
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
@@ -887,7 +973,24 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     )
     assert "public|private|internal)" in support_probe
     assert "visibility ${visibility}" in support_probe
-    assert "exact base ${BASE_SHA} and head ${HEAD_SHA}" in support_probe
+    assert "revision_pattern=" in support_probe
+    assert "repository_pattern=" in support_probe
+    assert "repository_owner=" in support_probe
+    assert "repository_name=" in support_probe
+    assert '[ "${repository_owner}" = ".." ]' in support_probe
+    assert '[ "${repository_name}" = ".." ]' in support_probe
+    assert "Malformed revision" in support_probe
+    assert "Malformed repository" in support_probe
+    assert "Named refs are not evidence" in support_probe
+    assert '000|"") http_status="unavailable"' in support_probe
+    assert (
+        "Dependency review evidence unavailable for the allowlisted repository"
+        in support_probe
+    )
+    assert "at exact base ${BASE_SHA} and head ${HEAD_SHA}" not in support_probe.split(
+        "set +e",
+        1,
+    )[0]
     assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
@@ -899,11 +1002,50 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
     assert "supported=false" not in workflow
     assert "skipping dependency-review hard gate" not in workflow
-    assert "cat \"$response_file\"" not in support_probe
+    assert 'cat "$response_file"' not in support_probe
     assert "steps.dependency_review_support.outputs.supported == 'true'" not in workflow
+    assert "fail-on-severity: moderate" in workflow
     assert action_first_line.startswith(
         "        uses: actions/dependency-review-action@"
     )
+    action_step = workflow.split("      - name: Dependency review\n", 1)[1].split(
+        "\n  trivy-fs:",
+        1,
+    )[0]
+    assert "if:" not in action_step
+    osv_job_header = workflow.split("  osv-scan:\n", 1)[1].split("    steps:", 1)[0]
+    trivy_job_header = workflow.split("  trivy-fs:\n", 1)[1].split("    steps:", 1)[0]
+    dependency_job_header = workflow.split("  dependency-review:\n", 1)[1].split(
+        "    steps:",
+        1,
+    )[0]
+    assert "continue-on-error: true" not in osv_job_header
+    assert "continue-on-error: true" not in trivy_job_header
+    assert "continue-on-error: true" not in dependency_job_header
+
+
+def test_dependency_review_http_403_skip_cannot_go_green(tmp_path: Path) -> None:
+    """The EgressWeave #66 canary must not be a green skip.
+
+    ContextualWisdomLab/EgressWeave#66 Security Scan run ``31108241013``,
+    job ``92638903658``, compared ``10d0c51d…c038a950`` and received HTTP
+    403. Current ``main`` printed the skip warning, omitted the pinned
+    action, and still exited 0. That path is forbidden.
+    """
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+    )
+    assert "skipping dependency-review hard gate" not in result.stdout
+    assert_dependency_review_compare_invoked(tmp_path)
 
 
 def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
@@ -920,20 +1062,36 @@ def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
         curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
     )
 
-    assert result.returncode == 1
-    assert "HTTP 200; curl exit 18" in result.stdout
-    assert "visibility public" in result.stdout
-    assert "exact base " + ("a" * 40) in result.stdout
-    assert "head " + ("b" * 40) in result.stdout
-    assert not (tmp_path / "github-output").exists()
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="200",
+        expected_curl_exit="18",
+    )
+
+
+def test_dependency_review_transport_failure_fails_closed(tmp_path: Path) -> None:
+    """A transport failure with no HTTP status must fail the hard gate."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf ''\nexit 28\n",
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="unavailable",
+        expected_curl_exit="28",
+    )
 
 
 @pytest.mark.parametrize(
     ("curl_script", "expected_http"),
     [
-        ("#!/usr/bin/env bash\nprintf '403'\nexit 0\n", "403"),
         ("#!/usr/bin/env bash\nprintf '404'\nexit 0\n", "404"),
         ("#!/usr/bin/env bash\nprintf ''\nexit 0\n", "unavailable"),
+        ("#!/usr/bin/env bash\nprintf '000'\nexit 0\n", "unavailable"),
         ("#!/usr/bin/env bash\nprintf 'OK'\nexit 0\n", "malformed"),
     ],
 )
@@ -942,19 +1100,19 @@ def test_dependency_review_non_200_status_fails_closed(
     curl_script: str,
     expected_http: str,
 ) -> None:
-    """HTTP 403/404, empty, and malformed statuses must fail closed."""
+    """HTTP 404, empty, curl 000, and malformed statuses must fail closed."""
 
     result = run_dependency_review_support_probe(
         tmp_path,
         curl_script=curl_script,
     )
 
-    assert result.returncode == 1
-    assert f"HTTP {expected_http}; curl exit 0" in result.stdout
-    assert "visibility public" in result.stdout
-    assert "exact base " + ("a" * 40) in result.stdout
-    assert "head " + ("b" * 40) in result.stdout
-    assert not (tmp_path / "github-output").exists()
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http=expected_http,
+        expected_curl_exit="0",
+    )
 
 
 def test_dependency_review_success_writes_supported_true(tmp_path: Path) -> None:
@@ -965,9 +1123,35 @@ def test_dependency_review_success_writes_supported_true(tmp_path: Path) -> None
         curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
     )
 
+    combined = f"{result.stdout}{result.stderr}"
     assert result.returncode == 0
     assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
         "supported=true\n"
+    )
+    assert PROBE_TOKEN not in combined
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+def test_dependency_review_accepts_sha256_object_ids(tmp_path: Path) -> None:
+    """A 64-character hex object id is a legal Git revision and may be compared."""
+
+    base_sha = "c" * 64
+    head_sha = "d" * 64
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+    assert_dependency_review_compare_invoked(
+        tmp_path,
+        base_sha=base_sha,
+        head_sha=head_sha,
     )
 
 
@@ -982,11 +1166,161 @@ def test_dependency_review_records_unknown_visibility_when_unset(
         repository_visibility="",
     )
 
-    assert result.returncode == 1
-    assert "visibility unknown" in result.stdout
-    assert "exact base " + ("a" * 40) in result.stdout
-    assert "head " + ("b" * 40) in result.stdout
-    assert not (tmp_path / "github-output").exists()
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+        expected_visibility="unknown",
+    )
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+@pytest.mark.parametrize("visibility", ["public", "private", "internal"])
+def test_dependency_review_records_allowlisted_visibility(
+    tmp_path: Path,
+    visibility: str,
+) -> None:
+    """Allowlisted visibility values must appear in fail-closed diagnostics."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '403'\nexit 0\n",
+        repository_visibility=visibility,
+    )
+
+    assert_dependency_review_probe_failed(
+        result,
+        tmp_path,
+        expected_http="403",
+        expected_curl_exit="0",
+        expected_visibility=visibility,
+    )
+    assert_dependency_review_compare_invoked(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("base_sha", "head_sha"),
+    [
+        ("", PROBE_HEAD_SHA),
+        (PROBE_BASE_SHA, ""),
+        ("not-a-revision", PROBE_HEAD_SHA),
+        (PROBE_BASE_SHA, "../" + ("c" * 37)),
+        ("d" * 39, PROBE_HEAD_SHA),
+    ],
+)
+def test_dependency_review_rejects_malformed_revision_before_network(
+    tmp_path: Path,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    """Empty or non-hex revisions must fail closed without calling curl."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    forbidden = tuple(
+        value
+        for value in (base_sha, head_sha)
+        if value and value not in {PROBE_BASE_SHA, PROBE_HEAD_SHA}
+    )
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=forbidden,
+    )
+    assert "Malformed revision" in result.stdout
+    assert "Named refs are not evidence" in result.stdout
+
+
+def test_dependency_review_named_head_revision_cannot_go_green(
+    tmp_path: Path,
+) -> None:
+    """GitHub resolves named revisions to moving HEADs; that is not evidence."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        head_sha="main",
+    )
+
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=("main",),
+    )
+    assert "Malformed revision" in result.stdout
+
+
+def test_dependency_review_rejects_malformed_repository_before_network(
+    tmp_path: Path,
+) -> None:
+    """A repository name that cannot form a compare URL must not reach curl."""
+
+    raw_repository = "../evil/repo"
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository=raw_repository,
+    )
+
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=(raw_repository, "../evil"),
+    )
+    assert "Malformed repository" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "ContextualWisdomLab/..",
+        "../.github",
+        "ContextualWisdomLab/.",
+        "./.github",
+    ],
+)
+def test_dependency_review_rejects_dot_repository_segments(
+    tmp_path: Path,
+    repository: str,
+) -> None:
+    """`.` and `..` path segments must not reach the compare URL."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository=repository,
+    )
+
+    assert_dependency_review_identity_rejected(
+        result,
+        tmp_path,
+        forbidden_substrings=(repository,),
+    )
+    assert "Malformed repository" in result.stdout
+
+
+def test_dependency_review_accepts_dot_github_repository_name(
+    tmp_path: Path,
+) -> None:
+    """The special `.github` repository name is canonical owner/name, not `..`."""
+
+    result = run_dependency_review_support_probe(
+        tmp_path,
+        curl_script="#!/usr/bin/env bash\nprintf '200'\nexit 0\n",
+        repository="ContextualWisdomLab/.github",
+    )
+
+    assert result.returncode == 0
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+        "supported=true\n"
+    )
+    assert_dependency_review_compare_invoked(tmp_path)
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
