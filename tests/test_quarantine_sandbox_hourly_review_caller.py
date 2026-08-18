@@ -24,7 +24,7 @@ def _yaml_path_entries(block: str) -> set[str]:
         if stripped.startswith("- "):
             entries.add(stripped[2:].strip())
         elif stripped.startswith("tests/") or stripped.startswith("scripts/"):
-            entries.add(stripped.rstrip(" \\\""))
+            entries.add(stripped.rstrip(" \\"))
     return entries
 
 
@@ -47,7 +47,7 @@ def _trigger_path_block(quality: str, trigger: str) -> str:
 def _compileall_block(quality: str) -> str:
     """Return the compileall argument list from the focused quality job."""
 
-    marker = "python -m compileall -q \\\""
+    marker = "python -m compileall -q \\"
     start = quality.index(marker)
     remainder = quality[start:]
     end = remainder.find("\n          git ")
