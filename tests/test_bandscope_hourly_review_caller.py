@@ -18,7 +18,7 @@ def test_bandscope_caller_is_hourly_bounded_and_non_cancelling() -> None:
     """BandScope receives one bounded repair opportunity per hourly heartbeat."""
     caller = _read(CALLER)
 
-    assert 'cron: "37 * * * *"' in caller
+    assert 'cron: "53 * * * *"' in caller
     assert "group: bandscope-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller

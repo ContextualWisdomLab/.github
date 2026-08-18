@@ -2,8 +2,8 @@ name: BandScope Hourly Review Repair
 
 on:
   schedule:
-    # Minute 37 staggers BandScope from the other product-specific callers.
-    - cron: "37 * * * *"
+    # Minute 53 avoids established product-specific heartbeat minutes.
+    - cron: "53 * * * *"
 
 concurrency:
   group: bandscope-hourly-review-repair

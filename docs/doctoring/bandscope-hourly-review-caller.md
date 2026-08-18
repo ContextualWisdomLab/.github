@@ -18,13 +18,14 @@ without crossing product ownership boundaries.
 
 ## Decision
 
-The caller runs at minute 37 of every hour and invokes the sealed central
-`pr-review-fix-scheduler.yml` with protected base `develop`. Each heartbeat scans
-at most 50 open pull requests and dispatches at most one writer. The
-two-hour same-head retry floor prevents a later heartbeat from duplicating a
-legitimate OpenCode, Strix, Noema, browser, Rust, or NVIDIA-backed investigation.
-The non-cancelling concurrency contract preserves root-cause analysis already in
-progress.
+The caller runs at minute 53 of every hour and invokes the sealed central
+`pr-review-fix-scheduler.yml` with protected base `develop`. Minute 53 avoids the
+established product-specific heartbeat minutes already present on protected
+central `main`. Each heartbeat scans at most 50 open pull requests and dispatches
+at most one writer. The two-hour same-head retry floor prevents a later heartbeat
+from duplicating a legitimate OpenCode, Strix, Noema, browser, Rust, or
+NVIDIA-backed investigation. The non-cancelling concurrency contract preserves
+root-cause analysis already in progress.
 
 A writer may edit only after it establishes the first causal boundary, compares
 bounded remediation candidates, proves remediation feasibility, verifies writer
