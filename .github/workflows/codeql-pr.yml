@@ -1,7 +1,9 @@
 # Runs CodeQL on both the PR head and merge preview. Medium+ security results
 # fail locally with rule/path/line/message evidence, while SARIF is preserved
 # as an artifact. This keeps real findings blocking even when GitHub's
-# installation API quota prevents code-scanning uploads.
+# installation API quota prevents code-scanning uploads. github/codeql-action
+# init can 503 while asking GitHub for feature enablement; retry that step
+# once after a short wait. The Medium+ SARIF gate is unchanged.
 name: CodeQL PR
 
 on:
@@ -90,6 +92,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Initialize CodeQL
+        id: codeql-init
+        continue-on-error: true
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Wait before CodeQL init retry
+        if: steps.codeql-init.outcome == 'failure'
+        run: sleep 20
+
+      - name: Retry Initialize CodeQL after GitHub API brownout
+        if: steps.codeql-init.outcome == 'failure'
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: ${{ matrix.language }}
@@ -197,6 +212,19 @@ jobs:
           ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
 
       - name: Initialize CodeQL
+        id: codeql-init
+        continue-on-error: true
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Wait before CodeQL init retry
+        if: steps.codeql-init.outcome == 'failure'
+        run: sleep 20
+
+      - name: Retry Initialize CodeQL after GitHub API brownout
+        if: steps.codeql-init.outcome == 'failure'
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           languages: ${{ matrix.language }}

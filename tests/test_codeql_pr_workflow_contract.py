@@ -39,6 +39,10 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "refs/pull/{0}/merge" in workflow
     assert workflow.count("security-events: read") == 2
     assert "security-events: write" not in workflow
+    assert workflow.count("id: codeql-init") == 2
+    assert workflow.count("Retry Initialize CodeQL after GitHub API brownout") == 2
+    assert workflow.count("steps.codeql-init.outcome == 'failure'") == 4
+    assert workflow.count("Wait before CodeQL init retry") == 2
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
