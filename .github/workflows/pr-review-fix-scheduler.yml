@@ -112,7 +112,8 @@ jobs:
           fi
 
           target_allowed=false
-          if [ "$TARGET_REPOSITORY" = "${GITHUB_REPOSITORY}" ]; then
+          if [ -n "${GITHUB_REPOSITORY:-}" ] &&
+            [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
             echo "Self-targeted scheduler invocation uses the protected caller repository."
             target_allowed=true
           else
