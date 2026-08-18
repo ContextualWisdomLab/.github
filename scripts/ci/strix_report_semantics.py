@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -11,6 +13,7 @@ from pathlib import Path
 
 MAX_REPORT_FILE_BYTES = 8 * 1024 * 1024
 MAX_ATTEMPT_BYTES = 64 * 1024 * 1024
+GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 NO_FINDING_PATTERNS = (
     re.compile(
         r"^#{1,6}\s+no\b.{0,100}\bvulnerabilit(?:y|ies)\b.{0,40}"
@@ -28,16 +31,23 @@ NO_FINDING_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(r"\bno\s+immediate\s+remediation\s+is\s+required\b", re.IGNORECASE),
+    re.compile(r"\bno\s+exploitable\s+(?:security\s+)?issues?\b", re.IGNORECASE),
 )
 POSITIVE_FINDING_PATTERNS = (
     re.compile(r"\bproof\s+of\s+concept\b", re.IGNORECASE),
-    re.compile(r"\baffected\s+(?:endpoint|file|component)\b", re.IGNORECASE),
-    re.compile(
-        r"(?m)^\s*(?:target|endpoint|location)\s*:\s*\S+", re.IGNORECASE
-    ),
     re.compile(r"\breproduction\s+steps?\b", re.IGNORECASE),
     re.compile(r"\b(?:successfully\s+)?exploited\b", re.IGNORECASE),
     re.compile(r"\bconfirmed\s+(?:authentication\s+)?bypass\b", re.IGNORECASE),
+    re.compile(r"\bexploit(?:ation)?\s+path\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:attacker|unauthenticated\s+user)\s+"
+        r"(?:can|could|is\s+able\s+to)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\ballows?\s+(?:an?\s+)?(?:attacker|unauthenticated\s+user)\b",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -50,15 +60,30 @@ def _regular_file(path: Path) -> Path:
     return path.resolve(strict=True)
 
 
+def _independent_no_finding_spans(text: str) -> list[tuple[int, int]]:
+    """Return non-overlapping evidence spans so one sentence counts only once."""
+    spans = sorted(
+        (match.start(), match.end())
+        for pattern in NO_FINDING_PATTERNS
+        for match in pattern.finditer(text)
+    )
+    independent: list[tuple[int, int]] = []
+    for start, end in spans:
+        if independent and start < independent[-1][1]:
+            previous_start, previous_end = independent[-1]
+            independent[-1] = (previous_start, max(previous_end, end))
+        else:
+            independent.append((start, end))
+    return independent
+
+
 def is_self_negating_report(path: Path) -> bool:
     """Return true only for strongly contradictory no-finding pseudo-records."""
     resolved = _regular_file(path)
     text = resolved.read_text(encoding="utf-8", errors="replace")
-    no_finding_evidence = sum(
-        bool(pattern.search(text)) for pattern in NO_FINDING_PATTERNS
-    )
+    no_finding_evidence = _independent_no_finding_spans(text)
     positive_evidence = any(pattern.search(text) for pattern in POSITIVE_FINDING_PATTERNS)
-    return no_finding_evidence >= 2 and not positive_evidence
+    return len(no_finding_evidence) >= 2 and not positive_evidence
 
 
 def _assert_tree_is_regular(root: Path) -> list[Path]:
@@ -82,10 +107,68 @@ def _assert_tree_is_regular(root: Path) -> list[Path]:
     return files
 
 
+def _validate_scope_sha(value: str, label: str) -> str | None:
+    """Validate an optional exact PR scope commit SHA."""
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not GIT_SHA.fullmatch(normalized):
+        raise ValueError(f"{label} must be an exact 40-character git SHA")
+    return normalized.lower()
+
+
+def _write_evidence_receipt(
+    destination: Path,
+    selected: list[Path],
+    source: Path,
+    started_at_epoch: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    """Bind imported report hashes to the exact PR base/head evidence scope."""
+    normalized_base = _validate_scope_sha(base_sha, "base_sha")
+    normalized_head = _validate_scope_sha(head_sha, "head_sha")
+    if bool(normalized_base) != bool(normalized_head):
+        raise ValueError("base_sha and head_sha must be supplied together")
+    file_records = [
+        {
+            "path": source_file.relative_to(source).as_posix(),
+            "sha256": hashlib.sha256(source_file.read_bytes()).hexdigest(),
+            "size_bytes": source_file.stat().st_size,
+        }
+        for source_file in sorted(selected)
+    ]
+    receipt = {
+        "schema_version": 1,
+        "evidence_kind": "current_attempt_strix_report_import",
+        "started_at_epoch": started_at_epoch,
+        "pr_base_sha": normalized_base,
+        "pr_head_sha": normalized_head,
+        "files": file_records,
+    }
+    encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    receipt_digest = hashlib.sha256(encoded).hexdigest()
+    receipt_directory = destination / "gate-evidence"
+    if receipt_directory.is_symlink():
+        raise ValueError("gate evidence directory must not be a symlink")
+    receipt_directory.mkdir(parents=True, exist_ok=True)
+    receipt_path = receipt_directory / f"{started_at_epoch}-{receipt_digest[:16]}.json"
+    if receipt_path.exists():
+        if receipt_path.is_symlink() or receipt_path.read_bytes() != encoded:
+            raise ValueError("conflicting Strix gate evidence receipt")
+        return
+    receipt_path.write_bytes(encoded)
+    receipt_path.chmod(0o600)
+
+
 def import_current_attempt_reports(
-    source_root: Path, destination_root: Path, started_at_epoch: int
+    source_root: Path,
+    destination_root: Path,
+    started_at_epoch: int,
+    base_sha: str = "",
+    head_sha: str = "",
 ) -> int:
-    """Copy only current-attempt regular files into the trusted evaluation root."""
+    """Copy current-attempt regular files and bind them to the PR evidence scope."""
     if not source_root.exists():
         return 0
     source = source_root.resolve(strict=True)
@@ -113,6 +196,15 @@ def import_current_attempt_reports(
         shutil.copyfile(source_file, destination_file, follow_symlinks=False)
         destination_file.chmod(0o600)
         copied += 1
+    if selected:
+        _write_evidence_receipt(
+            destination,
+            selected,
+            source,
+            started_at_epoch,
+            base_sha,
+            head_sha,
+        )
     return copied
 
 
@@ -121,9 +213,13 @@ def main(argv: list[str]) -> int:
     try:
         if len(argv) == 3 and argv[1] == "is-self-negating":
             return 0 if is_self_negating_report(Path(argv[2])) else 1
-        if len(argv) == 5 and argv[1] == "import-current-attempt":
+        if len(argv) == 7 and argv[1] == "import-current-attempt":
             copied = import_current_attempt_reports(
-                Path(argv[2]), Path(argv[3]), int(argv[4])
+                Path(argv[2]),
+                Path(argv[3]),
+                int(argv[4]),
+                argv[5],
+                argv[6],
             )
             print(copied)
             return 0
@@ -132,7 +228,8 @@ def main(argv: list[str]) -> int:
         return 2
     print(
         f"usage: {argv[0]} is-self-negating <report> | "
-        "import-current-attempt <source> <destination> <started-at-epoch>",
+        "import-current-attempt <source> <destination> <started-at-epoch> "
+        "<base-sha> <head-sha>",
         file=sys.stderr,
     )
     return 2
