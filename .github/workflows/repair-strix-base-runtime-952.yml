@@ -1,0 +1,478 @@
+name: Repair Strix base runtime contract for 952
+
+on:
+  push:
+    branches:
+      - fix/strix-base-runtime-contract-952
+    paths:
+      - .github/workflows/repair-strix-base-runtime-952.yml
+  workflow_dispatch:
+
+concurrency:
+  group: repair-strix-base-runtime-952
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Write RED contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > tests/test_strix_952_runtime_contract.py <<'PY'
+          """Regression contracts for issue 952's trusted Strix runtime boundary."""
+
+          from __future__ import annotations
+
+          import importlib.util
+          import tempfile
+          import unittest
+          from pathlib import Path
+
+          ROOT = Path(__file__).resolve().parents[1]
+          WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
+          GATE = ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
+          SEMANTICS = ROOT / "scripts" / "ci" / "strix_report_semantics.py"
+          VALIDATOR = ROOT / "scripts" / "ci" / "validate_strix_runtime_compatibility.py"
+
+
+          def load_module(path: Path, name: str):
+              """Load a repository script as a module without changing sys.path."""
+              spec = importlib.util.spec_from_file_location(name, path)
+              if spec is None or spec.loader is None:
+                  raise AssertionError(f"could not load {path}")
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              return module
+
+
+          class WorkflowContractTests(unittest.TestCase):
+              """Protect the base-executed pull_request_target installation path."""
+
+              def test_complete_hashed_lock_is_installed_without_reresolution(self) -> None:
+                  workflow = WORKFLOW.read_text(encoding="utf-8")
+                  self.assertIn(
+                      "--require-hashes --no-deps -r requirements-strix-ci-hashes.txt",
+                      workflow,
+                  )
+                  self.assertIn("validate_strix_runtime_compatibility.py", workflow)
+
+              def test_incomplete_backend_scan_cannot_become_success(self) -> None:
+                  workflow = WORKFLOW.read_text(encoding="utf-8")
+                  self.assertNotIn("Treating as a neutral skip", workflow)
+                  self.assertNotIn("backend_unavailable_signal=", workflow)
+                  self.assertIn('exit "$strix_rc"', workflow)
+
+              def test_gate_imports_authoritative_target_reports_before_judgment(self) -> None:
+                  gate = GATE.read_text(encoding="utf-8")
+                  self.assertIn("import-current-attempt", gate)
+                  self.assertIn('"${resolved_target_path%/}/strix_runs"', gate)
+                  self.assertIn("vulnerability_file_is_self_negating_no_finding", gate)
+
+
+          class ReportSemanticsTests(unittest.TestCase):
+              """Verify narrow contradictory no-finding classification and safe import."""
+
+              def setUp(self) -> None:
+                  self.module = load_module(SEMANTICS, "strix_report_semantics")
+
+              def test_scopeweave_self_negating_high_record_is_not_a_finding(self) -> None:
+                  with tempfile.TemporaryDirectory() as directory:
+                      report = Path(directory) / "finding.md"
+                      report.write_text(
+                          "# No JWT Authentication Vulnerabilities Found\n\n"
+                          "Severity: HIGH\nCVSS: 7.3\n\n"
+                          "N/A - No vulnerabilities discovered.\n"
+                          "No immediate remediation is required.\n",
+                          encoding="utf-8",
+                      )
+                      self.assertTrue(self.module.is_self_negating_report(report))
+
+              def test_real_finding_with_negative_control_language_is_preserved(self) -> None:
+                  with tempfile.TemporaryDirectory() as directory:
+                      report = Path(directory) / "finding.md"
+                      report.write_text(
+                          "# JWT Authentication Bypass\n\nSeverity: HIGH\n"
+                          "The negative control found no issue, but the affected endpoint "
+                          "accepts an unsigned token.\nTarget: backend/auth.py:42\n"
+                          "Proof of concept: send alg=none.\n",
+                          encoding="utf-8",
+                      )
+                      self.assertFalse(self.module.is_self_negating_report(report))
+
+              def test_current_attempt_import_rejects_symlinked_output(self) -> None:
+                  with tempfile.TemporaryDirectory() as directory:
+                      root = Path(directory)
+                      source = root / "source"
+                      destination = root / "destination"
+                      outside = root / "outside.md"
+                      source.mkdir()
+                      destination.mkdir()
+                      outside.write_text("Severity: HIGH", encoding="utf-8")
+                      (source / "run").mkdir()
+                      (source / "run" / "vulnerabilities").mkdir()
+                      (source / "run" / "vulnerabilities" / "escape.md").symlink_to(outside)
+                      with self.assertRaises(ValueError):
+                          self.module.import_current_attempt_reports(source, destination, 0)
+
+
+          class RuntimeCompatibilityTests(unittest.TestCase):
+              """Verify exact-pin parsing independently of installed third-party modules."""
+
+              def test_lock_parser_reads_exact_strix_and_cryptography_pins(self) -> None:
+                  module = load_module(VALIDATOR, "validate_strix_runtime_compatibility")
+                  with tempfile.TemporaryDirectory() as directory:
+                      lock = Path(directory) / "requirements.txt"
+                      lock.write_text(
+                          "strix-agent==1.5.3 --hash=sha256:abc\n"
+                          "cryptography==50.0.0 --hash=sha256:def\n",
+                          encoding="utf-8",
+                      )
+                      self.assertEqual(
+                          module.required_runtime_pins(lock),
+                          {"strix-agent": "1.5.3", "cryptography": "50.0.0"},
+                      )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+          if python3 tests/test_strix_952_runtime_contract.py; then
+            echo '::error::RED contract unexpectedly passed before implementation.'
+            exit 1
+          fi
+          echo 'Observed expected RED failure before implementation.'
+
+      - name: Apply bounded implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > scripts/ci/validate_strix_runtime_compatibility.py <<'PY'
+          #!/usr/bin/env python3
+          """Validate the exact Strix lock and exercised cryptographic consumers."""
+
+          from __future__ import annotations
+
+          import re
+          import sys
+          from importlib import metadata
+          from pathlib import Path
+
+          REQUIRED_DISTRIBUTIONS = ("strix-agent", "cryptography")
+          EXACT_PIN = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\s\\]+)")
+
+
+          def required_runtime_pins(lock_path: Path) -> dict[str, str]:
+              """Return the exact Strix and cryptography pins from a compiled lock."""
+              pins: dict[str, str] = {}
+              for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
+                  match = EXACT_PIN.match(raw_line.strip())
+                  if match and match.group("name").lower() in REQUIRED_DISTRIBUTIONS:
+                      pins[match.group("name").lower()] = match.group("version")
+              missing = set(REQUIRED_DISTRIBUTIONS) - pins.keys()
+              if missing:
+                  raise ValueError(f"compiled lock is missing exact pins: {sorted(missing)}")
+              return pins
+
+
+          def verify_installed_versions(expected: dict[str, str]) -> None:
+              """Fail when the installed environment differs from the compiled lock."""
+              for distribution, expected_version in expected.items():
+                  actual_version = metadata.version(distribution)
+                  if actual_version != expected_version:
+                      raise RuntimeError(
+                          f"installed {distribution}=={actual_version}; expected {expected_version}"
+                      )
+
+
+          def exercise_cryptographic_consumers() -> None:
+              """Exercise the PyJWT and pyOpenSSL APIs used through Strix dependencies."""
+              import jwt
+              from OpenSSL import crypto
+              from cryptography.hazmat.primitives import serialization
+              from cryptography.hazmat.primitives.asymmetric import rsa
+
+              private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+              private_pem = private_key.private_bytes(
+                  encoding=serialization.Encoding.PEM,
+                  format=serialization.PrivateFormat.PKCS8,
+                  encryption_algorithm=serialization.NoEncryption(),
+              )
+              public_pem = private_key.public_key().public_bytes(
+                  encoding=serialization.Encoding.PEM,
+                  format=serialization.PublicFormat.SubjectPublicKeyInfo,
+              )
+              encoded = jwt.encode({"sub": "strix-runtime-smoke"}, private_pem, algorithm="RS256")
+              decoded = jwt.decode(encoded, public_pem, algorithms=["RS256"])
+              if decoded.get("sub") != "strix-runtime-smoke":
+                  raise RuntimeError("PyJWT RS256 round trip returned unexpected claims")
+
+              openssl_key = crypto.PKey()
+              openssl_key.generate_key(crypto.TYPE_RSA, 2048)
+              certificate = crypto.X509()
+              certificate.set_version(2)
+              certificate.set_serial_number(1)
+              certificate.get_subject().CN = "strix-runtime-smoke"
+              certificate.gmtime_adj_notBefore(0)
+              certificate.gmtime_adj_notAfter(60)
+              certificate.set_issuer(certificate.get_subject())
+              certificate.set_pubkey(openssl_key)
+              certificate.sign(openssl_key, "sha256")
+              pem = crypto.dump_certificate(crypto.FILETYPE_PEM, certificate)
+              if b"BEGIN CERTIFICATE" not in pem:
+                  raise RuntimeError("pyOpenSSL certificate round trip failed")
+
+
+          def main(argv: list[str]) -> int:
+              """Run exact-version and executable compatibility checks."""
+              if len(argv) != 2:
+                  print(f"usage: {argv[0]} <compiled-lock>", file=sys.stderr)
+                  return 2
+              try:
+                  expected = required_runtime_pins(Path(argv[1]))
+                  verify_installed_versions(expected)
+                  exercise_cryptographic_consumers()
+              except (OSError, ValueError, RuntimeError, metadata.PackageNotFoundError, ImportError) as exc:
+                  print(f"Strix runtime compatibility validation failed: {exc}", file=sys.stderr)
+                  return 1
+              print(
+                  "Validated exact Strix/cryptography pins plus PyJWT RS256 and pyOpenSSL crypto APIs."
+              )
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main(sys.argv))
+          PY
+          chmod 755 scripts/ci/validate_strix_runtime_compatibility.py
+
+          cat > scripts/ci/strix_report_semantics.py <<'PY'
+          #!/usr/bin/env python3
+          """Safely import Strix reports and classify contradictory no-finding records."""
+
+          from __future__ import annotations
+
+          import os
+          import re
+          import shutil
+          import sys
+          from pathlib import Path
+
+          MAX_REPORT_FILE_BYTES = 8 * 1024 * 1024
+          MAX_ATTEMPT_BYTES = 64 * 1024 * 1024
+          NO_FINDING_PATTERNS = (
+              re.compile(r"^#{1,6}\s+no\b.{0,100}\bvulnerabilit(?:y|ies)\b.{0,40}\b(?:found|discovered|identified)\b", re.I | re.M),
+              re.compile(r"\bno\s+(?:security\s+)?vulnerabilit(?:y|ies)\s+(?:were\s+)?(?:found|discovered|identified)\b", re.I),
+              re.compile(r"\bn/?a\s*[-:–—]\s*no\s+vulnerabilit(?:y|ies)\s+(?:found|discovered|identified)\b", re.I),
+              re.compile(r"\bno\s+immediate\s+remediation\s+is\s+required\b", re.I),
+          )
+          POSITIVE_FINDING_PATTERNS = (
+              re.compile(r"\bproof\s+of\s+concept\b", re.I),
+              re.compile(r"\baffected\s+(?:endpoint|file|component)\b", re.I),
+              re.compile(r"(?m)^\s*(?:target|endpoint|location)\s*:\s*\S+", re.I),
+              re.compile(r"\breproduction\s+steps?\b", re.I),
+              re.compile(r"\b(?:successfully\s+)?exploited\b", re.I),
+              re.compile(r"\bconfirmed\s+(?:authentication\s+)?bypass\b", re.I),
+          )
+
+
+          def _regular_file(path: Path) -> Path:
+              """Resolve a bounded regular report file without accepting symlinks."""
+              if path.is_symlink() or not path.is_file():
+                  raise ValueError(f"report must be a regular non-symlink file: {path}")
+              if path.stat().st_size > MAX_REPORT_FILE_BYTES:
+                  raise ValueError(f"report exceeds size limit: {path}")
+              return path.resolve(strict=True)
+
+
+          def is_self_negating_report(path: Path) -> bool:
+              """Return true only for strongly contradictory no-finding pseudo-records."""
+              resolved = _regular_file(path)
+              text = resolved.read_text(encoding="utf-8", errors="replace")
+              no_finding_evidence = sum(bool(pattern.search(text)) for pattern in NO_FINDING_PATTERNS)
+              positive_evidence = any(pattern.search(text) for pattern in POSITIVE_FINDING_PATTERNS)
+              return no_finding_evidence >= 2 and not positive_evidence
+
+
+          def _assert_tree_is_regular(root: Path) -> list[Path]:
+              """Return files below root while rejecting links and special filesystem nodes."""
+              if root.is_symlink() or not root.is_dir():
+                  raise ValueError(f"report root must be a real directory: {root}")
+              files: list[Path] = []
+              for current, directory_names, file_names in os.walk(root, followlinks=False):
+                  current_path = Path(current)
+                  for name in directory_names:
+                      candidate = current_path / name
+                      if candidate.is_symlink() or not candidate.is_dir():
+                          raise ValueError(f"unsafe report directory: {candidate}")
+                  for name in file_names:
+                      candidate = current_path / name
+                      if candidate.is_symlink() or not candidate.is_file():
+                          raise ValueError(f"unsafe report file: {candidate}")
+                      if candidate.stat().st_size > MAX_REPORT_FILE_BYTES:
+                          raise ValueError(f"report file exceeds size limit: {candidate}")
+                      files.append(candidate)
+              return files
+
+
+          def import_current_attempt_reports(
+              source_root: Path, destination_root: Path, started_at_epoch: int
+          ) -> int:
+              """Copy only current-attempt regular files into the trusted evaluation root."""
+              if not source_root.exists():
+                  return 0
+              source = source_root.resolve(strict=True)
+              destination_root.mkdir(parents=True, exist_ok=True)
+              destination = destination_root.resolve(strict=True)
+              if source == destination:
+                  return 0
+              files = _assert_tree_is_regular(source)
+              minimum_mtime = max(0, started_at_epoch - 2)
+              selected = [path for path in files if int(path.stat().st_mtime) >= minimum_mtime]
+              total_bytes = sum(path.stat().st_size for path in selected)
+              if total_bytes > MAX_ATTEMPT_BYTES:
+                  raise ValueError("current Strix attempt reports exceed aggregate size limit")
+              copied = 0
+              for source_file in selected:
+                  relative = source_file.relative_to(source)
+                  destination_file = destination / relative
+                  destination_file.parent.mkdir(parents=True, exist_ok=True)
+                  if destination_file.exists():
+                      if destination_file.is_symlink() or not destination_file.is_file():
+                          raise ValueError(f"unsafe destination report path: {destination_file}")
+                      if destination_file.read_bytes() != source_file.read_bytes():
+                          raise ValueError(f"conflicting report copies: {relative}")
+                      continue
+                  shutil.copyfile(source_file, destination_file, follow_symlinks=False)
+                  destination_file.chmod(0o600)
+                  copied += 1
+              return copied
+
+
+          def main(argv: list[str]) -> int:
+              """Expose narrow shell-safe commands for the Strix gate."""
+              try:
+                  if len(argv) == 3 and argv[1] == "is-self-negating":
+                      return 0 if is_self_negating_report(Path(argv[2])) else 1
+                  if len(argv) == 5 and argv[1] == "import-current-attempt":
+                      copied = import_current_attempt_reports(
+                          Path(argv[2]), Path(argv[3]), int(argv[4])
+                      )
+                      print(copied)
+                      return 0
+              except (OSError, ValueError, UnicodeError) as exc:
+                  print(f"Strix report semantics validation failed: {exc}", file=sys.stderr)
+                  return 2
+              print(
+                  f"usage: {argv[0]} is-self-negating <report> | "
+                  "import-current-attempt <source> <destination> <started-at-epoch>",
+                  file=sys.stderr,
+              )
+              return 2
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main(sys.argv))
+          PY
+          chmod 755 scripts/ci/strix_report_semantics.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/strix.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          old_install = 'python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt'
+          new_install = '''# The compiled hash lock is the complete closed dependency set. Avoid\n          # re-applying stale transitive metadata constraints at install time.\n          python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes --no-deps -r requirements-strix-ci-hashes.txt\n          python3 scripts/ci/validate_strix_runtime_compatibility.py requirements-strix-ci-hashes.txt'''
+          if workflow.count(old_install) != 1:
+              raise SystemExit('unexpected Strix install marker count')
+          workflow = workflow.replace(old_install, new_install, 1)
+
+          wrapper_start = workflow.index('          # Capture the gate exit code plus its console output.')
+          wrapper_end = workflow.index('      - name: Collect Strix reports for artifact upload', wrapper_start)
+          replacement = '''          # Preserve the gate exit code and console output. An incomplete backend\n          # run is not security evidence, so every non-zero gate result remains\n          # fail-closed while the following always() steps preserve diagnostics.\n          strix_run_log="$RUNNER_TEMP/strix_gate_console.log"\n          strix_rc=0\n          set +e\n          bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_run_log"\n          strix_rc="${PIPESTATUS[0]}"\n          set -e\n          if [ "$strix_rc" -ne 0 ]; then\n            echo "Strix did not produce complete passing security evidence; failing the required check (gate exit ${strix_rc})." >&2\n          fi\n          exit "$strix_rc"\n\n'''
+          workflow = workflow[:wrapper_start] + replacement + workflow[wrapper_end:]
+          export_marker = '          test -f "$trusted_strix_source/scripts/ci/strix_required_workflow_smoke.sh"\n'
+          if workflow.count(export_marker) != 1:
+              raise SystemExit('unexpected trusted source export marker count')
+          workflow = workflow.replace(
+              export_marker,
+              export_marker
+              + '          test -f "$trusted_strix_source/scripts/ci/strix_report_semantics.py"\n'
+              + '          test -f "$trusted_strix_source/scripts/ci/validate_strix_runtime_compatibility.py"\n',
+              1,
+          )
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          gate_path = Path('scripts/ci/strix_quick_gate.sh')
+          gate = gate_path.read_text(encoding='utf-8')
+          import_marker = '\tpreserve_attempt_log "$model" "$rc"\n\n\tsanitize_known_strix_report_warnings'
+          import_replacement = '''\tpreserve_attempt_log "$model" "$rc"\n\n\tlocal authoritative_reports_dir="${resolved_target_path%/}/strix_runs"\n\tif [ -d "$authoritative_reports_dir" ] && [ ! -L "$authoritative_reports_dir" ]; then\n\t\tlocal imported_report_count\n\t\tif ! imported_report_count="$(python3 "$SCRIPT_DIR/strix_report_semantics.py" import-current-attempt "$authoritative_reports_dir" "$ACTIVE_REPORTS_DIR" "$start_epoch")"; then\n\t\t\techo "Strix authoritative report import failed; failing closed." | tee -a "$STRIX_LOG" >&2\n\t\t\tINFRA_ERROR_DETECTED=1\n\t\t\treturn 1\n\t\tfi\n\t\tif [ "$imported_report_count" -gt 0 ]; then\n\t\t\tprintf "Imported %s current-attempt Strix report file(s) from the authoritative target output path.\\n" "$imported_report_count" >&2\n\t\tfi\n\tfi\n\n\tsanitize_known_strix_report_warnings'''
+          if gate.count(import_marker) != 1:
+              raise SystemExit('unexpected report import marker count')
+          gate = gate.replace(import_marker, import_replacement, 1)
+
+          function_marker = 'vulnerability_file_is_retryable_model_inconsistency() {\n\tlocal vuln_file="$1"\n\tif ! vulnerability_file_is_below_threshold "$vuln_file"; then'
+          function_replacement = '''vulnerability_file_is_self_negating_no_finding() {\n\tlocal vuln_file="$1"\n\tpython3 "$SCRIPT_DIR/strix_report_semantics.py" is-self-negating "$vuln_file"\n}\n\nvulnerability_file_is_retryable_model_inconsistency() {\n\tlocal vuln_file="$1"\n\tif vulnerability_file_is_self_negating_no_finding "$vuln_file"; then\n\t\techo "Detected a self-negating Strix no-finding record with contradictory severity metadata; excluding it from vulnerability severity decisions." >&2\n\t\treturn 0\n\tfi\n\tif ! vulnerability_file_is_below_threshold "$vuln_file"; then'''
+          if gate.count(function_marker) != 1:
+              raise SystemExit('unexpected retryable inconsistency marker count')
+          gate = gate.replace(function_marker, function_replacement, 1)
+
+          unmapped_marker = '''\t\tfor vuln_file in "$vulnerabilities_dir"/*.md; do\n\t\t\tif [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then\n\t\t\t\tcontinue\n\t\t\tfi\n\t\t\trank="$(extract_max_severity_rank "$vuln_file")"'''
+          unmapped_replacement = '''\t\tfor vuln_file in "$vulnerabilities_dir"/*.md; do\n\t\t\tif [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then\n\t\t\t\tcontinue\n\t\t\tfi\n\t\t\tif vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then\n\t\t\t\tcontinue\n\t\t\tfi\n\t\t\trank="$(extract_max_severity_rank "$vuln_file")"'''
+          if gate.count(unmapped_marker) != 1:
+              raise SystemExit('unexpected unmapped report marker count')
+          gate = gate.replace(unmapped_marker, unmapped_replacement, 1)
+          gate_path.write_text(gate, encoding='utf-8')
+          PY
+
+      - name: Verify GREEN contracts and regressions
+        shell: bash
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: '1'
+          STRIX_TEST_FAKE_SLEEP_SECONDS: '2'
+        run: |
+          set -euo pipefail
+          python3 tests/test_strix_952_runtime_contract.py
+          python3 -m compileall -q scripts/ci/strix_report_semantics.py scripts/ci/validate_strix_runtime_compatibility.py tests/test_strix_952_runtime_contract.py
+          bash -n scripts/ci/strix_quick_gate.sh
+          bash -n scripts/ci/test_strix_quick_gate.sh
+          timeout 1200 bash scripts/ci/test_strix_quick_gate.sh
+
+      - name: Commit verified repair
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/strix.yml scripts/ci/strix_quick_gate.sh scripts/ci/strix_report_semantics.py scripts/ci/validate_strix_runtime_compatibility.py tests/test_strix_952_runtime_contract.py
+          if git diff --cached --quiet; then
+            echo 'No repair changes to commit.'
+            exit 0
+          fi
+          git commit -m 'fix(strix): enforce complete runtime evidence'
+          git push origin HEAD:fix/strix-base-runtime-contract-952
