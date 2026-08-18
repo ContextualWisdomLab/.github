@@ -39,3 +39,7 @@
 **Vulnerability:** Implicit shell execution risk and linter requirement bypassing
 **Learning:** `subprocess.run` and `subprocess.Popen` without explicit `shell=False` arguments fail security linting checks and leave ambiguity about shell execution intentions. Linters like bandit require `shell=False` for validation even if the default behavior is safe.
 **Prevention:** Always explicitly define `shell=False` in `subprocess.run` and `subprocess.Popen` calls.
+## 2026-08-16 - Add hostname validation to prevent SSRF
+**Vulnerability:** Server-Side Request Forgery (SSRF)
+**Learning:** Functions that accept URLs and make requests, like `wait_for_url` in `sandboxed_web_e2e.py`, must restrict the destination host to prevent an attacker from probing internal services or endpoints via malicious input parameters.
+**Prevention:** Always validate that the parsed URL hostname explicitly points to a safe destination, such as `localhost` or `127.0.0.1`, before making a request.

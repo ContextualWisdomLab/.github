@@ -114,6 +114,8 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
+    with pytest.raises(ValueError, match="URL must point to localhost or 127.0.0.1, got: http://example.com/ready"):
+        sandboxed_web_e2e.wait_for_url("http://example.com/ready", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
