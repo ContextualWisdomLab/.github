@@ -29,15 +29,19 @@ def test_bandscope_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert 'retry_hours: "2"' in caller
 
 
-def test_bandscope_caller_preserves_credentials_and_read_only_scope() -> None:
-    """The caller maps scheduler credentials without exposing model secrets."""
+def test_bandscope_caller_preserves_oidc_and_credential_scope() -> None:
+    """The caller grants only read and OIDC while mapping scheduler credentials."""
     caller = _read(CALLER)
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
     pr_review_secret = "$" + "{{ secrets.PR_REVIEW_MERGE_TOKEN }}"
     opencode_secret = "$" + "{{ secrets.OPENCODE_APPROVE_TOKEN }}"
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n" not in jobs_scope
+    assert (
+        "\n    permissions:\n"
+        "      contents: read\n"
+        "      id-token: write\n"
+    ) in jobs_scope
     assert f"PR_REVIEW_MERGE_TOKEN: {pr_review_secret}" in caller
     assert f"OPENCODE_APPROVE_TOKEN: {opencode_secret}" in caller
     assert "secrets: inherit" not in caller
@@ -64,6 +68,8 @@ def test_bandscope_doctoring_records_music_and_governance_bounds() -> None:
         "real-audio acceptance",
         "Rust-owned production arithmetic",
         "independent non-author approval",
+        "id-token: write",
+        "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
         "NVIDIA_NIM_API_KEY",
         "COPILOT_GITHUB_TOKEN",
         "ContextualWisdomLab/bandscope",

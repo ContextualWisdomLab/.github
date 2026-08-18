@@ -53,12 +53,22 @@ coverage, and realistic regression evidence.
 
 ## Credential and approval boundary
 
-The caller itself has read-only contents permission. It forwards only the
-established `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` scheduler
-credentials and never uses `secrets: inherit`. It does not receive
+The workflow-wide token remains read-only. The reusable caller job grants only
+`contents: read` and `id-token: write`: the latter permits the already-established
+central OpenCode GitHub App exchange when mapped `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN` credentials are unavailable. It does not grant repository
+contents, pull-request, issue, action, or status mutation to the caller token.
+The caller never uses `secrets: inherit` and does not receive
 `NVIDIA_NIM_API_KEY`; that model credential remains sealed inside the central
 OpenCode execution step. `COPILOT_GITHUB_TOKEN` is forbidden. Existing reviewer
 credential and model-pool contracts are not changed by this caller.
+
+Before protected merge, organization operators must confirm that
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS` includes the exact
+`ContextualWisdomLab/bandscope` repository and that the established app/OIDC or
+mapped-secret path can dispatch the central workflow without broadening the
+allowlist. A missing allowlist entry must fail closed rather than silently turn
+the hourly heartbeat into a no-op.
 
 A repair does not authorize approval or merge. The exact unchanged head still
 requires terminal required checks, zero valid unresolved findings, qualifying
