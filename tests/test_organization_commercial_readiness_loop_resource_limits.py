@@ -21,6 +21,47 @@ def _workflow(index: int) -> dict[str, Any]:
     }
 
 
+def test_workflow_metadata_count_is_bounded_per_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """More than 1,000 workflow records fail closed before fleet memory grows."""
+
+    client = GitHubClient("token")
+    pages = [
+        [
+            {
+                "id": page * 100 + index + 1,
+                "name": "CI",
+                "path": f".github/workflows/ci-{page}-{index}.yml",
+                "state": "active",
+            }
+            for index in range(100)
+        ]
+        for page in range(10)
+    ]
+    pages.append(
+        [
+            {
+                "id": 1001,
+                "name": "CI",
+                "path": ".github/workflows/ci-overflow.yml",
+                "state": "active",
+            }
+        ]
+    )
+
+    def fake(path: str, *, method: str = "GET", payload: Any = None) -> Any:
+        del method, payload
+        if "actions/workflows" in path:
+            return {"workflows": pages.pop(0) if pages else []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(client, "request", fake)
+
+    with pytest.raises(GitHubError, match="workflow metadata limit"):
+        client.list_workflows("ContextualWisdomLab/example", "a" * 40)
+
+
 def test_workflow_source_count_is_bounded_per_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
