@@ -86,5 +86,6 @@ def test_scheduled_self_target_does_not_require_cross_repository_allowlist() -> 
     """A protected same-repository schedule is valid even without cross-repo config."""
     workflow = _REUSABLE_SCHEDULER.read_text(encoding="utf-8")
 
-    assert 'if [ "$TARGET_REPOSITORY" = "${GITHUB_REPOSITORY}" ]; then' in workflow
+    assert 'if [ -n "${GITHUB_REPOSITORY:-}" ] &&' in workflow
+    assert '[ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then' in workflow
     assert "Self-targeted scheduler invocation uses the protected caller repository." in workflow
