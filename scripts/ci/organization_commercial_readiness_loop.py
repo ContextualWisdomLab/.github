@@ -43,6 +43,10 @@ MERGE_SCHEDULER_RE = re.compile(
 )
 SCHEDULE_RE = re.compile(r"(?m)^\s*schedule\s*:")
 WORKFLOW_DISPATCH_RE = re.compile(r"(?m)^\s*workflow_dispatch\s*:")
+MAX_WORKFLOW_RECORDS_PER_REPOSITORY = 1_000
+MAX_WORKFLOW_SOURCES_PER_REPOSITORY = 100
+MAX_WORKFLOW_SOURCE_BYTES_PER_FILE = 1_048_576
+MAX_WORKFLOW_SOURCE_BYTES_PER_REPOSITORY = 10 * 1_048_576
 
 
 class GitHubError(RuntimeError):
@@ -323,14 +327,21 @@ class GitHubClient:
         return sha.lower()
 
     def list_workflows(self, repository: str, exact_ref: str) -> tuple[WorkflowRecord, ...]:
-        """Return workflow metadata and exact source only for writer candidates."""
+        """Return a fail-closed, memory-bounded workflow and writer-source inventory."""
         workflows: list[WorkflowRecord] = []
+        source_count = 0
+        source_bytes = 0
         page = 1
         while True:
             result = self.request(
                 f"/repos/{repository}/actions/workflows?per_page=100&page={page}"
             )
             batch = list((result or {}).get("workflows") or [])
+            if len(workflows) + len(batch) > MAX_WORKFLOW_RECORDS_PER_REPOSITORY:
+                raise GitHubError(
+                    f"repository {repository} exceeded workflow metadata limit of "
+                    f"{MAX_WORKFLOW_RECORDS_PER_REPOSITORY}"
+                )
             for raw in batch:
                 workflow_id = int(raw.get("id") or 0)
                 path = str(raw.get("path") or "")
@@ -343,25 +354,50 @@ class GitHubClient:
                     and not path.startswith("dynamic/")
                     and _writer_signal(name, path)
                 ):
+                    source_count += 1
+                    if source_count > MAX_WORKFLOW_SOURCES_PER_REPOSITORY:
+                        raise GitHubError(
+                            f"repository {repository} exceeded workflow source limit of "
+                            f"{MAX_WORKFLOW_SOURCES_PER_REPOSITORY}"
+                        )
                     encoded_path = quote(path, safe="/")
                     try:
                         source = self.request(
                             f"/repos/{repository}/contents/{encoded_path}?ref={exact_ref}"
                         )
+                        source_size = (
+                            int(source.get("size") or 0)
+                            if isinstance(source, dict)
+                            else 0
+                        )
+                    except (GitHubError, ValueError):
+                        source = None
+                        source_size = 0
+                    if (
+                        isinstance(source, dict)
+                        and source.get("type") == "file"
+                        and source_size <= MAX_WORKFLOW_SOURCE_BYTES_PER_FILE
+                        and source.get("encoding") == "base64"
+                    ):
                         if (
-                            isinstance(source, dict)
-                            and source.get("type") == "file"
-                            and int(source.get("size") or 0) <= 1_048_576
-                            and source.get("encoding") == "base64"
+                            source_bytes + source_size
+                            > MAX_WORKFLOW_SOURCE_BYTES_PER_REPOSITORY
                         ):
+                            raise GitHubError(
+                                f"repository {repository} exceeded workflow source byte limit of "
+                                f"{MAX_WORKFLOW_SOURCE_BYTES_PER_REPOSITORY}"
+                            )
+                        try:
                             decoded = base64.b64decode(
                                 str(source.get("content") or ""), validate=True
                             )
                             content = decoded.decode("utf-8")
                             content_sha = str(source.get("sha") or "")
-                    except (GitHubError, ValueError, UnicodeDecodeError):
-                        content = None
-                        content_sha = ""
+                        except (ValueError, UnicodeDecodeError):
+                            content = None
+                            content_sha = ""
+                        else:
+                            source_bytes += source_size
                 workflows.append(
                     WorkflowRecord(
                         workflow_id=workflow_id,
