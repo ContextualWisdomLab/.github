@@ -24,8 +24,13 @@ Semantic Versioning where the repository publishes a release.
 - Use NVIDIA NIM `mistralai/mistral-small-4-119b-2603` with explicit high reasoning for scheduled repair and `nvidia/nemotron-3-nano-30b-a3b` for bounded helper work instead of GitHub Models in the write-capable autofix worker.
 - Apply one NUL-delimited exact-path and complete pre/post-worktree verification contract to both ordinary review repair and merge-conflict repair rather than relying on a visible post-model diff for the ordinary path.
 
+### Changed
+
+- Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
+
 ### Fixed
 
+- Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Required every package line to carry a `--hash=` pin before pip-audit treats a requirements file as a complete hashed lock. A lone `--require-hashes` directive, a mixed hashed-plus-unhashed file, a filename-only wheel path, a `-r` include, or a hash-shaped pip option no longer receives `--disable-pip`. Resolver-config lines such as `--index-url` beside exact SHA-256 pins still use `--disable-pip`. Invalid UTF-8, symlink/special-file inputs, and directory-symlink parents fail before any audit command, and workflow log paths are escaped. A pylock-shaped symlink or directory is not a project manifest, so the continue-to-next-candidate branch no longer depends on filesystem glob order.
 - Landed `--require-hashes --no-deps` on the required Strix installer and taught pip-audit to audit hashed complete locks with `--disable-pip`, so a later strix-agent 1.5.3 + cryptography 50.0.0 lock can install under `pull_request_target` and pip-audit no longer labels pip `ResolutionImpossible` as a known vulnerability (ContextualWisdomLab/.github#961, #952). A `*-hashes.txt` name without hash evidence no longer receives `--disable-pip`, and discovery skips virtualenv trees.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.

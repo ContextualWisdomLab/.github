@@ -525,7 +525,7 @@ def _trusted_uv_archive(
 def test_download_trusted_uv_archive_accepts_fixed_https_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The downloader returns bounded bytes from the fixed Astral HTTPS origin."""
+    """The downloader returns bounded bytes from the fixed GitHub HTTPS origin."""
     payload = b"archive"
     response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
@@ -533,11 +533,49 @@ def test_download_trusted_uv_archive_accepts_fixed_https_origin(
     assert materializer._download_trusted_uv_archive() == payload
 
 
-def test_download_trusted_uv_archive_rejects_unsafe_redirect(
+def test_download_trusted_uv_archive_accepts_github_release_asset_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The official GitHub release-asset CDN remains a valid final HTTPS origin."""
+    payload = b"archive"
+    response = FakeHttpResponse(
+        "https://release-assets.githubusercontent.com/"
+        "github-production-release-asset/699532645/archive",
+        payload,
+    )
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+
+    assert materializer._download_trusted_uv_archive() == payload
+
+
+def test_download_trusted_uv_archive_accepts_legacy_objects_asset_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The previous GitHub release-asset hostname remains a valid final origin."""
+    payload = b"archive"
+    response = FakeHttpResponse(
+        "https://objects.githubusercontent.com/github-production-release-asset/1/file",
+        payload,
+    )
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+
+    assert materializer._download_trusted_uv_archive() == payload
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "https://example.invalid/uv.tar.gz",
+        "https://user@github.com/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
+        "https://:secret@github.com/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
+    ],
+)
+def test_download_trusted_uv_archive_rejects_unsafe_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_url: str,
+) -> None:
     """A redirect away from the fixed HTTPS release host fails closed."""
-    response = FakeHttpResponse("https://example.invalid/uv.tar.gz")
+    response = FakeHttpResponse(unsafe_url)
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
 
     with pytest.raises(RuntimeError, match="redirected outside"):
