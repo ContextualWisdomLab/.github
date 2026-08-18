@@ -16,6 +16,23 @@ def _exact_pin(package_name: str, digest_character: str) -> bytes:
     )
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (b"", False),
+        (b"--require-hashes\n", False),
+        (_exact_pin("standalone-package", "a"), True),
+        (b"-r requirements-other.txt\n", False),
+    ],
+)
+def test_flat_materializable_lock_requires_a_standalone_exact_closure(
+    content: bytes,
+    expected: bool,
+) -> None:
+    """Flat publication accepts pins but never unresolved include-only content."""
+    assert materializer._is_flat_materializable_lock(content) is expected
+
+
 @pytest.mark.parametrize("directive", ["-r", "--requirement"])
 def test_flat_publication_excludes_relative_include_referrers(
     tmp_path: Path,
