@@ -135,6 +135,16 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
+      - name: Start contextual-orchestrator sidecar
+        if: env.PR_NUMBER != ''
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: bash scripts/ci/start_contextual_orchestrator_sidecar.sh
+
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
         id: noema_credential
@@ -276,6 +286,8 @@ jobs:
           NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
           NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL || '' }}
+          CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ env.CONTEXTUAL_ORCHESTRATOR_TOKEN || '' }}
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           set -euo pipefail
@@ -286,6 +298,15 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
+          fi
+          # Prefer the contextual-orchestrator sidecar (auto-discovers and
+          # cost-optimizes across every registered upstream provider) over the
+          # single-provider NVIDIA NIM direct fallback below, when the sidecar
+          # started successfully and nothing more specific was configured.
+          if [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ] && [ -n "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ]; then
+            export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/chat/completions"
+            export NOEMA_LLM_MODEL="contextual-orchestrator"
+            export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}"
           fi
           if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
             export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"

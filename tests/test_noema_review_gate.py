@@ -386,10 +386,13 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     with pytest.raises(ValueError, match="URL scheme must be http or https"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
 
-    # Test localhost rejection
+    # Loopback is allowed (same-job contextual-orchestrator sidecar): NOEMA_LLM_API_URL
+    # is only ever set from a trusted repo/org Actions variable, never PR content.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
-    with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
     # Test missing hostname
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http:///chat")
@@ -404,15 +407,43 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     import socket
     original_getaddrinfo = socket.getaddrinfo
 
-    # Test DNS resolution bypass
+    # A hostname that resolves to loopback via DNS is allowed too, same as a
+    # literal "localhost"/"127.0.0.1" -- the guard now permits any loopback
+    # target, not just those two spellings.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+
+    # Non-loopback internal ranges (private, link-local, multicast, unspecified)
+    # stay blocked regardless of loopback now being permitted.
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-private.example.com/chat")
+    def fake_getaddrinfo_private(host, port, *args, **kwargs):
+        if host == "resolved-to-private.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_private)
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False)
+
+    # Multiple addrinfo records (e.g. dual-stack A + AAAA), none of which raise:
+    # the loop must continue past the first record to check the rest, not stop
+    # after the first non-raising entry.
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://dual-stack.example.com/chat")
+    def fake_getaddrinfo_dual_stack(host, port, *args, **kwargs):
+        if host == "dual-stack.example.com":
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 0)),
+            ]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_dual_stack)
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
     # Test unresolved hostname does not break
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")

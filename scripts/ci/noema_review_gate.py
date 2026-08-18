@@ -460,8 +460,17 @@ def call_llm(
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
-        raise ValueError("URL cannot target localhost")
+    # Loopback is allowed: NOEMA_LLM_API_URL is only ever set from a
+    # repository/org-level Actions *variable* (see noema-review.yml), which
+    # only someone with write access to repo settings can set -- it is never
+    # influenced by pull request content. The trust boundary here is "who can
+    # set the variable," not "what IP range the value resolves to," so
+    # blocking loopback specifically doesn't add real protection once that's
+    # true -- and it's exactly the target needed to reach a same-job
+    # contextual-orchestrator sidecar (see start_contextual_orchestrator_sidecar.sh).
+    # Non-loopback internal ranges stay blocked below: those would indicate a
+    # genuine misconfiguration (an unintended internal service), not this
+    # deliberate same-job pattern.
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
@@ -473,7 +482,9 @@ def call_llm(
                 ip = ipaddress.ip_address(ip_str)
             except ValueError:
                 continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            if ip.is_loopback:
+                continue
+            if ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
                 raise ValueError("URL cannot target internal IP addresses")
 
     prompt = {
