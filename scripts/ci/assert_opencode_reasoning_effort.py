@@ -5,9 +5,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+_JSONC_LINE_COMMENT = re.compile(r"^[ \t]*//.*$", re.MULTILINE)
+
+
+def strip_jsonc_line_comments(text: str) -> str:
+    """Strip whole-line ``//`` comments so JSONC content parses as strict JSON.
+
+    Only strips a ``//`` that starts a line (after leading whitespace); this
+    file's comments are always written that way, never trailing after a JSON
+    token, so this cannot accidentally eat a string value containing "//".
+    """
+    return _JSONC_LINE_COMMENT.sub("", text)
 
 
 def is_known_reasoning_capable(model_name: str) -> bool:

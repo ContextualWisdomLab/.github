@@ -30,6 +30,8 @@ CENTRAL_FALLBACK_ENV = {
 INHERITED_PROVIDER_CREDENTIAL_ENV = {
     "NVIDIA_API_KEY",
     "NVIDIA_NIM_API_KEY",
+    "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+    "CONTEXTUAL_ORCHESTRATOR_TOKEN",
 }
 
 
@@ -833,6 +835,39 @@ def test_nvidia_nim_candidate_requires_key(
     assert result.returncode == 1
     assert "scoped NVIDIA_NIM_API_KEY is not configured" in result.stdout
     assert "attempt 1/1" not in result.stdout
+
+
+def test_contextual_orchestrator_candidate_requires_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """contextual-orchestrator is skipped cleanly when its sidecar never started."""
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "ambient-token")
+    result = run_failed_model(
+        tmp_path,
+        model_candidates="contextual-orchestrator/contextual-orchestrator",
+    )
+
+    assert result.returncode == 1
+    assert "contextual-orchestrator sidecar did not start" in result.stdout
+    assert "attempt 1/1" not in result.stdout
+
+
+def test_contextual_orchestrator_candidate_runs_when_sidecar_started(
+    tmp_path: Path,
+) -> None:
+    """contextual-orchestrator is attempted once its sidecar has published a base URL."""
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"decision":"approve"}',
+        extra_env={
+            "CONTEXTUAL_ORCHESTRATOR_BASE_URL": "http://127.0.0.1:8000/v1",
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN": "fake-sidecar-token",
+        },
+        model_candidates="contextual-orchestrator/contextual-orchestrator",
+    )
+
+    assert "attempt 1/1" in result.stdout
 
 
 def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:

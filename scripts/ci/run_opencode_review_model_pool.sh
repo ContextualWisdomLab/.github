@@ -361,6 +361,13 @@ is_openrouter_candidate() {
 	esac
 }
 
+is_contextual_orchestrator_candidate() {
+	case "$1" in
+	contextual-orchestrator/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_nvidia_nim_candidate() {
 	case "$1" in
 	nvidia-nim/*) return 0 ;;
@@ -414,6 +421,10 @@ should_skip_model_candidate() {
 	fi
 	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
 		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
+	if is_contextual_orchestrator_candidate "$model_candidate" && [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ]; then
+		printf 'Skipping OpenCode %s because the contextual-orchestrator sidecar did not start (no upstream provider credential configured); falling back to the next provider-qualified candidate.\n' "$model_candidate"
 		return 0
 	fi
 	return 1

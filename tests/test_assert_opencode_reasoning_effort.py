@@ -168,6 +168,24 @@ def test_load_config_tolerates_real_opencode_jsonc_comment_style(tmp_path):
 
     assert config["model"] == "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
 
+def test_load_config_tolerates_jsonc_line_comments(tmp_path):
+    """Leading comments in provider configuration must not break parsing."""
+    config_path = tmp_path / "opencode.jsonc"
+    config_path.write_text(
+        "{\n"
+        "  // a standalone comment line, like the ones in the real config\n"
+        '  "provider": {\n'
+        "    // another comment, indented\n"
+        '    "github-models": { "models": {} }\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    config = guard.load_config(config_path)
+
+    assert config == {"provider": {"github-models": {"models": {}}}}
+
 
 def test_main_reports_all_candidate_errors(tmp_path, capsys):
     """The CLI validates every candidate before returning failure."""

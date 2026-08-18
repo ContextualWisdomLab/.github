@@ -99,7 +99,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "&& 'contextual-orchestrator/contextual-orchestrator "
+        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
@@ -122,6 +123,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
+        "contextual-orchestrator/contextual-orchestrator",
         "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
@@ -165,6 +167,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
     )
     assert candidate_pairs == [
+        ["contextual-orchestrator", "contextual-orchestrator"],
         ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
         ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
         ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
@@ -220,6 +223,18 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
         "limit"
     ] == {"context": 131072, "output": 8192}
+    contextual_orchestrator_provider = generated_config["provider"]["contextual-orchestrator"]
+    assert contextual_orchestrator_provider["options"] == {
+        "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+        "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}",
+    }
+    contextual_orchestrator_model = contextual_orchestrator_provider["models"][
+        "contextual-orchestrator"
+    ]
+    assert contextual_orchestrator_model["tool_call"] is True
+    # Not reasoning:true -- contextual-orchestrator routes to whichever upstream
+    # model it auto-selects, so a fixed reasoning capability can't be guaranteed.
+    assert contextual_orchestrator_model.get("reasoning") is not True
     scoped_provider_binding = (
         "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
     )
@@ -244,7 +259,10 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         privileged_review_job.count(
             "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
         )
-        == 2
+        # 2 for the existing NVIDIA-NIM-direct opencode.jsonc bindings, plus 1
+        # more where the contextual-orchestrator sidecar step forwards the
+        # same scoped secret so the sidecar can register it into its own KV.
+        == 3
     )
     for job_name, job_block in job_blocks.items():
         if job_name == "opencode-review-target":
@@ -1525,7 +1543,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "'contextual-orchestrator/contextual-orchestrator "
+        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
