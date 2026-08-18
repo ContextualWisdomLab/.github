@@ -161,13 +161,13 @@ extract_strix_report_model_markers() {
 
     if (/^### Strix vulnerability report window/i) {
       $in_window = 1;
-      while (m{(?:model|for model)[[:space:]]+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)}gi) {
+      while (m{(?:model|for model)[[:space:]]+((?:nvidia[-_]nim|github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)}gi) {
         print "$1\n";
       }
       next;
     }
     next unless $in_window;
-    if (m{(?:^|[[:space:]])Model[[:space:]]+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)}i) {
+    if (m{(?:^|[[:space:]])Model[[:space:]]+((?:nvidia[-_]nim|github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)}i) {
       print "$1\n";
     }
   ' "$FAILED_CHECK_EVIDENCE_FILE" | sort -u
@@ -184,7 +184,7 @@ from pathlib import Path
 
 control = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 pattern = re.compile(
-    r"strix|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report",
+    r"strix|nvidia[-_]nim/|github[-_]models/|deepseek/|openai/gpt-|vertex_ai/|Vulnerability Report",
     re.IGNORECASE,
 )
 count = 0

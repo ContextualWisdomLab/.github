@@ -2382,6 +2382,44 @@ EOF
 	set -e
 	assert_equals "0" "$rc" "failed-check review validator accepts Strix log-backed findings"
 
+	cat >"$evidence_file" <<'EOF'
+## Failed check: Strix Security Scan/strix
+
+### Failed job steps
+
+- step 6: Self-test Strix gate script (failure)
+
+### Strix vulnerability report window 1
+
+Model nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 Vulnerabilities 1
+│  Vulnerability Report                                                        │
+│  Title: Authentication Bypass via X-Dev-User Header                          │
+│  Severity: CRITICAL                                                          │
+│  Endpoint: /api/me                                                           │
+│  Method: GET                                                                 │
+│    Location 1: backend/app/auth.py:132-135                                   │
+EOF
+	cat >"$control_json" <<'EOF'
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135.","findings":[{"path":"backend/app/auth.py","line":132,"severity":"CRITICAL","title":"Authentication Bypass via X-Dev-User Header","problem":"Strix Security Scan/strix failed with a Vulnerability Report for Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The review mapped the Strix title and location but omitted the NIM model id from the report window.","fix_direction":"Remove the unauthenticated fallback at backend/app/auth.py:132-135.","regression_test_direction":"Add auth tests for the request path.","suggested_diff":"diff --git a/backend/app/auth.py b/backend/app/auth.py\n--- a/backend/app/auth.py\n+++ b/backend/app/auth.py\n@@ -132 +132 @@\n-old\n+new"}]}
+EOF
+	set +e
+	bash "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" \
+		"$control_json" "$failed_checks_file" "$evidence_file" >"$tmp_dir/nim-omit.out" 2>"$tmp_dir/nim-omit.err"
+	rc=$?
+	set -e
+	assert_equals "4" "$rc" "failed-check review validator requires mapping nvidia-nim report models"
+	assert_file_contains "$tmp_dir/nim-omit.out" "Strix vulnerability reports were not mapped to distinct source-backed findings" "failed-check validator treats nvidia-nim report windows as known models, not unknown-model"
+
+	cat >"$control_json" <<'EOF'
+{"head_sha":"abc123","run_id":"42","run_attempt":"1","result":"REQUEST_CHANGES","reason":"Strix Security Scan/strix failed","summary":"Strix Security Scan/strix failed in Self-test Strix gate script and reported nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 Authentication Bypass via X-Dev-User Header with Severity: CRITICAL at backend/app/auth.py:132-135.","findings":[{"path":"backend/app/auth.py","line":132,"severity":"CRITICAL","title":"Authentication Bypass via X-Dev-User Header","problem":"Strix Security Scan/strix failed with nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 Vulnerability Report Authentication Bypass via X-Dev-User Header, Severity: CRITICAL, /api/me, Method: GET, backend/app/auth.py:132-135.","root_cause":"The failed Strix NIM report identifies the backend auth fallback line.","fix_direction":"Remove the unauthenticated fallback at backend/app/auth.py:132-135.","regression_test_direction":"Add auth tests for the request path.","suggested_diff":"diff --git a/backend/app/auth.py b/backend/app/auth.py\n--- a/backend/app/auth.py\n+++ b/backend/app/auth.py\n@@ -132 +132 @@\n-old\n+new"}]}
+EOF
+	set +e
+	bash "$REPO_ROOT/scripts/ci/validate_opencode_failed_check_review.sh" \
+		"$control_json" "$failed_checks_file" "$evidence_file" >"$tmp_dir/nim-ok.out" 2>"$tmp_dir/nim-ok.err"
+	rc=$?
+	set -e
+	assert_equals "0" "$rc" "failed-check review validator accepts a source-backed nvidia-nim report mapping"
+
 	rm -rf "$tmp_dir"
 }
 
