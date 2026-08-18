@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   required-workflow-bootstrap:
@@ -30,6 +31,97 @@ jobs:
         run: >-
           echo "Required OpenCode workflow materialized without checking out or
           executing pull-request content."
+
+      - name: Resolve immutable central policy source
+        id: trusted_source
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          expected_repository="ContextualWisdomLab/.github"
+          expected_file=".github/workflows/opencode-review.yml"
+
+          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
+            printf '::error::Required workflow repository resolved to %s, expected %s.\n' \
+              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
+            exit 1
+          fi
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Required workflow SHA is missing or malformed: %s.\n' \
+              "${WORKFLOW_SHA:-<empty>}"
+            exit 1
+          fi
+          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
+            printf '::error::Required workflow file resolved to %s, expected %s.\n' \
+              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
+            exit 1
+          fi
+          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
+          case "$WORKFLOW_REF" in
+            "$expected_ref_prefix"*) ;;
+            *)
+              printf '::error::Required workflow ref is missing or inconsistent: %s.\n' \
+                "${WORKFLOW_REF:-<empty>}"
+              exit 1
+              ;;
+          esac
+
+          {
+            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
+            printf 'sha=%s\n' "$WORKFLOW_SHA"
+            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Checkout immutable central policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.trusted_source.outputs.repository }}
+          ref: ${{ steps.trusted_source.outputs.sha }}
+          path: .cwl-required-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable central policy checkout
+        env:
+          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
+          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          cd .cwl-required-source
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            printf '::error::Checked-out policy SHA %s does not match workflow SHA %s.\n' \
+              "$actual_sha" "$EXPECTED_SHA"
+            exit 1
+          fi
+          if [ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]; then
+            printf '::error::Required workflow source file is missing or symlinked: %s.\n' \
+              "$EXPECTED_FILE"
+            exit 1
+          fi
+          if [ ! -f scripts/ci/pingora_edge_policy.py ] || [ -L scripts/ci/pingora_edge_policy.py ]; then
+            echo "::error::Trusted Pingora edge policy helper is missing or symlinked."
+            exit 1
+          fi
+
+      - name: Enforce Cloudflare Pingora edge policy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_ACTION: ${{ github.event.action || 'unknown' }}
+        run: |
+          set -euo pipefail
+          python3 .cwl-required-source/scripts/ci/pingora_edge_policy.py \
+            --repository "$TARGET_REPOSITORY" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --head-sha "$PULL_REQUEST_HEAD_SHA" \
+            --event-action "$EVENT_ACTION" \
+            --api-url "https://api.github.com"
 
   coverage-source-tree:
     name: coverage-source-tree
