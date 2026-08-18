@@ -39,8 +39,7 @@ remediation feasibility before editing. It must:
 5. Dispatch at most one feasible repair; otherwise leave the branch unchanged
    and continue productive non-conflicting work.
 
-A queued check remains a merge blocker but is not a code defect. Independent
-non-author approval is an external authorization gate and is never synthesized
+A queued check remains a merge blocker but is not a code defect. The independent non-author approval remains an external authorization gate and is never synthesized
 by the repair worker. The worker cannot approve, merge, release, weaken branch
 protection, reinterpret a missing sandbox capability as success, or manufacture
 passing evidence.
