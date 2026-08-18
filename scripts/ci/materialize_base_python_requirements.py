@@ -41,17 +41,9 @@ TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
 TRUSTED_UV_VERSION_OUTPUT = f"uv {TRUSTED_UV_VERSION} ({TRUSTED_UV_TARGET_TRIPLE})"
 TRUSTED_UV_ARCHIVE_URL = (
-    "https://github.com/astral-sh/uv/releases/download/0.12.1/"
+    "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
 )
-TRUSTED_UV_RELEASE_HOST = "github.com"
-TRUSTED_UV_ASSET_HOSTS = frozenset(
-    {
-        "release-assets.githubusercontent.com",
-        "objects.githubusercontent.com",
-    }
-)
-TRUSTED_UV_FINAL_HOSTS = frozenset({TRUSTED_UV_RELEASE_HOST, *TRUSTED_UV_ASSET_HOSTS})
 TRUSTED_UV_ARCHIVE_SHA256 = (
     "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 )
@@ -60,51 +52,10 @@ TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
-TRUSTED_UV_ORIGIN_ERROR = (
-    "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
-)
 
 
-def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
-    """Return whether one parsed URL uses the implicit or explicit HTTPS port."""
-    try:
-        return parsed.port in (None, 443)
-    except ValueError:
-        return False
-
-
-def _is_trusted_uv_https_host(
-    url: str,
-    allowed_hosts: frozenset[str],
-) -> bool:
-    """Return whether ``url`` is HTTPS, default-port, and host-allowlisted."""
-    parsed = urllib.parse.urlparse(url)
-    return (
-        parsed.scheme == "https"
-        and parsed.hostname in allowed_hosts
-        and parsed.username is None
-        and parsed.password is None
-        and _https_default_port(parsed)
-    )
-
-
-def _is_trusted_uv_release_request(url: str) -> bool:
-    """Return whether the current request is still the GitHub Releases origin."""
-    return _is_trusted_uv_https_host(url, frozenset({TRUSTED_UV_RELEASE_HOST}))
-
-
-def _is_trusted_uv_asset_location(url: str) -> bool:
-    """Return whether the next hop is an official GitHub release-asset host."""
-    return _is_trusted_uv_https_host(url, TRUSTED_UV_ASSET_HOSTS)
-
-
-def _is_trusted_uv_final_origin(url: str) -> bool:
-    """Return whether the completed response stayed on a trusted HTTPS origin."""
-    return _is_trusted_uv_https_host(url, TRUSTED_UV_FINAL_HOSTS)
-
-
-class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
-    """Follow one GitHub Releases hop onto the official asset CDN only."""
+class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject every redirect before urllib issues a request to its target."""
 
     def redirect_request(
         self,
@@ -114,31 +65,18 @@ class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
         message: str,
         headers: Any,
         new_url: str,
-    ) -> urllib.request.Request:
-        """Allow github.com → GitHub asset CDN and reject every other hop."""
-        if not _is_trusted_uv_release_request(request.full_url) or not (
-            _is_trusted_uv_asset_location(new_url)
-        ):
-            raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
-        followed = super().redirect_request(
-            request,
-            response,
-            code,
-            message,
-            headers,
-            new_url,
-        )
-        if followed is None:
-            raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
-        return followed
+    ) -> None:
+        """Fail closed for all redirect status codes and target locations."""
+        del request, response, code, message, headers, new_url
+        raise RuntimeError("trusted uv archive redirects are forbidden")
 
 
 @functools.cache
 def _install_trusted_uv_url_opener() -> None:
-    """Install one process-wide no-proxy opener for the fixed GitHub URL."""
+    """Install one process-wide no-proxy, no-redirect opener for the fixed URL."""
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
-        _TrustedUvReleaseAssetRedirects(),
+        _RejectTrustedUvRedirects(),
     )
     urllib.request.install_opener(opener)
 
@@ -306,12 +244,27 @@ def _download_trusted_uv_archive() -> bytes:
         # prove that neither user data nor repository content selects a scheme,
         # host, path, query, fragment, method, or request header.
         with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            "https://github.com/astral-sh/uv/releases/download/0.12.1/"
+            "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
             "uv-x86_64-unknown-linux-gnu.tar.gz",
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
-            if not _is_trusted_uv_final_origin(response.geturl()):
-                raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
+            final_url = urllib.parse.urlparse(response.geturl())
+            try:
+                final_port = final_url.port
+            except ValueError as exc:
+                raise RuntimeError(
+                    "trusted uv archive redirected outside the fixed "
+                    "releases.astral.sh HTTPS origin"
+                ) from exc
+            if (
+                (final_url.scheme, final_url.hostname)
+                != ("https", "releases.astral.sh")
+                or final_port not in (None, 443)
+            ):
+                raise RuntimeError(
+                    "trusted uv archive redirected outside the fixed "
+                    "releases.astral.sh HTTPS origin"
+                )
             payload = bytearray()
             while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
                 chunk = response.read(

@@ -1,11 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // NOT switched to "contextual-orchestrator/contextual-orchestrator" yet:
-  // that requires CONTEXTUAL_ORCHESTRATOR_BASE_URL/_TOKEN to be provisioned
-  // first (see the "contextual-orchestrator" provider block below).
   "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
   "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
-  "enabled_providers": ["nvidia-nim", "github-models", "contextual-orchestrator"],
+  "enabled_providers": ["nvidia-nim", "github-models"],
   "lsp": false,
   "mcp": {},
   "permission": {
@@ -115,7 +112,7 @@
             "output": 100000
           }
         },
-        "openai/gpt-5-chat": {
+        "openai/gpt-4o": {
           "name": "OpenAI GPT-5 Chat",
           "tool_call": true,
           "reasoning": true,
@@ -371,34 +368,6 @@
           "limit": {
             "context": 131072,
             "output": 8192
-          }
-        }
-      }
-    },
-    // Added (not yet the default -- see model/small_model above): the org's
-    // contextual-orchestrator LLM gateway. It auto-discovers models across
-    // Bytez/NVIDIA NIM (x2 keys)/OpenRouter/OpenAI from KV-registered
-    // credentials and auto-optimizes routing by cost, so pointing OpenCode at
-    // one model id here delegates upstream selection to the gateway. Requires
-    // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN to be
-    // provisioned as repo/org Actions variables before switching the default
-    // model/small_model above to "contextual-orchestrator/contextual-orchestrator";
-    // until then this provider is defined but unused, so OpenCode keeps working.
-    "contextual-orchestrator": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Contextual Orchestrator",
-      "options": {
-        "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
-        "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
-      },
-      "models": {
-        "contextual-orchestrator": {
-          "name": "Contextual Orchestrator (auto-routed)",
-          "tool_call": true,
-          "reasoning": true,
-          "limit": {
-            "context": 200000,
-            "output": 32768
           }
         }
       }

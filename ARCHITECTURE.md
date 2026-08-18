@@ -108,9 +108,7 @@ sequenceDiagram
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
 CI installs Python tools only with `pip install --require-hashes`. Contract
-tests pin workflow structure and governance prose so drift fails closed. The
-trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
-`uv` 0.12.1; `releases.astral.sh` is not the network sink.
+tests pin workflow structure and governance prose so drift fails closed.
 
 ## Related durable documents
 
