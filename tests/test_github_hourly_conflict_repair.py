@@ -1,6 +1,9 @@
 """Regression contracts for unattended OpenCode merge-conflict repair."""
 
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from scripts.ci import pr_review_fix_scheduler as scheduler
 
@@ -34,6 +37,45 @@ def test_explicit_policy_dispatches_unreviewed_conflict() -> None:
 
     assert needs_repair
     assert "fresh review and checks" in reasons[0]
+
+
+def test_scheduler_dispatches_conflict_mode_for_unreviewed_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trusted queue must reach the existing bounded conflict worker."""
+    arguments = scheduler.parse_args(
+        [
+            "--repo",
+            "ContextualWisdomLab/.github",
+            "--base-branch",
+            "main",
+            "--resolve-unreviewed-conflicts",
+            "--dry-run",
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def capture_dispatch(_repo: str, _pr: dict[str, Any], **kwargs: Any) -> None:
+        """Capture dispatch arguments without invoking GitHub."""
+        captured.update(kwargs)
+
+    monkeypatch.setattr(scheduler, "dispatch_autofix", capture_dispatch)
+    monkeypatch.setattr(
+        scheduler,
+        "create_fix_marker",
+        lambda *_args, **_kwargs: None,
+    )
+
+    action, reasons = scheduler.inspect_pr(
+        "ContextualWisdomLab/.github",
+        _unreviewed_conflict(),
+        arguments,
+        comments=[],
+    )
+
+    assert action == "dispatch"
+    assert "fresh review and checks" in reasons[0]
+    assert captured["resolve_conflict"] is True
 
 
 def test_default_library_policy_remains_backward_compatible() -> None:
