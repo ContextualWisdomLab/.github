@@ -6,6 +6,10 @@ on:
       - fix/trusted-uv-flat-publication-current-main
     paths:
       - .github/workflows/one-shot-flat-lock-bootstrap.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-flat-lock-bootstrap.yml
 
 permissions:
   contents: write
@@ -14,17 +18,25 @@ jobs:
   bind-current-trigger:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
-      github.ref == 'refs/heads/fix/trusted-uv-flat-publication-current-main'
+      (
+        github.ref == 'refs/heads/fix/trusted-uv-flat-publication-current-main' ||
+        (
+          github.event.pull_request.number == 1124 &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'fix/trusted-uv-flat-publication-current-main'
+        )
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      EXPECTED_PARENT_SHA: af5e8901937720a5613866e94b0fbf2a689c0364
+      EXPECTED_PARENT_SHA: bdf0d167b1eb440fdea4ef9849d55807775241d9
       TARGET_BRANCH: fix/trusted-uv-flat-publication-current-main
+      TRIGGER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact bootstrap trigger
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TRIGGER_SHA }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -32,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$TRIGGER_SHA"
           python - <<'PY'
           import os
           from pathlib import Path
@@ -40,7 +52,7 @@ jobs:
           workflow = Path(".github/workflows/one-shot-flat-lock-green.yml")
           text = workflow.read_text(encoding="utf-8")
           old_parent = "EXPECTED_PARENT_SHA: acfd2faea6c928ead4a3957506d6063558887002"
-          new_parent = f"EXPECTED_PARENT_SHA: {os.environ['GITHUB_SHA']}"
+          new_parent = f"EXPECTED_PARENT_SHA: {os.environ['TRIGGER_SHA']}"
           old_branch_check = '          test "$(git branch --show-current)" = "$TARGET_BRANCH"\n'
           new_branch_check = '          test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"\n'
           if text.count(old_parent) != 1 or text.count(old_branch_check) != 1:
