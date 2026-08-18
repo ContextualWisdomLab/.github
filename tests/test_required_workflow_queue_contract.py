@@ -955,6 +955,16 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "repository_pattern=" in support_probe
     assert "Malformed revision" in support_probe
     assert "Malformed repository" in support_probe
+    identity_errors = [
+        line
+        for line in support_probe.splitlines()
+        if "curl exit uncalled" in line
+    ]
+    assert identity_errors
+    for line in identity_errors:
+        assert "${BASE_SHA}" not in line
+        assert "${HEAD_SHA}" not in line
+        assert "${REPOSITORY}" not in line
     assert '"$repository_owner" = ".."' in support_probe
     assert '"$repository_name" = ".."' in support_probe
     assert '""|000)' in support_probe
