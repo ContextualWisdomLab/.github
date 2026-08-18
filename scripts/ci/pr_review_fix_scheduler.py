@@ -313,11 +313,13 @@ def inspect_pr(
         else:
             needs_resolve, resolve_reasons = needs_conflict_resolution(
                 pr,
-                allow_unreviewed=args.resolve_unreviewed_conflicts,
+                allow_unreviewed=bool(
+                    getattr(args, "resolve_unreviewed_conflicts", False)
+                ),
             )
             if not needs_resolve:
                 return "skip", (
-                    "no current-head autofixable review, failed-check RCA, or merge conflict",
+                    "no current-head autofixable review, failed-check RCA, or approved merge conflict",
                 )
             resolve_conflict = True
             repair_mode = "conflict"
@@ -369,7 +371,9 @@ def process_queue(args: argparse.Namespace) -> int:
         needs_rca, _ = needs_rca_repair(pr)
         needs_resolve, _ = needs_conflict_resolution(
             pr,
-            allow_unreviewed=args.resolve_unreviewed_conflicts,
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
         )
         if needs_fix or needs_rca or needs_resolve:
             prs_needing_comments.append(pr)
