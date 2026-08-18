@@ -1,0 +1,68 @@
+name: One-shot Flat Lock Bootstrap
+
+on:
+  push:
+    branches:
+      - fix/trusted-uv-flat-publication-current-main
+    paths:
+      - .github/workflows/one-shot-flat-lock-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bind-current-trigger:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.ref == 'refs/heads/fix/trusted-uv-flat-publication-current-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_PARENT_SHA: af5e8901937720a5613866e94b0fbf2a689c0364
+      TARGET_BRANCH: fix/trusted-uv-flat-publication-current-main
+    steps:
+      - name: Checkout exact bootstrap trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Bind GREEN workflow to the resulting commit parent
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/one-shot-flat-lock-green.yml")
+          text = workflow.read_text(encoding="utf-8")
+          old_parent = "EXPECTED_PARENT_SHA: acfd2faea6c928ead4a3957506d6063558887002"
+          new_parent = f"EXPECTED_PARENT_SHA: {os.environ['GITHUB_SHA']}"
+          old_branch_check = '          test "$(git branch --show-current)" = "$TARGET_BRANCH"\n'
+          new_branch_check = '          test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"\n'
+          if text.count(old_parent) != 1 or text.count(old_branch_check) != 1:
+              raise SystemExit("one-shot binding boundary drifted")
+          workflow.write_text(
+              text.replace(old_parent, new_parent, 1).replace(
+                  old_branch_check, new_branch_check, 1
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Publish bound workflow and remove bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-flat-lock-bootstrap.yml
+          git add -A
+          git config user.name "CWL One-shot Bootstrap"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: bind flat-lock GREEN to exact trigger"
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
