@@ -20,12 +20,66 @@ def is_known_reasoning_capable(model_name: str) -> bool:
     )
 
 
+def strip_jsonc_comments(text: str) -> str:
+    """Return ``text`` with ``//`` and ``/* */`` comments removed outside strings.
+
+    ``opencode.jsonc`` is genuinely JSONC (it carries explanatory ``//`` notes,
+    e.g. above the ``contextual-orchestrator`` provider block), so a plain
+    :func:`json.loads` rejects it. Comment markers are only recognized outside
+    JSON string literals, so a string value that itself contains ``//`` (the
+    ``"$schema": "https://opencode.ai/config.json"`` line) is preserved
+    unchanged. Newlines inside removed content are kept so any remaining
+    ``json.JSONDecodeError`` still reports an accurate line number.
+    """
+    result: list[str] = []
+    in_string = False
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if char == "\\" and index + 1 < length:
+                result.append(text[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            index += 2
+            while index < length and text[index] not in "\r\n":
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            index += 2
+            while index + 1 < length and not (
+                text[index] == "*" and text[index + 1] == "/"
+            ):
+                if text[index] in "\r\n":
+                    result.append(text[index])
+                index += 1
+            index += 2
+            continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
 def load_config(path: Path) -> dict[str, Any]:
-    """Load the OpenCode JSON config."""
+    """Load the OpenCode JSONC config, tolerating ``//`` and ``/* */`` comments."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw_text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise SystemExit(f"OpenCode config not found: {path}") from None
+    try:
+        return json.loads(strip_jsonc_comments(raw_text))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"OpenCode config is not valid JSON: {path}: {exc}") from None
 
