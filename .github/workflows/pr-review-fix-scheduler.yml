@@ -23,6 +23,11 @@ on:
         required: false
         default: ""
         type: string
+      resolve_unreviewed_conflicts:
+        description: Dispatch bounded conflict repair before the original head is reviewed
+        required: false
+        default: true
+        type: boolean
       retry_hours:
         description: Minimum hours before redispatching autofix for the same head
         required: false
@@ -83,6 +88,7 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
+      RESOLVE_UNREVIEWED_CONFLICTS: ${{ github.event.client_payload.resolve_unreviewed_conflicts == true || github.event.client_payload.resolve_unreviewed_conflicts == 'true' || inputs.resolve_unreviewed_conflicts == true }}
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
@@ -104,20 +110,25 @@ jobs:
               "${TARGET_REPOSITORY:-<empty>}"
             exit 1
           fi
-          if [ -z "$ALLOWED_TARGET_REPOSITORIES" ]; then
-            echo "::error::Scheduler target repository allowlist is not configured."
-            exit 1
-          fi
 
           target_allowed=false
-          IFS=',' read -r -a allowed_targets <<<"$ALLOWED_TARGET_REPOSITORIES"
-          for candidate in "${allowed_targets[@]}"; do
-            candidate="${candidate//[[:space:]]/}"
-            if [ -n "$candidate" ] && [ "$candidate" = "$TARGET_REPOSITORY" ]; then
-              target_allowed=true
-              break
+          if [ "$TARGET_REPOSITORY" = "${GITHUB_REPOSITORY}" ]; then
+            echo "Self-targeted scheduler invocation uses the protected caller repository."
+            target_allowed=true
+          else
+            if [ -z "$ALLOWED_TARGET_REPOSITORIES" ]; then
+              echo "::error::Scheduler target repository allowlist is not configured."
+              exit 1
             fi
-          done
+            IFS=',' read -r -a allowed_targets <<<"$ALLOWED_TARGET_REPOSITORIES"
+            for candidate in "${allowed_targets[@]}"; do
+              candidate="${candidate//[[:space:]]/}"
+              if [ -n "$candidate" ] && [ "$candidate" = "$TARGET_REPOSITORY" ]; then
+                target_allowed=true
+                break
+              fi
+            done
+          fi
           if [ "$target_allowed" != "true" ]; then
             printf '::error::Scheduler target repository is not allowlisted: %s.\n' \
               "$TARGET_REPOSITORY"
@@ -127,7 +138,7 @@ jobs:
           # A reusable workflow receives its caller's original event payload,
           # so the hourly callers arrive as `schedule`, not `workflow_call`.
           # Only the direct repository_dispatch surface needs sender binding;
-          # every invocation still passes the target allowlist above.
+          # cross-repository invocations still pass the configured allowlist.
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
               [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
@@ -308,6 +319,9 @@ jobs:
             --autofix-workflow "$AUTOFIX_WORKFLOW"
             --autofix-repository "$AUTOFIX_REPOSITORY"
           )
+          if [ "$RESOLVE_UNREVIEWED_CONFLICTS" = "true" ]; then
+            args+=(--resolve-unreviewed-conflicts)
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
