@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      EXPECTED_PARENT_SHA: c3d4205dce7998bc8671121e5e2d8bf88e8b1781
+      EXPECTED_PARENT_SHA: 56a0b0f132ad271fcdc1b6dcf67a8a5fb509828c
       TARGET_BRANCH: fix/trusted-uv-flat-publication-current-main
       TRIGGER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -202,10 +202,7 @@ https://pip.pypa.io/en/stable/topics/secure-installs/
       - name: Remove temporary workflows from the verification tree
         run: |
           set -euo pipefail
-          rm -f \
-            .github/workflows/one-shot-flat-lock-bootstrap.yml \
-            .github/workflows/one-shot-flat-lock-green.yml \
-            .github/workflows/one-shot-flat-lock-green-v2.yml
+          rm -f .github/workflows/one-shot-flat-lock-green-v2.yml
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
