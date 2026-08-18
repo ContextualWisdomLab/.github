@@ -101,39 +101,29 @@ def validate_candidate(config: dict[str, Any], candidate: str) -> list[str]:
     except ValueError as exc:
         return [str(exc)]
 
-    if not config_for_model and (
-        provider == "github-models" or is_known_reasoning_capable(model_name)
-    ):
-        return [
-            f"OpenCode candidate {candidate} is not defined in opencode.jsonc "
-            f"under provider {provider}."
-        ]
     if not config_for_model:
+        if provider == "github-models" or is_known_reasoning_capable(model_name):
+            return [
+                f"OpenCode candidate {candidate} is not defined in opencode.jsonc "
+                f"under provider {provider}."
+            ]
         return []
 
     configured_reasoning = config_for_model.get("reasoning") is True
-    should_require_effort = configured_reasoning or is_known_reasoning_capable(model_name)
-    if not should_require_effort:
+    if not (configured_reasoning or is_known_reasoning_capable(model_name)):
         return []
 
     errors: list[str] = []
+    prefix = f"OpenCode reasoning-capable candidate {candidate} must set"
+    suffix = "in opencode.jsonc."
+
     if not configured_reasoning:
-        errors.append(
-            f"OpenCode reasoning-capable candidate {candidate} must set reasoning=true "
-            "in opencode.jsonc."
-        )
+        errors.append(f"{prefix} reasoning=true {suffix}")
     if (config_for_model.get("options") or {}).get("reasoningEffort") != "high":
-        errors.append(
-            f"OpenCode reasoning-capable candidate {candidate} must set "
-            "options.reasoningEffort=high in opencode.jsonc."
-        )
-    if ((config_for_model.get("variants") or {}).get("high") or {}).get(
-        "reasoningEffort"
-    ) != "high":
-        errors.append(
-            f"OpenCode reasoning-capable candidate {candidate} must set "
-            "variants.high.reasoningEffort=high in opencode.jsonc."
-        )
+        errors.append(f"{prefix} options.reasoningEffort=high {suffix}")
+    if ((config_for_model.get("variants") or {}).get("high") or {}).get("reasoningEffort") != "high":
+        errors.append(f"{prefix} variants.high.reasoningEffort=high {suffix}")
+
     return errors
 
 
