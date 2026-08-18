@@ -50,7 +50,7 @@ def test_identity_helpers_cover_malformed_and_noncanonical_checks() -> None:
     assert identity.normalize_result("nope") == "unknown"
     assert identity.check_head_sha({"headSha": "abc"}) == "abc"
     assert identity.check_workflow_name({"checkSuite": {"workflowRun": {}}}) == ""
-    assert identity.check_workflow_name({"app": {"name": "GitHub Actions"}}) == "GitHub Actions"
+    assert identity.check_workflow_name({"app": {"name": "GitHub Actions"}}) == ""
     assert identity.check_workflow_name({"check_suite": "bad"}) == ""
     assert identity.check_workflow_name({"check_suite": {"workflow_run": "bad"}}) == ""
     assert identity.check_workflow_name({"app": "nope"}) == ""
@@ -69,10 +69,22 @@ def test_identity_helpers_cover_malformed_and_noncanonical_checks() -> None:
     string_workflow = coverage_check(head=head)
     string_workflow["check_suite"] = {"workflow_run": {"workflow": "Required OpenCode Review"}}
     string_workflow["app"] = {"name": "GitHub Actions"}
-    assert identity.check_workflow_name(string_workflow) == "GitHub Actions"
+    assert identity.check_workflow_name(string_workflow) == ""
     missing_conclusion = coverage_check(head=head, conclusion="")
     with pytest.raises(identity.CoverageQuoteError, match="non-terminal"):
         identity.terminal_coverage_result([missing_conclusion], head)
+
+
+def test_app_only_check_run_is_still_canonical() -> None:
+    """A completed exact-head check with only an app.name (the real REST shape,
+    which never carries check_suite.workflow_run) must still be accepted."""
+    head = identity.KAEFA_78_HEAD
+    app_only = coverage_check(head=head, conclusion="success")
+    app_only["check_suite"] = {}
+    app_only["app"] = {"name": "GitHub Actions"}
+    assert identity.check_workflow_name(app_only) == ""
+    assert identity.is_canonical_coverage_check(app_only, head) is True
+    assert identity.terminal_coverage_result([app_only], head) == "success"
 
 
 def test_load_and_cli_verify_quoted_success(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -115,6 +127,19 @@ def test_load_and_cli_verify_quoted_success(tmp_path: Path, capsys, monkeypatch)
     assert identity.main(
         ["--head-sha", head, "--quoted-result", "success", "--check-runs-file", str(broken)]
     ) == 1
+
+
+def test_fetch_check_runs_rejects_unvalidated_repo_and_head_sha(monkeypatch) -> None:
+    """A malformed --repo or --head-sha never reaches the gh api path string."""
+
+    def unexpected_run(args, **kwargs):
+        raise AssertionError(f"gh must not be invoked with unvalidated input: {args!r}")
+
+    monkeypatch.setattr(identity.subprocess, "run", unexpected_run)
+    with pytest.raises(identity.CoverageQuoteError, match="owner/repo"):
+        identity.fetch_check_runs("../evil", identity.KAEFA_78_HEAD)
+    with pytest.raises(identity.CoverageQuoteError, match="40-character"):
+        identity.fetch_check_runs("ContextualWisdomLab/kaefa", "not-a-sha")
 
 
 def test_fetch_check_runs_parses_pages(monkeypatch) -> None:

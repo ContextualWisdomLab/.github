@@ -569,7 +569,11 @@ def distinct_surfaces(review_body: str, comment_body: str) -> None:
         raise ValueError("status comment must not contain the formal review overview")
     if "## Findings" in comment_body or "## 발견 사항" in comment_body:
         raise ValueError("status comment must not contain the formal review findings")
-    if "## OpenCode Review Overview" in review_body or "## OpenCode 게이트 상태" in review_body:
+    if (
+        "## OpenCode Review Status" in review_body
+        or "## OpenCode Review Overview" in review_body
+        or "## OpenCode 게이트 상태" in review_body
+    ):
         raise ValueError("formal review must not reuse the status-comment heading")
 
 

@@ -223,7 +223,7 @@ evidence_text = evidence_file.read_text(encoding="utf-8", errors="replace")
 
 ansi_re = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 model_re = re.compile(
-    r"(?:^|[\s])Model\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
+    r"(?:^|[\s])Model\s+((?:nvidia[-_]nim|github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)",
     re.IGNORECASE,
 )
 failed_model_re = re.compile(r"Strix run failed for model '([^']+)'")
@@ -236,7 +236,7 @@ clean_suffix_pipe_re = re.compile(r"\s*│.*$")
 clean_prefix_z_re = re.compile(r"^.*?[0-9]Z\s+")
 clean_whitespace_re = re.compile(r"\s+")
 new_field_re = re.compile(r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b", re.IGNORECASE)
-window_model_re = re.compile(r"(?:model|for model)\s+((?:github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)", re.IGNORECASE)
+window_model_re = re.compile(r"(?:model|for model)\s+((?:nvidia[-_]nim|github[-_]models|openai|deepseek|vertex_ai)/[A-Za-z0-9._/-]+)", re.IGNORECASE)
 continuation_border_re = re.compile(r"^[╭╰─]+$")
 field_title_re = re.compile(r"^Title:\s+(.+)", re.IGNORECASE)
 field_severity_re = re.compile(r"^Severity:\s+(CRITICAL|HIGH|MEDIUM|LOW|NONE)\b", re.IGNORECASE)

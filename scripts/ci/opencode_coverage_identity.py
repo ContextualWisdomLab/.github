@@ -17,6 +17,7 @@ from typing import Any
 CANONICAL_CHECK_NAME = "coverage-evidence"
 CANONICAL_WORKFLOW_NAMES = frozenset({"Required OpenCode Review"})
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 TERMINAL_RESULTS = frozenset(
     {"success", "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required"}
 )
@@ -45,7 +46,15 @@ def check_head_sha(check: Mapping[str, Any]) -> str:
 
 
 def check_workflow_name(check: Mapping[str, Any]) -> str:
-    """Return the workflow name that produced a check-run, if present."""
+    """Return the workflow name that produced a check-run, if present.
+
+    The REST list-check-runs response's ``check_suite`` object does not carry a
+    ``workflow_run`` field, so this almost always returns "". ``app.name`` is
+    always "GitHub Actions" for Actions-produced checks, not the workflow name,
+    so it is not an acceptable fallback: a canonical exact-head check would be
+    rejected by a workflow-name mismatch it can never satisfy. An empty result
+    defers to ``is_canonical_coverage_check``'s ``not workflow`` acceptance.
+    """
     suite = check.get("check_suite") or check.get("checkSuite") or {}
     if isinstance(suite, Mapping):
         run = suite.get("workflow_run") or suite.get("workflowRun") or {}
@@ -55,9 +64,6 @@ def check_workflow_name(check: Mapping[str, Any]) -> str:
                 name = str(workflow.get("name") or "").strip()
                 if name:
                     return name
-    app = check.get("app") or {}
-    if isinstance(app, Mapping):
-        return str(app.get("name") or "").strip()
     return ""
 
 
@@ -130,6 +136,10 @@ def load_check_runs(path: str | None) -> list[Mapping[str, Any]]:
 
 def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
     """Read exact-head check-runs through gh without invoking a shell."""
+    if not REPO_RE.fullmatch(repo):
+        raise CoverageQuoteError(f"coverage identity requires an owner/repo value, got {repo!r}")
+    if not SHA_RE.fullmatch(head_sha):
+        raise CoverageQuoteError("coverage identity requires a 40-character head SHA")
     completed = subprocess.run(
         [
             "gh",

@@ -43,7 +43,7 @@ MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 NIM_CHAT_HOST = "integrate.api.nvidia.com"
-FORBIDDEN_NOEMA_MODEL_MARKERS = ("gpt-5.6", "github-models", "copilot")
+FORBIDDEN_NOEMA_MODEL_MARKERS = ("gpt-5.6", "github-models", "github_models", "copilot")
 TRANSIENT_GH_ERROR_RE = re.compile(
     r"HTTP 429|HTTP 502|HTTP 503|No server is currently available to service your request",
     re.IGNORECASE,
@@ -74,7 +74,7 @@ def scrub_sensitive_data(text: str | None) -> str | None:
     return text
 
 
-def run(args: Sequence[str], *, stdin: str | None = None) -> str:
+def run(args: Sequence[str], *, stdin: str | None = None, retry: bool = True) -> str:
     """Run a command without invoking a shell and return stdout."""
     if isinstance(args, str):
         raise TypeError("run() requires argv, not a shell command string")
@@ -82,7 +82,7 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     last_stderr = ""
     last_returncode = 1
     attempts = 1
-    if argv and argv[0] == "gh":
+    if retry and argv and argv[0] == "gh":
         attempts = max(1, GH_TRANSIENT_RETRY_ATTEMPTS)
     attempt = 1
     while True:
@@ -683,6 +683,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     run(
         ["gh", "api", "-X", "POST", f"repos/{repo}/pulls/{number}/reviews", "--input", "-"],
         stdin=json.dumps(payload),
+        retry=False,
     )
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 

@@ -268,6 +268,13 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     bad_file.write_text("{}", encoding="utf-8")
     with pytest.raises(receipt.ReceiptGateError, match="JSON array"):
         receipt.load_reviews(str(bad_file))
+
+    def unexpected_run(args, **kwargs):
+        raise AssertionError(f"gh must not be invoked with unvalidated input: {args!r}")
+
+    monkeypatch.setattr(receipt.subprocess, "run", unexpected_run)
+    with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
+        receipt.fetch_reviews("../evil", 230)
     monkeypatch.setattr(
         receipt.sys,
         "stdin",

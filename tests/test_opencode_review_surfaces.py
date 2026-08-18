@@ -157,6 +157,8 @@ def test_distinct_surfaces_reject_duplicated_overview() -> None:
         surfaces.distinct_surfaces("review", "## Pull request overview\n")
     with pytest.raises(ValueError, match="formal review must not reuse"):
         surfaces.distinct_surfaces("## OpenCode Review Overview\n", "status")
+    with pytest.raises(ValueError, match="formal review must not reuse"):
+        surfaces.distinct_surfaces("## OpenCode Review Status\n", "status")
 
 
 def test_rejects_path_traversal() -> None:

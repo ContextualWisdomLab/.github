@@ -566,7 +566,11 @@ def test_format_findings_and_submit_review(monkeypatch):
 
     calls = []
     monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", "oidc")
-    monkeypatch.setattr(noema, "run", lambda args, stdin=None: calls.append((args, json.loads(stdin))) or "")
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda args, stdin=None, retry=True: calls.append((args, json.loads(stdin), retry)) or "",
+    )
     noema.submit_review(
         "owner/repo",
         7,
@@ -579,11 +583,27 @@ def test_format_findings_and_submit_review(monkeypatch):
     assert payload["commit_id"] == "head"
     assert "Noema LLM review" in payload["body"]
     assert "oidc" in payload["body"]
+    assert calls[0][2] is False
 
     calls.clear()
     noema.submit_review("owner/repo", 7, make_pr(), "", {"decision": "comment"})
     assert calls[0][1]["event"] == "COMMENT"
     assert "No blocking findings" in calls[0][1]["body"]
+    assert calls[0][2] is False
+
+
+def test_run_retry_false_skips_transient_gh_retry(monkeypatch) -> None:
+    """retry=False makes a single gh attempt even on a transient error."""
+    calls = {"n": 0}
+
+    def fake_run(argv, **_kwargs):
+        calls["n"] += 1
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="HTTP 503")
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        noema.run(["gh", "api", "-X", "POST", "repos/owner/repo/pulls/1/reviews"], retry=False)
+    assert calls["n"] == 1
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
@@ -636,6 +656,10 @@ def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://api.openai.com/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "gpt-5.6-sol")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "sk-test")
+    with pytest.raises(RuntimeError, match="must not use"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_MODEL", "github_models/openai/o3")
     with pytest.raises(RuntimeError, match="must not use"):
         noema.require_nim_runtime()
 

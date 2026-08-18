@@ -2115,7 +2115,20 @@ jobs:
 
           coverage_output_file="$(mktemp)"
           if [ -s "$summary_file" ]; then
-            cp "$summary_file" "$coverage_output_file"
+            # The trusted host validator rejects a sandbox output larger than
+            # 262144 bytes. Keep the published excerpt below that limit so a
+            # long measurement log cannot turn a passing gate into a blocker.
+            coverage_output_max_bytes=200000
+            summary_bytes="$(wc -c <"$summary_file" | tr -d '[:space:]')"
+            if [ "${summary_bytes:-0}" -le "$coverage_output_max_bytes" ]; then
+              cp "$summary_file" "$coverage_output_file"
+            else
+              {
+                head -c 120000 "$summary_file"
+                printf '\n\n... coverage log truncated: showing first 120000 and last 60000 of %s bytes; the complete log is in the job log and step summary ...\n\n' "$summary_bytes"
+                tail -c 60000 "$summary_file"
+              } >"$coverage_output_file"
+            fi
           else
             {
               printf '## Coverage Decision\n\n'
@@ -5210,8 +5223,16 @@ jobs:
             review_payload_file="$(mktemp)"
             review_response_file="$(mktemp)"
             if [ "$event" = "APPROVE" ]; then
-              live_draft="$(gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.draft')"
-              if [ "$live_draft" = "true" ]; then
+              local live_draft
+              if ! live_draft="$(
+                timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
+                  env GH_TOKEN="$review_head_guard_token" \
+                  gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.draft'
+              )"; then
+                printf '::error::draft state could not be read before APPROVE for head %s.\n' "$HEAD_SHA"
+                return 1
+              fi
+              if [ "$live_draft" != "false" ]; then
                 printf '::error::draft must never receive bot APPROVE for head %s.\n' "$HEAD_SHA"
                 return 1
               fi
@@ -6241,7 +6262,7 @@ jobs:
               printf 'Bounded PR evidence:\n<opencode-evidence>\n'
               sed -n '1,500p' "$OPENCODE_EVIDENCE_FILE"
               printf '\n</opencode-evidence>\n\n'
-              printf 'First line exactly:\n'
+              printf 'Then, after the review body, one line exactly:\n'
               printf '<!-- opencode-review-gate head_sha=%s run_id=%s run_attempt=%s -->\n' "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT"
               printf 'Then exactly one control block:\n'
               printf '<!-- opencode-review-control-v1\n'
