@@ -25,6 +25,13 @@ flowchart LR
   Products -->|"standalone or as module"| Buyer
 ```
 
+## OriginWeave hourly caller
+
+`originweave-hourly-review-repair.yml` is a thin, read-only caller at minute
+10. It names `ContextualWisdomLab/OriginWeave` and protected `main`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -94,7 +101,9 @@ sequenceDiagram
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
 CI installs Python tools only with `pip install --require-hashes`. Contract
-tests pin workflow structure and governance prose so drift fails closed.
+tests pin workflow structure and governance prose so drift fails closed. The
+trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
+`uv` 0.12.1; `releases.astral.sh` is not the network sink.
 
 ## Related durable documents
 
