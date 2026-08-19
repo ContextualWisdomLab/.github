@@ -1087,6 +1087,9 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
     assert "agents\\.exceptions\\.ModelBehaviorError:[[:space:]]*" in workflow
+    assert "ContextWindowExceededError" in workflow
+    assert "maximum context length" in workflow
+    assert "messages resulted in[[:space:]]+[0-9]+[[:space:]]+tokens" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow

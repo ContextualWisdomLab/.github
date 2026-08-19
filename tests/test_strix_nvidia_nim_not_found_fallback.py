@@ -293,6 +293,31 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_outer_workflow_neutralizes_context_window_overflow_without_findings(
+        self,
+    ) -> None:
+        """Treat a provider context overflow as backend failure, not a finding."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "openai.BadRequestError: maximum context length is 1000000 "
+                "tokens; messages resulted in 1438805 tokens\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
+    def test_outer_workflow_never_neutralizes_context_overflow_with_findings(
+        self,
+    ) -> None:
+        """Keep context overflow plus a reported vulnerability fail-closed."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "openai.BadRequestError: ContextWindowExceededError\n"
+                "Vulnerabilities 1\n"
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
