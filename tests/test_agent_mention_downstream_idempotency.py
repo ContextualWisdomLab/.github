@@ -32,6 +32,7 @@ def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
         assert "requested_agent" in text
+        assert "cancel-in-progress: false" in text
         assert "queue: max" in text
         assert "cancel-in-progress: true" not in text
         assert "^[0-9a-f]{64}$" in text
