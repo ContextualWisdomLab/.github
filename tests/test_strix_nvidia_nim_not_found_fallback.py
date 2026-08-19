@@ -73,52 +73,6 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     return completed.returncode == 0
 
 
-def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
-    """Extract one single-quoted POSIX ERE assigned in the Strix workflow."""
-
-    match = re.search(
-        rf"(?m)^\s+{re.escape(variable_name)}='([^']+)'$",
-        workflow,
-    )
-    if match is None:
-        raise AssertionError(f"missing workflow signal: {variable_name}")
-    return match.group(1)
-
-
-def _workflow_neutralizes(log_text: str) -> bool:
-    """Execute the outer workflow's backend-neutralization condition."""
-
-    workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-    backend_pattern = _workflow_signal_pattern(
-        workflow,
-        "backend_unavailable_signal",
-    )
-    vulnerability_pattern = _workflow_signal_pattern(
-        workflow,
-        "reported_vulnerability_signal",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-workflow-404-") as temp_dir:
-        log_path = Path(temp_dir) / "strix.log"
-        log_path.write_text(log_text, encoding="utf-8")
-        backend = subprocess.run(
-            ["grep", "-Eiq", backend_pattern, str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        vulnerability = subprocess.run(
-            ["grep", "-Eiq", vulnerability_pattern, str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    if backend.returncode not in {0, 1}:
-        raise AssertionError(backend.stderr)
-    if vulnerability.returncode not in {0, 1}:
-        raise AssertionError(vulnerability.stderr)
-    return backend.returncode == 0 and vulnerability.returncode == 1
-
-
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
     """Protect provider-scoped 404 fallback without weakening security gates."""
 
@@ -199,63 +153,18 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
 
-    def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
-        """Reject provider-like target text in the outer neutralization gate."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "source literal: Nvidia_nimException Error code: 404\n"
-            )
-        )
-        self.assertTrue(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: Nvidia_nimException - "
-                "Error code: 404\nVulnerabilities 0\n"
-            )
-        )
-
-    def test_outer_workflow_rejects_cross_line_signal_assembly(self) -> None:
-        """Require exception, provider, and 404 evidence on one physical line."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: provider unavailable\n"
-                "Nvidia_nimException Error code: 404\n"
-            )
-        )
-
-    def test_outer_workflow_rejects_nvidia_404_without_litellm_context(self) -> None:
-        """Require LiteLLM NotFoundError context, not just NVIDIA + 404."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "Nvidia_nimException Error code: 404\nVulnerabilities 0\n"
-            )
-        )
-
-    def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
-        """Keep a real vulnerability signal blocking despite provider failure."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: Nvidia_nimException - "
-                "Error code: 404\nVulnerabilities 1\n"
-            )
-        )
-
-    def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
-        """Retain the static fail-closed vulnerability evidence contract."""
+    def test_outer_workflow_keeps_provider_failures_fail_closed(self) -> None:
+        """Provider fallback belongs inside the gate; its required wrapper preserves rc."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("Nvidia_nimException", workflow)
-        self.assertIn("Error code:[[:space:]]*404", workflow)
-        self.assertIn("reported_vulnerability_signal", workflow)
-        self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
+        self.assertNotIn("backend_unavailable_signal=", workflow)
+        self.assertNotIn("reported_vulnerability_signal=", workflow)
+        self.assertNotIn("Treating as a neutral skip", workflow)
+        self.assertIn('exit "$strix_rc"', workflow)
         self.assertIn(
-            '! grep -Eiq "$reported_vulnerability_signal"',
+            "Strix did not produce complete passing security evidence",
             workflow,
         )
-
 
 if __name__ == "__main__":
     unittest.main()

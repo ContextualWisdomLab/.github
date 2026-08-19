@@ -2144,6 +2144,9 @@ has_unmapped_threshold_report() {
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
+			if vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then
+				continue
+			fi
 			rank="$(extract_max_severity_rank "$vuln_file")"
 			if [ "$rank" -lt "$threshold_rank" ]; then
 				continue
@@ -2582,6 +2585,24 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
+
+	local authoritative_reports_dir="${resolved_target_path%/}/strix_runs"
+	if [ -L "$authoritative_reports_dir" ] || { [ -e "$authoritative_reports_dir" ] && [ ! -d "$authoritative_reports_dir" ]; }; then
+		echo "Strix authoritative report output is not a regular directory; failing closed." | tee -a "$STRIX_LOG" >&2
+		INFRA_ERROR_DETECTED=1
+		return 1
+	fi
+	if [ -d "$authoritative_reports_dir" ]; then
+		local imported_report_count
+		if ! imported_report_count="$(python3 -I "$SCRIPT_DIR/strix_report_semantics.py" import-current-attempt "$authoritative_reports_dir" "$ACTIVE_REPORTS_DIR" "$start_epoch" "${PR_BASE_SHA:-}" "${PR_HEAD_SHA:-}")"; then
+			echo "Strix authoritative report import failed; failing closed." | tee -a "$STRIX_LOG" >&2
+			INFRA_ERROR_DETECTED=1
+			return 1
+		fi
+		if [ "$imported_report_count" -gt 0 ]; then
+			printf "Imported %s current-attempt Strix report file(s) from the authoritative target output path.\n" "$imported_report_count" >&2
+		fi
+	fi
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
@@ -3070,6 +3091,9 @@ has_only_below_threshold_vulnerabilities() {
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
+			if vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then
+				continue
+			fi
 
 			found_any_vuln_file=1
 			update_max_severity_from_stream "$vuln_file"
@@ -3176,6 +3200,9 @@ has_any_reported_severity_markers() {
 		local vuln_file
 		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			if vulnerability_file_is_retryable_model_inconsistency "$vuln_file"; then
 				continue
 			fi
 			if grep -Eiq 'severity[[:space:]]*:' "$vuln_file"; then
@@ -3775,8 +3802,17 @@ vulnerability_file_reports_generic_github_actions_workflow_insecurity() {
 	return 1
 }
 
+vulnerability_file_is_self_negating_no_finding() {
+	local vuln_file="$1"
+	python3 -I "$SCRIPT_DIR/strix_report_semantics.py" is-self-negating "$vuln_file"
+}
+
 vulnerability_file_is_retryable_model_inconsistency() {
 	local vuln_file="$1"
+	if vulnerability_file_is_self_negating_no_finding "$vuln_file"; then
+		echo "Detected a self-negating Strix no-finding record with contradictory severity metadata; excluding it from vulnerability severity decisions." >&2
+		return 0
+	fi
 	if ! vulnerability_file_is_below_threshold "$vuln_file"; then
 		return 1
 	fi
