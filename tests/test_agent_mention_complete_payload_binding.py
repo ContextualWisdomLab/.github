@@ -83,14 +83,8 @@ def test_event_and_payloads_bind_exact_base_identity() -> None:
         assert len(payload) <= router.MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES
 
     opencode_payload = router.opencode_payload(request)["client_payload"]
-    assert len(opencode_payload) == 10
-    assert opencode_payload["control"] == {
-        "enable_auto_merge": False,
-        "merge_mode": "disabled",
-        "review_dispatch_limit": "1",
-        "trigger_reviews": True,
-        "update_branches": False,
-    }
+    assert len(opencode_payload) == 9
+    assert "control" not in opencode_payload
     with pytest.raises(ValueError, match="must be an object"):
         router._validate_repository_dispatch_payload({"client_payload": []})
     with pytest.raises(ValueError, match="at most 10"):
@@ -179,25 +173,14 @@ def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
         assert "--arg pr_base_sha \"$PR_BASE_SHA\"" in workflow
         assert "pr_base_sha: $pr_base_sha" in workflow
 
-    assert "github.event.client_payload.trigger_reviews" not in opencode
-    assert "github.event.client_payload.review_dispatch_limit" not in opencode
-    assert "github.event.client_payload.enable_auto_merge" not in opencode
-    assert "github.event.client_payload.update_branches" not in opencode
-    assert "github.event.client_payload.merge_mode" not in opencode
-    assert 'TRIGGER_REVIEWS: "true"' in opencode
-    assert 'REVIEW_DISPATCH_LIMIT: "1"' in opencode
-    assert 'ENABLE_AUTO_MERGE: "false"' in opencode
-    assert 'UPDATE_BRANCHES: "false"' in opencode
-    assert 'MERGE_MODE: "disabled"' in opencode
-
-    for field in (
-        "github.event.client_payload.control.trigger_reviews",
-        "github.event.client_payload.control.review_dispatch_limit",
-        "github.event.client_payload.control.enable_auto_merge",
-        "github.event.client_payload.control.update_branches",
-        "github.event.client_payload.control.merge_mode",
+    for default in (
+        "github.event.client_payload.trigger_reviews || 'true'",
+        "github.event.client_payload.review_dispatch_limit || '1'",
+        "github.event.client_payload.enable_auto_merge || 'false'",
+        "github.event.client_payload.update_branches || 'false'",
+        "github.event.client_payload.merge_mode || 'disabled'",
     ):
-        assert field in opencode
+        assert default in opencode
 
     for field in (
         '"trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true"',

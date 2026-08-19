@@ -89,6 +89,15 @@ def test_sensitive_log_redaction_preserves_jwt_boundaries_and_operational_marker
     assert json.loads(json_cleaned)["message"] == expected_operational
 
 
+def test_sensitive_log_redaction_handles_adjacent_ipv4_addresses() -> None:
+    """A delimiter must remain available for the next address match."""
+    operational = "ips=192.0.2.10 198.51.100.2"
+
+    assert redactor._redact_operational_identifiers(operational) == (
+        "ips=[REDACTED_IP] [REDACTED_IP]"
+    )
+
+
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
     """Quoted sensitive assignments are parsed linearly even with many escapes."""
     source = "_jwt:\"" + "\\!" * 5000

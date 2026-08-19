@@ -124,10 +124,9 @@ def test_wrapper_forwarders_stay_within_github_key_limit() -> None:
     assert len(noema_keys) <= limit
     assert len(opencode_keys) <= limit
     assert REQUIRED_IDENTITY_KEYS <= set(noema_keys)
-    assert REQUIRED_IDENTITY_KEYS <= set(opencode_keys)
+    assert (REQUIRED_IDENTITY_KEYS - {"source_comment_id"}) <= set(opencode_keys)
     assert OPENCODE_FORWARD_SAFETY_KEYS <= set(opencode_keys)
-    assert "trigger_reviews" not in opencode_keys
-    assert "review_dispatch_limit" not in opencode_keys
+    assert {"trigger_reviews", "review_dispatch_limit"} <= set(opencode_keys)
     assert "requested_agent" not in opencode_keys
     assert "requested_by" not in opencode_keys
 

@@ -2067,6 +2067,44 @@ def test_post_merge_strix_dispatch_dry_run_and_active_run(monkeypatch, capsys) -
     assert "Post-merge Strix dispatch skipped" in capsys.readouterr().out
 
 
+def test_post_merge_dedup_ignores_pre_merge_same_head_run(monkeypatch) -> None:
+    """A queued open scan must not suppress the merged-tree evidence dispatch."""
+
+    head = "a" * 40
+    monkeypatch.setattr(sched, "validate_github_repository", lambda value: value)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _value: "owner/repo")
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *_args, **_kwargs: [
+            {
+                "id": 1,
+                "name": "Strix Security Scan",
+                "event": "repository_dispatch",
+                "display_title": f"Strix Security Scan owner/repo#7@{head}:open",
+            },
+            {
+                "id": 2,
+                "name": "Strix Security Scan",
+                "event": "repository_dispatch",
+                "display_title": f"Strix Security Scan owner/repo#7@{head}:merged",
+            },
+        ],
+    )
+
+    current, stale = sched.active_review_run_refs(
+        "owner/repo",
+        "Strix Security Scan",
+        {"number": 7, "headRefOid": head},
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+        required_merge_state="merged",
+    )
+
+    assert current == [("owner/repo", "2")]
+    assert stale == [("owner/repo", "1")]
+
+
 def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")

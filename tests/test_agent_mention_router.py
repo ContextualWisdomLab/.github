@@ -369,12 +369,17 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     client = module.GitHubClient("secret-token")
-    assert client.request(["repos/x/y"], input_payload={"a": 1}) == {"ok": True}
+    assert (
+        client.request(
+            ["repos/x/y"], input_payload={"label": "한", "a": 1}
+        )
+        == {"ok": True}
+    )
     command, kwargs = calls[0]
     assert command == ["gh", "api", "repos/x/y", "--input", "-"]
     assert "secret-token" not in command
     assert kwargs["env"]["GH_TOKEN"] == "secret-token"
-    assert kwargs["input"] == '{"a": 1}'
+    assert kwargs["input"] == '{"label":"한","a":1}'
     monkeypatch.setattr(
         module.subprocess,
         "run",

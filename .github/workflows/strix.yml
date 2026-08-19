@@ -3,7 +3,8 @@ run-name: >-
   Strix Security Scan ${{ github.event.client_payload.target_repository ||
   github.event.pull_request.base.repo.full_name || github.repository }}#${{
   github.event.client_payload.pr_number || github.event.pull_request.number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
+  github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.sha }}:${{
+  github.event.client_payload.merge_state || 'open' }}
 
 on:
   push:

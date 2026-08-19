@@ -17,10 +17,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     header, jobs = text.split("\njobs:\n", 1)
     assert "issue_comment:" in header
     assert 'cron: "*/5 * * * *"' in header
-    assert (
-        "group: review-agent-mention-router-${{ github.repository }}-${{ github.event_name }}"
-        in header
-    )
+    assert "concurrency:" not in header
     assert "workflow_dispatch:" not in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header

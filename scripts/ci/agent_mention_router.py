@@ -36,6 +36,7 @@ RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
 MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES = 10
+REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES
 MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH = 100
 MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES = 64 * 1024
 
@@ -52,6 +53,11 @@ class MentionRequest:
     actor: str
     agents: tuple[str, ...]
     pull_request_base_sha: str = ""
+
+
+def _serialize_json_payload(payload: object) -> str:
+    """Serialize API JSON once so size checks match the transmitted body."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 class GitHubClient:
@@ -80,7 +86,11 @@ class GitHubClient:
         try:
             completed = subprocess.run(
                 command,
-                input=None if input_payload is None else json.dumps(input_payload),
+                input=(
+                    None
+                    if input_payload is None
+                    else _serialize_json_payload(input_payload)
+                ),
                 text=True,
                 capture_output=True,
                 shell=False,
@@ -317,11 +327,7 @@ def _validate_repository_dispatch_payload(
         )
     try:
         payload_bytes = len(
-            json.dumps(
-                client_payload,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            _serialize_json_payload(client_payload).encode("utf-8")
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("repository-dispatch client_payload must be JSON serializable") from exc
@@ -603,16 +609,24 @@ def dispatch_request(
         "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
-    target_client.request(
-        [
-            f"{target_api}/issues/{request.pull_request_number}/comments",
-            "-X",
-            "POST",
-        ],
-        input_payload={"body": acknowledgement},
-    )
-    if ledger_artifact_cache is not None:
-        ledger_artifact_cache[acknowledgement_cache_key] = True
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/{request.pull_request_number}/comments",
+                "-X",
+                "POST",
+            ],
+            input_payload={"body": acknowledgement},
+        )
+    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+        message = " ".join(str(exc).split()) or exc.__class__.__name__
+        print(
+            "::warning::Agent mention acknowledgement comment failed; "
+            f"durable dispatch state is preserved: {message[:1000]}"
+        )
+    else:
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 

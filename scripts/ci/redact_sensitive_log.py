@@ -41,7 +41,7 @@ PHONE_RE = re.compile(
 )
 IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 IPV4_RE = re.compile(
-    rf"(^|[^\d.])(?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET}($|[^\d.])"
+    rf"(^|[^\d.])(?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET}(?=$|[^\d.])"
 )
 RUNNER_PATH_RE = re.compile(
     r"(^|[^\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
@@ -156,7 +156,7 @@ def _redact_operational_identifiers(text: str) -> str:
         lambda match: f"{match.group(1)}[REDACTED_PHONE]{match.group(2)}", cleaned
     )
     cleaned = IPV4_RE.sub(
-        lambda match: f"{match.group(1)}[REDACTED_IP]{match.group(2)}", cleaned
+        lambda match: f"{match.group(1)}[REDACTED_IP]", cleaned
     )
     return RUNNER_PATH_RE.sub(r"\1[REDACTED_PATH]", cleaned)
 

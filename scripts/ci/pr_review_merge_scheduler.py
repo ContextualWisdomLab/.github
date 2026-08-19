@@ -1929,6 +1929,7 @@ def active_review_run_refs(
     *,
     run_title: str,
     workflow_aliases: frozenset[str],
+    required_merge_state: str | None = None,
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Return repository-qualified current and stale review workflow runs."""
@@ -1969,8 +1970,15 @@ def active_review_run_refs(
                 None,
             )
             if run_data.get("event") == "repository_dispatch" and dispatch_title_prefix:
-                dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
+                dispatch_suffix = display_title.removeprefix(dispatch_title_prefix).lower()
+                dispatched_head, separator, dispatched_merge_state = dispatch_suffix.partition(":")
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
+                    continue
+                if required_merge_state is not None and (
+                    (separator and dispatched_merge_state != required_merge_state)
+                    or (not separator and required_merge_state != "open")
+                ):
+                    stale.append(run_ref)
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
@@ -2167,6 +2175,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         pr,
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
+        required_merge_state="open",
     )
     force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:
@@ -2225,6 +2234,7 @@ def dispatch_post_merge_strix_evidence(
         pr,
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
+        required_merge_state="merged",
     )
     force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:

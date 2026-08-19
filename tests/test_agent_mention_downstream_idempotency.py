@@ -47,6 +47,8 @@ def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
         )
         assert "workflow_runs" not in text
         assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
+    assert "queue: max" not in noema
+    assert "queue: max" not in opencode
     assert "types: [agent-mention-noema]" in noema
     assert 'event_type: "noema-review"' in noema
     assert 'REQUESTED_AGENT: "cwl-noema-review"' in noema
