@@ -724,7 +724,9 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     def verify(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
         nonlocal calls
         calls += 1
-        return subprocess.CompletedProcess([], 0, b"uv 0.12.1\n", b"")
+        return subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.1 (x86_64-unknown-linux-gnu)\n", b""
+        )
 
     monkeypatch.setattr(materializer.subprocess, "run", verify)
 
@@ -773,8 +775,16 @@ def test_install_trusted_uv_rejects_version_process_failures(
 @pytest.mark.parametrize(
     "completed",
     [
-        subprocess.CompletedProcess([], 0, b"uv 0.12.0\n", b""),
-        subprocess.CompletedProcess([], 1, b"uv 0.12.1\n", b"failed"),
+        subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.0 (x86_64-unknown-linux-gnu)\n", b""
+        ),
+        subprocess.CompletedProcess(
+            [], 1, b"uv 0.12.1 (x86_64-unknown-linux-gnu)\n", b"failed"
+        ),
+        subprocess.CompletedProcess([], 0, b"uv 0.12.1\n", b""),
+        subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.1 (aarch64-unknown-linux-gnu)\n", b""
+        ),
     ],
 )
 def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
