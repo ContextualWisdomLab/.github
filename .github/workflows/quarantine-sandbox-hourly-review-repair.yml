@@ -1,14 +1,14 @@
-name: LineageWeave Hourly Review Repair
+name: Quarantine Sandbox Hourly Review Repair
 
 on:
-  workflow_dispatch:
   schedule:
-    # Minute 4 avoids the start-of-hour load peak and existing product callers.
-    - cron: "4 * * * *"
+    # Minute 14 avoids existing product callers while keeping one bounded
+    # review-repair heartbeat per hour for the sandbox runtime.
+    - cron: "14 * * * *"
 
 concurrency:
-  group: lineageweave-hourly-review-repair
-  # A later heartbeat must not cancel an in-flight lineage or buyer-surface RCA.
+  group: quarantine-sandbox-hourly-review-repair
+  # A later heartbeat must not cancel an in-flight security RCA.
   cancel-in-progress: false
 
 permissions:
@@ -21,8 +21,8 @@ jobs:
       id-token: write
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
-      target_repository: ContextualWisdomLab/LineageWeave
-      base_branch: main
+      target_repository: ContextualWisdomLab/quarantine-sandbox-runtime
+      base_branch: develop
       max_prs: "50"
       max_dispatches: "1"
       retry_hours: "2"

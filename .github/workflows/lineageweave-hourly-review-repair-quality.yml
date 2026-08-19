@@ -1,0 +1,55 @@
+name: LineageWeave Hourly Review Repair Quality
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/lineageweave-hourly-review-repair.yml
+      - .github/workflows/lineageweave-hourly-review-repair-quality.yml
+      - tests/test_lineageweave_hourly_review_caller.py
+      - docs/doctoring/lineageweave-hourly-review-caller.md
+      - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
+  push:
+    paths:
+      - .github/workflows/lineageweave-hourly-review-repair.yml
+      - .github/workflows/lineageweave-hourly-review-repair-quality.yml
+      - tests/test_lineageweave_hourly_review_caller.py
+      - docs/doctoring/lineageweave-hourly-review-caller.md
+      - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lineageweave-hourly-review-repair-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: LineageWeave target, cadence, and least-privilege contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+      - name: Verify LineageWeave hourly caller contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_lineageweave_hourly_review_caller.py
+          python -m compileall -q \
+            tests/test_lineageweave_hourly_review_caller.py
+          git diff --check

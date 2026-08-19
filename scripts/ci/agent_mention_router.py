@@ -464,6 +464,16 @@ def dispatch_request(
         )
         return handles
 
+    acknowledgement_cache_key = (
+        f"acknowledgement:{request.repository}:{request.pull_request_number}:"
+        f"{request.pull_request_head_sha}:{request.comment_id}"
+    )
+    if (
+        ledger_artifact_cache is not None
+        and ledger_artifact_cache.get(acknowledgement_cache_key)
+    ):
+        return ()
+
     existing = dispatched_agents(
         request,
         dispatch_client,
@@ -472,7 +482,10 @@ def dispatch_request(
     )
     missing = tuple(agent for agent in dispatchable if agent not in existing)
     handles = tuple(f"@{agent}" for agent in missing)
-    if not missing:
+    existing_handles = tuple(
+        f"@{agent}" for agent in dispatchable if agent in existing
+    )
+    if not missing and not existing:
         if rejected:
             print(
                 "Rejected agent mention without target mutation "
@@ -501,18 +514,24 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    target_client.request(
-        [
-            f"{target_api}/issues/comments/{request.comment_id}/reactions",
-            "-X",
-            "POST",
-        ],
-        input_payload={"content": "eyes"},
-    )
-    status_parts = [f"Queued {' and '.join(handles)}"]
-    existing_handles = tuple(
-        f"@{agent}" for agent in dispatchable if agent in existing
-    )
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/comments/{request.comment_id}/reactions",
+                "-X",
+                "POST",
+            ],
+            input_payload={"content": "eyes"},
+        )
+    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+        message = " ".join(str(exc).split()) or exc.__class__.__name__
+        print(
+            "::warning::Agent mention acknowledgement reaction failed; "
+            f"durable dispatch state is preserved: {message[:1000]}"
+        )
+    status_parts: list[str] = []
+    if handles:
+        status_parts.append(f"Queued {' and '.join(handles)}")
     if existing_handles:
         status_parts.append(
             f"Already queued {' and '.join(existing_handles)} on this exact request"
@@ -538,6 +557,8 @@ def dispatch_request(
         ],
         input_payload={"body": acknowledgement},
     )
+    if ledger_artifact_cache is not None:
+        ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 
