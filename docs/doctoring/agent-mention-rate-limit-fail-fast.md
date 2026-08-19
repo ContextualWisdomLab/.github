@@ -12,6 +12,9 @@ Treat explicit GitHub primary- or secondary-rate-limit messages as **sweep-globa
 
 This change is intentionally narrow. It does not retry, sleep, change credentials, widen permissions, alter the canonical invocation key, modify the exact-name artifact ledger, or claim that a failed request was dispatched. A later scheduled invocation may run after GitHub restores capacity. Interactive/local routing and the separate concurrency-isolation repair remain independent control-plane lanes.
 
+The scheduled CLI emits an error with the budget-reset action and exits 1, so
+operators see a bounded failure rather than an unhandled traceback.
+
 ## Why fail-fast
 
 GitHub documents that installation access tokens share an installation-level primary REST budget. When a primary limit is exceeded, requests return HTTP 403 or 429 and callers should not retry until the reset time. GitHub also states that integrations should stop and wait on secondary-rate-limit responses; continuing to make requests while rate-limited may lead to integration bans. The current sweep cannot safely infer reset headers from the `gh` exception string, so the bounded action is to stop the current scheduled traversal rather than amplify the exhausted state.

@@ -69,4 +69,25 @@ def test_secondary_rate_limit_exhaustion_is_global() -> None:
     assert sweep.is_rate_limit_exhaustion(
         RuntimeError("You have exceeded a secondary rate limit. Please retry later.")
     )
+    assert sweep.is_rate_limit_exhaustion(
+        RuntimeError("API rate limit already exceeded for installation ID 141441800")
+    )
     assert not sweep.is_rate_limit_exhaustion(RuntimeError("Resource not accessible"))
+
+
+def test_main_reports_rate_limit_reset_and_returns_failure(monkeypatch, capsys) -> None:
+    """The scheduled CLI reports the shared-budget stop without a traceback."""
+
+    sweep = module()
+    monkeypatch.setenv("TARGET_REPOSITORY_TOKEN", "target")
+    monkeypatch.setenv("AGENT_DISPATCH_TOKEN", "dispatch")
+    def fail_for_rate_limit(**kwargs):
+        del kwargs
+        raise sweep.SweepRateLimitExhausted(
+            "wait for the budget reset before retrying"
+        )
+
+    monkeypatch.setattr(sweep, "sweep", fail_for_rate_limit)
+
+    assert sweep.main([]) == 1
+    assert "wait for the budget reset before retrying" in capsys.readouterr().out

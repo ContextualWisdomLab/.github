@@ -40,6 +40,7 @@ def is_rate_limit_exhaustion(error: Exception) -> bool:
     message = " ".join(str(error).split()).casefold()
     return (
         "api rate limit exceeded" in message
+        or "api rate limit already exceeded" in message
         or "secondary rate limit" in message
     )
 
@@ -325,7 +326,8 @@ def sweep(
         if is_rate_limit_exhaustion(error):
             raise SweepRateLimitExhausted(
                 "GitHub API rate limit exhausted; stopping organization sweep "
-                "to preserve the shared installation budget"
+                "to preserve the shared installation budget; wait for the "
+                "budget reset before retrying"
             ) from error
 
     for issue in list_recent_pull_requests(
@@ -393,19 +395,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         os.environ.get("OPENCODE_REPOSITORY_DISPATCH_TARGETS", "")
     )
     metrics = SweepMetrics()
-    sweep(
-        target_client=GitHubClient(
-            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
-        ),
-        dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
-        organization=args.organization,
-        repository_source=args.repository_source,
-        lookback_hours=args.lookback_hours,
-        max_dispatches=args.max_dispatches,
-        opencode_allowlist=allowlist,
-        dry_run=args.dry_run,
-        metrics=metrics,
-    )
+    try:
+        sweep(
+            target_client=GitHubClient(
+                os.environ.get("TARGET_REPOSITORY_TOKEN", "")
+            ),
+            dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
+            organization=args.organization,
+            repository_source=args.repository_source,
+            lookback_hours=args.lookback_hours,
+            max_dispatches=args.max_dispatches,
+            opencode_allowlist=allowlist,
+            dry_run=args.dry_run,
+            metrics=metrics,
+        )
+    except SweepRateLimitExhausted as exc:
+        print(f"::error::{exc}")
+        return 1
     return 1 if metrics.failures else 0
 
 
