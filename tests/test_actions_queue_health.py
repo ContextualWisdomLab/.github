@@ -381,6 +381,47 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
     with pytest.raises(queue_health.QueueHealthError):
         queue_health.collect_snapshot(["owner/repo"], runner=invalid_run_runner)
 
+    bad_pull = pull_request()
+    bad_pull["base"] = "temporarily incomplete"
+    retry_calls = 0
+
+    def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        nonlocal retry_calls
+        payload = responses[args[-1]]
+        if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
+            retry_calls += 1
+            payload = [bad_pull] if retry_calls == 1 else payload
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    queue_health.collect_snapshot(["owner/repo"], runner=retry_runner)
+    assert retry_calls == 2
+
+    def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        payload = [bad_pull] if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100" else responses[args[-1]]
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    with pytest.raises(queue_health.QueueHealthError, match="owner/repo"):
+        queue_health.collect_snapshot(["owner/repo"], runner=persistent_bad_runner)
+
+    bad_number = pull_request(number=0)
+
+    def invalid_pull_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        payload = (
+            [bad_number]
+            if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
+            else responses[args[-1]]
+        )
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    with pytest.raises(queue_health.QueueHealthError, match="owner/repo"):
+        queue_health.collect_snapshot(["owner/repo"], runner=invalid_pull_runner)
+
 
 def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:
     path = tmp_path / "snapshot.json"
