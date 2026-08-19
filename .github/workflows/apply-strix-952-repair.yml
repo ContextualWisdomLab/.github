@@ -3,7 +3,7 @@ name: Apply exact-head Strix 952 repair
 on:
   pull_request_target:
     types: [ready_for_review]
-    branches: [main]
+    branches: [bootstrap/strix-952-branch-repair]
 
 concurrency:
   group: apply-strix-952-repair
@@ -16,6 +16,7 @@ jobs:
   apply:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
+      && github.event.pull_request.base.ref == 'bootstrap/strix-952-branch-repair'
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.head.ref == 'fix/strix-base-runtime-contract-952'
       && github.event.pull_request.head.sha == 'e6aadff4ea1ceefe2cc90fad45b66d1bf06b2d04'
