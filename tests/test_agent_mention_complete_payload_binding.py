@@ -206,14 +206,14 @@ def test_repository_dispatch_payloads_stay_within_github_property_limit() -> Non
     assert len(opencode_payload) <= 10
 
     workflow = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
-    for default in (
-        "github.event.client_payload.trigger_reviews || 'true'",
-        "github.event.client_payload.review_dispatch_limit || '1'",
-        "github.event.client_payload.enable_auto_merge || 'false'",
-        "github.event.client_payload.update_branches || 'false'",
-        "github.event.client_payload.merge_mode || 'disabled'",
+    for constant in (
+        'TRIGGER_REVIEWS: "true"',
+        'REVIEW_DISPATCH_LIMIT: "1"',
+        'ENABLE_AUTO_MERGE: "false"',
+        'UPDATE_BRANCHES: "false"',
+        'MERGE_MODE: "disabled"',
     ):
-        assert default in workflow
+        assert constant in workflow
 
     forward = workflow.split(
         "      - name: Forward once to the authoritative review-only scheduler\n", 1
@@ -232,20 +232,15 @@ def test_repository_dispatch_payloads_stay_within_github_property_limit() -> Non
         "pr_head_sha",
         "pr_base_sha",
         "base_branch",
-        "trigger_reviews",
-        "review_dispatch_limit",
         "enable_auto_merge",
         "update_branches",
         "merge_mode",
+        "agent_invocation_key",
+        "source_comment_id",
     }
     assert len(forwarded_keys) <= 10
-    for wrapper_identity in (
-        "requested_agent",
-        "agent_invocation_key",
-        "requested_by",
-        "source_comment_id",
-    ):
-        assert f"{wrapper_identity}:" not in payload_literal
+    assert "requested_agent:" not in payload_literal
+    assert "requested_by:" not in payload_literal
 
 
 def test_no_pr_specific_writer_workflow_remains() -> None:
