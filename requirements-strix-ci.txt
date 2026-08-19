@@ -1,4 +1,4 @@
-strix-agent==1.0.4
+strix-agent==1.5.3
 aiohttp==3.14.3
 google-cloud-aiplatform==1.133.0
 protobuf<7.0.0
