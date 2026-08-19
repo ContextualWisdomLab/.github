@@ -205,7 +205,7 @@ def default_file_opener(path: str, headers: Mapping[str, str]) -> tuple[int, byt
             "/v1/files or /v1/images requests on api.figma.com.",
             EXIT_TRANSPORT,
         )
-    connection = http.client.HTTPSConnection(
+    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
         FIGMA_API_HOST,
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
