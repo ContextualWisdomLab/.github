@@ -114,8 +114,8 @@ Machine-checkable contracts require:
 - no product name hard-coded in the reusable scheduler.
 
 After merge, a scheduled protected-default-branch run must prove the exact
-target and base. Source checks alone are not protected-main operational
-acceptance. Product PR merge still requires exact-head required checks,
+target and base. Source checks alone are not protected-main operational acceptance.
+Product PR merge still requires exact-head required checks,
 resolution of every valid review finding, and qualifying independent approval.
 
 Rollback removes only this caller, its focused test, doctoring, and central
