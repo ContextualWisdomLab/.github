@@ -3593,7 +3593,7 @@ jobs:
             "$schema": "https://opencode.ai/config.json",
             "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
             "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
-            "enabled_providers": ["nvidia-nim", "opencode-free", "opencode", "openai", "openrouter", "github-models"],
+            "enabled_providers": ["contextual-orchestrator", "nvidia-nim", "opencode-free", "opencode", "openai", "openrouter", "github-models"],
             "lsp": false,
             "mcp": {},
             "permission": {
