@@ -333,6 +333,7 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
     assert "secret-token" not in command
     assert kwargs["env"]["GH_TOKEN"] == "secret-token"
     assert kwargs["input"] == '{"a": 1}'
+    assert kwargs["shell"] is False
     monkeypatch.setattr(
         module.subprocess,
         "run",

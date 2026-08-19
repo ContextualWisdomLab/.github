@@ -94,6 +94,62 @@ def test_pull_pagination_stops_at_cutoff_without_loading_later_pages() -> None:
     assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
 
 
+def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatch) -> None:
+    """Repository fetches are parallel but results remain repository ordered."""
+
+    sweep = module()
+    client = PagingClient(
+        {
+            ("orgs/ContextualWisdomLab/repos", 1): [[
+                repository("first"),
+                repository("second"),
+            ]],
+            ("repos/ContextualWisdomLab/first/pulls", 1): [pull(1)],
+            ("repos/ContextualWisdomLab/second/pulls", 1): [pull(2)],
+        }
+    )
+    worker_limits = []
+    real_executor = sweep.concurrent.futures.ThreadPoolExecutor
+
+    def recording_executor(*, max_workers):
+        worker_limits.append(max_workers)
+        return real_executor(max_workers=max_workers)
+
+    monkeypatch.setattr(
+        sweep.concurrent.futures,
+        "ThreadPoolExecutor",
+        recording_executor,
+    )
+    results = list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+        )
+    )
+    assert [result["repository"] for result in results] == [
+        "ContextualWisdomLab/first",
+        "ContextualWisdomLab/second",
+    ]
+    assert worker_limits == [2]
+
+
+def test_recent_pull_requests_skip_executor_when_no_repositories() -> None:
+    """An empty organization inventory does not create worker threads."""
+
+    sweep = module()
+    client = PagingClient({("orgs/ContextualWisdomLab/repos", 1): []})
+    assert list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+        )
+    ) == []
+
+
 def test_pull_pagination_stops_on_empty_followup_page() -> None:
     """A full page followed by an empty page terminates without page three."""
 

@@ -78,6 +78,7 @@ class GitHubClient:
             input=None if input_payload is None else json.dumps(input_payload),
             text=True,
             capture_output=True,
+            shell=False,
             check=False,
             env=environment,
         )

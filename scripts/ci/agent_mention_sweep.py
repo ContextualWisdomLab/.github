@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import os
 import re
 from dataclasses import dataclass
@@ -155,46 +156,45 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    for repository in repositories:
-        try:
-            page = 1
-            while True:
-                response = client.request(
-                    [
-                        f"repos/{repository}/pulls",
-                        "-X",
-                        "GET",
-                        "-f",
-                        "state=open",
-                        "-f",
-                        "sort=updated",
-                        "-f",
-                        "direction=desc",
-                        "-f",
-                        "per_page=100",
-                        "-f",
-                        f"page={page}",
-                    ]
-                )
-                pull_requests = flatten_pages(response)
-                if not pull_requests:
+    if not repositories:
+        return
+
+    def fetch(repository: str) -> list[dict[str, Any]]:
+        """Fetch one repository's recent open pull requests."""
+
+        results: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            response = client.request(
+                [
+                    f"repos/{repository}/pulls",
+                    "-X",
+                    "GET",
+                    "-f",
+                    "state=open",
+                    "-f",
+                    "sort=updated",
+                    "-f",
+                    "direction=desc",
+                    "-f",
+                    "per_page=100",
+                    "-f",
+                    f"page={page}",
+                ]
+            )
+            pull_requests = flatten_pages(response)
+            if not pull_requests:
+                break
+            reached_cutoff = False
+            for pull_request in pull_requests:
+                if parse_timestamp(str(pull_request.get("updated_at") or "")) < cutoff:
+                    reached_cutoff = True
                     break
-                reached_cutoff = False
-                for pull_request in pull_requests:
-                    if (
-                        parse_timestamp(
-                            str(pull_request.get("updated_at") or "")
-                        )
-                        < cutoff
-                    ):
-                        reached_cutoff = True
-                        break
-                    number = pull_request.get("number")
-                    if not isinstance(number, int) or number < 1:
-                        raise ValueError(
-                            "GitHub returned an invalid pull request number"
-                        )
-                    yield {
+                number = pull_request.get("number")
+                if not isinstance(number, int) or number < 1:
+                    raise ValueError("GitHub returned an invalid pull request number")
+                results.append(
+                    {
                         "number": number,
                         "repository": repository,
                         "pull_request": {
@@ -204,13 +204,31 @@ def list_recent_pull_requests(
                             )
                         },
                     }
-                if reached_cutoff or len(pull_requests) < 100:
-                    break
-                page += 1
-        except Exception as exc:  # noqa: BLE001 - repository isolation boundary
-            if on_error is None:
-                raise
-            on_error(repository, exc)
+                )
+            if reached_cutoff or len(pull_requests) < 100:
+                break
+            page += 1
+        return results
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(4, len(repositories))
+    )
+    futures = [
+        (repository, executor.submit(fetch, repository))
+        for repository in repositories
+    ]
+    try:
+        for repository, future in futures:
+            try:
+                yield from future.result()
+            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
+                if on_error is None:
+                    raise
+                on_error(repository, exc)
+    finally:
+        for _, future in futures:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def list_recent_comments(
