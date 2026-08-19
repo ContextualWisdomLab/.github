@@ -6072,6 +6072,37 @@ run_filtered_gate_case_if_requested() {
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
 		;;
+	github-models-fallback-provider-signal-tries-next)
+		run_gate_case "github-models-fallback-provider-signal-tries-next" \
+			"openai/gpt-5" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
+			"3" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
+			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
 	endpoint-in-excluded-dir)
 		run_gate_case "endpoint-in-excluded-dir" \
 			"vertex_ai/excluded-dir-primary" \
