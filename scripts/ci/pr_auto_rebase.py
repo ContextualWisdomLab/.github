@@ -176,13 +176,17 @@ def rest_auto_rebase_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
+    head_repository_name = str(head_repo.get("full_name") or "").strip()
+    same_repository = bool(head_repository_name) and (
+        head_repository_name.lower() == repo.lower()
+    )
     sha = str(head.get("sha") or "")
     merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
         str(pr.get("mergeable_state") or "").upper(),
     )
     labels = [{"name": (label or {}).get("name")} for label in (pr.get("labels") or [])]
-    commit_payload = gh_api_json(f"repos/{repo}/commits/{sha}") if sha else {}
+    commit_payload = gh_api_json(f"repos/{repo}/commits/{sha}") if sha and same_repository else {}
     commit_meta = (commit_payload or {}).get("commit") or {}
     author_login = ((commit_payload or {}).get("author") or {}).get("login")
     committed_date = (commit_meta.get("author") or {}).get("date") or (commit_meta.get("committer") or {}).get(
@@ -198,10 +202,12 @@ def rest_auto_rebase_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "baseRefOid": base.get("sha"),
         "headRefName": head.get("ref"),
         "headRefOid": sha,
-        "isCrossRepository": (head_repo.get("full_name") or repo).lower() != repo.lower(),
+        "isCrossRepository": not same_repository,
         "maintainerCanModify": bool(pr.get("maintainer_can_modify")),
         "labels": {"nodes": labels},
-        "headRepository": {"nameWithOwner": head_repo.get("full_name") or repo},
+        "headRepository": (
+            {"nameWithOwner": head_repository_name} if head_repository_name else None
+        ),
         "commits": {
             "nodes": [
                 {
@@ -268,7 +274,7 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             if not pr_page["pageInfo"]["hasNextPage"]:
                 break
             cursor = pr_page["pageInfo"]["endCursor"]
-    except RuntimeError as exc:
+    except (RuntimeError, json.JSONDecodeError) as exc:
         if is_graphql_transport_failure(exc):
             print(
                 "GraphQL open-PR list failed with a transport/capacity error; falling back to REST",

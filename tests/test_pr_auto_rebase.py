@@ -535,6 +535,37 @@ def test_graphql_utf8_errors_fall_back_to_rest(monkeypatch):
     assert any(path.startswith("repos/ContextualWisdomLab/.github/pulls?") for path in calls)
 
 
+def test_graphql_json_decode_errors_fall_back_to_rest(monkeypatch):
+    """A malformed GraphQL response uses the bounded REST fallback."""
+
+    fallback = [make_pr(number=934)]
+
+    def fail_graphql(*args, **kwargs):
+        raise json.JSONDecodeError("invalid JSON", "{", 0)
+
+    monkeypatch.setattr(rebase, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(rebase, "fetch_open_prs_rest", lambda repo, max_prs: fallback)
+
+    assert rebase.fetch_open_prs("owner/repo", 1) == fallback
+
+
+def test_rest_node_unknown_head_is_cross_repository_without_commit_lookup(monkeypatch):
+    """Missing REST head ownership is unknown and never authorizes commit reads."""
+
+    payload = _rest_list_pr(934, mergeable_state="behind", sha="c" * 40)
+    payload["head"].pop("repo")
+    monkeypatch.setattr(
+        rebase,
+        "gh_api_json",
+        lambda path: pytest.fail(f"unknown head must not fetch commit metadata: {path}"),
+    )
+
+    node = rebase.rest_auto_rebase_pr_node("owner/repo", payload)
+
+    assert node["isCrossRepository"] is True
+    assert node["headRepository"] is None
+
+
 def test_graphql_resource_limit_falls_back_to_rest(monkeypatch):
     """A 58-PR GraphQL list that exceeds GitHub query cost uses REST instead of aborting."""
 
