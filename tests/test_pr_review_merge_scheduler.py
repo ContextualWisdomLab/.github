@@ -1274,6 +1274,18 @@ def test_review_state_and_failed_checks():
             }
         )
     ) == "running"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {"name": "coverage-evidence", "state": "FAILURE"},
+                        {"name": "unrelated-check", "state": "SUCCESS"},
+                    ]
+                }
+            }
+        )
+    ) == "failed"
     assert sched.coverage_evidence_state(make_pr()) == "missing"
     ordinary_request = make_pr(
         reviews={
@@ -1283,6 +1295,12 @@ def test_review_state_and_failed_checks():
         }
     )
     assert not sched.current_head_coverage_change_request(ordinary_request)
+    assert not sched.current_head_coverage_change_request(
+        make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "old")]})
+    )
+    assert not sched.current_head_coverage_change_request(
+        make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    )
 
     stale_gate_reviews = make_pr(
         reviews={
@@ -3083,6 +3101,23 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
     )
     assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: "another scheduler dispatch is active",
+    )
+    assert inspect(coverage_request).action == "wait"
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    already_running = inspect(coverage_request)
+    assert already_running.action == "wait"
+    assert already_running.reason == (
+        "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active"
+    )
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
