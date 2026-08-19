@@ -21,7 +21,9 @@ def clear_trusted_uv_opener_cache() -> Iterator[None]:
 def test_trusted_uv_redirect_handler_allows_one_github_asset_hop() -> None:
     """GitHub Releases may take one hop onto the official release-asset CDN."""
     handler = materializer._TrustedUvReleaseAssetRedirects()
-    original = urllib.request.Request(materializer.TRUSTED_UV_ARCHIVE_URL)
+    original = urllib.request.Request(  # noqa: S310 - fixed trusted HTTPS archive URL
+        materializer.TRUSTED_UV_ARCHIVE_URL
+    )
     allowed = (
         "https://release-assets.githubusercontent.com/"
         "github-production-release-asset/699532645/archive"

@@ -68,7 +68,6 @@ def test_code_reviewer_subagent_contract_is_configured():
     models = config["provider"]["github-models"]["models"]
     high_reasoning_models = {
         "openai/gpt-5",
-        "openai/gpt-5-chat",
         "openai/gpt-5-mini",
         "openai/gpt-5-nano",
         "deepseek/deepseek-r1",
@@ -191,7 +190,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["openrouter", "qwen/qwen3-coder"],
         ["github-models", "openai/gpt-4.1"],
         ["github-models", "openai/gpt-5"],
-        ["github-models", "openai/gpt-5-chat"],
+        ["github-models", "openai/gpt-4o"],
         ["github-models", "openai/o3"],
         ["github-models", "deepseek/deepseek-r1-0528"],
         ["github-models", "deepseek/deepseek-r1"],
@@ -317,7 +316,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "deepseek/deepseek-v3-0324",
         "openai/gpt-4.1",
         "openai/gpt-5",
-        "openai/gpt-5-chat",
+        "openai/gpt-4o",
         "openai/o3",
         "deepseek/deepseek-r1-0528",
         "deepseek/deepseek-r1",
@@ -1553,7 +1552,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
+        "github-models/openai/gpt-4o "
         "github-models/openai/o3 "
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1"
@@ -1700,7 +1699,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
         "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
+        "github-models/openai/gpt-4o "
         "github-models/openai/o3 "
         "github-models/deepseek/deepseek-r1-0528 "
         "github-models/deepseek/deepseek-r1"
