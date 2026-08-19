@@ -66,6 +66,15 @@ Each consumer repository MUST test the exact outbound request body or injected c
 
 The central runtime MUST expose its routing objective and unpriced-model policy in an operator-readable policy snapshot or equivalent audit evidence.
 
+## Research boundary
+
+TRINITY is evidence that a lightweight coordinator can adaptively delegate
+multiple turns across specialized Thinker, Worker, and Verifier roles. This
+contract adopts the observable boundary—adaptive delegation, bounded budgets,
+and auditable routing evidence—not TRINITY's learned coordinator, evolutionary
+optimizer, or model pool. Those remain implementation choices for the central
+runtime and require their own benchmark and rollback evidence.
+
 ## Current adoption program
 
 The 2026-08-16 migration program covers the central runtime and known consumers including fast-mlsirm, DiagramWeave, LineageWeave, LifeOS, ScopeWeave, Wardnet, pg-erd-cloud, naruon, and four-pillars. Repositories with no production call are not modified merely because they mention contextual-orchestrator in documentation.
@@ -77,3 +86,5 @@ Omidvar, H., & Akhlaghi, V. (2026). *A communication-theoretic framework for LLM
 Tang, Y., Cetin, E., Xu, J., Sun, Q., Nielsen, S., Richard, V., Goda, H., Tymchenko, I., Nguyen, N., Lee, H., Ashiga, M., Kotyan, S., Kuroki, S., & Clanuwat, T. (2026). *Sakana Fugu technical report* [Technical report]. arXiv. https://doi.org/10.48550/arXiv.2606.21228
 
 Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Conductor: Learning to route multi-agent workflows* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04388
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
