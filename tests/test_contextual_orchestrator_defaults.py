@@ -141,6 +141,8 @@ def test_reusable_workflow_is_exact_ref_read_only_governance() -> None:
     )
     assert "governance_sha:" in workflow
     assert "target_ref:" in workflow
+    assert '[[ "$GOVERNANCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' in workflow
+    assert '[[ "$TARGET_REF" =~ ^[0-9a-fA-F]{40}$ ]]' in workflow
     assert "ref: ${{ inputs.governance_sha }}" in workflow
     assert "ref: ${{ inputs.target_ref }}" in workflow
     assert "permissions:\n  contents: read" in workflow
