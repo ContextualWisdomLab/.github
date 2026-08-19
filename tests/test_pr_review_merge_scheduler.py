@@ -1239,6 +1239,51 @@ def test_review_state_and_failed_checks():
     assert sched.has_current_head_approval(superseded)
     assert not sched.has_current_head_changes_requested(superseded)
 
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
+                        "The coverage-evidence gate reported test evidence: not proven passing."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                ]
+            }
+        },
+    )
+    assert sched.current_head_coverage_change_request(coverage_request)
+    assert sched.coverage_evidence_state(coverage_request) == "complete"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "PENDING"}]}
+            }
+        )
+    ) == "running"
+    assert sched.coverage_evidence_state(make_pr()) == "missing"
+    ordinary_request = make_pr(
+        reviews={
+            "nodes": [
+                {**opencode_review("CHANGES_REQUESTED", "head"), "body": "Fix the estimator."}
+            ]
+        }
+    )
+    assert not sched.current_head_coverage_change_request(ordinary_request)
+
     stale_gate_reviews = make_pr(
         reviews={
             "nodes": [
@@ -3052,6 +3097,47 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
             "current-head OpenCode review requested changes"
         )
     assert update_calls == []
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
+                        "The coverage-evidence gate reported test evidence: not proven passing."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                ]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(
+            (repo, workflow, pr["headRefOid"], dry_run)
+        )
+        or "dispatched",
+    )
+    coverage_decision = inspect(coverage_request)
+    assert coverage_decision.action == "review_dispatch"
+    assert coverage_decision.reason == (
+        "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
+    )
+    assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
