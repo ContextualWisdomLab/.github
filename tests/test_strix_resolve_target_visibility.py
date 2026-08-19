@@ -185,7 +185,7 @@ def test_installation_rate_limit_403_retries_then_preserves_visibility() -> None
         == "false"
     )
     assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
-    assert sleeps == [15.0]
+    assert sleeps == [30.0]
 
 
 def test_secondary_rate_limit_403_retries_then_preserves_visibility() -> None:
@@ -208,7 +208,7 @@ def test_secondary_rate_limit_403_retries_then_preserves_visibility() -> None:
         == "true"
     )
     assert runner.calls == ["ContextualWisdomLab/inkspan"] * 2
-    assert sleeps == [15.0]
+    assert sleeps == [30.0]
 
 
 def test_exhausted_rate_limit_403_stays_typed_infrastructure_failure() -> None:
@@ -230,7 +230,7 @@ def test_exhausted_rate_limit_403_stays_typed_infrastructure_failure() -> None:
     assert "installation ID 141441800" in str(excinfo.value)
     assert "denied or missing" not in str(excinfo.value)
     assert runner.calls == ["ContextualWisdomLab/inkspan"] * 3
-    assert sleeps == [15.0, 20.0]
+    assert sleeps == [30.0, 60.0]
 
 
 def test_rate_limit_403_is_not_confused_with_authorization_403() -> None:
@@ -267,7 +267,7 @@ def test_rate_limit_retry_after_is_honored_and_capped() -> None:
             1,
             "gh: HTTP 403: API rate limit exceeded\nRetry-After: 90",
         )
-        == 20.0
+        == 60.0
     )
     runner = _ScriptedGh(
         [
@@ -303,7 +303,7 @@ def test_rate_limit_reset_header_and_past_reset_are_bounded(
             INSTALLATION_RATE_LIMIT_403 + "\nX-RateLimit-Reset: 1",
             now=8.0,
         )
-        == 15.0
+        == 30.0
     )
     runner = _ScriptedGh(
         [
@@ -329,7 +329,7 @@ def test_rate_limit_reset_header_and_past_reset_are_bounded(
 def test_generic_transient_backoff_stays_short() -> None:
     """A 502 flake must keep the original 1/2/4s schedule."""
     assert visibility.backoff_seconds(1) == 1.0
-    assert visibility.rate_limit_backoff_seconds(1, INSTALLATION_RATE_LIMIT_403) == 15.0
+    assert visibility.rate_limit_backoff_seconds(1, INSTALLATION_RATE_LIMIT_403) == 30.0
     assert visibility.RATE_LIMIT_MAX_ATTEMPTS == 3
     assert visibility.DEFAULT_MAX_ATTEMPTS == 4
 
