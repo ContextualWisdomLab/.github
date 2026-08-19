@@ -117,12 +117,15 @@ def _redact_assignments(text: str) -> str:
         if eval_start > cursor and text[eval_start - 1] in "\"'":
             eval_start -= 1
 
-        consume_match = None
-        for i in range(eval_start, match.start() + 1):
-            consume_match = _consume_sensitive_assignment(text, i)
-            if consume_match:
-                eval_start = i
-                break
+        quoted_start = eval_start if eval_start != key_start else None
+        candidate_start = key_start
+        while candidate_start < match.start() and text[candidate_start].isdigit():
+            candidate_start += 1
+        eval_start = quoted_start if quoted_start is not None else candidate_start
+        consume_match = _consume_sensitive_assignment(text, eval_start)
+        if consume_match is None and quoted_start is not None:
+            eval_start = candidate_start
+            consume_match = _consume_sensitive_assignment(text, candidate_start)
 
         if consume_match:
             output.append(text[last_append:eval_start])
@@ -130,7 +133,10 @@ def _redact_assignments(text: str) -> str:
             output.append(replacement)
             last_append = cursor
         else:
-            cursor = match.start() + 1
+            key_end = match.end()
+            while key_end < len(text) and text[key_end] in KEY_CHARS:
+                key_end += 1
+            cursor = key_end
     output.append(text[last_append:])
     return "".join(output)
 
