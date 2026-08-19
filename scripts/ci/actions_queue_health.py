@@ -235,18 +235,34 @@ def collect_snapshot(
         metadata = github_json(f"repos/{repository}", runner=runner)
         if not isinstance(metadata, dict):
             raise QueueHealthError(f"repository metadata for {repository} is not an object")
+        pulls_endpoint = f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
         pull_requests = _list_payload(
-            github_json(
-                f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}",
-                paginate=True,
-                runner=runner,
-            ),
+            github_json(pulls_endpoint, paginate=True, runner=runner),
             "pulls",
         )
-        normalized_pull_requests = sorted(
-            (_normalise_pull_request(item) for item in pull_requests),
-            key=lambda item: item["number"],
-        )
+        try:
+            normalized_pull_requests = sorted(
+                (_normalise_pull_request(item) for item in pull_requests),
+                key=lambda item: item["number"],
+            )
+        except QueueHealthError as exc:
+            if str(exc) != "pull request head and base must be objects":
+                raise QueueHealthError(
+                    f"pull-request identity validation failed for {repository}: {exc}"
+                ) from exc
+            retry_pull_requests = _list_payload(
+                github_json(pulls_endpoint, paginate=True, runner=runner),
+                "pulls",
+            )
+            try:
+                normalized_pull_requests = sorted(
+                    (_normalise_pull_request(item) for item in retry_pull_requests),
+                    key=lambda item: item["number"],
+                )
+            except QueueHealthError as retry_exc:
+                raise QueueHealthError(
+                    f"pull-request identity validation failed for {repository}: {retry_exc}"
+                ) from retry_exc
         pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
         runs_by_id: dict[int, dict[str, Any]] = {}
         for status in ("in_progress", "queued"):
