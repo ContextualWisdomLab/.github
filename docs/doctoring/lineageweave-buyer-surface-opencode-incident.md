@@ -11,25 +11,34 @@ formal exact-head review.
 
 ## First causal boundaries
 
-The central default-branch mention workflow used a concurrency property that is
-not part of the GitHub Actions workflow schema. Because sibling repository
-comments are discovered by the scheduled organization sweep, that invalid
-workflow prevented the sweep from being treated as operational.
+The durable repository dispatch had already succeeded. The router then tried to
+add a cosmetic `eyes` reaction before publishing the acknowledgement comment.
+The target repository returned HTTP 403 for that reaction, which terminated the
+source run before the receipt was written. The exact invocation ledger correctly
+prevented duplicate dispatch, but the previous all-agents-existing early return
+also prevented a later organization sweep from healing the missing receipt.
 
-A second failure happened after dispatch. The router attempted a cosmetic
-reaction before publishing the durable acknowledgement. A target-repository
-permission failure therefore terminated the source run even though dispatch had
-already succeeded. The exact invocation ledger blocked duplicate dispatch, but
-the previous early return also blocked a later sweep from recreating the missing
-receipt.
+The scheduled sweep had a separate availability weakness: `gh api` subprocesses
+had no finite timeout, so an already-running repository query could make
+executor shutdown wait indefinitely after the dispatch frontier was reached.
+That weakness did not explain the already-created invocation without a receipt,
+but it could prevent later LineageWeave requests from being discovered and
+recovered predictably.
+
+`concurrency.queue: max` is not an invalid workflow property. GitHub introduced
+larger concurrency queues on May 7, 2026; `queue: max` preserves up to 100
+pending runs and is compatible with an omitted or false `cancel-in-progress`.
+The shared local-mention queue therefore retains `queue: max`, while exact-key
+downstream wrappers keep their invocation-scoped concurrency contract.
 
 ## Repair contract
 
 The central repair must:
 
-- use valid non-cancelling workflow concurrency;
-- bound repository discovery while preserving deterministic output and
-  repository-local failure isolation;
+- retain the valid `queue: max` local concurrency contract;
+- bind every `gh api` subprocess to a finite timeout;
+- bound repository discovery while preserving deterministic output, fair
+  rotation, and repository-local failure isolation;
 - publish the acknowledgement even when the cosmetic reaction is forbidden;
 - recreate a missing acknowledgement for an existing exact invocation without
   dispatching again;
@@ -65,10 +74,14 @@ remain merge requirements.
 
 ## APA 7th references
 
-GitHub, Inc. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
+GitHub, Inc. (2026, May 7). *GitHub Actions concurrency groups now allow larger
+queues*. GitHub Changelog.
+https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues/
+
+GitHub, Inc. (n.d.-a). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 20, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
-GitHub, Inc. (n.d.). *Workflow syntax for GitHub Actions*. GitHub Docs.
+GitHub, Inc. (n.d.-b). *Workflow syntax for GitHub Actions*. GitHub Docs.
 Retrieved August 20, 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax

@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Sequence
@@ -162,13 +163,14 @@ def list_recent_pull_requests(
         return
     rotation_offset %= len(repositories)
     repositories = repositories[rotation_offset:] + repositories[:rotation_offset]
+    stop_event = threading.Event()
 
     def fetch(repository: str) -> list[dict[str, Any]]:
         """Fetch one repository's recent open pull requests."""
 
         results: list[dict[str, Any]] = []
         page = 1
-        while True:
+        while not stop_event.is_set():
             response = client.request(
                 [
                     f"repos/{repository}/pulls",
@@ -230,6 +232,7 @@ def list_recent_pull_requests(
                     raise
                 on_error(repository, exc)
     finally:
+        stop_event.set()
         for _, future in futures:
             future.cancel()
         executor.shutdown(wait=True, cancel_futures=True)

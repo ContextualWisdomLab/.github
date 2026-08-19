@@ -34,6 +34,7 @@ BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
+GITHUB_API_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -66,21 +67,28 @@ class GitHubClient:
         *,
         input_payload: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute ``gh api`` and decode its optional JSON response."""
+        """Execute one bounded ``gh api`` request and decode optional JSON."""
 
         command = ["gh", "api", *args]
         if input_payload is not None:
             command.extend(["--input", "-"])
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
-        completed = subprocess.run(
-            command,
-            input=None if input_payload is None else json.dumps(input_payload),
-            text=True,
-            capture_output=True,
-            check=False,
-            env=environment,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                input=None if input_payload is None else json.dumps(input_payload),
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+                timeout=GITHUB_API_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "gh api timed out after "
+                f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
+            ) from exc
         return_code = int(getattr(completed, "returncode", 0))
         if return_code:
             diagnostic = " ".join(

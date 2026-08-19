@@ -47,7 +47,7 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     assert _concurrency_block(local_job) == (
         "    concurrency:\n"
         "      group: review-agent-mention-router-local-${{ github.repository }}\n"
-        "      cancel-in-progress: false"
+        "      queue: max"
     )
     assert _concurrency_block(sweep_job) == (
         "    concurrency:\n"
@@ -65,6 +65,7 @@ def test_interactive_queue_retains_pending_requests_without_cancellation() -> No
         "route-local-agent-mention",
         "sweep-organization-agent-mentions",
     )
-    assert "cancel-in-progress: false" in _concurrency_block(local_job)
-    assert "queue: max" not in _concurrency_block(local_job)
-    assert "cancel-in-progress: true" not in workflow
+    concurrency = _concurrency_block(local_job)
+
+    assert "queue: max" in concurrency
+    assert "cancel-in-progress: true" not in concurrency
