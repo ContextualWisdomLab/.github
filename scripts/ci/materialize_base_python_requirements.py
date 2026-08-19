@@ -149,6 +149,7 @@ def _is_candidate_lock_name(name: str) -> bool:
     )
 
 
+
 def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
     """Return whether one safe tracked path can name a pip requirements lock.
 
@@ -241,23 +242,6 @@ def _is_hash_pinned(content: bytes) -> bool:
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
-
-
-def _is_flat_materializable_lock(content: bytes) -> bool:
-    """Return whether content is one standalone exact SHA-256 requirements lock.
-
-    Selected sources are renamed to generated flat files. Relative ``-r`` and
-    ``--requirement`` edges therefore lose the source directory that gives them
-    meaning. Only independent exact package pins cross this publication boundary
-    until a complete immutable include graph can be reconstructed and rewritten.
-    """
-    lines = _requirement_lines(content)
-    requirement_lines = [line for line in lines if line != "--require-hashes"]
-    return bool(requirement_lines) and all(
-        _is_fully_hash_pinned_requirement(line) for line in requirement_lines
-    )
-
-
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
     fields = re.split(r"\s+(?=--hash=)", line)
@@ -575,9 +559,9 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     for path, candidate in regular_blobs:
-        if _is_candidate_lock_path(candidate):
+        if _is_candidate_lock_name(candidate.name):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
-            if _is_flat_materializable_lock(content):
+            if _is_hash_pinned(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
             if _uv_pyproject_path(path) not in regular_paths:
