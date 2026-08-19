@@ -135,6 +135,60 @@ def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatc
     assert worker_limits == [2]
 
 
+def test_repeated_sweeps_rotate_repository_dispatch_frontier(monkeypatch) -> None:
+    """Five-minute sweeps do not starve later repositories at the limit."""
+
+    sweep = module()
+    client = PagingClient(
+        {
+            ("orgs/ContextualWisdomLab/repos", 1): [[
+                repository("first"),
+                repository("second"),
+            ]],
+            ("repos/ContextualWisdomLab/first/pulls", 1): [pull(1)],
+            ("repos/ContextualWisdomLab/second/pulls", 1): [pull(2)],
+        }
+    )
+    processed = []
+    monkeypatch.setattr(
+        sweep,
+        "build_requests_for_pull_request",
+        lambda *args, issue, **kwargs: processed.append(issue["repository"])
+        or (mention_request(10),),
+    )
+    monkeypatch.setattr(
+        sweep,
+        "dispatch_request",
+        lambda *args, **kwargs: ("@cwl-noema-review",),
+    )
+    common = {
+        "target_client": client,
+        "dispatch_client": object(),
+        "organization": "ContextualWisdomLab",
+        "repository_source": "organization",
+        "lookback_hours": 24,
+        "max_dispatches": 1,
+        "opencode_allowlist": frozenset(),
+    }
+    assert (
+        sweep.sweep(
+            **common, now=datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc)
+        )
+        == 1
+    )
+    assert (
+        sweep.sweep(
+            **common, now=datetime(2026, 8, 6, 0, 5, tzinfo=timezone.utc)
+        )
+        == 1
+    )
+    assert len(processed) == 2
+    assert {name.rsplit("/", 1)[-1] for name in processed} == {
+        "first",
+        "second",
+    }
+
+
 def test_recent_pull_requests_skip_executor_when_no_repositories() -> None:
     """An empty organization inventory does not create worker threads."""
 

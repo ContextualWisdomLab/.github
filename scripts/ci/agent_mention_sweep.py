@@ -22,6 +22,7 @@ from agent_mention_router import (
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
+REPOSITORY_ROTATION_SECONDS = 5 * 60
 
 
 @dataclass
@@ -147,8 +148,9 @@ def list_recent_pull_requests(
     repository_source: str,
     since: str,
     on_error: Callable[[str, Exception], None] | None = None,
+    rotation_offset: int = 0,
 ) -> Iterator[dict[str, Any]]:
-    """Yield recent open pull requests with lazy cutoff-aware pagination."""
+    """Yield recent open pull requests with bounded fair repository rotation."""
 
     cutoff = parse_timestamp(since)
     repositories = list_accessible_repositories(
@@ -158,6 +160,8 @@ def list_recent_pull_requests(
     )
     if not repositories:
         return
+    rotation_offset %= len(repositories)
+    repositories = repositories[rotation_offset:] + repositories[:rotation_offset]
 
     def fetch(repository: str) -> list[dict[str, Any]]:
         """Fetch one repository's recent open pull requests."""
@@ -313,7 +317,9 @@ def sweep(
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
-    since = cutoff_timestamp(lookback_hours, now=now)
+    current = now or datetime.now(timezone.utc)
+    since = cutoff_timestamp(lookback_hours, now=current)
+    rotation_offset = int(current.timestamp() // REPOSITORY_ROTATION_SECONDS)
     counters = metrics if metrics is not None else SweepMetrics()
     ledger_artifact_cache: dict[str, bool] = {}
     dispatched = 0
@@ -333,6 +339,7 @@ def sweep(
         repository_source=repository_source,
         since=since,
         on_error=record_failure,
+        rotation_offset=rotation_offset,
     ):
         issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
         try:
