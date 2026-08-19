@@ -673,6 +673,19 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "Could not cancel superseded run" in workflow
     assert "No run will be cancelled from incomplete evidence" in workflow
     assert "queue_hygiene_ready=false" in workflow
+    # Organization sweep budgets must be consumed across the repository loop;
+    # resetting the configured limit for every target can flood Actions with
+    # long-running review dispatches.
+    assert '"$ORG_SWEEP_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
+    assert '"$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
+    assert "org_review_dispatches_used=0" in workflow
+    assert "org_branch_updates_used=0" in workflow
+    assert 'review_dispatch_limit=$((ORG_SWEEP_REVIEW_DISPATCH_LIMIT - org_review_dispatches_used))' in workflow
+    assert 'branch_update_limit=$((ORG_SWEEP_BRANCH_UPDATE_LIMIT - org_branch_updates_used))' in workflow
+    assert '--review-dispatch-limit "$review_dispatch_limit"' in workflow
+    assert '--branch-update-limit "$branch_update_limit"' in workflow
+    assert 'grep -Ec \'^PR #[0-9]+: (review_dispatch|security_dispatch):\'' in workflow
+    assert 'grep -Ec \'^PR #[0-9]+: (update_branch|restamp_head):\'' in workflow
     # The scheduler requires --project-flow; the sweep must derive and pass it
     # per target repository (regression: the first sweep failed every repo with
     # "--project-flow is required").
