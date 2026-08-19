@@ -54,6 +54,7 @@ RATE_LIMIT_MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUT_SECONDS = 20.0
 MAX_BACKOFF_SECONDS = 4.0
 RATE_LIMIT_BASE_BACKOFF_SECONDS = 30.0
+RATE_LIMIT_MIN_BACKOFF_SECONDS = 5.0
 RATE_LIMIT_MAX_BACKOFF_SECONDS = 60.0
 
 
@@ -173,6 +174,7 @@ def rate_limit_backoff_seconds(
             RATE_LIMIT_BASE_BACKOFF_SECONDS * float(2 ** (attempt - 1)),
             RATE_LIMIT_MAX_BACKOFF_SECONDS,
         )
+    parsed = max(parsed, RATE_LIMIT_MIN_BACKOFF_SECONDS)
     if parsed > RATE_LIMIT_MAX_BACKOFF_SECONDS:
         print(
             "GitHub visibility rate-limit retry sleep capped from "
@@ -199,7 +201,7 @@ def fetch_repository_visibility(
         )
     runner = run_gh or run_gh_visibility
     last_error = "Target repository visibility did not resolve to true or false."
-    attempt_limit = max_attempts
+    rate_limit_attempts = 0
     for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failure raises
         kind = "transient"
         rate_limited = False
@@ -225,8 +227,10 @@ def fetch_repository_visibility(
                 "Target repository visibility did not resolve to true or false."
             )
         if rate_limited:
-            attempt_limit = min(max_attempts, RATE_LIMIT_MAX_ATTEMPTS)
-        if attempt >= attempt_limit or kind != "transient":
+            rate_limit_attempts += 1
+            if rate_limit_attempts >= RATE_LIMIT_MAX_ATTEMPTS:
+                break
+        if attempt >= max_attempts or kind != "transient":
             break
         if rate_limited:
             delay = rate_limit_backoff_seconds(attempt, last_error, now=now())
@@ -236,7 +240,8 @@ def fetch_repository_visibility(
             label = "transient"
         print(
             f"{label.capitalize()} GitHub visibility lookup failure on attempt "
-            f"{attempt}/{attempt_limit}; retrying in {delay:g}s.",
+            f"{attempt}/{RATE_LIMIT_MAX_ATTEMPTS if rate_limited else max_attempts}; "
+            f"retrying in {delay:g}s.",
             file=sys.stderr,
         )
         sleep(delay)

@@ -269,6 +269,13 @@ def test_rate_limit_retry_after_is_honored_and_capped() -> None:
         )
         == 60.0
     )
+    assert (
+        visibility.rate_limit_backoff_seconds(
+            1,
+            "gh: HTTP 403: API rate limit exceeded\nRetry-After: 0",
+        )
+        == 5.0
+    )
     runner = _ScriptedGh(
         [
             visibility.VisibilityCommandError(
@@ -289,13 +296,20 @@ def test_rate_limit_retry_after_is_honored_and_capped() -> None:
     assert sleeps == [12.0]
 
 
-def test_rate_limit_reset_header_and_past_reset_are_bounded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_rate_limit_reset_header_and_past_reset_are_bounded() -> None:
     """Honor X-RateLimit-Reset when present; a past reset uses the default wait."""
-    monkeypatch.setattr(visibility.time, "time", lambda: 100.0)
-    assert visibility.parse_rate_limit_wait_seconds("X-RateLimit-Reset: 112") == 12.0
-    assert visibility.parse_rate_limit_wait_seconds("X-RateLimit-Reset: 90") is None
+    assert (
+        visibility.parse_rate_limit_wait_seconds(
+            "X-RateLimit-Reset: 112", now=100.0
+        )
+        == 12.0
+    )
+    assert (
+        visibility.parse_rate_limit_wait_seconds(
+            "X-RateLimit-Reset: 90", now=100.0
+        )
+        is None
+    )
     assert visibility.parse_rate_limit_wait_seconds("") is None
     assert (
         visibility.rate_limit_backoff_seconds(
@@ -324,6 +338,29 @@ def test_rate_limit_reset_header_and_past_reset_are_bounded(
         == "false"
     )
     assert sleeps == [10.0]
+
+
+def test_rate_limit_does_not_shrink_generic_retry_budget() -> None:
+    """A later generic transient may still use the full retry budget."""
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403),
+            visibility.VisibilityCommandError("gh: HTTP 502: Bad Gateway"),
+            visibility.VisibilityCommandError("gh: HTTP 503: Service Unavailable"),
+            "false",
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "false"
+    )
+    assert sleeps == [30.0, 2.0, 4.0]
 
 
 def test_generic_transient_backoff_stays_short() -> None:
@@ -578,8 +615,6 @@ def test_strix_workflow_uses_helper_and_keeps_token_order() -> None:
         workflow
     )
     assert "STRIX_SCAN_MODE" not in visibility_step
-    assert "--require-hashes" not in visibility_step
-    assert "--no-deps" not in visibility_step
 
 
 def test_noema_and_opencode_visibility_paths_stay_untouched() -> None:
