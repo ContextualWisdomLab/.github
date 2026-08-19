@@ -143,8 +143,9 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
 
 def test_lock_name_candidates_are_pip_requirements_files() -> None:
-    """Requirements files and requirements.lock are candidates; other names are not."""
+    """Requirements files and lock files are candidates; other names are not."""
     assert materializer._is_candidate_lock_name("requirements.lock")
+    assert materializer._is_candidate_lock_name("requirements-dev.lock")
     assert materializer._is_candidate_lock_name("requirements-dev.txt")
     assert materializer._is_candidate_lock_name("requirements.txt")
     assert not materializer._is_candidate_lock_name(

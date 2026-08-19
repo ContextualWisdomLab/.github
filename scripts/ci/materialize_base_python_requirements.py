@@ -145,16 +145,20 @@ def _install_trusted_uv_url_opener() -> None:
 
 def _is_candidate_lock_name(name: str) -> bool:
     """Return whether a file name is a possible pip requirements lock."""
-    return name == "requirements.lock" or (
-        fnmatch.fnmatch(name, "requirements*.txt")
-        and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+    return (
+        (
+            fnmatch.fnmatch(name, "requirements*.txt")
+            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+        )
+        or fnmatch.fnmatch(name, "requirements*.lock")
     )
 
 
 def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
     """Return whether one safe tracked path can name a pip requirements lock.
 
-    In addition to conventional ``requirements*.txt`` names, repositories often
+    In addition to conventional ``requirements*.txt`` and ``requirements*.lock``
+    names, repositories often
     keep concrete environment closures as direct children such as
     ``requirements/ci.txt`` or ``service/requirements/package.txt``. Only direct
     ``.txt`` children of a directory named ``requirements`` gain this path-based
