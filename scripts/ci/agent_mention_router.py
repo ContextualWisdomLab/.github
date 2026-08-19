@@ -52,12 +52,13 @@ class MentionRequest:
 class GitHubClient:
     """Small token-bound wrapper around ``gh api`` for JSON requests."""
 
-    def __init__(self, token: str) -> None:
-        """Initialize a client with one non-empty GitHub credential."""
+    def __init__(self, token: str, *, timeout_seconds: int = 60) -> None:
+        """Initialize a client with one credential and request timeout."""
 
         if not token:
             raise ValueError("GitHub token is required")
         self._token = token
+        self._timeout_seconds = timeout_seconds
 
     def request(
         self,
@@ -72,14 +73,20 @@ class GitHubClient:
             command.extend(["--input", "-"])
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
-        completed = subprocess.run(
-            command,
-            input=None if input_payload is None else json.dumps(input_payload),
-            text=True,
-            capture_output=True,
-            check=False,
-            env=environment,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                input=None if input_payload is None else json.dumps(input_payload),
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+                timeout=self._timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"gh api timed out after {self._timeout_seconds} seconds"
+            ) from exc
         return_code = int(getattr(completed, "returncode", 0))
         if return_code:
             diagnostic = " ".join(
