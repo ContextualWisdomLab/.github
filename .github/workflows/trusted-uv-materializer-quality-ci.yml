@@ -129,6 +129,7 @@ jobs:
             tests/test_trusted_uv_download_contract.py \
             tests/test_trusted_uv_portability_and_streaming.py \
             tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_flat_lock_publication_boundary.py \
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
@@ -155,6 +156,7 @@ jobs:
             tests/test_trusted_uv_download_contract.py \
             tests/test_trusted_uv_portability_and_streaming.py \
             tests/test_uv_export_isolation_contract.py \
+            tests/test_uv_flat_lock_publication_boundary.py \
             tests/test_uv_redirect_and_coverage_contract.py \
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \

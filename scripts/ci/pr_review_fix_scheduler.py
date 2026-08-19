@@ -174,20 +174,28 @@ def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
 
 
-def needs_conflict_resolution(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
-    """Return whether an approved PR has a conflict safe to auto-resolve.
+def needs_conflict_resolution(
+    pr: dict[str, Any],
+    *,
+    allow_unreviewed: bool = False,
+) -> tuple[bool, tuple[str, ...]]:
+    """Return whether a GitHub-reported conflict is safe to auto-resolve.
 
-    Only a current-head-approved PR that GitHub reports as ``DIRTY`` or
-    ``CONFLICTING`` qualifies. The worker merges the base into the head and the
-    resulting head must be reviewed and checked again before merge.
+    Direct library callers retain the historical current-head approval
+    prerequisite unless ``allow_unreviewed`` is explicit. Trusted scheduled
+    callers enable it because conflict repair creates a new head and therefore
+    requires fresh reviews and checks regardless of the previous review state.
     """
     merge_state = str(pr.get("mergeStateStatus") or "").upper()
     if merge_state not in CONFLICT_MERGE_STATES:
         return False, ()
-    if not has_current_head_approval(pr):
+    approved = has_current_head_approval(pr)
+    if not approved and not allow_unreviewed:
         return False, ()
+    review_state = "current-head approved" if approved else "unreviewed"
     return True, (
-        f"current-head approved PR is {merge_state.lower()}; auto-resolving the merge conflict",
+        f"{review_state} PR is {merge_state.lower()}; auto-resolving the merge "
+        "conflict and requiring fresh review and checks on the resulting head",
     )
 
 
@@ -234,7 +242,7 @@ def dispatch_autofix(
 
     ``repair_mode=rca`` tells the trusted context collector to gather failed
     check evidence and widen the sealed edit scope only to current PR files.
-    ``resolve_conflict`` retains the separate approved-conflict path.
+    ``resolve_conflict`` retains the separately bounded conflict path.
     """
     dispatch_repo = workflow_repository or repo
     if workflow != DEFAULT_AUTOFIX_WORKFLOW:
@@ -303,7 +311,12 @@ def inspect_pr(
             repair_mode = "rca"
             reasons = rca_reasons
         else:
-            needs_resolve, resolve_reasons = needs_conflict_resolution(pr)
+            needs_resolve, resolve_reasons = needs_conflict_resolution(
+                pr,
+                allow_unreviewed=bool(
+                    getattr(args, "resolve_unreviewed_conflicts", False)
+                ),
+            )
             if not needs_resolve:
                 return "skip", (
                     "no current-head autofixable review, failed-check RCA, or approved merge conflict",
@@ -356,7 +369,12 @@ def process_queue(args: argparse.Namespace) -> int:
             continue
         needs_fix, _ = needs_autofix(pr)
         needs_rca, _ = needs_rca_repair(pr)
-        needs_resolve, _ = needs_conflict_resolution(pr)
+        needs_resolve, _ = needs_conflict_resolution(
+            pr,
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
+        )
         if needs_fix or needs_rca or needs_resolve:
             prs_needing_comments.append(pr)
 
@@ -503,6 +521,12 @@ def self_test() -> int:
         {**approved_dirty_pr, "mergeStateStatus": "CLEAN"}
     ) == (False, ())
     assert needs_conflict_resolution(dirty_pr) == (False, ())
+    resolves, resolve_reasons = needs_conflict_resolution(
+        dirty_pr,
+        allow_unreviewed=True,
+    )
+    assert resolves
+    assert "fresh review and checks" in resolve_reasons[0]
     model_exhausted_pr = {
         **pr,
         "reviews": {
@@ -552,6 +576,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-prs", type=int, default=50)
     parser.add_argument("--max-dispatches", type=int, default=1)
     parser.add_argument("--retry-hours", type=int, default=24)
+    parser.add_argument("--resolve-unreviewed-conflicts", action="store_true")
     parser.add_argument("--autofix-workflow", default="pr-review-autofix.yml")
     parser.add_argument(
         "--autofix-repository",
