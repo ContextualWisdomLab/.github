@@ -35,45 +35,62 @@ jobs:
       - name: Resolve immutable central policy source
         id: trusted_source
         env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-          WORKFLOW_REF: ${{ job.workflow_ref }}
-          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
         run: |
           set -euo pipefail
-          expected_repository="ContextualWisdomLab/.github"
-          expected_file=".github/workflows/opencode-review.yml"
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
 
-          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
-            printf '::error::Required workflow repository resolved to %s, expected %s.\n' \
-              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
-            exit 1
-          fi
-          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            printf '::error::Required workflow SHA is missing or malformed: %s.\n' \
-              "${WORKFLOW_SHA:-<empty>}"
-            exit 1
-          fi
-          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
-            printf '::error::Required workflow file resolved to %s, expected %s.\n' \
-              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
-            exit 1
-          fi
-          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
-          case "$WORKFLOW_REF" in
-            "$expected_ref_prefix"*) ;;
-            *)
-              printf '::error::Required workflow ref is missing or inconsistent: %s.\n' \
-                "${WORKFLOW_REF:-<empty>}"
-              exit 1
-              ;;
-          esac
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
 
-          {
-            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
-            printf 'sha=%s\n' "$WORKFLOW_SHA"
-            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
-          } >>"$GITHUB_OUTPUT"
+          expected_repository = "ContextualWisdomLab/.github"
+          expected_file = ".github/workflows/opencode-review.yml"
+          workflow_repository = str(
+              job_context.get("workflow_repository") or expected_repository
+          ).strip()
+          workflow_sha = str(
+              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+          ).strip()
+          workflow_file_path = str(job_context.get("workflow_file_path") or "").strip()
+
+          if not workflow_file_path:
+              prefix = f"{expected_repository}/{expected_file}@"
+              if workflow_ref.startswith(prefix):
+                  workflow_file_path = expected_file
+
+          if workflow_repository != expected_repository:
+              print(
+                  f"::error::Required workflow repository resolved to {workflow_repository}, expected {expected_repository}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          if not re.fullmatch(r"[0-9a-fA-F]{40}", workflow_sha):
+              print("::error::Required workflow SHA is missing or malformed.", file=sys.stderr)
+              raise SystemExit(1)
+          if workflow_file_path != expected_file:
+              print("::error::Required workflow file path is missing or unexpected.", file=sys.stderr)
+              raise SystemExit(1)
+          expected_ref_prefix = f"{expected_repository}/{expected_file}@"
+          if not workflow_ref.startswith(expected_ref_prefix):
+              print("::error::Required workflow ref is missing or inconsistent.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"repository={workflow_repository}")
+          print(f"sha={workflow_sha}")
+          print(f"workflow_file_path={workflow_file_path}")
+          PY
 
       - name: Checkout immutable central policy source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
