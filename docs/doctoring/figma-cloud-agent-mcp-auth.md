@@ -100,7 +100,8 @@ characters in the token are rejected so they cannot split `X-Figma-Token`
    where `depth` counts levels under the selected node (Figma, 2026c). The
    outline keeps `absoluteBoundingBox`, SOLID fills, TEXT `characters` and
    type, auto-layout padding, constraints, `thumbnailUrl`, and bounded
-   component/style names. `--images` returns HTTPS PNG URLs that expire
+   bounded component and component-set catalogs, style metadata, and node style
+   references. `--images` returns HTTPS PNG URLs that expire
    after 30 days (Figma, 2026c). `file://`, `http://`, userinfo, and
    `api.figma.com` locators are refused. Branch URLs
    (`/design/<file_key>/branch/<branch_key>/...`) use the branch key.

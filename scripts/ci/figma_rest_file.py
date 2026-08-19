@@ -380,11 +380,11 @@ def bounded_text(value: object) -> str | None:
 
 
 def named_catalog(value: object, name_key: str, type_key: str | None) -> list[dict[str, str]]:
-    """Return a bounded name catalog from ``components`` or ``styles``."""
+    """Return bounded component/style metadata without access tokens."""
     if not isinstance(value, Mapping):
         return []
     items: list[dict[str, str]] = []
-    for raw_item in value.values():
+    for raw_key, raw_item in value.items():
         if len(items) >= MAX_CATALOG_ITEMS:
             break
         if not isinstance(raw_item, Mapping):
@@ -393,12 +393,31 @@ def named_catalog(value: object, name_key: str, type_key: str | None) -> list[di
         if name is None:
             continue
         entry = {name_key: name}
+        catalog_key = safe_label(raw_item.get("key")) or safe_label(raw_key)
+        if catalog_key is not None:
+            entry["catalog_key"] = catalog_key
         if type_key is not None:
             style_type = safe_label(raw_item.get(type_key))
             if style_type is not None:
                 entry["style_type"] = style_type
+        description = bounded_text(raw_item.get("description"))
+        if description is not None:
+            entry["description"] = description
         items.append(entry)
     return items
+
+
+def style_references(value: object) -> dict[str, str]:
+    """Return safe node style references that link nodes to the style catalog."""
+    if not isinstance(value, Mapping):
+        return {}
+    references: dict[str, str] = {}
+    for raw_type, raw_id in value.items():
+        style_type = safe_label(raw_type)
+        style_id = safe_label(raw_id)
+        if style_type is not None and style_id is not None:
+            references[style_type] = style_id
+    return references
 
 
 def outline_node(node: object, remaining_depth: int) -> dict[str, Any] | None:
@@ -433,6 +452,9 @@ def outline_node(node: object, remaining_depth: int) -> dict[str, Any] | None:
     constraints = constraint_axes(node.get("constraints"))
     if constraints is not None:
         summary["constraints"] = constraints
+    style_refs = style_references(node.get("styles"))
+    if style_refs:
+        summary["style_references"] = style_refs
     if remaining_depth > 0:
         children = node.get("children")
         if isinstance(children, list):
@@ -494,6 +516,9 @@ def summarize_file_payload(payload: Mapping[str, Any], outline_depth: int) -> di
     components = named_catalog(payload.get("components"), "component_name", None)
     if components:
         summary["component_names"] = components
+    component_sets = named_catalog(payload.get("componentSets"), "component_set_name", None)
+    if component_sets:
+        summary["component_set_catalog"] = component_sets
     styles = named_catalog(payload.get("styles"), "style_name", "styleType")
     if styles:
         summary["style_catalog"] = styles

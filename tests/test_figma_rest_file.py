@@ -359,10 +359,11 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
             "role": "viewer",
             "thumbnailUrl": "https://figma-alpha-api.s3.amazonaws.com/thumb.png",
             "document": {"id": "0:0", "name": "Document", "type": "DOCUMENT"},
-            "components": {"1:9": {"name": "Button"}, "bad": "skip", "1:8": {"name": None}},
-            "styles": {"S:1": {"name": "Ink", "styleType": "FILL"}, "bad": []},
+            "components": {"1:9": {"key": "component-key", "name": "Button"}, "bad": "skip", "1:8": {"name": None}},
+            "componentSets": {"2:9": {"key": "set-key", "name": "Controls"}},
+            "styles": {"S:1": {"key": "style-key", "name": "Ink", "styleType": "FILL", "description": "Brand ink"}, "bad": []},
             "nodes": {
-                "12:34": {"document": {"id": "12:34", "name": "Hero", "type": "FRAME"}},
+                "12:34": {"document": {"id": "12:34", "name": "Hero", "type": "FRAME", "styles": {"FILL": "S:1"}}},
                 "I12:34;56:78": {"document": {"id": "I12:34;56:78", "name": "Instance"}},
                 "skip": {"document": {"id": "9:9"}},
                 "1:2": "not-a-map",
@@ -381,9 +382,14 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
     assert summary["viewer_role"] == "viewer"
     assert summary["thumbnail_url"].startswith("https://")
     assert summary["component_names"][0]["component_name"] == "Button"
+    assert summary["component_names"][0]["catalog_key"] == "component-key"
+    assert summary["component_set_catalog"][0]["component_set_name"] == "Controls"
     assert summary["style_catalog"][0]["style_name"] == "Ink"
+    assert summary["style_catalog"][0]["catalog_key"] == "style-key"
+    assert summary["style_catalog"][0]["description"] == "Brand ink"
     assert summary["document_outline"]["node_type"] == "DOCUMENT"
     assert summary["selected_nodes"]["12:34"]["node_name"] == "Hero"
+    assert summary["selected_nodes"]["12:34"]["style_references"] == {"FILL": "S:1"}
     assert summary["selected_nodes"]["I12:34;56:78"]["node_name"] == "Instance"
     assert "skip" not in summary["selected_nodes"]
     assert summary["image_urls"]["12:34"].startswith("https://")
@@ -606,8 +612,12 @@ def test_design_field_helpers_stay_bounded_and_token_free() -> None:
     assert files.bounded_text(long_text) == "a" * files.MAX_TEXT_CHARS
     assert files.named_catalog("nope", "component_name", None) == []
     assert files.named_catalog({"1": {"name": "Ink"}}, "style_name", "styleType") == [
-        {"style_name": "Ink"}
+        {"style_name": "Ink", "catalog_key": "1"}
     ]
+    assert files.named_catalog({"": {"name": "No key"}}, "style_name", None) == [
+        {"style_name": "No key"}
+    ]
+    assert files.style_references({"FILL": None, None: "S:1"}) == {}
     catalog = {str(index): {"name": f"C{index}"} for index in range(files.MAX_CATALOG_ITEMS + 3)}
     assert len(files.named_catalog(catalog, "component_name", None)) == files.MAX_CATALOG_ITEMS
     assert files.allowed_image_host("figma.com") is True
