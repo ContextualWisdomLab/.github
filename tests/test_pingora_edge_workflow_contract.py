@@ -16,9 +16,10 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in text
     assert 'job_context.get("workflow_sha") or github_context.get("workflow_sha")' in text
     assert "job.workflow_repository" not in text
-    assert "repository: ${{ steps.trusted_source.outputs.repository }}" in text
-    assert "ref: ${{ steps.trusted_source.outputs.sha }}" in text
-    assert "persist-credentials: false" in text
+    assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.sha }}" in text
+    assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in text
+    assert "Trusted central policy source ref must resolve to the immutable workflow commit SHA" in text
+    assert "actions/checkout" not in text
     assert "scripts/ci/pingora_edge_policy.py" in text
     assert '--api-url "https://api.github.com"' in text
     assert "github.event.pull_request.head.sha" in text
