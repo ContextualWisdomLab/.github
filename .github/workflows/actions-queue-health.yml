@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: github-actions-queue-health
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ permissions:
 jobs:
   collect:
     name: Collect exact-head queue evidence
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
@@ -34,12 +34,17 @@ jobs:
 
       - name: Collect read-only repository and runner evidence
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          python3 scripts/ci/actions_queue_health.py
-          --allowlist config/actions_queue_health_repositories.json
-          --output-json "$RUNNER_TEMP/actions-queue-health.json"
-          --output-html "$RUNNER_TEMP/actions-queue-health.html"
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is required for cross-repository queue reads."
+            exit 1
+          fi
+          echo "::add-mask::$GH_TOKEN"
+          python3 scripts/ci/actions_queue_health.py \
+            --allowlist config/actions_queue_health_repositories.json \
+            --output-json "$RUNNER_TEMP/actions-queue-health.json" \
+            --output-html "$RUNNER_TEMP/actions-queue-health.html"
 
       - name: Upload queue-health evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
