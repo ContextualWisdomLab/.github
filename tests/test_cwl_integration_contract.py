@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,6 +23,37 @@ DOCTORING = ROOT / "docs" / "doctoring" / "ecosystem-integration-standards.md"
 RFC3339_DATE_TIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:\d{2})$"
+)
+KNOWN_LEAP_SECOND_DATES = frozenset(
+    {
+        "1972-06-30",
+        "1972-12-31",
+        "1973-12-31",
+        "1974-12-31",
+        "1975-12-31",
+        "1976-12-31",
+        "1977-12-31",
+        "1978-12-31",
+        "1979-12-31",
+        "1981-06-30",
+        "1982-06-30",
+        "1983-06-30",
+        "1985-06-30",
+        "1987-12-31",
+        "1989-12-31",
+        "1990-12-31",
+        "1992-06-30",
+        "1993-06-30",
+        "1994-06-30",
+        "1995-12-31",
+        "1997-06-30",
+        "1998-12-31",
+        "2005-12-31",
+        "2008-12-31",
+        "2012-06-30",
+        "2015-06-30",
+        "2016-12-31",
+    }
 )
 
 
@@ -44,9 +75,17 @@ def _assert_date_time(value: str, path: str) -> None:
     """Assert strict RFC 3339 lexical form plus a real offset-aware instant."""
 
     assert RFC3339_DATE_TIME.fullmatch(value), path
+    _, time_part = value.split("T", 1)
+    leap_second = ":60" in time_part[:8]
+    if leap_second:
+        value = value.replace(":60", ":59", 1)
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     parsed = datetime.fromisoformat(normalized)
     assert parsed.tzinfo is not None, path
+    if leap_second:
+        instant = parsed.astimezone(timezone.utc)
+        assert instant.date().isoformat() in KNOWN_LEAP_SECOND_DATES, path
+        assert (instant.hour, instant.minute, instant.second) == (23, 59, 59), path
 
 
 def _assert_profile_instance(instance: object, schema: dict, path: str = "$") -> None:
@@ -232,8 +271,15 @@ def test_date_time_profile_rejects_non_rfc3339_lexical_forms() -> None:
     for value in (
         "2026-08-15T10:00:00Z",
         "2026-08-15T10:00:00.123456789+09:00",
+        "2016-12-31T23:59:60Z",
+        "2017-01-01T08:59:60+09:00",
     ):
         _assert_date_time(value, "$.timestamp")
+    for value in (
+        "2016-12-30T23:59:60Z",
+        "2016-12-31T23:58:60Z",
+    ):
+        _assert_invalid(value, {"type": "string", "format": "date-time"})
 
 
 def test_documented_external_contract_baselines_are_present() -> None:
