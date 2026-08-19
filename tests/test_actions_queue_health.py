@@ -271,6 +271,9 @@ def test_normalise_pull_request_preserves_exact_head_identity() -> None:
     assert normalized["number"] == 1
     assert normalized["head_sha"] == "head"
     assert normalized["base_repository"] == "owner/repo"
+    assert queue_health._normalise_pull_request(normalized) == normalized
+    with pytest.raises(queue_health.QueueHealthError, match="identity fields"):
+        queue_health._normalise_pull_request({**normalized, "head_sha": None})
     for invalid in ({"number": True}, {"number": 0}, {"number": "1"}, "bad"):
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._normalise_pull_request(invalid)  # type: ignore[arg-type]

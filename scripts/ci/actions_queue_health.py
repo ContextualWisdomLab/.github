@@ -139,12 +139,26 @@ def _normalise_pull_request(pull_request: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(pull_request, dict):
         raise QueueHealthError("pull request entry must be an object")
     number = pull_request.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        raise QueueHealthError("pull request number must be a positive integer")
+    if "head_sha" in pull_request or "base_ref" in pull_request:
+        canonical = {
+            "base_ref": pull_request.get("base_ref", ""),
+            "base_repository": pull_request.get("base_repository", ""),
+            "head_sha": pull_request.get("head_sha", ""),
+            "updated_at": pull_request.get("updated_at", ""),
+        }
+        if not all(isinstance(value, str) for value in canonical.values()):
+            raise QueueHealthError("normalized pull request identity fields must be strings")
+        return {
+            "number": number,
+            "state": pull_request.get("state", "open"),
+            **canonical,
+        }
     head = pull_request.get("head")
     base = pull_request.get("base")
     if not isinstance(head, dict) or not isinstance(base, dict):
         raise QueueHealthError("pull request head and base must be objects")
-    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
-        raise QueueHealthError("pull request number must be a positive integer")
     return {
         "number": number,
         "state": pull_request.get("state", "open"),
