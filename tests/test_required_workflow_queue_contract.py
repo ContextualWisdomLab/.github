@@ -39,6 +39,21 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
+
+    assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
+    assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
+    assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
+        concurrency_contract
+    )
+    assert "cancel-in-progress: ${{" in concurrency_contract
+    assert "github.event_name == 'repository_dispatch'" in concurrency_contract
+
+
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     """Guard the runner-token dispatch credential for central review workflows.
 

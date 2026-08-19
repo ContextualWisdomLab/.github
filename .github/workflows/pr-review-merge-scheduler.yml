@@ -95,9 +95,10 @@ concurrency:
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
     github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true && format('org-sweep-{0}', github.repository) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != '' && format('target-{0}-pr-{1}', github.event.client_payload.target_repository, github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
-    github.event_name == 'repository_dispatch' && github.run_id ||
+    github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository) ||
     github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
 
