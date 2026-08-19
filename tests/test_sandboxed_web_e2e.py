@@ -112,8 +112,16 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
-    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
+    with pytest.raises(ValueError, match="readiness URL"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
+    with pytest.raises(ValueError, match="invalid authority"):
+        sandboxed_web_e2e.wait_for_url("http://127.0.0.1:not-a-port/", 1, exited_service)
+    with pytest.raises(ValueError, match="credential-free host"):
+        sandboxed_web_e2e.wait_for_url("http://user:pass@127.0.0.1/", 1, exited_service)
+    with pytest.raises(ValueError, match="loopback IP literal"):
+        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/", 1, exited_service)
+    with pytest.raises(ValueError, match="loopback IP literal"):
+        sandboxed_web_e2e.wait_for_url("http://example.com/", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
