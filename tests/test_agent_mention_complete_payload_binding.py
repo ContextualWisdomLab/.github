@@ -162,6 +162,17 @@ def test_wrappers_recompute_complete_claim_before_ledger_access() -> None:
         assert "--arg pr_base_sha \"$PR_BASE_SHA\"" in workflow
         assert "pr_base_sha: $pr_base_sha" in workflow
 
+    assert "github.event.client_payload.trigger_reviews" not in opencode
+    assert "github.event.client_payload.review_dispatch_limit" not in opencode
+    assert "github.event.client_payload.enable_auto_merge" not in opencode
+    assert "github.event.client_payload.update_branches" not in opencode
+    assert "github.event.client_payload.merge_mode" not in opencode
+    assert 'TRIGGER_REVIEWS: "true"' in opencode
+    assert 'REVIEW_DISPATCH_LIMIT: "1"' in opencode
+    assert 'ENABLE_AUTO_MERGE: "false"' in opencode
+    assert 'UPDATE_BRANCHES: "false"' in opencode
+    assert 'MERGE_MODE: "disabled"' in opencode
+
     for field in (
         '"trigger_reviews": os.environ["TRIGGER_REVIEWS"] == "true"',
         '"review_dispatch_limit": os.environ["REVIEW_DISPATCH_LIMIT"]',
