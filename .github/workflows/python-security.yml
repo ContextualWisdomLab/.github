@@ -237,7 +237,21 @@ jobs:
           # Audit every discovered requirements file.
           while IFS= read -r req; do
             echo "::group::pip-audit -r ${req}"
-            pip-audit --strict --desc=on -r "${req}" || status=1
+            # A matching requirements-<tool>-ci-overrides.txt (a `uv pip compile --override`
+            # input, e.g. requirements-strix-ci-overrides.txt) means this file pins a version
+            # whose declared metadata range intentionally conflicts with another pin here
+            # (verified safe at override time, not a resolution mistake) -- pip's own dependency
+            # resolver, which pip-audit calls even for fully hash-pinned files, fails on that
+            # same declared-range conflict regardless of --require-hashes. --no-deps skips
+            # resolution and audits exactly the pinned versions listed, which is what we already
+            # trust for these files.
+            base="${req%.txt}"
+            base="${base%-hashes}"
+            if [ -f "${base}-overrides.txt" ]; then
+              pip-audit --strict --desc=on --no-deps -r "${req}" || status=1
+            else
+              pip-audit --strict --desc=on -r "${req}" || status=1
+            fi
             echo "::endgroup::"
           done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
 
