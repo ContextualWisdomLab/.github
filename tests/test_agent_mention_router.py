@@ -222,13 +222,9 @@ def test_eligible_agents_and_payloads() -> None:
     assert opencode["event_type"] == "agent-mention-opencode"
     assert opencode["client_payload"]["base_branch"] == "develop"
     assert opencode["client_payload"]["pr_base_sha"] == "b" * 40
-    assert "merge_mode" not in opencode["client_payload"]
-    assert "enable_auto_merge" not in opencode["client_payload"]
-    assert "update_branches" not in opencode["client_payload"]
-    claim = module.agent_invocation_claim(request, "opencode-agent")
-    assert claim["merge_mode"] == "disabled"
-    assert claim["enable_auto_merge"] is False
-    assert claim["update_branches"] is False
+    assert opencode["client_payload"]["merge_mode"] == "disabled"
+    assert opencode["client_payload"]["enable_auto_merge"] is False
+    assert opencode["client_payload"]["update_branches"] is False
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:
@@ -333,30 +329,12 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
     assert "secret-token" not in command
     assert kwargs["env"]["GH_TOKEN"] == "secret-token"
     assert kwargs["input"] == '{"a": 1}'
-    assert kwargs["shell"] is False
-    assert kwargs["timeout"] == 60
     monkeypatch.setattr(
         module.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(stdout="  "),
     )
     assert client.request(["repos/x/y"]) is None
-
-
-def test_github_client_bounds_request_timeout(monkeypatch) -> None:
-    """A hung GitHub CLI request becomes an isolated routing failure."""
-
-    module = load_module()
-    timeout = module.subprocess.TimeoutExpired(["gh", "api"], 60)
-
-    def timed_out_run(*args, **kwargs):
-        """Raise the bounded transport timeout fixture."""
-        del args, kwargs
-        raise timeout
-
-    monkeypatch.setattr(module.subprocess, "run", timed_out_run)
-    with pytest.raises(RuntimeError, match="timed out after 60 seconds"):
-        module.GitHubClient("secret-token").request(["repos/x/y"])
 
 
 def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:

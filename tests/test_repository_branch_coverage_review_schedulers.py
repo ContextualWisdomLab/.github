@@ -138,9 +138,7 @@ def test_fix_scheduler_queue_includes_eligible_pr_without_fix_need(
     monkeypatch.setattr(fix_scheduler, "same_repository_head", lambda *_args: True)
     monkeypatch.setattr(fix_scheduler, "needs_autofix", lambda _pr: (False, ()))
     monkeypatch.setattr(
-        fix_scheduler,
-        "needs_conflict_resolution",
-        lambda _pr, **_kwargs: (False, ()),
+        fix_scheduler, "needs_conflict_resolution", lambda _pr: (False, ())
     )
     monkeypatch.setattr(
         fix_scheduler, "inspect_pr", lambda *_args, **_kwargs: ("skip", ("clean",))

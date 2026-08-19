@@ -33,7 +33,6 @@ HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
-REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 
 
 @dataclass(frozen=True)
@@ -53,13 +52,12 @@ class MentionRequest:
 class GitHubClient:
     """Small token-bound wrapper around ``gh api`` for JSON requests."""
 
-    def __init__(self, token: str, *, timeout_seconds: int = 60) -> None:
-        """Initialize a client with one credential and request timeout."""
+    def __init__(self, token: str) -> None:
+        """Initialize a client with one non-empty GitHub credential."""
 
         if not token:
             raise ValueError("GitHub token is required")
         self._token = token
-        self._timeout_seconds = timeout_seconds
 
     def request(
         self,
@@ -74,21 +72,15 @@ class GitHubClient:
             command.extend(["--input", "-"])
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
-        try:
-            completed = subprocess.run(
-                command,
-                input=None if input_payload is None else json.dumps(input_payload),
-                text=True,
-                capture_output=True,
-                shell=False,
-                check=False,
-                env=environment,
-                timeout=self._timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"gh api timed out after {self._timeout_seconds} seconds"
-            ) from exc
+        completed = subprocess.run(
+            command,
+            input=None if input_payload is None else json.dumps(input_payload),
+            text=True,
+            capture_output=True,
+            shell=False,
+            check=False,
+            env=environment,
+        )
         return_code = int(getattr(completed, "returncode", 0))
         if return_code:
             diagnostic = " ".join(
@@ -378,28 +370,13 @@ def dispatched_agents(
     return frozenset(observed)
 
 
-def repository_dispatch_body(
-    event_type: str,
-    client_payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Return a repository-dispatch body within GitHub's 10-key payload limit."""
-
-    if len(client_payload) > REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS:
-        raise ValueError(
-            "repository_dispatch client_payload has "
-            f"{len(client_payload)} keys; GitHub allows at most "
-            f"{REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS}"
-        )
-    return {"event_type": event_type, "client_payload": client_payload}
-
-
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
     """Return the durable Noema wrapper dispatch request body."""
 
     agent = "cwl-noema-review"
-    return repository_dispatch_body(
-        "agent-mention-noema",
-        {
+    return {
+        "event_type": "agent-mention-noema",
+        "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
@@ -410,32 +387,33 @@ def noema_payload(request: MentionRequest) -> dict[str, Any]:
             "requested_by": request.actor,
             "source_comment_id": request.comment_id,
         },
-    )
+    }
 
 
 def opencode_payload(request: MentionRequest) -> dict[str, Any]:
-    """Return the durable review-only OpenCode wrapper dispatch body.
-
-    Review-only behavior flags stay in the invocation claim and are hardcoded
-    by the wrapper. Copying them onto this first hop exceeds GitHub's 10-key
-    ``client_payload`` limit and prevents mention pings from enqueueing.
-    """
+    """Return the durable review-only OpenCode wrapper dispatch body."""
 
     agent = "opencode-agent"
-    return repository_dispatch_body(
-        "agent-mention-opencode",
-        {
+    claim = agent_invocation_claim(request, agent)
+    return {
+        "event_type": "agent-mention-opencode",
+        "client_payload": {
             "target_repository": request.repository,
             "pr_number": request.pull_request_number,
             "pr_head_sha": request.pull_request_head_sha,
             "pr_base_sha": request.pull_request_base_sha,
             "base_branch": request.pull_request_base_branch,
+            "trigger_reviews": claim["trigger_reviews"],
+            "review_dispatch_limit": claim["review_dispatch_limit"],
+            "enable_auto_merge": claim["enable_auto_merge"],
+            "update_branches": claim["update_branches"],
+            "merge_mode": claim["merge_mode"],
             "requested_agent": agent,
             "agent_invocation_key": agent_invocation_key(request, agent),
             "requested_by": request.actor,
             "source_comment_id": request.comment_id,
         },
-    )
+    }
 
 
 def dispatch_request(

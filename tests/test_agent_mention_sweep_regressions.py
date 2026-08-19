@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import sys
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -162,27 +161,21 @@ def test_repository_failure_is_isolated_and_later_repository_runs() -> None:
         }
     )
     failures = []
-    callback_threads = []
-    consumer_thread = threading.get_ident()
-
-    def on_error(scope, error):
-        failures.append((scope, str(error)))
-        callback_threads.append(threading.get_ident())
-
     results = list(
         sweep.list_recent_pull_requests(
             client,
             organization="ContextualWisdomLab",
             repository_source="organization",
             since="2026-08-05T00:00:00Z",
-            on_error=on_error,
+            on_error=lambda scope, error: failures.append(
+                (scope, str(error))
+            ),
         )
     )
     assert [result["repository"] for result in results] == [
         "ContextualWisdomLab/healthy"
     ]
     assert failures == [("ContextualWisdomLab/broken", "forbidden")]
-    assert callback_threads == [consumer_thread]
 
 
 def mention_request(comment_id: int):

@@ -10,7 +10,6 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
-      - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
@@ -19,7 +18,6 @@ on:
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
-      - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_originweave_hourly_review_caller.py
@@ -41,7 +39,6 @@ on:
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
-      - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/originweave-hourly-review-caller.md
@@ -54,7 +51,6 @@ on:
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
-      - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
@@ -63,7 +59,6 @@ on:
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
-      - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_originweave_hourly_review_caller.py
@@ -85,7 +80,6 @@ on:
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
-      - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/originweave-hourly-review-caller.md
@@ -139,7 +133,6 @@ jobs:
             tests/test_bandscope_hourly_review_caller.py \
             tests/test_disksage_hourly_review_caller.py \
             tests/test_fast_mlsirm_hourly_review_caller.py \
-            tests/test_github_hourly_conflict_repair.py \
             tests/test_governance_risk_compliance_hourly_review_caller.py \
             tests/test_hourly_scheduler_runtime_budget.py \
             tests/test_originweave_hourly_review_caller.py \
