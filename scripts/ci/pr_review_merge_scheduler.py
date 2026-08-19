@@ -2390,7 +2390,8 @@ def inspect_pr(
     if has_current_head_changes_requested(pr):
         behind_by = branch_outdated_by_base(pr, merge_state)
         if (
-            behind_by
+            merge_state not in {"DIRTY", "CONFLICTING"}
+            and behind_by
             and not pr.get("autoMergeRequest")
             and update_branches
             and trigger_reviews
