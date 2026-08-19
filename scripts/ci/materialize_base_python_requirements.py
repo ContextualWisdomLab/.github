@@ -38,6 +38,8 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
+TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
+TRUSTED_UV_VERSION_OUTPUT = f"uv {TRUSTED_UV_VERSION} ({TRUSTED_UV_TARGET_TRIPLE})"
 TRUSTED_UV_ARCHIVE_URL = (
     "https://github.com/astral-sh/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
@@ -381,7 +383,7 @@ def _install_trusted_uv() -> str:
                 f"trusted uv executable verification failed: {type(exc).__name__}"
             ) from exc
         observed = completed.stdout.decode("utf-8", errors="replace").strip()
-        if completed.returncode != 0 or observed != f"uv {TRUSTED_UV_VERSION}":
+        if completed.returncode != 0 or observed != TRUSTED_UV_VERSION_OUTPUT:
             raise RuntimeError(
                 "trusted uv executable reported an unexpected version or exit status"
             )
