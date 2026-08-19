@@ -10,9 +10,17 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
 
     assert 'cron: "7 * * * *"' in workflow
     assert "workflow_dispatch:" not in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
     assert "contents: write" not in workflow
+    assert (
+        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}"
+        in workflow
+    )
+    assert "GH_TOKEN: ${{ github.token }}" not in workflow
+    assert "required for cross-repository queue reads" in workflow
     assert "gh run cancel" not in workflow
     assert "gh pr merge" not in workflow
     assert "step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920" in workflow

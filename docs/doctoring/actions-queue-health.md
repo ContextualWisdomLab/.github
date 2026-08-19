@@ -2,9 +2,12 @@
 
 The scheduled `actions-queue-health.yml` workflow reads a fixed allowlist of
 CWL repositories once per hour and publishes a JSON report plus a keyboard-
-readable HTML report as an artifact. The collector uses only `gh api` reads;
-it does not cancel runs, mutate branches, dispatch workflows, or alter merge
-gates.
+readable HTML report as an artifact. The collector uses only `gh api` reads
+through the configured cross-repository `PR_REVIEW_MERGE_TOKEN` or
+`OPENCODE_APPROVE_TOKEN`; it fails visibly when neither credential is present.
+It does not cancel runs, mutate branches, dispatch workflows, or alter merge
+gates, and it never relies on the central repository's scoped `GITHUB_TOKEN`
+for sibling-repository reads.
 
 The report schema is `actions.queue_health.v1`. Each observed run records its
 repository, pull-request number, head SHA, event, run attempt, concurrency
