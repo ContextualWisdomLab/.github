@@ -251,7 +251,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("Error code:[[:space:]]*404", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
-        self.assertIn("ModelBehaviorError", workflow)
+        self.assertIn(
+            "agents\\.exceptions\\.ModelBehaviorError:[[:space:]]*",
+            workflow,
+        )
         self.assertIn(
             '! grep -Eiq "$reported_vulnerability_signal"',
             workflow,
@@ -260,22 +263,34 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
     def test_outer_workflow_neutralizes_model_behavior_error_without_findings(
         self,
     ) -> None:
-        """Treat a scanner ModelBehaviorError with zero findings as backend flake."""
+        """Require the actual scanner ModelBehaviorError format before neutralizing."""
 
-        self.assertTrue(
+        self.assertFalse(
             _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 0\n")
+        )
+        self.assertTrue(
+            _workflow_neutralizes(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 0\n"
+            )
         )
 
     def test_outer_workflow_never_neutralizes_model_behavior_error_with_findings(
         self,
     ) -> None:
-        """Keep Vulnerabilities [1-9] fail-closed even when the model also errored."""
+        """Keep Vulnerabilities [1-9] fail-closed for the actual model exception."""
 
         self.assertFalse(
-            _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 1\n")
+            _workflow_neutralizes(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 1\n"
+            )
         )
         self.assertFalse(
-            _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 9\n")
+            _workflow_neutralizes(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 9\n"
+            )
         )
 
 
