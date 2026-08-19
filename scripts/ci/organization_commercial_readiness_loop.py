@@ -239,6 +239,7 @@ class GitHubClient:
     """Use the GitHub CLI as an authenticated, bounded REST transport."""
 
     def __init__(self, token: str, *, timeout_seconds: int = 60) -> None:
+        """Configure the bounded REST transport with its explicit credential."""
         if not token:
             raise GitHubError("GH_TOKEN is required for organization coordination")
         self._token = token
