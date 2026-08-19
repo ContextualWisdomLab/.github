@@ -1,0 +1,107 @@
+name: Apply exact-head Strix 952 repair
+
+on:
+  pull_request_target:
+    types: [ready_for_review]
+    branches: [main]
+
+concurrency:
+  group: apply-strix-952-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.head.ref == 'fix/strix-base-runtime-contract-952'
+      && github.event.pull_request.head.sha == 'e6aadff4ea1ceefe2cc90fad45b66d1bf06b2d04'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact same-repository repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/strix-base-runtime-contract-952
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Verify immutable repair input
+        env:
+          EXPECTED_HEAD_SHA: e6aadff4ea1ceefe2cc90fad45b66d1bf06b2d04
+        run: |
+          set -euo pipefail
+          actual_head_sha="$(git rev-parse HEAD)"
+          if [ "$actual_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Repair branch moved before trusted execution: expected $EXPECTED_HEAD_SHA, found $actual_head_sha."
+            exit 1
+          fi
+          test -f scripts/ci/apply_strix_952_repair_v2.py
+          test -f scripts/ci/strix_report_semantics.py
+          test -f scripts/ci/validate_strix_runtime_compatibility.py
+          test -f tests/test_strix_952_runtime_contract.py
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Apply bounded production patch
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/apply_strix_952_repair_v2.py
+          git diff --check
+
+      - name: Verify focused Python contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests.test_strix_952_runtime_contract \
+            tests.test_strix_nvidia_nim_not_found_fallback
+          python3 -m compileall -q \
+            scripts/ci/strix_report_semantics.py \
+            scripts/ci/validate_strix_runtime_compatibility.py \
+            tests/test_strix_952_runtime_contract.py \
+            tests/test_strix_nvidia_nim_not_found_fallback.py
+
+      - name: Verify trusted shell contracts
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: '1'
+          STRIX_TEST_FAKE_SLEEP_SECONDS: '2'
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/strix_quick_gate.sh
+          bash -n scripts/ci/test_strix_quick_gate.sh
+          bash scripts/ci/strix_required_workflow_smoke.sh
+          timeout 1200 bash scripts/ci/test_strix_quick_gate.sh
+
+      - name: Commit verified repair and delete all bootstrap tooling
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-strix-952-repair.yml \
+            .github/workflows/repair-strix-base-runtime-952.yml \
+            scripts/ci/apply_strix_952_repair.py \
+            scripts/ci/apply_strix_952_repair_v2.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo '::error::Expected verified Strix repair changes were not produced.'
+            exit 1
+          fi
+          git commit -m 'fix(strix): enforce complete runtime evidence'
+          git push origin HEAD:fix/strix-base-runtime-contract-952
