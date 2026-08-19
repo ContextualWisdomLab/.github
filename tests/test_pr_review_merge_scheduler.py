@@ -2997,6 +2997,27 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
     )
+    stale_change_request = inspect(
+        make_pr(
+            mergeStateStatus="BEHIND",
+            restMergeableState="BEHIND",
+            compareBehindBy=2,
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+        )
+    )
+    assert stale_change_request.action == "update_branch"
+    assert stale_change_request.reason.startswith(
+        "current-head OpenCode review requested changes; branch is outdated before re-review"
+    )
+    assert inspect(
+        make_pr(
+            mergeStateStatus="BEHIND",
+            restMergeableState="BEHIND",
+            compareBehindBy=2,
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+        ),
+        trigger_reviews=False,
+    ).action == "block"
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
