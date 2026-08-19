@@ -661,6 +661,12 @@ jobs:
             && LLVM_COV_BIN="$(command -v llvm-cov || ls /usr/bin/llvm-cov-* 2>/dev/null | sort -V | tail -n1)" \
             && LLVM_PROFDATA_BIN="$(command -v llvm-profdata || ls /usr/bin/llvm-profdata-* 2>/dev/null | sort -V | tail -n1)" \
             && test -n "$LLVM_COV_BIN" && test -n "$LLVM_PROFDATA_BIN" \
+            && RUSTC_LLVM_VERSION="$(rustc -vV | sed -n 's/^LLVM version: //p')" \
+            && LLVM_COV_VERSION="$(llvm-cov --version | sed -n 's/^LLVM version //p')" \
+            && LLVM_PROFDATA_VERSION="$(llvm-profdata --version | sed -n 's/^LLVM version //p')" \
+            && test -n "$RUSTC_LLVM_VERSION" \
+            && test "$RUSTC_LLVM_VERSION" = "$LLVM_COV_VERSION" \
+            && test "$RUSTC_LLVM_VERSION" = "$LLVM_PROFDATA_VERSION" \
             && ln -sf "$LLVM_COV_BIN" /usr/local/bin/llvm-cov \
             && ln -sf "$LLVM_PROFDATA_BIN" /usr/local/bin/llvm-profdata
           ENV LLVM_COV=/usr/local/bin/llvm-cov \

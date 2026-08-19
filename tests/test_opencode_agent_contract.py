@@ -2169,6 +2169,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
         in coverage_job
     )
+    assert 'rustc -vV | sed -n \'s/^LLVM version: //p\'' in coverage_job
+    assert 'llvm-cov --version | sed -n \'s/^LLVM version //p\'' in coverage_job
+    assert 'llvm-profdata --version | sed -n \'s/^LLVM version //p\'' in coverage_job
+    assert 'test "$RUSTC_LLVM_VERSION" = "$LLVM_COV_VERSION"' in coverage_job
+    assert 'test "$RUSTC_LLVM_VERSION" = "$LLVM_PROFDATA_VERSION"' in coverage_job
     assert "sha256sum -c -" in coverage_job
     assert "install.packages(" not in coverage_job
 
