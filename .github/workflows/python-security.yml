@@ -236,37 +236,9 @@ jobs:
 
           # Audit every discovered requirements file.
           while IFS= read -r req; do
-            # A matching requirements-<tool>-ci-overrides.txt (a `uv pip compile --override`
-            # input, e.g. requirements-strix-ci-overrides.txt) means the *-hashes.txt this
-            # override applies to pins a version whose declared metadata range intentionally
-            # conflicts with another pin in the same file (verified safe at override time, not a
-            # resolution mistake). pip's own dependency resolver -- which pip-audit's default
-            # `-r` mode still calls even for fully hash-pinned files -- fails on that same
-            # declared-range conflict regardless of --require-hashes, and plain --no-deps does
-            # not suppress it (confirmed: --no-deps only skips fetching undeclared transitive
-            # packages, pip's resolver still cross-checks the packages that *are* listed
-            # together). --disable-pip bypasses pip's resolver entirely and audits the exact
-            # pins directly, but it requires every requirement to be an exact version (raises on
-            # any bare range) -- true for the compiled *-hashes.txt, not necessarily true for the
-            # hand-maintained raw input (e.g. requirements-strix-ci.txt intentionally leaves
-            # protobuf as a range). So: hashed output files with an override get
-            # --disable-pip --no-deps; their raw, non-hash input counterpart is skipped here
-            # (it is never itself a `pip install --require-hashes` target -- only its compiled
-            # *-hashes.txt is installed -- and that compiled file is the one audited with full
-            # transitive coverage).
-            base="${req%.txt}"
-            unhashed_base="${base%-hashes}"
-            if [ "$base" != "$unhashed_base" ] && [ -f "${unhashed_base}-overrides.txt" ]; then
-              echo "::group::pip-audit -r ${req} (--disable-pip --no-deps: overridden lock)"
-              pip-audit --strict --desc=on --no-deps --disable-pip -r "${req}" || status=1
-              echo "::endgroup::"
-            elif [ "$base" = "$unhashed_base" ] && [ -f "${unhashed_base}-overrides.txt" ]; then
-              echo "::notice::Skipping pip-audit for ${req}: it is the raw input to an overridden lock (${unhashed_base}-hashes.txt), never itself a pip install --require-hashes target, and its compiled hashes file is audited separately with full resolution."
-            else
-              echo "::group::pip-audit -r ${req}"
-              pip-audit --strict --desc=on -r "${req}" || status=1
-              echo "::endgroup::"
-            fi
+            echo "::group::pip-audit -r ${req}"
+            pip-audit --strict --desc=on -r "${req}" || status=1
+            echo "::endgroup::"
           done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
 
           # Audit the project itself when a PEP 621 / lock manifest exists.

@@ -17,16 +17,15 @@ from tests.conftest import FakeHttpResponse
 @pytest.mark.parametrize(
     "unsafe_url",
     [
-        "https://github.com:444/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
-        "https://github.com:not-a-port/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
-        "https://release-assets.githubusercontent.com:444/github-production-release-asset/1/file",
+        "https://releases.astral.sh:444/github/uv/releases/download/0.12.1/uv.tar.gz",
+        "https://releases.astral.sh:not-a-port/github/uv/releases/download/0.12.1/uv.tar.gz",
     ],
 )
 def test_trusted_uv_download_rejects_nondefault_or_malformed_ports(
     monkeypatch: pytest.MonkeyPatch,
     unsafe_url: str,
 ) -> None:
-    """The pinned GitHub release origin cannot land on another or malformed port."""
+    """The pinned Astral host cannot redirect to another or malformed service port."""
 
     response = FakeHttpResponse(unsafe_url)
     monkeypatch.setattr(
@@ -39,21 +38,14 @@ def test_trusted_uv_download_rejects_nondefault_or_malformed_ports(
         materializer._download_trusted_uv_archive()
 
 
-@pytest.mark.parametrize(
-    "trusted_url",
-    [
-        "https://github.com:443/astral-sh/uv/releases/download/0.12.1/uv-x86_64-unknown-linux-gnu.tar.gz",
-        "https://release-assets.githubusercontent.com:443/github-production-release-asset/1/file",
-        "https://objects.githubusercontent.com:443/github-production-release-asset/1/file",
-    ],
-)
 def test_trusted_uv_download_accepts_explicit_default_https_port(
     monkeypatch: pytest.MonkeyPatch,
-    trusted_url: str,
 ) -> None:
-    """An explicit port 443 still denotes a fixed trusted HTTPS origin."""
+    """An explicit port 443 still denotes the fixed trusted HTTPS origin."""
 
-    response = FakeHttpResponse(trusted_url)
+    response = FakeHttpResponse(
+        "https://releases.astral.sh:443/github/uv/releases/download/0.12.1/uv.tar.gz"
+    )
     monkeypatch.setattr(
         materializer.urllib.request,
         "urlopen",

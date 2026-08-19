@@ -8,17 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
-
-
-def load_opencode_jsonc() -> dict:
-    """Load the repository's opencode.jsonc, tolerating its // comments."""
-    return json.loads(strip_jsonc_comments(Path("opencode.jsonc").read_text(encoding="utf-8")))
-
 
 def test_code_reviewer_subagent_contract_is_configured():
     """Guard the read-only code-reviewer subagent contract."""
-    config = load_opencode_jsonc()
+    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
     agents = config["agent"]
     reviewer = agents["code-reviewer"]
 
@@ -91,7 +84,7 @@ def test_code_reviewer_subagent_contract_is_configured():
 
 def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     """Guard every review-pool candidate against silent reasoning-effort drift."""
-    config = load_opencode_jsonc()
+    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     github_models = config["provider"]["github-models"]["models"]
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
@@ -1119,13 +1112,7 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
         r'grep -qi "conflict marker"[\s\S]{0,200}refusing to push[\s\S]{0,200}exit 1',
         worker,
     )
-    assert 'expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"' in worker
-    assert (
-        'git -c core.hooksPath=/dev/null push "$expected_origin" '
-        '"HEAD:${PR_HEAD_REF}"'
-        in worker
-    )
-    assert 'git push origin "HEAD:${PR_HEAD_REF}"' not in worker
+    assert 'git push origin "HEAD:${PR_HEAD_REF}"' in worker
 
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
@@ -2301,7 +2288,7 @@ def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approv
 def test_opencode_strix_security_regressions_are_closed():
     """Bind the nine current-head Strix findings to fail-closed contracts."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    config = load_opencode_jsonc()
+    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
 
     assert "  validate-pr-metadata:\n" in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow

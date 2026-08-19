@@ -18,16 +18,10 @@ The implementation therefore:
    absence;
 3. installs one process-wide urllib opener with an empty proxy map and a redirect
    handler that rejects every redirect before urllib creates a target request;
-4. downloads one fixed official `uv` archive from the literal GitHub Releases
-   HTTPS URL and accepts a response only when its parsed origin remains HTTPS on
-   `github.com`, `release-assets.githubusercontent.com`, or
-   `objects.githubusercontent.com` with the absent or explicit default port 443;
-   malformed or nondefault ports, userinfo, and any other host fail closed. The
-   opener may follow exactly one hop from `github.com` onto those two GitHub
-   release-asset hosts. `releases.astral.sh` is no longer the network sink
-   because that vanity host now returns HTTP 403 for the pinned 0.12.1 archive
-   (ContextualWisdomLab/.github#1109) while the GitHub Releases asset keeps the
-   same SHA-256 digest;
+4. downloads one fixed official Astral `uv` archive from a literal HTTPS URL and
+   accepts a response only when its parsed origin remains HTTPS,
+   `releases.astral.sh`, and the absent or explicit default port 443; malformed
+   or nondefault ports fail closed;
 5. verifies the bounded archive with a pinned SHA-256 digest before extraction;
 6. accepts only the expected regular-file tar member within explicit size bounds;
 7. writes the executable with mode `0755` and verifies that it reports the exact
@@ -110,12 +104,10 @@ Regression coverage must prove:
 - base-revision-only reads and rejection of unsafe revision/path shapes;
 - an absent sibling project is skipped, but an inventoried project blob that
   cannot be read propagates a fatal error before uv starts;
-- the download opener is cached, disables ambient proxies, and follows only one
-  `github.com` → GitHub release-asset CDN hop before rejecting every other
-  redirect;
-- fixed HTTPS scheme and hostname validation for GitHub Releases plus the two
-  official asset hosts, acceptance only of an absent or explicit port 443,
-  rejection of userinfo, malformed ports, and nondefault ports, bounded reads,
+- the download opener is cached, disables ambient proxies, and rejects redirects
+  before following them;
+- fixed HTTPS scheme and hostname validation, acceptance only of an absent or
+  explicit port 443, rejection of malformed and nondefault ports, bounded reads,
   archive digest, member type, member size, executable size, executable mode,
   and exact version;
 - frozen, offline, cacheless, noninteractive exporter arguments;
@@ -179,9 +171,6 @@ accepted by the coverage sandbox.
 
 ## References
 
-Astral Software, Inc. (n.d.). *Installation*. uv documentation. Retrieved
-August 18, 2026, from https://docs.astral.sh/uv/getting-started/installation/
-
 Astral Software, Inc. (n.d.). *Exporting a lockfile*. uv documentation. Retrieved
 August 4, 2026, from https://docs.astral.sh/uv/concepts/projects/export/
 
@@ -195,15 +184,8 @@ Berners-Lee, T., Fielding, R., & Masinter, L. (2005). *Uniform Resource Identifi
 (URI): Generic syntax* (STD 66; RFC 3986). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC3986
 
-Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022). *HTTP
-semantics* (RFC 9110). Internet Engineering Task Force.
-https://doi.org/10.17487/RFC9110
-
 GitHub. (n.d.). *actions/checkout*. GitHub. Retrieved August 5, 2026, from
 https://github.com/actions/checkout
-
-GitHub, Inc. (n.d.). *About releases*. GitHub Docs. Retrieved August 18, 2026,
-from https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases
 
 GitHub, Inc. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved
 August 5, 2026, from
@@ -214,12 +196,6 @@ Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
 
 Supply-chain Levels for Software Artifacts. (2025). *Provenance (version 1.2)*.
 https://slsa.dev/spec/v1.2/provenance
-
-MITRE. (2026a). *CWE-601: URL redirection to untrusted site ('open redirect')*.
-https://cwe.mitre.org/data/definitions/601.html
-
-MITRE. (2026b). *CWE-918: Server-side request forgery (SSRF)*.
-https://cwe.mitre.org/data/definitions/918.html
 
 Supply-chain Levels for Software Artifacts. (2025). *Source: Requirements for
 producing source (version 1.2)*.

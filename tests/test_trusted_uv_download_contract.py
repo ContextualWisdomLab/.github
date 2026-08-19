@@ -9,7 +9,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MATERIALIZER = _REPO_ROOT / "scripts" / "ci" / "materialize_base_python_requirements.py"
 _EXPECTED_URL = (
-    "https://github.com/astral-sh/uv/releases/download/0.12.1/"
+    "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
 )
 _SEMGREP_DYNAMIC_URL_RULE = (

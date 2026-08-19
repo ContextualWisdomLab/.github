@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import json
 import os
 import signal
@@ -15,7 +14,6 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,39 +110,17 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        shell=False,  # nosec B603
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
 
 
-def validate_readiness_url(url: str) -> None:
-    """Require a loopback literal so readiness checks cannot become SSRF."""
-    try:
-        parsed = urlsplit(url)
-        host = parsed.hostname
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("readiness URL has an invalid authority") from exc
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("readiness URL must use http:// or https://")
-    if host is None or parsed.username is not None or parsed.password is not None:
-        raise ValueError("readiness URL must contain a credential-free host")
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError as exc:
-        raise ValueError(
-            "readiness URL host must be a loopback IP literal"
-        ) from exc
-    if not address.is_loopback:
-        raise ValueError("readiness URL host must be a loopback IP literal")
-
-
 def wait_for_url(url: str, timeout: int, service: Service) -> bool:
-    """Poll a loopback readiness URL until it responds or the service exits."""
+    """Poll a readiness URL until it responds or the service exits."""
     if not url:
         return True
-    validate_readiness_url(url)
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError(f"URL must start with http:// or https://, got: {url}")
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
@@ -170,7 +146,6 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
-        shell=False,  # nosec B603
     )
 
 

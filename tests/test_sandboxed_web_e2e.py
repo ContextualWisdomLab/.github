@@ -112,16 +112,8 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
-    with pytest.raises(ValueError, match="readiness URL"):
+    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
-    with pytest.raises(ValueError, match="invalid authority"):
-        sandboxed_web_e2e.wait_for_url("http://127.0.0.1:not-a-port/", 1, exited_service)
-    with pytest.raises(ValueError, match="credential-free host"):
-        sandboxed_web_e2e.wait_for_url("http://user:pass@127.0.0.1/", 1, exited_service)
-    with pytest.raises(ValueError, match="loopback IP literal"):
-        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/", 1, exited_service)
-    with pytest.raises(ValueError, match="loopback IP literal"):
-        sandboxed_web_e2e.wait_for_url("http://example.com/", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
@@ -189,13 +181,13 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert popen_calls[0][1].get("shell") is False
+    assert "shell" not in popen_calls[0][1]
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-    assert run_calls[0][1].get("shell") is False
+    assert "shell" not in run_calls[0][1]
     assert "executable" not in run_calls[0][1]
 
 

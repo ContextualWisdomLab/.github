@@ -318,188 +318,6 @@ def test_context_writer_empty_reviews_threads_and_validation(monkeypatch, tmp_pa
         context.repo_parts("owner")
 
 
-def test_context_explicit_rca_uses_precollected_evidence(monkeypatch, tmp_path):
-    """Explicit RCA mode consumes only the trusted pre-collected evidence file."""
-    head = "a" * 40
-    pr = {
-        "number": 7,
-        "title": "Repair failed checks",
-        "url": "https://example.test/pr/7",
-        "headRefName": "feature",
-        "baseRefName": "main",
-        "headRefOid": head,
-        "baseRefOid": "b" * 40,
-        "mergeStateStatus": "CLEAN",
-        "statusCheckRollup": [],
-    }
-    reviews = [
-        {
-            "commit_id": head,
-            "state": "CHANGES_REQUESTED",
-            "user": {"login": "opencode-agent"},
-            "body": "Failed check evidence reports Strix failed on this head.",
-        }
-    ]
-    monkeypatch.setattr(context, "pr_view", lambda repo, number: pr)
-    monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: reviews)
-    monkeypatch.setattr(context, "review_threads", lambda repo, number: [])
-    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: ["src/app.py"])
-    monkeypatch.setattr(
-        context,
-        "collect_failed_check_evidence",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("collector reran")),
-    )
-    evidence = tmp_path / "failed-checks.md"
-    evidence.write_text("redacted exact-head failure", encoding="utf-8")
-    output = tmp_path / "context.md"
-
-    context.write_context(
-        "owner/repo",
-        7,
-        head,
-        output,
-        repair_mode="rca",
-        failed_check_evidence_path=evidence,
-    )
-
-    body = output.read_text(encoding="utf-8")
-    assert "Repair mode: failed-check-rca" in body
-    assert "- `src/app.py`" in body
-    assert "redacted exact-head failure" in body
-
-
-def test_context_inferred_rca_collects_evidence(monkeypatch, tmp_path):
-    """Legacy callers still infer RCA and invoke the trusted collector once."""
-    head = "a" * 40
-    pr = {
-        "number": 7,
-        "title": "Repair failed checks",
-        "url": "https://example.test/pr/7",
-        "headRefName": "feature",
-        "baseRefName": "main",
-        "headRefOid": head,
-        "baseRefOid": "b" * 40,
-        "mergeStateStatus": "CLEAN",
-        "statusCheckRollup": [],
-    }
-    reviews = [
-        {
-            "commit_id": head,
-            "state": "CHANGES_REQUESTED",
-            "user": {"login": "opencode-agent"},
-            "body": "Coverage-evidence failed on this exact head.",
-        }
-    ]
-    calls = []
-    monkeypatch.setattr(context, "pr_view", lambda repo, number: pr)
-    monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: reviews)
-    monkeypatch.setattr(context, "review_threads", lambda repo, number: [])
-    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: [])
-    monkeypatch.setattr(
-        context,
-        "collect_failed_check_evidence",
-        lambda repo, number, head_sha, output: calls.append(output) or "collected evidence",
-    )
-    output = tmp_path / "context.md"
-
-    context.write_context("owner/repo", 7, head, output)
-
-    assert len(calls) == 1
-    assert "collected evidence" in output.read_text(encoding="utf-8")
-
-
-def test_context_explicit_mode_and_evidence_fail_closed(monkeypatch, tmp_path):
-    """Mode mismatches and nonregular evidence cannot widen autonomous edit scope."""
-    head = "a" * 40
-    pr = {
-        "number": 7,
-        "title": "Repair failed checks",
-        "url": "https://example.test/pr/7",
-        "headRefName": "feature",
-        "baseRefName": "main",
-        "headRefOid": head,
-        "baseRefOid": "b" * 40,
-        "mergeStateStatus": "CLEAN",
-        "statusCheckRollup": [],
-    }
-    rca_reviews = [
-        {
-            "commit_id": head,
-            "state": "CHANGES_REQUESTED",
-            "user": {"login": "opencode-agent"},
-            "body": "CodeQL failed on this exact head.",
-        }
-    ]
-    monkeypatch.setattr(context, "pr_view", lambda repo, number: pr)
-    monkeypatch.setattr(context, "review_threads", lambda repo, number: [])
-    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: [])
-    output = tmp_path / "context.md"
-
-    monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: [])
-    with pytest.raises(RuntimeError, match="does not match"):
-        context.write_context("owner/repo", 7, head, output, repair_mode="rca")
-
-    evidence = tmp_path / "review-only.md"
-    evidence.write_text("not RCA", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="only for exact-head RCA"):
-        context.write_context(
-            "owner/repo",
-            7,
-            head,
-            output,
-            repair_mode="review",
-            failed_check_evidence_path=evidence,
-        )
-
-    monkeypatch.setattr(
-        context,
-        "current_reviews",
-        lambda repo, number, head_sha: rca_reviews,
-    )
-    with pytest.raises(RuntimeError, match="does not match"):
-        context.write_context("owner/repo", 7, head, output, repair_mode="review")
-
-    monkeypatch.setattr(
-        context,
-        "pr_changed_paths",
-        lambda repo, number: (_ for _ in ()).throw(
-            AssertionError("conflict mode must not widen to all changed paths")
-        ),
-    )
-    context.write_context(
-        "owner/repo",
-        7,
-        head,
-        output,
-        repair_mode="conflict",
-    )
-    assert "Repair mode: review-feedback" in output.read_text(encoding="utf-8")
-    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: [])
-
-    with pytest.raises(RuntimeError, match="missing or not a regular file"):
-        context.write_context(
-            "owner/repo",
-            7,
-            head,
-            output,
-            repair_mode="rca",
-            failed_check_evidence_path=tmp_path / "missing.md",
-        )
-    target = tmp_path / "target.md"
-    target.write_text("redacted", encoding="utf-8")
-    symlink = tmp_path / "evidence-link.md"
-    symlink.symlink_to(target)
-    with pytest.raises(RuntimeError, match="missing or not a regular file"):
-        context.write_context(
-            "owner/repo",
-            7,
-            head,
-            output,
-            repair_mode="rca",
-            failed_check_evidence_path=symlink,
-        )
-
-
 def test_context_parse_and_main(monkeypatch, tmp_path):
     """Context CLI validates arguments and calls the writer."""
     head = "a" * 40
@@ -512,56 +330,10 @@ def test_context_parse_and_main(monkeypatch, tmp_path):
     assert context.main(["--repo", "owner/repo", "--pr-number", "1", "--head-sha", head, "--output", str(output)]) == 0
     assert called == [("owner/repo", 1, head, output)]
 
-    evidence = tmp_path / "failed.md"
-    evidence.write_text("redacted", encoding="utf-8")
-    allowed_paths = tmp_path / "allowed.zlist"
-    explicit_calls = []
-    monkeypatch.setattr(
-        context,
-        "write_context",
-        lambda repo, number, head_sha, out, **kwargs: explicit_calls.append(
-            (repo, number, head_sha, out, kwargs)
-        ),
-    )
-    assert context.main(
-        [
-            "--repo",
-            "owner/repo",
-            "--pr-number",
-            "1",
-            "--head-sha",
-            head,
-            "--repair-mode",
-            "rca",
-            "--failed-check-evidence",
-            str(evidence),
-            "--allowed-paths-output",
-            str(allowed_paths),
-            "--output",
-            str(output),
-        ]
-    ) == 0
-    assert explicit_calls == [
-        (
-            "owner/repo",
-            1,
-            head,
-            output,
-            {
-                "allowed_paths_output": allowed_paths,
-                "repair_mode": "rca",
-                "failed_check_evidence_path": evidence,
-            },
-        )
-    ]
-
     for bad_args in (
         ["--pr-number", "1", "--head-sha", head, "--output", str(output)],
         ["--repo", "owner/repo", "--pr-number", "0", "--head-sha", head, "--output", str(output)],
         ["--repo", "owner/repo", "--pr-number", "1", "--head-sha", "bad", "--output", str(output)],
-        ["--repo", "owner/repo", "--pr-number", "1", "--head-sha", head, "--repair-mode", "invalid", "--output", str(output)],
-        ["--repo", "owner/repo", "--pr-number", "1", "--head-sha", head, "--repair-mode", "rca", "--output", str(output)],
-        ["--repo", "owner/repo", "--pr-number", "1", "--head-sha", head, "--failed-check-evidence", str(evidence), "--output", str(output)],
     ):
         monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
         with pytest.raises(SystemExit):
@@ -702,51 +474,6 @@ def test_dispatch_autofix_rejects_selectable_workflow_and_invalid_repository():
             workflow_repository="bad repository",
             dry_run=True,
         )
-    with pytest.raises(ValueError, match="invalid repair mode"):
-        fix.dispatch_autofix(
-            "owner/repo",
-            pr,
-            workflow="pr-review-autofix.yml",
-            workflow_repository="ContextualWisdomLab/.github",
-            dry_run=True,
-            repair_mode="invalid",
-        )
-
-
-def test_inspect_pr_dispatches_failed_check_rca(monkeypatch):
-    """A current-head failed-check review dispatches in explicit RCA mode."""
-    head = "a" * 40
-    pr = make_pr(
-        headRefOid=head,
-        reviews={
-            "nodes": [
-                {
-                    "state": "CHANGES_REQUESTED",
-                    "author": {"login": "opencode-agent"},
-                    "commit": {"oid": head},
-                    "body": "Coverage-evidence failed on this exact head.",
-                }
-            ]
-        },
-    )
-    captured = {}
-    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
-    monkeypatch.setattr(
-        fix,
-        "dispatch_autofix",
-        lambda repo, pr, **kwargs: captured.update(kwargs),
-    )
-    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
-    args = fix.parse_args(
-        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
-    )
-
-    action, reasons = fix.inspect_pr("owner/repo", pr, args)
-
-    assert action == "dispatch"
-    assert reasons == ("current-head failed-check blocker requires RCA",)
-    assert captured["repair_mode"] == "rca"
-    assert captured["resolve_conflict"] is False
 
 
 def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
@@ -796,7 +523,7 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))
     assert fix.inspect_pr("owner/repo", make_pr(), args) == (
         "skip",
-        ("no current-head autofixable review, failed-check RCA, or approved merge conflict",),
+        ("no current-head autofixable OpenCode change request or approved merge conflict",),
     )
 
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))

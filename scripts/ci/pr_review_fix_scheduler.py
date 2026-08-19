@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dispatch conservative PR repair runs for actionable exact-head evidence."""
+"""Dispatch conservative PR autofix runs for actionable review feedback."""
 
 from __future__ import annotations
 
@@ -45,29 +45,19 @@ FIX_MARKER_RE = re.compile(
     r"head_sha=([0-9a-fA-F]{40}) epoch=([0-9]+) -->"
 )
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-REPAIR_MODES = frozenset({"review", "rca", "conflict"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
     "mergestatestatus `dirty`",
     "mergestatestatus dirty",
     "model pool exhausted",
     "could not establish approval sufficiency",
-    "independent approval",
     "unresolved human review thread",
     "unresolved reviewer thread",
     "unresolved reviewer or review-agent thread",
-    "queued check",
-    "pending check",
-    "check rollup cannot be verified",
-)
-RCA_REPAIR_CHANGE_REQUEST_MARKERS = (
     "failed check",
     "failed-check",
     "coverage-evidence",
     "strix failed",
-    "security scan failed",
-    "sast semgrep failed",
-    "codeql failed",
 )
 
 
@@ -78,9 +68,7 @@ def run_json(args: list[str]) -> Any:
 
 def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
     """Return issue comments for a PR."""
-    pages = run_json(
-        ["api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--slurp"]
-    )
+    pages = run_json(["api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--slurp"])
     return [comment for page in pages for comment in page]
 
 
@@ -100,7 +88,7 @@ def recent_fix_marker_exists(
 
 
 def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
-    """Return whether repository workflow credentials can mutate the PR head."""
+    """Return whether the PR head can be mutated by repository workflow credentials."""
     return ((pr.get("headRepository") or {}).get("nameWithOwner") or "") == repo
 
 
@@ -112,46 +100,25 @@ def latest_current_head_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | 
     return None
 
 
-def _clean_change_request_body(pr: dict[str, Any]) -> str | None:
-    """Return normalized exact-head OpenCode review text for a clean PR."""
+def change_request_is_autofixable(pr: dict[str, Any]) -> bool:
+    """Return whether the latest OpenCode request is safe for bot autofix."""
     merge_state = str(pr.get("mergeStateStatus") or "").upper()
     if merge_state and merge_state not in {"CLEAN", "HAS_HOOKS"}:
-        return None
+        return False
+
     review = latest_current_head_opencode_review(pr)
     if review is None:
-        return None
-    return str(review.get("body") or "").lower()
-
-
-def change_request_is_autofixable(pr: dict[str, Any]) -> bool:
-    """Return whether ordinary review feedback is safe for bounded autofix."""
-    body = _clean_change_request_body(pr)
-    if body is None:
         return False
+    body = str((review or {}).get("body") or "").lower()
     if any(marker in body for marker in NON_AUTOFIX_CHANGE_REQUEST_MARKERS):
-        return False
-    if any(marker in body for marker in RCA_REPAIR_CHANGE_REQUEST_MARKERS):
         return False
     return True
 
 
-def change_request_requires_rca(pr: dict[str, Any]) -> bool:
-    """Return whether failed-check evidence warrants a bounded RCA repair run."""
-    body = _clean_change_request_body(pr)
-    if body is None:
-        return False
-    if any(marker in body for marker in NON_AUTOFIX_CHANGE_REQUEST_MARKERS):
-        return False
-    return any(marker in body for marker in RCA_REPAIR_CHANGE_REQUEST_MARKERS)
-
-
 def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
-    """Return whether current-head evidence justifies ordinary review autofix."""
+    """Return whether current-head evidence justifies an autofix attempt."""
     reasons: list[str] = []
-    if not (
-        has_current_head_changes_requested(pr)
-        and change_request_is_autofixable(pr)
-    ):
+    if not (has_current_head_changes_requested(pr) and change_request_is_autofixable(pr)):
         return False, ()
 
     reasons.append("current-head OpenCode requested changes")
@@ -161,41 +128,26 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     return bool(reasons), tuple(reasons)
 
 
-def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
-    """Return whether exact-head failed-check evidence warrants RCA and repair."""
-    if not (
-        has_current_head_changes_requested(pr)
-        and change_request_requires_rca(pr)
-    ):
-        return False, ()
-    return True, ("current-head failed-check blocker requires RCA",)
-
-
 CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
 
 
-def needs_conflict_resolution(
-    pr: dict[str, Any],
-    *,
-    allow_unreviewed: bool = False,
-) -> tuple[bool, tuple[str, ...]]:
-    """Return whether a GitHub-reported conflict is safe to auto-resolve.
+def needs_conflict_resolution(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
+    """Return whether an approved PR has a merge conflict safe to auto-resolve.
 
-    Direct library callers retain the historical current-head approval
-    prerequisite unless ``allow_unreviewed`` is explicit. Trusted scheduled
-    callers enable it because conflict repair creates a new head and therefore
-    requires fresh reviews and checks regardless of the previous review state.
+    Only a current-head-approved PR that GitHub reports as ``DIRTY`` or
+    ``CONFLICTING`` qualifies: the head was otherwise ready to merge but for the
+    conflict. The bot merges the base into the head and pushes; the resulting
+    head is re-reviewed and re-checked before it can merge, so a wrong
+    resolution cannot merge unreviewed. Same-repository-head and dispatch
+    bounding are enforced by the caller.
     """
     merge_state = str(pr.get("mergeStateStatus") or "").upper()
     if merge_state not in CONFLICT_MERGE_STATES:
         return False, ()
-    approved = has_current_head_approval(pr)
-    if not approved and not allow_unreviewed:
+    if not has_current_head_approval(pr):
         return False, ()
-    review_state = "current-head approved" if approved else "unreviewed"
     return True, (
-        f"{review_state} PR is {merge_state.lower()}; auto-resolving the merge "
-        "conflict and requiring fresh review and checks on the resulting head",
+        f"current-head approved PR is {merge_state.lower()}; auto-resolving the merge conflict",
     )
 
 
@@ -236,13 +188,11 @@ def dispatch_autofix(
     workflow_repository: str,
     dry_run: bool,
     resolve_conflict: bool = False,
-    repair_mode: str = "review",
 ) -> None:
-    """Dispatch a repair worker for the exact PR head.
+    """Dispatch an autofix worker for the exact PR head.
 
-    ``repair_mode=rca`` tells the trusted context collector to gather failed
-    check evidence and widen the sealed edit scope only to current PR files.
-    ``resolve_conflict`` retains the separately bounded conflict path.
+    When ``resolve_conflict`` is set the worker merges the base branch into the
+    head and resolves conflict markers instead of applying review-feedback fixes.
     """
     dispatch_repo = workflow_repository or repo
     if workflow != DEFAULT_AUTOFIX_WORKFLOW:
@@ -251,9 +201,6 @@ def dispatch_autofix(
         )
     if not REPO_RE.fullmatch(dispatch_repo):
         raise ValueError(f"invalid autofix workflow repository: {dispatch_repo!r}")
-    effective_mode = "conflict" if resolve_conflict else repair_mode
-    if effective_mode not in REPAIR_MODES:
-        raise ValueError(f"invalid repair mode: {effective_mode!r}")
     payload = {
         "event_type": AUTOFIX_REPOSITORY_DISPATCH_TYPE,
         "client_payload": {
@@ -264,7 +211,6 @@ def dispatch_autofix(
             "pr_head_ref": pr["headRefName"],
             "pr_head_sha": pr["headRefOid"],
             "resolve_conflict": "true" if resolve_conflict else "false",
-            "repair_mode": effective_mode,
         },
     }
     args = [
@@ -289,72 +235,47 @@ def inspect_pr(
     *,
     comments: list[dict[str, Any]] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
-    """Inspect one PR and optionally dispatch a bounded repair."""
+    """Inspect one PR and optionally dispatch autofix."""
     number = int(pr["number"])
     if pr.get("isDraft"):
         return "skip", ("draft PR",)
     if pr.get("baseRefName") != args.base_branch:
-        return "skip", (
-            f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
-        )
+        return "skip", (f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",)
     if not same_repository_head(repo, pr):
-        return "skip", (
-            "external PR head is not writable by repository workflow credentials",
-        )
+        return "skip", ("external PR head is not writable by repository workflow credentials",)
 
     needs_fix, reasons = needs_autofix(pr)
-    repair_mode = "review"
     resolve_conflict = False
     if not needs_fix:
-        needs_rca, rca_reasons = needs_rca_repair(pr)
-        if needs_rca:
-            repair_mode = "rca"
-            reasons = rca_reasons
-        else:
-            needs_resolve, resolve_reasons = needs_conflict_resolution(
-                pr,
-                allow_unreviewed=bool(
-                    getattr(args, "resolve_unreviewed_conflicts", False)
-                ),
+        needs_resolve, resolve_reasons = needs_conflict_resolution(pr)
+        if not needs_resolve:
+            return "skip", (
+                "no current-head autofixable OpenCode change request or approved merge conflict",
             )
-            if not needs_resolve:
-                return "skip", (
-                    "no current-head autofixable review, failed-check RCA, or approved merge conflict",
-                )
-            resolve_conflict = True
-            repair_mode = "conflict"
-            reasons = resolve_reasons
+        resolve_conflict = True
+        reasons = resolve_reasons
 
     if comments is None:
         comments = issue_comments(repo, number)
 
-    if recent_fix_marker_exists(
-        comments,
-        str(pr["headRefOid"]),
-        args.retry_hours * 3600,
-    ):
+    if recent_fix_marker_exists(comments, str(pr["headRefOid"]), args.retry_hours * 3600):
         return "wait", ("recent autofix marker exists for this head",)
 
-    dispatch_kwargs: dict[str, Any] = {
-        "workflow": args.autofix_workflow,
-        "workflow_repository": args.autofix_repository,
-        "dry_run": args.dry_run,
-        "resolve_conflict": resolve_conflict,
-    }
-    if repair_mode == "rca":
-        dispatch_kwargs["repair_mode"] = "rca"
-    dispatch_autofix(repo, pr, **dispatch_kwargs)
+    dispatch_autofix(
+        repo,
+        pr,
+        workflow=args.autofix_workflow,
+        workflow_repository=args.autofix_repository,
+        dry_run=args.dry_run,
+        resolve_conflict=resolve_conflict,
+    )
     create_fix_marker(repo, pr, dry_run=args.dry_run)
     return "dispatch", reasons
 
 
 def process_queue(args: argparse.Namespace) -> int:
-    """Inspect open PRs and dispatch bounded repair work."""
-    prs = (
-        fetch_pr(args.repo, args.pr_number)
-        if args.pr_number
-        else fetch_open_prs(args.repo, args.max_prs)
-    )
+    """Inspect open PRs and dispatch bounded autofix work."""
+    prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
     dispatched = 0
     inspected = 0
     decisions: list[dict[str, Any]] = []
@@ -368,37 +289,26 @@ def process_queue(args: argparse.Namespace) -> int:
         if not same_repository_head(args.repo, pr):
             continue
         needs_fix, _ = needs_autofix(pr)
-        needs_rca, _ = needs_rca_repair(pr)
-        needs_resolve, _ = needs_conflict_resolution(
-            pr,
-            allow_unreviewed=bool(
-                getattr(args, "resolve_unreviewed_conflicts", False)
-            ),
-        )
-        if needs_fix or needs_rca or needs_resolve:
+        needs_resolve, _ = needs_conflict_resolution(pr)
+        if needs_fix or needs_resolve:
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
     if len(prs_needing_comments) <= 1:
+        # Fast path for single items
         for pr in prs_needing_comments:
             pr_number = int(pr["number"])
             comments_by_pr[pr_number] = issue_comments(args.repo, pr_number)
     else:
+        # ⚡ Bolt: Avoid N+1 API blocking by parallelizing independent issue_comments fetches
+        # Impact: Reduces wait time from O(N) API calls to O(N/max_workers) for queue scanning
         max_workers = min(10, len(prs_needing_comments))
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers
-        ) as executor:
-
-            def fetch_comments(
-                pr_number: int,
-            ) -> tuple[int, list[dict[str, Any]]]:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            def fetch_comments(pr_number: int) -> tuple[int, list[dict[str, Any]]]:
                 """Fetch one PR's issue comments for parallel queue inspection."""
                 return pr_number, issue_comments(args.repo, pr_number)
 
-            futures = [
-                executor.submit(fetch_comments, int(pr["number"]))
-                for pr in prs_needing_comments
-            ]
+            futures = [executor.submit(fetch_comments, int(pr["number"])) for pr in prs_needing_comments]
             for future in concurrent.futures.as_completed(futures):
                 try:
                     pr_number, comments = future.result()
@@ -409,13 +319,7 @@ def process_queue(args: argparse.Namespace) -> int:
     for pr in prs:
         inspected += 1
         if dispatched >= args.max_dispatches:
-            decisions.append(
-                {
-                    "pr": pr["number"],
-                    "action": "skip",
-                    "reasons": ["autofix dispatch limit reached"],
-                }
-            )
+            decisions.append({"pr": pr["number"], "action": "skip", "reasons": ["autofix dispatch limit reached"]})
             continue
         try:
             pr_number = int(pr["number"])
@@ -429,33 +333,17 @@ def process_queue(args: argparse.Namespace) -> int:
             action, reasons = "error", (str(exc),)
         if action == "dispatch":
             dispatched += 1
-        decisions.append(
-            {
-                "pr": pr["number"],
-                "action": action,
-                "reasons": list(reasons),
-            }
-        )
+        decisions.append({"pr": pr["number"], "action": action, "reasons": list(reasons)})
         print(f"PR #{pr['number']}: {action}: {'; '.join(reasons)}")
 
-    print(
-        json.dumps(
-            {
-                "inspected": inspected,
-                "autofix_dispatches": dispatched,
-                "decisions": decisions,
-            }
-        )
-    )
+    print(json.dumps({"inspected": inspected, "autofix_dispatches": dispatched, "decisions": decisions}))
     return 0
 
 
 def self_test() -> int:
     """Run cheap contract checks."""
     head = "a" * 40
-    comments = [
-        {"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}
-    ]
+    comments = [{"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}]
     assert recent_fix_marker_exists(comments, head, 24 * 3600)
     assert not recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
     pr = {
@@ -473,32 +361,9 @@ def self_test() -> int:
         "headRefOid": head,
         "mergeStateStatus": "CLEAN",
     }
-    assert needs_autofix(pr) == (
-        True,
-        ("current-head OpenCode requested changes",),
-    )
-    assert needs_rca_repair(pr) == (False, ())
-    failed_check_pr = {
-        **pr,
-        "reviews": {
-            "nodes": [
-                {
-                    "state": "CHANGES_REQUESTED",
-                    "author": {"login": "opencode-agent"},
-                    "commit": {"oid": head},
-                    "body": "Failed check evidence shows coverage-evidence failed.",
-                }
-            ]
-        },
-    }
-    assert needs_autofix(failed_check_pr) == (False, ())
-    assert needs_rca_repair(failed_check_pr) == (
-        True,
-        ("current-head failed-check blocker requires RCA",),
-    )
+    assert needs_autofix(pr) == (True, ("current-head OpenCode requested changes",))
     dirty_pr = {**pr, "mergeStateStatus": "DIRTY"}
     assert needs_autofix(dirty_pr) == (False, ())
-    assert needs_rca_repair(dirty_pr) == (False, ())
     approved_dirty_pr = {
         "reviews": {
             "nodes": [
@@ -517,16 +382,8 @@ def self_test() -> int:
     resolves, resolve_reasons = needs_conflict_resolution(approved_dirty_pr)
     assert resolves
     assert "auto-resolving" in resolve_reasons[0]
-    assert needs_conflict_resolution(
-        {**approved_dirty_pr, "mergeStateStatus": "CLEAN"}
-    ) == (False, ())
+    assert needs_conflict_resolution({**approved_dirty_pr, "mergeStateStatus": "CLEAN"}) == (False, ())
     assert needs_conflict_resolution(dirty_pr) == (False, ())
-    resolves, resolve_reasons = needs_conflict_resolution(
-        dirty_pr,
-        allow_unreviewed=True,
-    )
-    assert resolves
-    assert "fresh review and checks" in resolve_reasons[0]
     model_exhausted_pr = {
         **pr,
         "reviews": {
@@ -535,16 +392,12 @@ def self_test() -> int:
                     "state": "CHANGES_REQUESTED",
                     "author": {"login": "opencode-agent"},
                     "commit": {"oid": head},
-                    "body": (
-                        "OpenCode could not establish approval sufficiency because "
-                        "the model pool exhausted."
-                    ),
+                    "body": "OpenCode could not establish approval sufficiency because the model pool exhausted.",
                 }
             ]
         },
     }
     assert needs_autofix(model_exhausted_pr) == (False, ())
-    assert needs_rca_repair(model_exhausted_pr) == (False, ())
     unresolved_thread_pr = {
         **pr,
         "reviews": {
@@ -553,16 +406,12 @@ def self_test() -> int:
                     "state": "CHANGES_REQUESTED",
                     "author": {"login": "opencode-agent"},
                     "commit": {"oid": head},
-                    "body": (
-                        "OpenCode found unresolved reviewer or review-agent thread "
-                        "evidence before approval."
-                    ),
+                    "body": "OpenCode found unresolved reviewer or review-agent thread evidence before approval.",
                 }
             ]
         },
     }
     assert needs_autofix(unresolved_thread_pr) == (False, ())
-    assert needs_rca_repair(unresolved_thread_pr) == (False, ())
     print("self-test passed")
     return 0
 
@@ -576,14 +425,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-prs", type=int, default=50)
     parser.add_argument("--max-dispatches", type=int, default=1)
     parser.add_argument("--retry-hours", type=int, default=24)
-    parser.add_argument("--resolve-unreviewed-conflicts", action="store_true")
     parser.add_argument("--autofix-workflow", default="pr-review-autofix.yml")
     parser.add_argument(
         "--autofix-repository",
-        default=os.environ.get(
-            "AUTOFIX_REPOSITORY",
-            DEFAULT_AUTOFIX_REPOSITORY,
-        ),
+        default=os.environ.get("AUTOFIX_REPOSITORY", DEFAULT_AUTOFIX_REPOSITORY),
         help="Repository that owns the autofix workflow, in OWNER/NAME form.",
     )
     parser.add_argument("--dry-run", action="store_true")

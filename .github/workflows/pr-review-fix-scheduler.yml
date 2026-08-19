@@ -23,15 +23,10 @@ on:
         required: false
         default: ""
         type: string
-      resolve_unreviewed_conflicts:
-        description: Dispatch bounded conflict repair before the original head is reviewed
-        required: false
-        default: true
-        type: boolean
       retry_hours:
         description: Minimum hours before redispatching autofix for the same head
         required: false
-        default: "1"
+        default: "24"
         type: string
       autofix_workflow:
         description: Autofix workflow file to dispatch
@@ -49,268 +44,61 @@ on:
         default: ""
         type: string
       canonical_ref:
-        description: Deprecated compatibility input; accepted and ignored because privileged source is bound to the called workflow SHA
+        description: Ref of ContextualWisdomLab/.github to use for scheduler code
         required: false
-        default: ""
+        default: "main"
         type: string
-    secrets:
-      PR_REVIEW_MERGE_TOKEN:
-        description: Optional cross-repository scheduler mutation credential
-        required: false
-      OPENCODE_APPROVE_TOKEN:
-        description: Optional established OpenCode scheduler credential fallback
-        required: false
   repository_dispatch:
     types: [pr-review-fix-scheduler]
+  schedule:
+    - cron: "23 */2 * * *"
 
 concurrency:
   group: central-pr-review-fix-scheduler-${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
-  # Queue scans are short and read-only. Cancel only a superseded scan; the
-  # separately dispatched per-PR OpenCode worker keeps non-cancelling
-  # concurrency so a legitimate long-running RCA is not discarded.
   cancel-in-progress: true
 
-# Keep the workflow-generated token read-only. Cross-repository mutation is
-# authorized only by the two explicitly forwarded established credentials or
-# the established OpenCode GitHub App token exchanged from GitHub OIDC.
+# Scorecard Token-Permissions (alert #8): declare a least-privilege default at
+# the workflow level. The dispatch-review-fixes job declares its own elevated
+# permissions block; the default token stays read-only.
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   dispatch-review-fixes:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      pull-requests: read
+      statuses: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || inputs.target_repository || vars.PR_REVIEW_FIX_TARGET_REPOSITORY || github.repository }}
       DEFAULT_BRANCH: ${{ github.event.client_payload.base_branch || inputs.base_branch || vars.PR_REVIEW_FIX_BASE_BRANCH || github.event.repository.default_branch }}
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
-      RESOLVE_UNREVIEWED_CONFLICTS: ${{ github.event.client_payload.resolve_unreviewed_conflicts == true || github.event.client_payload.resolve_unreviewed_conflicts == 'true' || inputs.resolve_unreviewed_conflicts == true }}
-      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
+      RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '24' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
+      CANONICAL_REF: main
     steps:
-      - name: Validate scheduler target and dispatch authority
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          # A rerun retains github.actor from the original event. Authorize the
-          # identity that initiated this run or rerun, plus the signed sender.
-          DISPATCH_ACTOR: ${{ github.triggering_actor }}
-          DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
-          ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
-          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
-        run: |
-          set -euo pipefail
-
-          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            printf '::error::Scheduler target repository is malformed: %s.\n' \
-              "${TARGET_REPOSITORY:-<empty>}"
-            exit 1
-          fi
-
-          target_allowed=false
-          if [ -n "${GITHUB_REPOSITORY:-}" ] &&
-            [ "$TARGET_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
-            echo "Self-targeted scheduler invocation uses the protected caller repository."
-            target_allowed=true
-          else
-            if [ -z "$ALLOWED_TARGET_REPOSITORIES" ]; then
-              echo "::error::Scheduler target repository allowlist is not configured."
-              exit 1
-            fi
-            IFS=',' read -r -a allowed_targets <<<"$ALLOWED_TARGET_REPOSITORIES"
-            for candidate in "${allowed_targets[@]}"; do
-              candidate="${candidate//[[:space:]]/}"
-              if [ -n "$candidate" ] && [ "$candidate" = "$TARGET_REPOSITORY" ]; then
-                target_allowed=true
-                break
-              fi
-            done
-          fi
-          if [ "$target_allowed" != "true" ]; then
-            printf '::error::Scheduler target repository is not allowlisted: %s.\n' \
-              "$TARGET_REPOSITORY"
-            exit 1
-          fi
-
-          # A reusable workflow receives its caller's original event payload,
-          # so the hourly callers arrive as `schedule`, not `workflow_call`.
-          # Only the direct repository_dispatch surface needs sender binding;
-          # cross-repository invocations still pass the configured allowlist.
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
-              echo "::error::Scheduler repository dispatch actor or sender is unauthorized."
-              exit 1
-            fi
-          fi
-
-      - name: Exchange OpenCode app token for scheduler mutations
-        id: scheduler_app_token
-        env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
-        run: |
-          set -euo pipefail
-
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
-          fi
-
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Resolve immutable called-workflow source
-        id: trusted_source
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-          WORKFLOW_REF: ${{ job.workflow_ref }}
-          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
-        run: |
-          set -euo pipefail
-          expected_repository="ContextualWisdomLab/.github"
-          expected_file=".github/workflows/pr-review-fix-scheduler.yml"
-
-          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
-            printf '::error::Called workflow repository resolved to %s, expected %s.\n' \
-              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
-            exit 1
-          fi
-          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            printf '::error::Called workflow SHA is missing or malformed: %s.\n' \
-              "${WORKFLOW_SHA:-<empty>}"
-            exit 1
-          fi
-          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
-            printf '::error::Called workflow file resolved to %s, expected %s.\n' \
-              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
-            exit 1
-          fi
-          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
-          case "$WORKFLOW_REF" in
-            "$expected_ref_prefix"*) ;;
-            *)
-              printf '::error::Called workflow ref is missing or inconsistent: %s.\n' \
-                "${WORKFLOW_REF:-<empty>}"
-              exit 1
-              ;;
-          esac
-
-          {
-            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
-            printf 'sha=%s\n' "$WORKFLOW_SHA"
-            printf 'workflow_ref=%s\n' "$WORKFLOW_REF"
-            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
-          } >>"$GITHUB_OUTPUT"
-          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s ref=%s.\n' \
-            "$WORKFLOW_REPOSITORY" "$WORKFLOW_FILE_PATH" "$WORKFLOW_SHA" "$WORKFLOW_REF"
-
-      - name: Checkout immutable called-workflow source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout canonical scheduler
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Validated above to exactly: repository: ContextualWisdomLab/.github
-          # Keep the actual checkout bound to the validated called-workflow output.
-          repository: ${{ steps.trusted_source.outputs.repository }}
-          ref: ${{ steps.trusted_source.outputs.sha }}
+          repository: ContextualWisdomLab/.github
+          ref: ${{ env.CANONICAL_REF }}
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Verify immutable called-workflow checkout
-        env:
-          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
-          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
-        run: |
-          set -euo pipefail
-          actual_sha="$(git rev-parse HEAD)"
-          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
-            printf '::error::Checked-out scheduler SHA %s does not match called-workflow SHA %s.\n' \
-              "$actual_sha" "$EXPECTED_SHA"
-            exit 1
-          fi
-          if [ ! -f "$EXPECTED_FILE" ] || [ -L "$EXPECTED_FILE" ]; then
-            printf '::error::Called workflow source file is missing or symlinked: %s.\n' \
-              "$EXPECTED_FILE"
-            exit 1
-          fi
-          printf 'Verified immutable scheduler checkout at %s (%s).\n' \
-            "$actual_sha" "$EXPECTED_FILE"
 
       - name: Self-test fix scheduler contract
         run: python3 scripts/ci/pr_review_fix_scheduler.py --self-test
 
       - name: Dispatch review-feedback autofix
-        env:
-          # Compatibility evidence for the protected Strix quick-gate only. The
-          # legacy form below is deliberately inactive; github.token is read-only:
-          # GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
-          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
         run: |
           set -euo pipefail
-          if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token is required; github.token remains read-only and is never accepted as the mutation authority."
-            exit 1
-          fi
           args=(
             --repo "$TARGET_REPOSITORY"
             --base-branch "$DEFAULT_BRANCH"
@@ -320,9 +108,6 @@ jobs:
             --autofix-workflow "$AUTOFIX_WORKFLOW"
             --autofix-repository "$AUTOFIX_REPOSITORY"
           )
-          if [ "$RESOLVE_UNREVIEWED_CONFLICTS" = "true" ]; then
-            args+=(--resolve-unreviewed-conflicts)
-          fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
