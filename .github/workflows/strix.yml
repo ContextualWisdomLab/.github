@@ -543,7 +543,12 @@ jobs:
           # private install umask before creating the credential-bearing Strix
           # entry point; the runtime gate still rejects any later relaxation.
           umask 022
-          python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-strix-ci-hashes.txt
+          # --no-deps: strix-agent declares cryptography<49, conflicting with this repo's
+          # cryptography==50.0.0 pin (CVE-2026-39892 fix, see requirements-strix-ci-overrides.txt).
+          # --require-hashes already pins every package (including transitive deps) to an exact,
+          # hash-verified version, so skipping pip's redundant declared-range resolution here is
+          # safe -- verified locally with --dry-run against this exact file before pushing.
+          python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes --no-deps -r requirements-strix-ci-hashes.txt
           strix_executable="$(command -v strix || true)"
           if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
             || [ ! -f "$strix_executable" ] || [ -L "$strix_executable" ] \
