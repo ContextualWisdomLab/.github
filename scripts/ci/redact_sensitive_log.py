@@ -41,7 +41,7 @@ PHONE_RE = re.compile(
 )
 IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 IPV4_RE = re.compile(
-    rf"(^|[^\d.])(?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET}(?=$|[^\d.])"
+    rf"(^|[^\d.])((?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET})($|[^\d.])"
 )
 RUNNER_PATH_RE = re.compile(
     r"(^|[^\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
@@ -155,10 +155,24 @@ def _redact_operational_identifiers(text: str) -> str:
     cleaned = PHONE_RE.sub(
         lambda match: f"{match.group(1)}[REDACTED_PHONE]{match.group(2)}", cleaned
     )
-    cleaned = IPV4_RE.sub(
-        lambda match: f"{match.group(1)}[REDACTED_IP]", cleaned
-    )
+    cleaned = _redact_ipv4_addresses(cleaned)
     return RUNNER_PATH_RE.sub(r"\1[REDACTED_PATH]", cleaned)
+
+
+def _redact_ipv4_addresses(text: str) -> str:
+    """Redact IPv4 values while keeping delimiters available to later matches."""
+    pieces: list[str] = []
+    cursor = 0
+    search_from = 0
+    while True:
+        match = IPV4_RE.search(text, search_from)
+        if match is None:
+            pieces.append(text[cursor:])
+            return "".join(pieces)
+        ip_start, ip_end = match.span(2)
+        pieces.extend((text[cursor:ip_start], "[REDACTED_IP]"))
+        cursor = ip_end
+        search_from = ip_end
 
 
 def _redact_line(line: str) -> str:

@@ -244,6 +244,9 @@ def test_repository_dispatch_contract_validates_event_type_and_size() -> None:
             module._validate_repository_dispatch_payload(
                 {"event_type": event_type, "client_payload": {}}
             )
+    assert module._validate_repository_dispatch_payload(
+        {"event_type": "bounded", "client_payload": {}}
+    )["event_type"] == "bounded"
 
     oversized = "x" * module.MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES
     with pytest.raises(ValueError, match="under"):
