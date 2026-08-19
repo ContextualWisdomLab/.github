@@ -159,6 +159,11 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "deterministic fallback approval",
     "did not emit a usable current-head control block",
 )
+COVERAGE_REVIEW_MARKERS = (
+    "coverage evidence did not pass",
+    "coverage-evidence",
+    "test evidence: not proven passing",
+)
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 
 
@@ -1275,6 +1280,33 @@ def has_current_head_approval(pr: dict[str, Any]) -> bool:
 def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     """Return whether OpenCode requested changes on the exact current head."""
     return current_head_review_state(pr, "CHANGES_REQUESTED")
+
+
+def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
+    """Return whether the latest current-head request is only a coverage gate."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
+            return False
+        body = (review.get("body") or "").lower()
+        return all(marker in body for marker in COVERAGE_REVIEW_MARKERS)
+    return False
+
+
+def coverage_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, complete, or failed for the latest coverage gate."""
+    for node in reversed(context_nodes(pr)):
+        name = (node.get("name") or node.get("context") or "").lower()
+        if name != "coverage-evidence":
+            continue
+        status = (node.get("status") or node.get("state") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        if node.get("__typename") == "CheckRun":
+            return "complete" if (node.get("conclusion") or "").upper() == "SUCCESS" else "failed"
+        return "complete" if status == "SUCCESS" else "failed"
+    return "missing"
 
 
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
@@ -2491,6 +2523,28 @@ def inspect_pr(
         ):
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
+            )
+        coverage_ready = (
+            trigger_reviews
+            and review_dispatch_allowed
+            and current_head_coverage_change_request(pr)
+            and coverage_evidence_state(pr) == "complete"
+            and strix_evidence_state(pr) == "complete"
+            and not failed_status_checks(pr)
+        )
+        if coverage_ready:
+            wait_reason = repository_dispatch_wait_reason(repo, workflow)
+            if wait_reason:
+                return decide("wait", wait_reason)
+            dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return decide(
+                    "wait",
+                    "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active",
+                )
+            return decide(
+                "review_dispatch",
+                "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched",
             )
         if pr.get("autoMergeRequest"):
             return finish(
