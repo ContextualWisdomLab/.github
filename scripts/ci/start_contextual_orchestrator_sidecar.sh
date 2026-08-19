@@ -62,7 +62,6 @@ git -C "$RUNTIME_DIR" checkout --quiet FETCH_HEAD
 python3 -m venv "$RUNTIME_DIR/.venv-sidecar"
 # shellcheck disable=SC1091
 source "$RUNTIME_DIR/.venv-sidecar/bin/activate"
-python -m pip install --quiet --upgrade pip
 python -m pip install --quiet --require-hashes -r "$RUNTIME_DIR/requirements.lock"
 python -m pip install --quiet --no-deps -e "$RUNTIME_DIR"
 

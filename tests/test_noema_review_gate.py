@@ -1,6 +1,6 @@
 import base64
 import json
-import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,11 +38,22 @@ def review(state="APPROVED", commit="head", login="opencode-agent", body="Result
 
 
 def test_run_split_repo_graphql_and_fetch_pr(monkeypatch):
-    assert noema.run([sys.executable, "-c", "print('ok')"]).strip() == "ok"
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(noema.subprocess, "run", fake_run)
+    assert noema.run(["gh", "api", "user"]).strip() == "ok"
+    assert calls[0][0] == ["gh", "api", "user"]
+    assert calls[0][1]["shell"] is False
     with pytest.raises(TypeError):
         noema.run("echo unsafe")  # type: ignore[arg-type]
-    with pytest.raises(RuntimeError):
-        noema.run([sys.executable, "-c", "import sys; sys.exit(5)"])
+    with pytest.raises(ValueError):
+        noema.run(["python", "-c", "print('unsafe')"])
+    with pytest.raises(TypeError):
+        noema.run(["gh", 1])  # type: ignore[list-item]
 
     assert noema.split_repo("owner/repo") == ("owner", "repo")
 
@@ -73,6 +84,8 @@ def test_split_repo_and_graphql(monkeypatch):
         noema.split_repo("owner")
     with pytest.raises(ValueError):
         noema.split_repo("/repo")
+    with pytest.raises(ValueError):
+        noema.split_repo("owner/repo;id")
 
     calls = []
 

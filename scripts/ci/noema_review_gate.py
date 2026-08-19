@@ -41,6 +41,8 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+GH_EXECUTABLE = "gh"
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -65,11 +67,16 @@ def scrub_sensitive_data(text: str | None) -> str | None:
 
 
 def run(args: Sequence[str], *, stdin: str | None = None) -> str:
-    """Run a command without invoking a shell and return stdout."""
+    """Run an allow-listed GitHub CLI argv without invoking a shell."""
     if isinstance(args, str):
         raise TypeError("run() requires argv, not a shell command string")
+    argv = list(args)
+    if not argv or any(not isinstance(arg, str) for arg in argv):
+        raise TypeError("run() requires a non-empty sequence of argv strings")
+    if argv[0] != GH_EXECUTABLE:
+        raise ValueError("run() only permits the GitHub CLI executable")
     completed = subprocess.run(
-        list(args),
+        [GH_EXECUTABLE, *argv[1:]],
         input=stdin,
         text=True,
         stdout=subprocess.PIPE,
@@ -80,16 +87,16 @@ def run(args: Sequence[str], *, stdin: str | None = None) -> str:
     if completed.returncode != 0:
         scrubbed_stderr = scrub_sensitive_data(completed.stderr.strip())
         raise RuntimeError(
-            f"Command failed ({completed.returncode}): {args[0]}\n{scrubbed_stderr}"
+            f"Command failed ({completed.returncode}): {GH_EXECUTABLE}\n{scrubbed_stderr}"
         )
     return completed.stdout
 
 
 def split_repo(repo: str) -> tuple[str, str]:
     """Split an owner/name repository string into owner and repository."""
-    owner, name = repo.split("/", 1)
-    if not owner or not name:
+    if not REPOSITORY_RE.fullmatch(repo):
         raise ValueError(f"repo must be owner/name, got {repo!r}")
+    owner, name = repo.split("/", 1)
     return owner, name
 
 
