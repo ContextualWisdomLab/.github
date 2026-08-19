@@ -1246,7 +1246,7 @@ def test_review_state_and_failed_checks():
                     **opencode_review("CHANGES_REQUESTED", "head"),
                     "body": (
                         "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported test evidence: not proven passing."
+                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
                     ),
                 }
             ]
@@ -3049,7 +3049,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
                     **opencode_review("CHANGES_REQUESTED", "head"),
                     "body": (
                         "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported test evidence: not proven passing."
+                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
                     ),
                 }
             ]

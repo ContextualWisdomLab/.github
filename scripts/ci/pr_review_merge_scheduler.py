@@ -161,7 +161,7 @@ DETERMINISTIC_APPROVAL_MARKERS = (
 COVERAGE_REVIEW_MARKERS = (
     "coverage evidence did not pass",
     "coverage-evidence",
-    "test evidence: not proven passing",
+    "required test/docstring evidence",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 
