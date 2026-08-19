@@ -184,7 +184,9 @@ def _github_open_json(url: str, token: str) -> object:
         },
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed GitHub API origin
+        with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310 - URL is validated immediately above
+            request, timeout=30
+        ) as response:
             payload = response.read(MAX_FILE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
         raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
