@@ -1086,7 +1086,9 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
+    assert "ModelBehaviorError" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
+    assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
     assert "before producing a vulnerability report" in workflow
