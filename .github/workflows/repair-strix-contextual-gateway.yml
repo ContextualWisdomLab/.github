@@ -1,0 +1,79 @@
+name: Repair Strix Contextual-Orchestrator gateway
+
+on:
+  push:
+    branches:
+      - fix/strix-contextual-orchestrator-fallback
+    paths:
+      - .github/workflows/repair-strix-contextual-gateway.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-strix-contextual-orchestrator-gateway
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/strix-contextual-orchestrator-fallback
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ github.token }}
+
+      - name: Patch Strix workflow and gate
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/apply_strix_contextual_gateway_patch.py
+
+      - name: Verify Strix and gateway contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_strix_report_signal.py' -v
+          python3 -m unittest discover -s tests -p 'test_strix_contextual_gateway.py' -v
+          python3 -m compileall -q scripts/ci tests
+          bash -n scripts/ci/strix_quick_gate.sh
+          bash -n scripts/ci/strix_required_workflow_smoke.sh
+          bash scripts/ci/strix_required_workflow_smoke.sh
+          bash scripts/ci/test_strix_quick_gate.sh
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/strix.yml').read_text(encoding='utf-8')
+          required = (
+              '16a2448ab109feceb9113eb0c990c7c51a83a04a',
+              'openai/contextual-orchestrator',
+              'STRIX_TRANSIENT_RETRY_PER_MODEL',
+              'contextual-orchestrator-gateway.log',
+          )
+          for token in required:
+              if token not in workflow:
+                  raise SystemExit(f'missing Strix gateway contract token: {token}')
+          if workflow.count('uses: actions/checkout@') != 1:
+              raise SystemExit('Strix workflow must retain exactly one actions/checkout step')
+          PY
+
+      - name: Commit verified repair
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/repair-strix-contextual-gateway.yml
+          rm -f scripts/ci/apply_strix_contextual_gateway_patch.py
+          git config user.name "opencode-agent[bot]"
+          git config user.email "219766164+opencode-agent[bot]@users.noreply.github.com"
+          git add .github/workflows/strix.yml \
+            scripts/ci/strix_quick_gate.sh \
+            scripts/ci/strix_contextual_gateway.py \
+            scripts/ci/strix_report_signal.py \
+            tests/test_strix_contextual_gateway.py \
+            tests/test_strix_report_signal.py \
+            CHANGELOG.md \
+            .github/workflows/repair-strix-contextual-gateway.yml \
+            scripts/ci/apply_strix_contextual_gateway_patch.py
+          git commit -m "fix(strix): route provider failures through Contextual-Orchestrator"
+          git push origin HEAD:fix/strix-contextual-orchestrator-fallback
