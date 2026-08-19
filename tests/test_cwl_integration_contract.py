@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,6 +23,37 @@ DOCTORING = ROOT / "docs" / "doctoring" / "ecosystem-integration-standards.md"
 RFC3339_DATE_TIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:\d{2})$"
+)
+RFC3339_LEAP_SECOND_DATES = frozenset(
+    {
+        "1972-06-30",
+        "1972-12-31",
+        "1973-12-31",
+        "1974-12-31",
+        "1975-12-31",
+        "1976-12-31",
+        "1977-12-31",
+        "1978-12-31",
+        "1979-12-31",
+        "1981-06-30",
+        "1982-06-30",
+        "1983-06-30",
+        "1985-06-30",
+        "1987-12-31",
+        "1989-12-31",
+        "1990-12-31",
+        "1992-06-30",
+        "1993-06-30",
+        "1994-06-30",
+        "1995-12-31",
+        "1997-06-30",
+        "1998-12-31",
+        "2005-12-31",
+        "2008-12-31",
+        "2012-06-30",
+        "2015-06-30",
+        "2016-12-31",
+    }
 )
 
 
@@ -45,6 +76,15 @@ def _assert_date_time(value: str, path: str) -> None:
 
     assert RFC3339_DATE_TIME.fullmatch(value), path
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    if normalized[17:19] == "60":
+        parsed = datetime.fromisoformat(normalized[:17] + "59" + normalized[19:])
+        utc = parsed.astimezone(timezone.utc)
+        assert (
+            utc.hour == 23
+            and utc.minute == 59
+            and utc.date().isoformat() in RFC3339_LEAP_SECOND_DATES
+        ), path
+        return
     parsed = datetime.fromisoformat(normalized)
     assert parsed.tzinfo is not None, path
 
@@ -234,6 +274,23 @@ def test_date_time_profile_rejects_non_rfc3339_lexical_forms() -> None:
         "2026-08-15T10:00:00.123456789+09:00",
     ):
         _assert_date_time(value, "$.timestamp")
+
+
+def test_date_time_profile_handles_rfc3339_leap_seconds() -> None:
+    """Accept an announced leap second and reject impossible placements."""
+
+    _assert_date_time("2016-12-31T23:59:60Z", "$.timestamp")
+    _assert_date_time("2017-01-01T00:59:60+01:00", "$.timestamp")
+    for value in (
+        "2016-12-31T23:58:60Z",
+        "2017-01-01T00:00:60Z",
+        "2017-01-01T00:59:60Z",
+    ):
+        try:
+            _assert_date_time(value, "$.timestamp")
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError(f"impossible leap second accepted: {value}")
 
 
 def test_documented_external_contract_baselines_are_present() -> None:
