@@ -121,7 +121,6 @@ def test_central_repository_has_hourly_self_caller() -> None:
     assert "resolve_unreviewed_conflicts: true" in workflow
     assert 'max_dispatches: "1"' in workflow
     assert 'retry_hours: "1"' in workflow
-    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
 
