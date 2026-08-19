@@ -25,16 +25,7 @@ on:
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_nonnest2_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
-      - .github/workflows/clearfolio-hourly-review-repair.yml
-      - .github/workflows/disksage-hourly-review-repair.yml
-      - .github/workflows/fast-mlsirm-hourly-review-repair.yml
-      - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/lineageweave-hourly-review-repair.yml
-      - scripts/ci/pr_review_conflict_scope.py
-      - scripts/ci/pr_review_autofix_context.py
-      - tests/test_disksage_hourly_review_caller.py
-      - tests/test_fast_mlsirm_hourly_review_caller.py
-      - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_lineageweave_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
@@ -59,7 +50,6 @@ on:
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
-      - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/lineageweave-hourly-review-caller.md
   push:
     paths:
@@ -85,16 +75,7 @@ on:
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_nonnest2_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
-      - .github/workflows/clearfolio-hourly-review-repair.yml
-      - .github/workflows/disksage-hourly-review-repair.yml
-      - .github/workflows/fast-mlsirm-hourly-review-repair.yml
-      - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/lineageweave-hourly-review-repair.yml
-      - scripts/ci/pr_review_conflict_scope.py
-      - scripts/ci/pr_review_autofix_context.py
-      - tests/test_disksage_hourly_review_caller.py
-      - tests/test_fast_mlsirm_hourly_review_caller.py
-      - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_lineageweave_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
@@ -119,7 +100,6 @@ on:
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
-      - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/lineageweave-hourly-review-caller.md
 
 permissions:
@@ -176,9 +156,6 @@ jobs:
             tests/test_hourly_scheduler_runtime_budget.py \
             tests/test_nonnest2_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
-            tests/test_disksage_hourly_review_caller.py \
-            tests/test_fast_mlsirm_hourly_review_caller.py \
-            tests/test_hourly_scheduler_runtime_budget.py \
             tests/test_lineageweave_hourly_review_caller.py \
             tests/test_pr_review_conflict_scope_control_files.py \
             tests/test_hourly_autofix_context_quality_gate.py \
@@ -191,5 +168,4 @@ jobs:
             tests/test_pr_review_autofix_context_head_binding.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py \
             tests/test_pr_review_autofix_writer_security_contract.py
-          git diff --check
           git diff --check
