@@ -47,6 +47,11 @@ def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
 
     assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
+    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
+    assert (
+        "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
+        in concurrency_contract
+    )
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
