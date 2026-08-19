@@ -18,6 +18,7 @@ Semantic Versioning where the repository publishes a release.
 - Added a dedicated Clearfolio hourly caller that invokes the product-neutral central scheduler with the exact repository, protected base branch, one-dispatch budget, one-hour retry floor, single-flight concurrency, and only the established scheduler credentials.
 - Added a dedicated DiskSage hourly caller that invokes the same product-neutral RCA and remediation-feasibility scheduler with an exact repository target, one-dispatch budget, two-hour same-head retry floor, non-cancelling single-flight heartbeat, and explicit established scheduler credentials.
 - Added a dedicated fast-mlsirm hourly caller that preserves Rust-owned psychometric arithmetic while dispatching at most one exact-head, root-cause-driven repair with a two-hour same-head retry floor.
+- Added a read-only, exact-ref reusable policy workflow and 100%-covered scanner that rejects production contextual-orchestrator route pinning or omitted adaptive mode, with narrow reviewed path exceptions and bounded evidence.
 
 ### Changed
 
