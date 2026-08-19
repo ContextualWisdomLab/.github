@@ -189,7 +189,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "name: Prepare GitHub Models fallback credentials\n        if: false",
+            "name: Prepare GitHub Models fallback credentials\n        if: steps.gate.outputs.provider_mode == 'retired_github_models'",
             workflow,
         )
         self.assertNotIn("github_models/", workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0])
