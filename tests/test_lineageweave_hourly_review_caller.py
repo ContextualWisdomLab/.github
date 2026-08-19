@@ -97,7 +97,7 @@ def test_incident_doctoring_tracks_current_buyer_surface_stack() -> None:
         "#258 → #260 → #261 → #262 → #263 → #264",
         "@opencode-agent",
         "exact invocation ledger",
-        "without a visible receipt",
+        "neither a visible receipt",
         "formal OpenCode review",
         "no duplicate dispatch",
         "dependency order",
