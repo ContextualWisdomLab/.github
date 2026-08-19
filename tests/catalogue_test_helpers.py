@@ -13,7 +13,7 @@ CI = ROOT / "scripts/ci"
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-import validate_cwl_ecosystem_catalog as validator  # noqa: E402
+import validate_cwl_ecosystem_catalog as validator  # noqa: E402, F401
 
 CATALOG = ROOT / "schemas/examples/cwl-ecosystem-catalog-v1.example.json"
 SERVICES = CATALOG.parent / "services"
@@ -28,7 +28,9 @@ def load_catalog() -> dict[str, Any]:
 def load_service(service_id: str = "identity_federation") -> dict[str, Any]:
     """Return a deep copy of one positive service manifest."""
 
-    return copy.deepcopy(json.loads((SERVICES / f"{service_id}.json").read_text(encoding="utf-8")))
+    return copy.deepcopy(
+        json.loads((SERVICES / f"{service_id}.json").read_text(encoding="utf-8"))
+    )
 
 
 def write_catalog_tree(tmp_path: Path, catalog: dict[str, Any] | None = None) -> Path:
@@ -39,7 +41,10 @@ def write_catalog_tree(tmp_path: Path, catalog: dict[str, Any] | None = None) ->
     for source in SERVICES.glob("*.json"):
         (service_dir / source.name).write_bytes(source.read_bytes())
     target = tmp_path / "catalog.json"
-    target.write_text(json.dumps(catalog or load_catalog(), ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    target.write_text(
+        json.dumps(catalog or load_catalog(), ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     return target
 
 

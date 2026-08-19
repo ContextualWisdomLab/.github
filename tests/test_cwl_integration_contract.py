@@ -135,7 +135,9 @@ def _traceparent_schema(schema: dict) -> dict:
 
     if "traceparent" in schema["properties"]:
         return schema["properties"]["traceparent"]
-    return schema["properties"]["data"]["properties"]["metadata"]["properties"]["traceparent"]
+    return schema["properties"]["data"]["properties"]["metadata"]["properties"][
+        "traceparent"
+    ]
 
 
 def test_shared_schemas_use_json_schema_2020_12() -> None:
@@ -144,7 +146,9 @@ def test_shared_schemas_use_json_schema_2020_12() -> None:
     for path in (EVENT_SCHEMA, COMMAND_SCHEMA):
         schema = _load(path)
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-        assert schema["$id"].startswith("https://contextualwisdomlab.github.io/schemas/")
+        assert schema["$id"].startswith(
+            "https://contextualwisdomlab.github.io/schemas/"
+        )
 
 
 def test_examples_validate_against_declared_profiles() -> None:
@@ -242,9 +246,7 @@ def test_profiles_reject_unknown_properties_and_invalid_trace_context() -> None:
 
     command_schema = _load(COMMAND_SCHEMA)
     command = copy.deepcopy(_load(COMMAND_EXAMPLE))
-    command["traceparent"] = (
-        "00-00000000000000000000000000000000-00f067aa0ba902b7-01"
-    )
+    command["traceparent"] = "00-00000000000000000000000000000000-00f067aa0ba902b7-01"
     _assert_invalid(command, command_schema)
 
 
