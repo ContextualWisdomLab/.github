@@ -36,7 +36,7 @@ def test_fast_mlsirm_caller_preserves_credentials_and_read_only_scope() -> None:
     opencode_secret = "$" + "{{ secrets.OPENCODE_APPROVE_TOKEN }}"
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
+    assert "\n    permissions:\n" not in jobs_scope
     assert f"PR_REVIEW_MERGE_TOKEN: {pr_review_secret}" in caller
     assert f"OPENCODE_APPROVE_TOKEN: {opencode_secret}" in caller
     assert "secrets: inherit" not in caller
