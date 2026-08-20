@@ -9,18 +9,19 @@ import sys
 from typing import Any
 
 REDACTED = "[REDACTED]"
-KEY_CHARS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
-)
+KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 SENSITIVE_KEY_RE = re.compile(
-    r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|"
-    r"t(?:[^a-zA-Z]*o|0)[^a-zA-Z]*k(?:[^a-zA-Z]*e|3)[^a-zA-Z]*n)",
-    re.IGNORECASE,
-)
-NON_SENSITIVE_KEY_RE = re.compile(
-    r"^(?:public|visible|safe|nonsecret)_token$|"
-    r"^token_(?:count|name|type|limit|length|ttl|expires?)$",
+    r"(?:t[^a-zA-Z]*[o0][^a-zA-Z]*k[^a-zA-Z]*[e3][^a-zA-Z]*n|"
+    r"s[^a-zA-Z]*[e3][^a-zA-Z]*c[^a-zA-Z]*r[^a-zA-Z]*[e3][^a-zA-Z]*t|"
+    r"p[^a-zA-Z]*[a4][^a-zA-Z]*s[^a-zA-Z]*s[^a-zA-Z]*w[^a-zA-Z]*[o0][^a-zA-Z]*r[^a-zA-Z]*d|"
+    r"p[^a-zA-Z]*[a4][^a-zA-Z]*s[^a-zA-Z]*s[^a-zA-Z]*w[^a-zA-Z]*d|"
+    r"c[^a-zA-Z]*r[^a-zA-Z]*[e3][^a-zA-Z]*d[^a-zA-Z]*[e3][^a-zA-Z]*n[^a-zA-Z]*t[^a-zA-Z]*i[^a-zA-Z]*[a4][^a-zA-Z]*l|"
+    r"a[^a-zA-Z]*u[^a-zA-Z]*t[^a-zA-Z]*h[^a-zA-Z]*[o0][^a-zA-Z]*r[^a-zA-Z]*i[^a-zA-Z]*z[^a-zA-Z]*[a4][^a-zA-Z]*t[^a-zA-Z]*i[^a-zA-Z]*[o0][^a-zA-Z]*n|"
+    r"j[^a-zA-Z]*w[^a-zA-Z]*t|"
+    r"a[^a-zA-Z]*p[^a-zA-Z]*i[^a-zA-Z]*k[^a-zA-Z]*[e3][^a-zA-Z]*y|"
+    r"p[^a-zA-Z]*r[^a-zA-Z]*i[^a-zA-Z]*v[^a-zA-Z]*[a4][^a-zA-Z]*t[^a-zA-Z]*[e3][^a-zA-Z]*k[^a-zA-Z]*[e3][^a-zA-Z]*y|"
+    r"a[^a-zA-Z]*c[^a-zA-Z]*c[^a-zA-Z]*[e3][^a-zA-Z]*s[^a-zA-Z]*s[^a-zA-Z]*k[^a-zA-Z]*[e3][^a-zA-Z]*y|"
+    r"s[^a-zA-Z]*[e3][^a-zA-Z]*s[^a-zA-Z]*s[^a-zA-Z]*i[^a-zA-Z]*[o0][^a-zA-Z]*n[^a-zA-Z]*k[^a-zA-Z]*[e3][^a-zA-Z]*y)",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -40,19 +41,11 @@ PROVIDER_TOKEN_RES = (
 )
 
 
-def _is_sensitive_key(key: str) -> bool:
-    """Return whether a key names a credential rather than descriptive data."""
-    normalized = re.sub(r"[\s\\]+", "", key)
-    if NON_SENSITIVE_KEY_RE.fullmatch(normalized):
-        return False
-    return SENSITIVE_KEY_RE.search(normalized) is not None
-
-
 def _redact_json(value: Any) -> Any:
     """Recursively replace values whose JSON keys identify credentials."""
     if isinstance(value, dict):
         return {
-            key: REDACTED if _is_sensitive_key(str(key)) else _redact_json(item)
+            key: REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -67,26 +60,17 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
     if cursor < len(text) and text[cursor] in "\"'":
         key_quote = text[cursor]
         cursor += 1
+    key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
         return None
-    key_chars: list[str] = [text[cursor]]
-    cursor += 1
-    while cursor < len(text):
-        separator_start = cursor
-        while cursor < len(text) and text[cursor] in "\\ \t\r\n":
-            cursor += 1
-        if cursor < len(text) and text[cursor] in KEY_CHARS:
-            key_chars.append(text[cursor])
-            cursor += 1
-            continue
-        cursor = max(separator_start, cursor)
-        break
-    key = "".join(key_chars)
+    while cursor < len(text) and text[cursor] in KEY_CHARS:
+        cursor += 1
+    key = text[key_start:cursor]
     if key_quote:
         if cursor >= len(text) or text[cursor] != key_quote:
             return None
         cursor += 1
-    if not _is_sensitive_key(key):
+    if not SENSITIVE_KEY_RE.search(key):
         return None
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
@@ -113,11 +97,7 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             elif char == value_quote:
                 break
     else:
-        while (
-            cursor < len(text)
-            and not text[cursor].isspace()
-            and text[cursor] not in ",}"
-        ):
+        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
             cursor += 1
     if cursor == value_start:
         return None
@@ -143,18 +123,15 @@ def _redact_assignments(text: str) -> str:
             key_start -= 1
 
         eval_start = key_start
-        if eval_start > cursor and text[eval_start - 1] in "\"'":
+        if eval_start > cursor and text[eval_start - 1] in "\"\'":
             eval_start -= 1
 
-        quoted_start = eval_start if eval_start != key_start else None
-        candidate_start = key_start
-        while candidate_start < match.start() and text[candidate_start].isdigit():
-            candidate_start += 1
-        eval_start = quoted_start if quoted_start is not None else candidate_start
-        consume_match = _consume_sensitive_assignment(text, eval_start)
-        if consume_match is None and quoted_start is not None:
-            eval_start = candidate_start
-            consume_match = _consume_sensitive_assignment(text, candidate_start)
+        consume_match = None
+        for i in range(eval_start, match.start() + 1):
+            consume_match = _consume_sensitive_assignment(text, i)
+            if consume_match:
+                eval_start = i
+                break
 
         if consume_match:
             output.append(text[last_append:eval_start])
@@ -162,10 +139,7 @@ def _redact_assignments(text: str) -> str:
             output.append(replacement)
             last_append = cursor
         else:
-            key_end = match.end()
-            while key_end < len(text) and text[key_end] in KEY_CHARS:
-                key_end += 1
-            cursor = key_end
+            cursor = match.start() + 1
     output.append(text[last_append:])
     return "".join(output)
 
@@ -180,36 +154,24 @@ def _redact_unstructured(text: str) -> str:
     return cleaned
 
 
+def _redact_line(line: str) -> str:
+    """Redact one log line, preferring recursive JSON handling when valid."""
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError:
+        return _redact_unstructured(line)
+    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+
+
 def redact_text(text: str) -> str:
-    """Return redacted log text while preserving JSON and line boundaries."""
+    """Return redacted log text while preserving line boundaries."""
     if not text:
         return text
     output: list[str] = []
-    unstructured_lines: list[str] = []
-
-    def flush_unstructured() -> None:
-        """Redact adjacent non-JSON lines together so values may span lines."""
-        if unstructured_lines:
-            output.append(_redact_unstructured("".join(unstructured_lines)))
-            unstructured_lines.clear()
-
     for raw_line in text.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
         ending = raw_line[len(line) :]
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            unstructured_lines.append(raw_line)
-        else:
-            if not isinstance(value, (dict, list)):
-                unstructured_lines.append(raw_line)
-                continue
-            flush_unstructured()
-            output.append(
-                json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
-            )
-            output[-1] += ending
-    flush_unstructured()
+        output.append(_redact_line(line) + ending)
     return "".join(output)
 
 
