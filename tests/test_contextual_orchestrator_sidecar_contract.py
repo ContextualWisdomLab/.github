@@ -9,12 +9,14 @@ import re
 NOEMA_WORKFLOW = Path(".github/workflows/noema-review.yml")
 OPENCODE_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 SIDECAR_SCRIPT = Path("scripts/ci/start_contextual_orchestrator_sidecar.sh")
+PINNED_ORCHESTRATOR_SHA = "7eb459ee72c37dead5d25f284dfa4546f149fbe1"
 
 
 def test_sidecar_source_is_immutable_and_readiness_is_bounded() -> None:
     """Privileged sidecar code must be commit-pinned and health probes bounded."""
     text = SIDECAR_SCRIPT.read_text(encoding="utf-8")
-    assert 'CONTEXTUAL_ORCHESTRATOR_REF:=7eb459ee72c37dead5d25f284dfa4546f149fbe1' in text
+    assert f'CONTEXTUAL_ORCHESTRATOR_REF="{PINNED_ORCHESTRATOR_SHA}"' in text
+    assert "CONTEXTUAL_ORCHESTRATOR_REF:=" not in text
     assert '^[0-9a-fA-F]{40}$' in text
     assert '--connect-timeout 1 --max-time 2' in text
     assert 'validate_contextual_orchestrator_licenses.py' in text
