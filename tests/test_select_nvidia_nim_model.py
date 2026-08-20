@@ -29,7 +29,7 @@ class _FakeResponse(io.BytesIO):
 
 
 class _FakeConnection:
-    """Minimal HTTPS connection stub for catalog requests."""
+    """Minimal non-context-managed HTTPS connection stub for catalog requests."""
 
     def __init__(
         self,
@@ -48,14 +48,11 @@ class _FakeConnection:
         self.context = context
         self.response = response
         self.requests = requests
+        self.closed = False
 
-    def __enter__(self) -> "_FakeConnection":
-        """Return the connection itself for the context manager boundary."""
-        return self
-
-    def __exit__(self, *_exc_info: object) -> bool:
-        """Never suppress request failures."""
-        return False
+    def close(self) -> None:
+        """Record explicit cleanup, matching ``HTTPSConnection.close``."""
+        self.closed = True
 
     def request(self, method: str, path: str, *, headers: dict[str, str]) -> None:
         """Record one outbound request without opening a network socket."""
@@ -133,6 +130,7 @@ def test_fetch_served_model_ids_returns_the_live_catalog(monkeypatch: pytest.Mon
     assert connection.timeout == 7.0
     assert connection.context.verify_mode == ssl.CERT_REQUIRED
     assert connection.context.check_hostname is True
+    assert connection.closed is True
     assert method == "GET"
     assert path == "/v1/models"
     assert headers["Authorization"] == "Bearer secret-key"

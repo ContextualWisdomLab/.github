@@ -90,12 +90,13 @@ def fetch_served_model_ids(
     parts = urlsplit(normalized_base_url)
     request_path = f"{parts.path.rstrip('/')}/models"
     try:
-        with http.client.HTTPSConnection(
+        connection = http.client.HTTPSConnection(
             parts.hostname,
             parts.port or 443,
             timeout=timeout_seconds,
             context=ssl.create_default_context(),
-        ) as connection:
+        )
+        try:
             connection.request(
                 "GET",
                 request_path,
@@ -110,6 +111,8 @@ def fetch_served_model_ids(
                     f"NVIDIA NIM model catalog request failed with HTTP {response.status}"
                 )
             payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
     except RuntimeError:
         raise
     except (OSError, http.client.HTTPException) as error:
