@@ -6,12 +6,6 @@ Live check: 2026-06-26 17:53 KST, GitHub API via `gh` as `seonghobae`.
 
 OpenCode decides; GitHub Actions mutates.
 
-Bot and agent operating procedure (PR stacking, successor heads, exact-head
-CI, do-not-merge / `DIRTY`–`CONFLICTING` repair, writer boundaries, and the
-approve-gate) lives in
-[docs/pr-review-and-merge-procedure.md](docs/pr-review-and-merge-procedure.md).
-The root [README.md](README.md) is the buyer/operator overview.
-
 - The canonical implementation belongs in `ContextualWisdomLab/.github`.
   Repository-local copies of the scheduler, OpenCode review workflow, Strix
   gate, or helper scripts are drift sources, not repo-specific contracts.
