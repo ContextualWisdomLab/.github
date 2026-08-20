@@ -114,14 +114,21 @@ def test_downloaded_artifact_digest_and_size_are_rechecked(
     )
 
     class Response(io.BytesIO):
+        """Provide the bounded response interface used by the downloader."""
+
         def __enter__(self):
+            """Return the in-memory response for the context manager."""
             return self
 
         def __exit__(self, *_args: object) -> bool:
+            """Keep the fake response from suppressing exceptions."""
             return False
 
     class Opener:
+        """Return controlled artifact bytes without network access."""
+
         def open(self, *_args: object, **_kwargs: object) -> Response:
+            """Open the in-memory response expected by the validator."""
             return Response(payload)
 
     monkeypatch.setattr(validator, "_opener", lambda: Opener())

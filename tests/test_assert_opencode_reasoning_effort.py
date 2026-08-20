@@ -1,3 +1,5 @@
+"""Contract tests for OpenCode reasoning-effort validation."""
+
 import json
 import runpy
 import sys

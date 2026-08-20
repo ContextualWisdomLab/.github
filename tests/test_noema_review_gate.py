@@ -1,3 +1,5 @@
+"""Contract tests for Noema's independent current-head review gate."""
+
 import base64
 import json
 from types import SimpleNamespace
@@ -8,6 +10,7 @@ from scripts.ci import noema_review_gate as noema
 
 
 def fake_secret(*parts: str) -> str:
+    """Join secret fragments so tests never spell a token as one literal."""
     return "".join(parts)
 
 
@@ -38,9 +41,11 @@ def review(state="APPROVED", commit="head", login="opencode-agent", body="Result
 
 
 def test_run_split_repo_graphql_and_fetch_pr(monkeypatch):
+    """Validate subprocess safety, repository parsing, and basic API access."""
     calls = []
 
     def fake_run(argv, **kwargs):
+        """Capture the safe subprocess invocation and return JSON text."""
         calls.append((argv, kwargs))
         return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
 
@@ -58,6 +63,7 @@ def test_run_split_repo_graphql_and_fetch_pr(monkeypatch):
     assert noema.split_repo("owner/repo") == ("owner", "repo")
 
 def test_scrub_sensitive_data():
+    """Redact common credentials while preserving harmless text."""
     assert noema.scrub_sensitive_data(None) is None
     assert noema.scrub_sensitive_data("") == ""
     assert noema.scrub_sensitive_data("ok") == "ok"
@@ -74,12 +80,14 @@ def test_scrub_sensitive_data():
 
 
 def test_scrub_sensitive_data_authorization_headers():
+    """Redact bearer and basic authorization header values."""
     assert noema.scrub_sensitive_data("Authorization: Basic dXNlcjpwYXNz") == "Authorization: Basic ***"
     assert noema.scrub_sensitive_data("Proxy-Authorization: Basic dXNlcjpwYXNz") == "Proxy-Authorization: Basic ***"
     assert noema.scrub_sensitive_data("authorization: bearer xyz") == "authorization: bearer ***"
 
 
 def test_split_repo_and_graphql(monkeypatch):
+    """Reject malformed repository names and decode GraphQL responses."""
     with pytest.raises(ValueError):
         noema.split_repo("owner")
     with pytest.raises(ValueError):
@@ -90,6 +98,7 @@ def test_split_repo_and_graphql(monkeypatch):
     calls = []
 
     def fake_run(args, stdin=None):
+        """Return a deterministic pull-request GraphQL response."""
         calls.append((args, stdin))
         return '{"data":{"repository":{"pullRequest":{"number":7}}}}'
 
@@ -105,6 +114,7 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_review_state_helpers_cover_current_head_logic():
+    """Accept only current-head primary approval and detect active blockers."""
     marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
     current = review(body=marker_body)
     old = review(commit="old", body=marker_body)
@@ -132,6 +142,7 @@ def test_review_state_helpers_cover_current_head_logic():
 
 
 def test_review_state_helpers_reject_explicit_previous_head_evidence():
+    """Reject review bodies that explicitly cite a superseded head."""
     current_head = "a" * 40
     previous_head = "b" * 40
     approval_marker = "Result: APPROVE"
@@ -161,6 +172,7 @@ def test_review_state_helpers_reject_explicit_previous_head_evidence():
 
 
 def test_check_helpers_and_existing_noema_review():
+    """Classify failed, running, and completed checks plus Noema markers."""
     status_context = {"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}
     check_run = {
         "__typename": "CheckRun",
@@ -226,6 +238,7 @@ def test_check_helpers_and_existing_noema_review():
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
+    """Cover actor fallback, bounded diffs, and JSON extraction errors."""
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
     assert noema.current_actor() == "noema"
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
@@ -243,6 +256,7 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
 
 
 def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
+    """Build review context from changed files, threads, and CodeGraph evidence."""
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
@@ -256,6 +270,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     calls = []
 
     def fake_run(args, stdin=None):
+        """Return deterministic command output for context assembly."""
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
@@ -307,6 +322,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
 
 
 def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch, tmp_path):
+    """Explain omitted files and missing indexes instead of hiding evidence gaps."""
     monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
     assert noema.load_codegraph_context() == ""
 
@@ -343,6 +359,7 @@ class FakeResponse:
 
 
 def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
+    """Exercise valid, malformed, and unavailable LLM response paths."""
     pr = make_pr()
     monkeypatch.delenv("NOEMA_LLM_API_URL", raising=False)
     monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
@@ -360,15 +377,20 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     seen = {}
 
     def fake_urlopen(request, timeout):
+        """Record request data and return a deterministic approval response."""
         seen["url"] = request.full_url
         seen["body"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse({"choices": [{"message": {"content": '{"decision":"approve","summary":"ok","findings":[]}'}}]})
 
     # Since we replaced urlopen with build_opener, we mock build_opener
     class FakeOpener:
+        """Provide a configurable opener for URL and redirect tests."""
+
         def __init__(self, call_func):
+            """Store the callback used for the next request."""
             self.call_func = call_func
         def open(self, request, timeout=None):
+            """Delegate the request to the configured fake callback."""
             return self.call_func(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
@@ -379,6 +401,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert "extra review context" in seen["body"]["messages"][1]["content"]
 
     def fake_urlopen_defer(request, timeout=None):
+        """Return a response with an unsupported decision."""
         return FakeResponse({"choices": [{"message": {"content": '{"decision":"defer"}'}}]})
 
     monkeypatch.setattr(
@@ -425,6 +448,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # target, not just those two spellings.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
+        """Resolve the test hostname to an allowed loopback address."""
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
@@ -436,6 +460,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # stay blocked regardless of loopback now being permitted.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-private.example.com/chat")
     def fake_getaddrinfo_private(host, port, *args, **kwargs):
+        """Resolve the test hostname to a blocked private address."""
         if host == "resolved-to-private.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
@@ -448,6 +473,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # after the first non-raising entry.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://dual-stack.example.com/chat")
     def fake_getaddrinfo_dual_stack(host, port, *args, **kwargs):
+        """Resolve to two public addresses for multi-record validation."""
         if host == "dual-stack.example.com":
             return [
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
@@ -462,6 +488,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://mixed-resolution.example.com/chat")
 
     def fake_getaddrinfo_mixed(host, port, *args, **kwargs):
+        """Resolve to loopback and private addresses for fail-closed validation."""
         if host == "mixed-resolution.example.com":
             return [
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
@@ -476,6 +503,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # Test unresolved hostname does not break
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
+        """Raise a resolver error to cover unresolved-host handling."""
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
@@ -484,6 +512,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
+        """Return malformed address data to cover defensive parsing."""
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
@@ -519,6 +548,7 @@ def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
     import socket
 
     def raise_gaierror(host, port, *args, **kwargs):
+        """Fail DNS resolution while testing URL scheme validation."""
         raise socket.gaierror("Name or service not known")
 
     monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
@@ -539,6 +569,7 @@ def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
 
 
 def test_format_findings_and_submit_review(monkeypatch):
+    """Format bounded findings and submit the exact current-head review."""
     findings = noema.format_findings(
         [
             {"severity": "high", "file": "a.py", "line": 3, "message": "bad"},
@@ -572,6 +603,7 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
+    """Skip draft, stale, blocked, and already-reviewed pull requests."""
     marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
     clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
     calls = []
@@ -603,6 +635,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
 
 
 def test_parse_args_and_main(monkeypatch):
+    """Parse CLI arguments and reject non-positive pull-request numbers."""
     parsed = noema.parse_args(["--repo", "owner/repo", "--pr-number", "9"])
     assert parsed.repo == "owner/repo"
     assert parsed.pr_number == 9
