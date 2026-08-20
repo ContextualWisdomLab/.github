@@ -8,6 +8,7 @@ import base64
 import ipaddress
 import json
 import os
+import pathlib
 import re
 import socket
 import subprocess
@@ -389,14 +390,32 @@ def review_thread_context(pr: dict[str, Any]) -> str:
 
 def load_codegraph_context() -> str:
     """Load optional precomputed CodeGraph context for structural review evidence."""
-    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
-    if not path:
+    raw_path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
+    if not raw_path:
         return ""
+    candidate = pathlib.Path(raw_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return "CodeGraph context unavailable: path must stay within the workspace"
+    workspace = pathlib.Path.cwd().resolve()
     try:
-        with open(path, encoding="utf-8") as handle:
-            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
+        current = workspace
+        for part in candidate.parts:
+            current /= part
+            if current.is_symlink():
+                return "CodeGraph context unavailable: symlinked paths are not allowed"
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(workspace)
+        if not resolved.is_file():
+            return "CodeGraph context unavailable: context path is not a regular file"
+        with resolved.open(encoding="utf-8") as handle:
+            return truncate_text(
+                handle.read(MAX_REVIEW_CONTEXT_CHARS + 1),
+                MAX_REVIEW_CONTEXT_CHARS,
+            )
     except OSError as exc:
-        return f"CodeGraph context unavailable: {exc}"
+        return f"CodeGraph context unavailable: {type(exc).__name__}"
+    except ValueError:
+        return "CodeGraph context unavailable: path is outside the workspace"
 
 
 def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:

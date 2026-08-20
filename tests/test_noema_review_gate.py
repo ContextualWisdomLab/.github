@@ -286,7 +286,8 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     monkeypatch.setattr(noema, "run", fake_run)
     codegraph_path = tmp_path / "codegraph.md"
     codegraph_path.write_text("call graph: src/a.py -> tests", encoding="utf-8")
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(codegraph_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "codegraph.md")
     pr = make_pr(
         headRefOid="head sha",
         reviewThreads={
@@ -325,6 +326,36 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     """Explain omitted files and missing indexes instead of hiding evidence gaps."""
     monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
     assert noema.load_codegraph_context() == ""
+
+
+def test_codegraph_context_rejects_paths_outside_workspace(monkeypatch, tmp_path):
+    """Reject traversal, absolute, and symlink paths before reading context."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(outside))
+    assert "within the workspace" in noema.load_codegraph_context()
+
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "../outside.md")
+    assert "within the workspace" in noema.load_codegraph_context()
+
+    link = workspace / "context.md"
+    link.symlink_to(outside)
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "context.md")
+    assert "symlinked paths" in noema.load_codegraph_context()
+
+
+def test_codegraph_context_reads_bounded_workspace_file(monkeypatch, tmp_path):
+    """Read a regular workspace context file without unbounded allocation."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "context.md").write_text("trusted context", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "context.md")
+    assert noema.load_codegraph_context() == "trusted context"
 
     monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(tmp_path / "missing.md"))
     assert "CodeGraph context unavailable" in noema.load_codegraph_context()
