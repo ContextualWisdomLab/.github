@@ -233,6 +233,38 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_outer_workflow_neutralizes_caido_guest_login_sandbox_failure(self) -> None:
+        """Neutralize only the known local Caido guest-login startup failure."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
+    def test_outer_workflow_does_not_neutralize_caido_failure_with_findings(self) -> None:
+        """Keep vulnerability evidence blocking despite a Caido startup failure."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "Failed to connect to 127.0.0.1 port 48080\n"
+                "Severity: HIGH\nVulnerabilities 1\n"
+            )
+        )
+
+    def test_outer_workflow_does_not_neutralize_arbitrary_local_connection_failure(self) -> None:
+        """Do not broaden the exception to arbitrary curl or loopback failures."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "curl exit 7: Failed to connect to 127.0.0.1 port 48081\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
     def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
         """Keep a real vulnerability signal blocking despite provider failure."""
 
