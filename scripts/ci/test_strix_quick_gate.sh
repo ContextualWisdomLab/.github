@@ -3792,7 +3792,7 @@ REPORT
 			;;
 		esac
 		;;
-	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-continues | github-models-exhausted-after-baseline-vulnerability-allows | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
+	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-continues | github-models-exhausted-after-baseline-vulnerability-fails-closed | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
 			echo "LLM CONNECTION FAILED"
@@ -3802,7 +3802,7 @@ REPORT
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-before-next-success-continues" ] ||
-				[ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-allows" ]; then
+				[ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-fails-closed" ]; then
 				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities"
 				cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
 Severity: CRITICAL
@@ -3831,7 +3831,7 @@ EOS
 			exit 2
 			;;
 		openai/deepseek/deepseek-v3-0324)
-			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-allows" ]; then
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-fails-closed" ]; then
 				echo "LLM CONNECTION FAILED"
 				echo "Could not establish connection to the language model."
 				echo "Error: provider retirement brownout"
@@ -6267,12 +6267,12 @@ run_filtered_gate_case_if_requested() {
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
 		;;
-	github-models-exhausted-after-baseline-vulnerability-allows)
-		run_gate_case "github-models-exhausted-after-baseline-vulnerability-allows" \
+	github-models-exhausted-after-baseline-vulnerability-fails-closed)
+		run_gate_case "github-models-exhausted-after-baseline-vulnerability-fails-closed" \
 			"openai/gpt-5" \
 			"" \
-			"0" \
-			"Configured provider models were exhausted after reporting only unchanged pull-request findings; allowing pipeline continuation." \
+			"1" \
+			"STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." \
 			"3" \
 			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
 			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
@@ -9761,11 +9761,11 @@ run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-exhausted-after-baseline-vulnerability-allows" \
+run_gate_case "github-models-exhausted-after-baseline-vulnerability-fails-closed" \
 	"openai/gpt-5" \
 	"" \
-	"0" \
-	"Configured provider models were exhausted after reporting only unchanged pull-request findings; allowing pipeline continuation." \
+	"1" \
+	"STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." \
 	"3" \
 	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
 	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \

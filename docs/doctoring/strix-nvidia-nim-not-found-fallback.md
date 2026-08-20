@@ -30,13 +30,12 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
-Exhausted provider infrastructure remains fail-closed unless either no
-vulnerability was reported or the trusted gate has parsed every threshold
-report and classified every finding as outside the pull request's changed
-files. The latter decision is made from structured report locations inside the
-gate, not by trusting a log phrase in the outer workflow. Changed, unmapped, or
-changed-manifest findings remain blocking. Scanner reports and attempt logs
-remain available as artifacts.
+Exhausted provider infrastructure remains fail-closed even when the trusted
+gate has classified every observed threshold finding as outside the pull
+request's changed files. That classification scopes authoritative findings; it
+cannot prove that an incomplete provider-exhausted scan observed every finding.
+Changed, unmapped, and changed-manifest findings also remain blocking. Scanner
+reports and attempt logs remain available as artifacts.
 
 ## Verification contract
 
@@ -51,10 +50,8 @@ Regression evidence proves that:
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
 7. GitHub Models remain later cross-provider fallbacks;
-8. vulnerability signals prevent neutral infrastructure classification unless
-   every threshold report is structurally attributed to unchanged baseline
-   files;
-9. changed, unmapped, and changed-manifest findings still block after provider
+8. provider exhaustion remains non-passing after unchanged baseline findings;
+9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
 10. the required-workflow smoke contract pins these properties.
 

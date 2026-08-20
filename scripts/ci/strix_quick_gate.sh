@@ -4084,13 +4084,6 @@ run_current_target_scan() {
 		fi
 	done
 
-	if is_pull_request_event &&
-		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ] &&
-		[ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
-		echo "Configured provider models were exhausted after reporting only unchanged pull-request findings; allowing pipeline continuation." >&2
-		return 0
-	fi
-
 	if should_fail_pull_request_infra_zero_findings; then
 		return 1
 	fi
@@ -4108,6 +4101,12 @@ run_current_target_scan() {
 		else
 			echo "ERROR: All configured fallback models are the same as the primary model" >&2
 		fi
+		return 1
+	fi
+
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
+		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
 		return 1
 	fi
 
