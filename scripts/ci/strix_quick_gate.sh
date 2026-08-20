@@ -4082,7 +4082,14 @@ run_current_target_scan() {
 			echo "Strix quick scan failed with a non-recoverable error." >&2
 			return 1
 		fi
-		done
+	done
+
+	if is_pull_request_event &&
+		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ] &&
+		[ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+		echo "Configured provider models were exhausted after reporting only unchanged pull-request findings; allowing pipeline continuation." >&2
+		return 0
+	fi
 
 	if should_fail_pull_request_infra_zero_findings; then
 		return 1
