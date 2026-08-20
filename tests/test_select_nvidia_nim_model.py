@@ -35,6 +35,7 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[Any]:
     requests: list[Any] = []
 
     def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
+        """Return the canned catalog and record request security metadata."""
         requests.append((request, timeout))
         return _FakeResponse(payload)
 
@@ -105,6 +106,7 @@ def test_fetch_served_model_ids_fails_closed_on_transport_errors(
     """A catalog outage is reported, never masked by guessing a model id."""
 
     def fake_urlopen(_request: Any, timeout: float | None = None) -> _FakeResponse:
+        """Raise the configured provider failure from the HTTP boundary."""
         raise error
 
     monkeypatch.setattr(resolver.urllib.request, "urlopen", fake_urlopen)
