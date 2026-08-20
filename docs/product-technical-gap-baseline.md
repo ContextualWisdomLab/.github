@@ -147,14 +147,14 @@ flowchart LR
 | #1065 | fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails | `d080c09161c92ffad7b9cf630ab774b6262eeba6` | main | BEHIND | — |
 | #1062 | fix(strix): map official modes without branch-selected dispatch | `74079e5bddd69bf7eac6d3b2492f25d598517905` | main | BEHIND | — |
 | #1061 | fix(scheduler): ignore manual Strix dispatch as merge evidence | `3865b1fccb3d5325b35f3bcf837613cb9ee6a1fd` | main | DIRTY | — |
-| #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `ba7249ef754e73ab9088f566990bea60e42b9def` | main | BEHIND | — |
+| #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `5bd705be8d5e3ea5e85ee38dfda9c809ccb4eb9f` | main | BEHIND | — |
 | #1058 | fix(operability): reject impossible control-plane SLI counts | `c2240af1e6e1d701c3a795ae60f0d89bc0ee738c` | main | BEHIND | — |
-| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `dc954d216d115c4ba0334e374963a13539e7bad8` | main | BEHIND | — |
+| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `3eac8c1f78ebb82272429d1804f3d039b5da86b8` | main | BEHIND | — |
 | #1053 | fix(redaction): skip gh run view job/step prefixes | `cd4b30e560e651f3d2d3c4e418d8f51ee650f9a2` | main | BEHIND | — |
 | #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `030af95f78e2910191d5e7f53a771e26f87f4dee` | main | BEHIND | CHANGES_REQUESTED |
 | #1051 | fix(pip-audit): keep index-url locks hashed and reject symlink parents | `4deb1376d3bb661e9d9934511f46bbf52d9b5b1c` | main | BEHIND | CHANGES_REQUESTED |
 | #1050 | fix(security): reject dot path components before dependency-review compare | `948de32e869e1656e7ae1ba770b16c0b652f4c29` | main | BEHIND | — |
-| #1046 | fix(opencode): pass trusted visibility into the private free-model hook | `7a17f0c663f5515ce7bab7acda0f6588fe54e435` | main | BEHIND | — |
+| #1046 | fix(opencode): pass trusted visibility into the private free-model hook | `b78f361780bbddfb54d63f78ffa13a56c8f76ab0` | main | BEHIND | — |
 | #1036 | fix(ci): bind stub-scan evidence and cap hourly fleet work at 12 | `1ac4d90af45f3106afd92fc81a0ec43cb43881bd` | main | BEHIND | — |
 | #1035 | docs(automation): retarget closed-unmerged #840 and #906 lineage | `271fc60592b9eb02cf81ff5281f9c2d0b36b9067` | main | DIRTY | — |
 | #1027 | fix(automation): stop mention sweep on already-exceeded rate limits | `2cd701fdb4a59cd4ebc28107bce5c3c13e1889e9` | main | BEHIND | — |
@@ -163,11 +163,11 @@ flowchart LR
 | #1015 | fix(coverage): defer interpreter-specific wheel gaps | `53f05d3d6f55ab1eeba730851439fd1d31db8e41` | main | BLOCKED | — |
 | #1009 | fix(strix): bind evidence to exact workflow artifacts | `805f4d32463aeef1b7557eb416fc5eb809874368` | main | BLOCKED | CHANGES_REQUESTED |
 | #1002 | fix(review): fail closed when required check is not a verdict | `5fe83ff0d3c8d6c8d645190076aad0271f75b78d` | main | BEHIND | — |
-| #991 | fix(automation): reuse review node_id for mention eyes | `1fa547ae56c3cb829dfbba3177c2ec0c3fa41fe3` | main | BEHIND | — |
+| #991 | fix(automation): reuse review node_id for mention eyes | `ac496b0cf993f0bd7a058cb297566c6da63d77d3` | main | BEHIND | — |
 | #949 | fix(opencode-review): discover multi-line run: blocks in safe_pytest_command | `de073535569b7e4904cac699df9f159ee8f93dd7` | main | BLOCKED | CHANGES_REQUESTED |
 | #946 | fix(review): publish substantive OpenCode LLM evidence | `efc069b56abf142312aa4f3bb7b5b98e3698b9c9` | main | BLOCKED | CHANGES_REQUESTED |
 | #941 | fix(semgrep): make the pinned image digest authoritative | `84b2b924547502db72856c657a171814e64142fb` | main | BLOCKED | — |
-| #939 | fix: keep cross-repo OpenCode evidence healthy | `050f2b036d90e4b6a9f9e85683efcbfb5c4d3fdd` | main | BEHIND | CHANGES_REQUESTED |
+| #939 | fix: keep cross-repo OpenCode evidence healthy | `a78991a3ada7a11efa2c4b41f3042b4143e8d1d1` | main | BEHIND | CHANGES_REQUESTED |
 | #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
 | #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
 | #932 | fix(sbom): preserve Markdown report integrity | `9df515e07b60b66014bbe96fe83ed70718837b10` | main | BEHIND | CHANGES_REQUESTED |
@@ -188,7 +188,7 @@ flowchart LR
 | #831 | feat(opencode): add head-matched gold corpus tooling | `16f9ec8b49b7bae8c51f4fb27e373f53eb94bb05` | main | BLOCKED | CHANGES_REQUESTED |
 | #828 | fix(scheduler): require independent exact-head approval | `7e15d2ffc288ba447d95c4e43f776be03d06dd22` | main | BLOCKED | CHANGES_REQUESTED |
 | #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `5a099cd7a4ce8bb5724401da901a63236980c284` | main | BLOCKED | — |
-| #807 | fix(coverage): validate nested npm metadata through canonical pins | `cb4596cbe8f82db215f6f4a1216a5998f728c9b1` | main | BLOCKED | CHANGES_REQUESTED |
+| #807 | fix(coverage): validate nested npm metadata through canonical pins | `362479dfa8f675dec59cf86d220736c651e3d83e` | main | BLOCKED | CHANGES_REQUESTED |
 | #797 | release: attest exact sealed SBOM evidence | `bbf5519bd676e666869d5292b744245255345e8f` | main | BLOCKED | — |
 | #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `8c0e6b3823b3e595a08512616e3bcc10dd8e328d` | main | BLOCKED | CHANGES_REQUESTED |
 | #790 | fix(coverage): retry transient trusted uv downloads | `afad81361377f1fe2e651018f1008a590f5344a5` | main | BEHIND | — |
