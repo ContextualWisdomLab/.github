@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Reconcile OSV registry findings with exact immutable direct-source evidence."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+
+SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+DIRECT_HEADER_RE = re.compile(
+    r"(?m)^  (?P<name>(?:@[^/\s]+/)?[^@\s]+)@(?P<url>https://[^\s]+):[ \t]*$"
+)
+ENTRY_BOUNDARY_RE = re.compile(r"(?m)^  \S")
+VERSION_LINE_RE = re.compile(r"(?m)^    version:[ \t]*['\"]?([^'\"\s]+)['\"]?[ \t]*$")
+TARBALL_RE = re.compile(r"(?:^|[, {])[ \t]*tarball:[ \t]*([^, }]+)")
+INTEGRITY_RE = re.compile(r"(?:^|[, {])[ \t]*integrity:[ \t]*(sha512-[A-Za-z0-9+/=]+)")
+AFFECTED_RANGE_RE = re.compile(r"^[ \t]*<[ \t]*(\d+\.\d+\.\d+)[ \t]*$")
+SHEETJS_URL_RE = re.compile(
+    r"^/xlsx-(?P<version>\d+\.\d+\.\d+)/xlsx-(?P=version)\.tgz$"
+)
+
+
+@dataclass(frozen=True)
+class DirectSource:
+    """Evidence parsed from one pnpm direct-tarball package record."""
+
+    package_name: str
+    version: str
+    source_url: str
+    integrity: str
+    valid: bool
+    reason: str
+
+
+def parse_semver(value: str) -> tuple[int, int, int] | None:
+    """Parse a strict three-component SemVer core."""
+
+    match = SEMVER_RE.fullmatch(value)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def valid_sha512_integrity(value: str) -> bool:
+    """Return whether an integrity string contains one exact SHA-512 digest."""
+
+    if not value.startswith("sha512-"):
+        return False
+    try:
+        decoded = base64.b64decode(value.removeprefix("sha512-"), validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    return len(decoded) == 64
+
+
+def validate_sheetjs_source(
+    package_name: str,
+    header_url: str,
+    tarball_url: str,
+    version: str,
+    integrity: str,
+) -> tuple[bool, str]:
+    """Validate the exact official immutable SheetJS release identity."""
+
+    if package_name != "xlsx":
+        return False, "package is not governed by the SheetJS direct-source contract"
+    try:
+        parsed = urlsplit(header_url)
+    except ValueError:
+        return False, "direct source URL is malformed"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "cdn.sheetjs.com"
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False, "direct source is not the canonical SheetJS HTTPS origin"
+    path_match = SHEETJS_URL_RE.fullmatch(parsed.path)
+    if not path_match or path_match.group("version") != version:
+        return False, "package version does not match the immutable SheetJS URL"
+    if header_url != tarball_url:
+        return False, "pnpm package key and resolution tarball disagree"
+    if parse_semver(version) is None:
+        return False, "package version is not a strict SemVer core"
+    if not valid_sha512_integrity(integrity):
+        return False, "direct source lacks one valid SHA-512 integrity receipt"
+    return True, "exact official immutable SheetJS release"
+
+
+def parse_direct_sources(lock_text: str) -> list[DirectSource]:
+    """Parse conservative direct HTTPS package records from a pnpm lockfile."""
+
+    sources: list[DirectSource] = []
+    matches = list(DIRECT_HEADER_RE.finditer(lock_text))
+    for match in matches:
+        start = match.end()
+        boundary = ENTRY_BOUNDARY_RE.search(lock_text, start)
+        end = boundary.start() if boundary else len(lock_text)
+        block = lock_text[start:end]
+        version_match = VERSION_LINE_RE.search(block)
+        tarball_match = TARBALL_RE.search(block)
+        integrity_match = INTEGRITY_RE.search(block)
+        version = version_match.group(1) if version_match else ""
+        tarball = tarball_match.group(1) if tarball_match else ""
+        integrity = integrity_match.group(1) if integrity_match else ""
+        valid, reason = validate_sheetjs_source(
+            match.group("name"), match.group("url"), tarball, version, integrity
+        )
+        sources.append(
+            DirectSource(
+                package_name=match.group("name"),
+                version=version,
+                source_url=match.group("url"),
+                integrity=integrity,
+                valid=valid,
+                reason=reason,
+            )
+        )
+    return sources
+
+
+def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    """Yield package findings from an OSV Scanner result document."""
+
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise ValueError("OSV results must contain a results array")
+    for result in results:
+        if not isinstance(result, dict):
+            raise ValueError("OSV result entries must be objects")
+        packages = result.get("packages") or []
+        if not isinstance(packages, list):
+            raise ValueError("OSV result packages must be an array")
+        for package in packages:
+            if not isinstance(package, dict):
+                raise ValueError("OSV package entries must be objects")
+            yield package
+
+
+def audit_entry(
+    *,
+    label: str,
+    source: DirectSource,
+    package_name: str,
+    package_version: str,
+    vulnerability: dict[str, Any],
+    affected_range: str | None,
+    status: str,
+    reason: str,
+) -> dict[str, str]:
+    """Build one stable audit record without copying advisory prose."""
+
+    return {
+        "scan": label,
+        "status": status,
+        "reason": reason,
+        "package": package_name,
+        "version": package_version,
+        "vulnerability_id": str(vulnerability.get("id") or "unknown"),
+        "affected_range": affected_range or "unknown",
+        "source_url": source.source_url,
+        "integrity": source.integrity or "missing",
+    }
+
+
+def reconcile_payload(
+    payload: dict[str, Any], lock_text: str, *, label: str
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove only findings disproven by exact source and affected-range evidence."""
+
+    direct_sources = parse_direct_sources(lock_text)
+    audit: list[dict[str, str]] = []
+    for package in iter_packages(payload):
+        package_info = package.get("package")
+        vulnerabilities = package.get("vulnerabilities") or []
+        if not isinstance(package_info, dict) or not isinstance(vulnerabilities, list):
+            raise ValueError("OSV package evidence is malformed")
+        package_name = str(package_info.get("name") or "")
+        package_version = str(package_info.get("version") or "")
+        candidates = [
+            source
+            for source in direct_sources
+            if source.package_name == package_name
+            and (source.version == package_version or not source.version)
+        ]
+        if not candidates:
+            continue
+        source = candidates[0]
+        retained: list[dict[str, Any]] = []
+        for vulnerability in vulnerabilities:
+            if not isinstance(vulnerability, dict):
+                raise ValueError("OSV vulnerability entries must be objects")
+            database_specific = vulnerability.get("database_specific")
+            affected_range = None
+            if isinstance(database_specific, dict):
+                raw_range = database_specific.get("last_known_affected_version_range")
+                if isinstance(raw_range, str):
+                    affected_range = raw_range
+            if not source.valid:
+                retained.append(vulnerability)
+                audit.append(
+                    audit_entry(
+                        label=label,
+                        source=source,
+                        package_name=package_name,
+                        package_version=package_version,
+                        vulnerability=vulnerability,
+                        affected_range=affected_range,
+                        status="SCANNER_METADATA_CONFLICT",
+                        reason=source.reason,
+                    )
+                )
+                continue
+            range_match = AFFECTED_RANGE_RE.fullmatch(affected_range or "")
+            version_key = parse_semver(package_version)
+            upper_key = parse_semver(range_match.group(1)) if range_match else None
+            if version_key is None or upper_key is None:
+                retained.append(vulnerability)
+                audit.append(
+                    audit_entry(
+                        label=label,
+                        source=source,
+                        package_name=package_name,
+                        package_version=package_version,
+                        vulnerability=vulnerability,
+                        affected_range=affected_range,
+                        status="SCANNER_METADATA_CONFLICT",
+                        reason="advisory lacks one machine-checkable exclusive affected upper bound",
+                    )
+                )
+                continue
+            if version_key < upper_key:
+                retained.append(vulnerability)
+                status = "AFFECTED"
+                reason = "exact direct-source version remains inside the affected range"
+            else:
+                status = "RECONCILED"
+                reason = "exact immutable direct-source version is outside the affected range"
+            audit.append(
+                audit_entry(
+                    label=label,
+                    source=source,
+                    package_name=package_name,
+                    package_version=package_version,
+                    vulnerability=vulnerability,
+                    affected_range=affected_range,
+                    status=status,
+                    reason=reason,
+                )
+            )
+        package["vulnerabilities"] = retained
+    return payload, audit
+
+
+def atomic_json_write(path: Path, value: object) -> None:
+    """Write JSON through a same-directory temporary regular file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    """Load one JSON object from a regular non-symlink file."""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"required JSON input is not a regular file: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"required JSON input is not an object: {path}")
+    return value
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--results", required=True, type=Path)
+    parser.add_argument("--lockfile", required=True, type=Path)
+    parser.add_argument("--audit", required=True, type=Path)
+    parser.add_argument("--label", default="scan")
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Reconcile one OSV document and publish append-only audit evidence."""
+
+    args = parse_args()
+    if args.lockfile.is_symlink() or not args.lockfile.is_file():
+        raise ValueError("pnpm lock provenance input must be a regular file")
+    payload = load_json_object(args.results)
+    reconciled, new_audit = reconcile_payload(
+        payload, args.lockfile.read_text(encoding="utf-8"), label=args.label
+    )
+    existing_audit: list[dict[str, str]] = []
+    if args.audit.exists():
+        if args.audit.is_symlink() or not args.audit.is_file():
+            raise ValueError("audit output must be a regular file")
+        loaded_audit = json.loads(args.audit.read_text(encoding="utf-8"))
+        if not isinstance(loaded_audit, list):
+            raise ValueError("audit output must contain an array")
+        existing_audit = loaded_audit
+    atomic_json_write(args.results, reconciled)
+    atomic_json_write(args.audit, [*existing_audit, *new_audit])
+    for entry in new_audit:
+        print(
+            "OSV provenance "
+            f"{entry['status']}: {entry['package']}@{entry['version']} "
+            f"{entry['vulnerability_id']} ({entry['reason']})"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
