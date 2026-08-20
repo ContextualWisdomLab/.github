@@ -20,13 +20,14 @@ semantics and remains independently operable as a standalone module.
 
 ## Authority and secret contract
 
-The caller keeps `GITHUB_TOKEN` at `contents: read`, grants job-scoped OIDC for
-the reusable scheduler's app-token exchange, and maps only
-`PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN`. It never uses
-`secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
-`COPILOT_GITHUB_TOKEN`. CWE-269 forbids granting the caller the worker's
-write or model privileges (MITRE, 2026). Model credentials remain scoped
-to the separately reviewed repair worker. The worker cannot approve,
+The caller keeps `GITHUB_TOKEN` at `contents: read` and maps only
+`PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN`. It deliberately does not
+grant `id-token: write`: the established mapped scheduler credentials remain
+the authority, while the optional OIDC exchange stays unavailable and
+fail-closed. It never uses `secrets: inherit`, receives `NVIDIA_NIM_API_KEY`,
+or introduces `COPILOT_GITHUB_TOKEN`. CWE-269 forbids granting the caller the
+worker's write or model privileges (MITRE, 2026). Model credentials remain
+scoped to the separately reviewed repair worker. The worker cannot approve,
 merge, release, change protection, or manufacture passing evidence.
 
 Before protected-main activation, the repository variable
@@ -56,8 +57,9 @@ qualifying independent non-author approval.
 
 Machine-checkable contracts require the exact target, minute 17 cadence,
 non-cancelling single-flight group, one dispatch, one-hour retry floor, explicit
-secret mapping, read-only permissions, central path-filter coverage, and
-absence of model or Copilot credentials. The full owned suite and hosted
+secret mapping, read-only permissions, central path-filter coverage, absence
+of OIDC elevation, absence of model or Copilot credentials, and absence of
+any target checkout or pull-request execution trigger. The full owned suite and
 security/review gates must pass on the unchanged exact head.
 
 Rollback removes the contextual-orchestrator caller, its focused test,
