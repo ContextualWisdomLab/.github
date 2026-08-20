@@ -117,6 +117,58 @@ def test_load_config_reports_missing_and_invalid_json(tmp_path):
         guard.load_config(invalid)
 
 
+def test_strip_jsonc_comments_removes_line_and_block_comments():
+    """Line and block comments outside strings are dropped, newlines preserved."""
+    text = (
+        '{\n'
+        '  // leading note\n'
+        '  "a": 1, /* inline block\n'
+        '  spanning lines */ "b": 2\n'
+        '}\n'
+    )
+
+    stripped = guard.strip_jsonc_comments(text)
+
+    assert json.loads(stripped) == {"a": 1, "b": 2}
+    assert stripped.count("\n") == text.count("\n")
+
+
+def test_strip_jsonc_comments_preserves_double_slash_inside_strings():
+    """A string value containing // (a URL) is not treated as a comment."""
+    text = '{\n  "$schema": "https://opencode.ai/config.json" // trailing note\n}\n'
+
+    stripped = guard.strip_jsonc_comments(text)
+
+    assert json.loads(stripped) == {"$schema": "https://opencode.ai/config.json"}
+
+
+def test_strip_jsonc_comments_respects_escaped_quotes_in_strings():
+    """An escaped quote inside a string does not end string tracking early."""
+    text = '{"a": "quote \\" then // not a comment", "b": 1}'
+
+    stripped = guard.strip_jsonc_comments(text)
+
+    assert json.loads(stripped) == {"a": 'quote " then // not a comment', "b": 1}
+
+
+def test_load_config_tolerates_real_opencode_jsonc_comment_style(tmp_path):
+    """The exact comment style used in the repository's opencode.jsonc loads."""
+    config_path = tmp_path / "opencode.jsonc"
+    config_path.write_text(
+        '{\n'
+        '  "$schema": "https://opencode.ai/config.json",\n'
+        '  // NOT switched to "contextual-orchestrator/contextual-orchestrator" yet:\n'
+        '  // that requires provisioning first.\n'
+        '  "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    config = guard.load_config(config_path)
+
+    assert config["model"] == "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
+
+
 def test_main_reports_all_candidate_errors(tmp_path, capsys):
     """The CLI validates every candidate before returning failure."""
     config_path = write_config(

@@ -30,6 +30,13 @@ def _created_tool_directory(path: Path) -> str:
     return str(path)
 
 
+def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    materializer._install_trusted_uv.cache_clear()
+
+
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
     """A PR-modified lock cannot enter the networked coverage image build context."""
     repo = tmp_path / "repo"
@@ -150,9 +157,24 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
-    assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert materializer._is_hash_pinned(b"-r requirements-other.txt\n")
+    assert not materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ./requirements-other.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ../escape.txt\n")
+    assert materializer._is_bounded_requirement_include(
+        "--requirement requirements-other.txt"
+    )
+    assert not materializer._is_bounded_requirement_include("-r .")
+    assert not materializer._is_bounded_requirement_include("-r -evil.txt")
+    assert not materializer._is_bounded_requirement_include("-r ~evil.txt")
+    assert not materializer._is_bounded_requirement_include("-r C:foo.txt")
+    assert not materializer._is_bounded_requirement_include("-r foo?bar.txt")
+    assert not materializer._is_bounded_requirement_include("-r foo#bar.txt")
+    assert not materializer._is_bounded_requirement_include(r"-r foo\\bar.txt")
+    assert not materializer._is_bounded_requirement_include("-r")
+    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
     # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
     assert materializer._is_hash_pinned(
@@ -503,7 +525,7 @@ def _trusted_uv_archive(
 def test_download_trusted_uv_archive_accepts_fixed_https_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The downloader returns bounded bytes from the fixed Astral HTTPS origin."""
+    """The downloader returns bounded bytes from the fixed GitHub HTTPS origin."""
     payload = b"archive"
     response = FakeHttpResponse(materializer.TRUSTED_UV_ARCHIVE_URL, payload)
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
@@ -511,11 +533,49 @@ def test_download_trusted_uv_archive_accepts_fixed_https_origin(
     assert materializer._download_trusted_uv_archive() == payload
 
 
-def test_download_trusted_uv_archive_rejects_unsafe_redirect(
+def test_download_trusted_uv_archive_accepts_github_release_asset_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The official GitHub release-asset CDN remains a valid final HTTPS origin."""
+    payload = b"archive"
+    response = FakeHttpResponse(
+        "https://release-assets.githubusercontent.com/"
+        "github-production-release-asset/699532645/archive",
+        payload,
+    )
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+
+    assert materializer._download_trusted_uv_archive() == payload
+
+
+def test_download_trusted_uv_archive_accepts_legacy_objects_asset_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The previous GitHub release-asset hostname remains a valid final origin."""
+    payload = b"archive"
+    response = FakeHttpResponse(
+        "https://objects.githubusercontent.com/github-production-release-asset/1/file",
+        payload,
+    )
+    monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
+
+    assert materializer._download_trusted_uv_archive() == payload
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "https://example.invalid/uv.tar.gz",
+        "https://user@github.com/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
+        "https://:secret@github.com/astral-sh/uv/releases/download/0.12.1/uv.tar.gz",
+    ],
+)
+def test_download_trusted_uv_archive_rejects_unsafe_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_url: str,
+) -> None:
     """A redirect away from the fixed HTTPS release host fails closed."""
-    response = FakeHttpResponse("https://example.invalid/uv.tar.gz")
+    response = FakeHttpResponse(unsafe_url)
     monkeypatch.setattr(materializer.urllib.request, "urlopen", lambda *_a, **_k: response)
 
     with pytest.raises(RuntimeError, match="redirected outside"):
@@ -644,6 +704,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -663,7 +724,9 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     def verify(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
         nonlocal calls
         calls += 1
-        return subprocess.CompletedProcess([], 0, b"uv 0.12.1\n", b"")
+        return subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.1 (x86_64-unknown-linux-gnu)\n", b""
+        )
 
     monkeypatch.setattr(materializer.subprocess, "run", verify)
 
@@ -690,6 +753,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -711,8 +775,16 @@ def test_install_trusted_uv_rejects_version_process_failures(
 @pytest.mark.parametrize(
     "completed",
     [
-        subprocess.CompletedProcess([], 0, b"uv 0.12.0\n", b""),
-        subprocess.CompletedProcess([], 1, b"uv 0.12.1\n", b"failed"),
+        subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.0 (x86_64-unknown-linux-gnu)\n", b""
+        ),
+        subprocess.CompletedProcess(
+            [], 1, b"uv 0.12.1 (x86_64-unknown-linux-gnu)\n", b"failed"
+        ),
+        subprocess.CompletedProcess([], 0, b"uv 0.12.1\n", b""),
+        subprocess.CompletedProcess(
+            [], 0, b"uv 0.12.1 (aarch64-unknown-linux-gnu)\n", b""
+        ),
     ],
 )
 def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
@@ -721,6 +793,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,
