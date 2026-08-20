@@ -100,18 +100,18 @@ flowchart LR
 | #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
 | #1166 | fix(ci): recognize replacement tests in existing files | `9e6063dc0d7298e394de87fc8f28aa3e0a6dced8` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `38aef069b2d9f8148a5e479125585ae408306d86` | main | BLOCKED | — |
-| #1162 | fix: use review credentials for agent dispatch | `fad1ed4de66e090d31881348a7c3c3f6518aa177` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `639553db` | main | BLOCKED | — |
+| #1162 | fix: use review credentials for agent dispatch | `e530ef197bab1a3f4a4b3331c0504f9f0bd6a1cc` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `ac0650f1ffe92e355ca3e41531787456988ed628` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `dbc3eca51444e46ce7a3a07ea818c72ad8bf124a` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
-| #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd79` | main | BLOCKED | — |
-| #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `0270c9cb` | main | BLOCKED | — |
-| #1155 | Fix duplicate repository dispatch scheduler runs | `6ce2fe83` | main | BLOCKED | — |
+| #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd790ba12161ad6385a46d9e3e60371103b4` | main | BLOCKED | — |
+| #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae506e777b3a21885173f8c86b2e5f2a31` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `7655ab630f954d27deaff365b0b21c437bf5bd34` | main | BLOCKED | — |
+| #1155 | Fix duplicate repository dispatch scheduler runs | `6ce2fe8339571637708752568d008a43c2277dbd` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
-| #1153 | fix(strix): fail closed on incomplete provider scans | `a0fe0501` | main | BLOCKED | — |
-| #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `a37fecbe96c01f5d3638085876371313713823c4` | main | BLOCKED | — |
-| #1150 | feat: add read-only Actions queue health evidence | `3196c2db08f84235aaf58bf612806e75d2b33023` | main | BLOCKED | — |
+| #1153 | fix(strix): fail closed on incomplete provider scans | `a0fe0501b6a4d0f3c532b5feeaf7a7038db41bb4` | main | BLOCKED | — |
+| #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `77165e64aea6e448632100c366680f98a9e46152` | main | BLOCKED | — |
+| #1150 | feat: add read-only Actions queue health evidence | `7bbd13393b7d7bfc7f76b544d4e33fc572ccb471` | main | BLOCKED | — |
 | #1147 | feat(integration): add ecosystem capability catalogue | `9ac03e0c1f9f2e12f0d29d354f5e9541a1feffbb` | main | BLOCKED | — |
 | #1146 | fix(figma): retain style references and component sets | `54cb0220ca95603831dc8defeedd766d47cf4a62` | main | BLOCKED | — |
 | #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
