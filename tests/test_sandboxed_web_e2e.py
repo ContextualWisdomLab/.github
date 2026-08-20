@@ -1,3 +1,5 @@
+"""Behavioral and security contracts for the sandboxed web E2E runner."""
+
 import json
 import os
 import runpy
@@ -118,15 +120,20 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
     class SlowProcess:
+        """Process double that first times out and then exits cleanly."""
+
         pid = 12345
 
         def __init__(self):
+            """Track the number of graceful-wait attempts."""
             self.waits = 0
 
         def poll(self):
+            """Pretend that the process remains alive while being stopped."""
             return None
 
         def wait(self, timeout):
+            """Timeout once, then report a successful process exit."""
             self.waits += 1
             if self.waits == 1:
                 raise subprocess.TimeoutExpired("slow", timeout)
@@ -135,6 +142,7 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     killed = []
 
     def fake_killpg(pid, sig):
+        """Record process-group termination and emulate a vanished group."""
         killed.append((pid, sig))
         if len(killed) == 2:
             raise ProcessLookupError
@@ -158,16 +166,21 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     run_calls = []
 
     class FakeProcess:
+        """Minimal process double returned by the patched process launcher."""
+
         pid = 42
 
         def poll(self):
+            """Report an already-completed process."""
             return 0
 
     def fake_popen(*args, **kwargs):
+        """Capture Popen arguments while returning the process double."""
         popen_calls.append((args, kwargs))
         return FakeProcess()
 
     def fake_run(*args, **kwargs):
+        """Capture run arguments and return a deterministic command result."""
         run_calls.append((args, kwargs))
         return subprocess.CompletedProcess(args[0], 7, stdout="out", stderr="err")
 
@@ -194,6 +207,8 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
 def test_wait_for_url_rejects_ssrf_hostnames():
     """The readiness URL validation blocks non-localhost hosts to prevent SSRF."""
     class FakeService:
+        """Service double used only on validation paths that return early."""
+
         pass
     with pytest.raises(ValueError, match="must be localhost, 127.0.0.1, or ::1"):
         sandboxed_web_e2e.wait_for_url("http://192.168.1.1:8000/ready", 1, FakeService())
@@ -209,22 +224,32 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     """Readiness polling accepts HTTP responses after transient URL errors."""
 
     class RunningProcess:
+        """Process double that remains alive while readiness is retried."""
+
         def poll(self):
+            """Report that the service is still running."""
             return None
 
     class Response:
+        """Successful response context manager returned by the fake opener."""
+
         status = 204
 
         def __enter__(self):
+            """Enter the response context."""
             return self
 
         def __exit__(self, exc_type, exc, traceback):
+            """Leave the response context without suppressing exceptions."""
             return False
 
     attempts = []
 
     class FakeOpener:
+        """Opener double that fails once before returning a response."""
+
         def open(self, url, timeout):
+            """Record a request and model one transient readiness failure."""
             attempts.append((url, timeout))
             if len(attempts) == 1:
                 raise sandboxed_web_e2e.urllib.error.URLError("not ready")
@@ -258,7 +283,10 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     """Readiness polling returns false after repeated URL failures."""
 
     class RunningProcess:
+        """Process double that stays alive until the readiness deadline."""
+
         def poll(self):
+            """Report that the service is still running."""
             return None
 
     ticks = iter([0, 0, 2])
@@ -266,7 +294,10 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
     class FailingOpener:
+        """Opener double that never reaches the readiness endpoint."""
+
         def open(self, url, timeout):
+            """Raise the transient network error used by the retry loop."""
             raise sandboxed_web_e2e.urllib.error.URLError("still starting")
 
     monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FailingOpener())
@@ -284,10 +315,14 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     stopped = []
 
     class DoneProcess:
+        """Process double for services that are managed by patched helpers."""
+
         def poll(self):
+            """Report that the service process has exited."""
             return 0
 
     def fake_start(label, command, cwd, env, logs_dir):
+        """Create a service double and record its startup metadata."""
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} ready\n", encoding="utf-8")
         service = sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
@@ -356,15 +391,20 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     class DoneProcess:
+        """Process double for the readiness-failure path."""
+
         def poll(self):
+            """Report that the service process has exited."""
             return 0
 
     def fake_start(label, command, cwd, env, logs_dir):
+        """Create a service log whose readiness state is test-controlled."""
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} not ready\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
     def fake_wait(url, timeout, service):
+        """Mark only the frontend as ready to exercise the failure branch."""
         return service.label == "frontend"
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
@@ -404,15 +444,20 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     class DoneProcess:
+        """Process double for the E2E timeout path."""
+
         def poll(self):
+            """Report that the service process has exited."""
             return 0
 
     def fake_start(label, command, cwd, env, logs_dir):
+        """Create a deterministic service log for timeout reporting."""
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} tail\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
     def fake_run_shell(command, cwd, env, timeout):
+        """Raise the timeout shape expected from the real command runner."""
         raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out", stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
@@ -484,6 +529,7 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     def fake_run_shell(command, cwd, env, timeout):
+        """Return text output in the timeout exception for evidence handling."""
         raise subprocess.TimeoutExpired(command, timeout, output="e2e-out", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
