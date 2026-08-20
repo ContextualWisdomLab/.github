@@ -71,6 +71,11 @@ if [ "$resolved_source_sha" != "$CONTEXTUAL_ORCHESTRATOR_REF" ]; then
 	exit 2
 fi
 
+# Validate the pinned source license and every lock dependency's artifact
+# license before creating a venv, installing packages, or importing source.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/validate_contextual_orchestrator_licenses.py" "$RUNTIME_DIR"
+
 python3 -m venv "$RUNTIME_DIR/.venv-sidecar"
 # shellcheck disable=SC1091
 source "$RUNTIME_DIR/.venv-sidecar/bin/activate"

@@ -17,6 +17,19 @@ def test_sidecar_source_is_immutable_and_readiness_is_bounded() -> None:
     assert 'CONTEXTUAL_ORCHESTRATOR_REF:=7eb459ee72c37dead5d25f284dfa4546f149fbe1' in text
     assert '^[0-9a-fA-F]{40}$' in text
     assert '--connect-timeout 1 --max-time 2' in text
+    assert 'validate_contextual_orchestrator_licenses.py' in text
+    assert text.index('validate_contextual_orchestrator_licenses.py') < text.index('python3 -m venv')
+
+
+def test_sidecar_license_policy_is_explicit_and_fail_closed() -> None:
+    """Only a bounded permissive SPDX set may reach the sidecar install."""
+    validator = Path("scripts/ci/validate_contextual_orchestrator_licenses.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"MIT"' in validator
+    assert '"Apache-2.0"' in validator
+    assert '"LGPL-3.0-only"' not in validator
+    assert "LICENSE_VALIDATION_FAILED" in validator
 
 
 def test_noema_auto_sidecar_is_public_repository_only() -> None:

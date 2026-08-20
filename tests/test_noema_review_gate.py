@@ -458,6 +458,21 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
     assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
+    # A loopback result must not short-circuit validation of later DNS results.
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://mixed-resolution.example.com/chat")
+
+    def fake_getaddrinfo_mixed(host, port, *args, **kwargs):
+        if host == "mixed-resolution.example.com":
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0)),
+            ]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_mixed)
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
+
     # Test unresolved hostname does not break
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
