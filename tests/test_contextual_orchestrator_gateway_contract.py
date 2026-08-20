@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
-GATEWAY_COMMIT = "5d989c6177514d30dace2afa2cf61c64a7d41f67"
+GATEWAY_COMMIT = "04761e412083e02ef6ccc0a888ceec4c0be71553"
 
 
 def test_isolated_opencode_review_uses_pinned_contextual_gateway():
