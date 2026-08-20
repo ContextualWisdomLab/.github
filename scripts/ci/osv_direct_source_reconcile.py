@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 from typing import Any, Iterable
 from urllib.parse import urlsplit
@@ -429,30 +430,36 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Reconcile one OSV document and publish append-only audit evidence."""
 
-    args = parse_args()
-    if args.lockfile.is_symlink() or not args.lockfile.is_file():
-        raise ValueError("pnpm lock provenance input must be a regular file")
-    payload = load_json_object(args.results)
-    reconciled, new_audit = reconcile_payload(
-        payload, read_utf8_text(args.lockfile, "pnpm lock provenance input"), label=args.label
-    )
-    existing_audit: list[dict[str, str]] = []
-    if args.audit.exists():
-        if args.audit.is_symlink() or not args.audit.is_file():
-            raise ValueError("audit output must be a regular file")
-        loaded_audit = json.loads(read_utf8_text(args.audit, "audit input"))
-        if not isinstance(loaded_audit, list):
-            raise ValueError("audit output must contain an array")
-        existing_audit = loaded_audit
-    atomic_json_write(args.results, reconciled)
-    atomic_json_write(args.audit, [*existing_audit, *new_audit])
-    for entry in new_audit:
-        print(
-            "OSV provenance "
-            f"{entry['status']}: {entry['package']}@{entry['version']} "
-            f"{entry['vulnerability_id']} ({entry['reason']})"
+    try:
+        args = parse_args()
+        if args.lockfile.is_symlink() or not args.lockfile.is_file():
+            raise ValueError("pnpm lock provenance input must be a regular file")
+        payload = load_json_object(args.results)
+        reconciled, new_audit = reconcile_payload(
+            payload,
+            read_utf8_text(args.lockfile, "pnpm lock provenance input"),
+            label=args.label,
         )
-    return 0
+        existing_audit: list[dict[str, str]] = []
+        if args.audit.exists():
+            if args.audit.is_symlink() or not args.audit.is_file():
+                raise ValueError("audit output must be a regular file")
+            loaded_audit = json.loads(read_utf8_text(args.audit, "audit input"))
+            if not isinstance(loaded_audit, list):
+                raise ValueError("audit output must contain an array")
+            existing_audit = loaded_audit
+        atomic_json_write(args.results, reconciled)
+        atomic_json_write(args.audit, [*existing_audit, *new_audit])
+        for entry in new_audit:
+            print(
+                "OSV provenance "
+                f"{entry['status']}: {entry['package']}@{entry['version']} "
+                f"{entry['vulnerability_id']} ({entry['reason']})"
+            )
+        return 0
+    except ValueError as error:
+        print(f"::error::{error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

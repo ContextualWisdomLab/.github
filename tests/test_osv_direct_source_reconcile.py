@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import copy
+import io
 import json
 from pathlib import Path
 import runpy
@@ -417,25 +418,27 @@ class DirectSourceReconcileTests(unittest.TestCase):
             self.assertEqual(json.loads(audit_path.read_text(encoding="utf-8")), [{"status": "prior"}])
 
             lock_path.write_bytes(b"lockfileVersion: '9.0'\n\xc0\xc0")
-            with mock.patch.object(sys, "argv", argv), self.assertRaisesRegex(
-                ValueError, "pnpm lock provenance input is not valid UTF-8"
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(OSV.sys, "stderr", new_callable=io.StringIO) as stderr,
             ):
-                OSV.main()
+                self.assertEqual(OSV.main(), 1)
+            self.assertIn("pnpm lock provenance input is not valid UTF-8", stderr.getvalue())
 
             lock_path.write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
 
             audit_path.write_text("{}", encoding="utf-8")
-            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
-                OSV.main()
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(OSV.main(), 1)
             audit_path.unlink()
             audit_target = root / "audit-target.json"
             audit_target.write_text("[]", encoding="utf-8")
             audit_path.symlink_to(audit_target)
-            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
-                OSV.main()
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(OSV.main(), 1)
             lock_path.unlink()
-            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
-                OSV.main()
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(OSV.main(), 1)
 
     def test_missing_authoritative_affected_range_fails_closed(self) -> None:
         payload = results("0.20.3", [vulnerability("GHSA-unknown-range", None)])
