@@ -27,6 +27,12 @@ large Actions queue does not require one oversized response. An incomplete,
 malformed, or larger response fails closed instead of silently claiming that
 the visible page is the whole queue.
 
+Every external `gh api` read has a 30-second subprocess timeout, and the
+collector job has a 30-minute execution ceiling. A timeout is typed as
+incomplete queue evidence rather than success. Offline snapshots also reject
+duplicate repository entries before counting runs so repeated input cannot
+inflate the reported queue.
+
 The default queue-age SLO is 900 seconds. A current-head job that remains
 unassigned beyond that limit produces a warning and an explicit manual action
 to inspect runner capacity, billing, runner-group policy, environment

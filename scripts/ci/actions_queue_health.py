@@ -28,6 +28,7 @@ SCHEMA_VERSION = "actions.queue_health.v1"
 MAX_API_PAGE_SIZE = 100
 WORKFLOW_RUN_PAGE_SIZE = 50
 MAX_API_PAGES = 20
+GITHUB_API_TIMEOUT_SECONDS = 30
 PAGINATED_PAGES_KEY = "_queue_health_pages"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -115,12 +116,18 @@ def github_json(path: str, *, paginate: bool = False, runner: Runner = subproces
     if paginate:
         command.extend(("--paginate", "--slurp"))
     command.append(path)
-    result = runner(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GITHUB_API_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise QueueHealthError(
+            f"GitHub API read timed out after {GITHUB_API_TIMEOUT_SECONDS} seconds for {path}"
+        ) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "GitHub API read failed").strip()
         raise QueueHealthError(f"GitHub API read failed for {path}: {detail[:400]}")
@@ -366,10 +373,14 @@ def build_report(
         raise QueueHealthError("queue-health snapshot repositories must be an array")
 
     rows: list[dict[str, Any]] = []
+    seen_repositories: set[str] = set()
     for repository in repositories:
         if not isinstance(repository, dict):
             raise QueueHealthError("queue-health repository entry must be an object")
         full_name = _repository_name(repository.get("full_name"))
+        if full_name in seen_repositories:
+            raise QueueHealthError(f"duplicate repository entry {full_name}")
+        seen_repositories.add(full_name)
         pull_request_entries = repository.get("pull_requests", [])
         if pull_request_entries is None:
             pull_request_entries = []

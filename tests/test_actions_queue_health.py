@@ -3,12 +3,13 @@ from datetime import datetime, timezone
 import io
 import json
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 
 import pytest
 
 
-MODULE_PATH = Path("scripts/ci/actions_queue_health.py")
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
 SPEC = importlib.util.spec_from_file_location("actions_queue_health", MODULE_PATH)
 assert SPEC and SPEC.loader
 queue_health = importlib.util.module_from_spec(SPEC)
@@ -16,6 +17,13 @@ SPEC.loader.exec_module(queue_health)
 
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+
+
+def test_queue_health_module_path_is_independent_of_working_directory() -> None:
+    """Load production code from the repository root, not the caller's cwd."""
+    expected = Path(__file__).resolve().parents[1] / "scripts/ci/actions_queue_health.py"
+    assert MODULE_PATH == expected
+    assert MODULE_PATH.is_file()
 
 
 def pull_request(number: int = 1, head_sha: str = "head") -> dict:
@@ -219,7 +227,12 @@ def test_list_payload_flattens_bounded_paginated_responses() -> None:
 def test_github_json_is_read_only_and_rejects_failures() -> None:
     def success_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
         assert args[0] == ["gh", "api", "repos/a/repo"]
-        assert kwargs == {"capture_output": True, "text": True, "check": False}
+        assert kwargs == {
+            "capture_output": True,
+            "text": True,
+            "check": False,
+            "timeout": 30,
+        }
         return CompletedProcess([], 0, "[{\"id\": 1}]", "")
 
     assert queue_health.github_json("repos/a/repo", runner=success_runner) == [{"id": 1}]
@@ -264,6 +277,15 @@ def test_github_json_is_read_only_and_rejects_failures() -> None:
 
     with pytest.raises(queue_health.QueueHealthError, match="invalid JSON"):
         queue_health.github_json("repos/a/repo", runner=invalid_json_runner)
+
+
+def test_github_json_fails_closed_when_external_read_times_out() -> None:
+    """A stalled GitHub CLI read must not occupy the workflow indefinitely."""
+    def timeout_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        raise TimeoutExpired(args[0], timeout=30)
+
+    with pytest.raises(queue_health.QueueHealthError, match="timed out after 30 seconds"):
+        queue_health.github_json("repos/a/repo", runner=timeout_runner)
 
 
 def test_normalise_pull_request_preserves_exact_head_identity() -> None:
@@ -533,6 +555,13 @@ def test_build_report_rejects_malformed_snapshot_shapes(snapshot: dict, message:
 
 
 def test_build_report_rejects_duplicate_and_invalid_entries() -> None:
+    duplicate_repository = report_snapshot()
+    duplicate_repository["repositories"].append(
+        dict(duplicate_repository["repositories"][0])
+    )
+    with pytest.raises(queue_health.QueueHealthError, match="duplicate repository entry"):
+        queue_health.build_report(duplicate_repository, now=NOW)
+
     duplicate_pr = report_snapshot()
     duplicate_pr["repositories"][0]["pull_requests"].append(pull_request(1, "other"))
     with pytest.raises(queue_health.QueueHealthError, match="duplicate pull request"):
