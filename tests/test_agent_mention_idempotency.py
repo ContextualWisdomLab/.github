@@ -348,3 +348,23 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
     ) == ()
     assert dispatch_events(retry) == []
     assert len(retry_target.calls) == 2
+
+
+def test_acknowledgement_comment_failure_is_auditable_without_failing_dispatch() -> None:
+    """A target comment permission failure preserves durable dispatch and retryability."""
+
+    module = load_module()
+    mention_request = request(module)
+    central = ArtifactAwareClient()
+    failing_target = ArtifactAwareClient(fail_target_call=2)
+
+    assert module.dispatch_request(
+        mention_request,
+        target_client=failing_target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({mention_request.repository}),
+    ) == ("@cwl-noema-review", "@opencode-agent")
+    assert dispatch_events(central) == [
+        "agent-mention-noema",
+        "agent-mention-opencode",
+    ]
