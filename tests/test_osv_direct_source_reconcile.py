@@ -184,6 +184,10 @@ class DirectSourceReconcileTests(unittest.TestCase):
         for lock_text in (
             direct_lock("0.20.3", integrity=None),
             direct_lock("0.20.3", host="example.invalid"),
+            direct_lock("0.20.3").replace(
+                "tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+                "tarball: https://cdn.sheetjs.com/xlsx-0.20.2/xlsx-0.20.2.tgz",
+            ),
         ):
             with self.subTest(lock_text=lock_text):
                 payload = results(
