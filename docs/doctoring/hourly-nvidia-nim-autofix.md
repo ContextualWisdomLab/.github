@@ -105,6 +105,20 @@ latency. It does not imply that deeper reasoning is universally superior; the
 setting is an explicit operational choice for this bounded, security-sensitive
 writer role and remains subject to exact-head regression evidence.
 
+### Reviewed static-analysis exception
+
+The catalog resolver keeps Python's `http.client.HTTPSConnection` because the
+destination host is allowlisted, the request path is derived only from that
+validated endpoint, and the call supplies `ssl.create_default_context()`.
+Python documents that an explicit `SSLContext` controls the HTTPS options and
+that certificate and hostname checks are enabled by default. Semgrep's generic
+HTTPSConnection rule is therefore a reviewed false positive at this one sink.
+The source uses one rule-specific `# nosemgrep` comment, and the resolver test
+asserts that the exception occurs exactly once and that the default TLS context
+remains present. This is a scoped exception, not a repository-wide suppression;
+the central SARIF gate removes only explicitly suppressed results and continues
+to fail on every other finding.
+
 ## Credential boundary
 
 The organization secret is bound as:
@@ -371,6 +385,14 @@ NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
 NVIDIA Corporation. (n.d.-d). *NVIDIA NIM for large language models:
 OpenAI-compatible API reference*. Retrieved August 20, 2026, from
 https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html
+
+Python Software Foundation. (2026). *http.client — HTTP protocol client*.
+Python 3.14 documentation. Retrieved August 21, 2026, from
+https://docs.python.org/3.14/library/http.client.html
+
+Semgrep, Inc. (2026). *Rule structure syntax examples: Rule ideas*.
+Retrieved August 21, 2026, from
+https://semgrep.dev/docs/writing-rules/rule-ideas
 
 OpenAI. (2025). *API reference: List models*. Retrieved August 20, 2026, from
 https://platform.openai.com/docs/api-reference/models/list
