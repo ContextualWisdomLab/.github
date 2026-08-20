@@ -154,6 +154,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
             return reconcile(Path(directory), payload, lock_text)
 
     def test_official_immutable_xlsx_0203_drops_only_metadata_disproven_findings(self) -> None:
+        """Drop only advisories disproven by the exact immutable release evidence."""
         payload = results(
             "0.20.3",
             [
@@ -171,6 +172,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertTrue(all(entry["integrity"] == INTEGRITY for entry in audit))
 
     def test_official_but_affected_versions_remain_findings(self) -> None:
+        """Keep versions inside their authoritative affected range."""
         for version, affected_range in (
             ("0.18.5", "< 0.19.3"),
             ("0.19.2", "< 0.19.3"),
@@ -185,6 +187,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertEqual(audit[0]["status"], "AFFECTED")
 
     def test_registry_package_never_borrows_direct_source_exception(self) -> None:
+        """Never apply a direct-source exception to a registry-backed package."""
         payload = results("0.18.5", [vulnerability("GHSA-registry", "< 0.19.3")])
         reconciled, audit = self.run_case(payload, registry_lock("0.18.5"))
         self.assertEqual(remaining_ids(reconciled), ["GHSA-registry"])
@@ -201,6 +204,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
 
     def test_unverifiable_direct_provenance_fails_closed(self) -> None:
+        """Retain findings when direct URL or integrity provenance is unverifiable."""
         for lock_text in (
             direct_lock("0.20.3", integrity=None),
             direct_lock("0.20.3", host="example.invalid"),
@@ -219,6 +223,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
 
     def test_only_exact_sheetjs_exception_version_can_reconcile(self) -> None:
+        """Restrict reconciliation to the one explicitly governed SheetJS version."""
         for version in ("0.20.2", "0.20.4", "1.0.0"):
             with self.subTest(version=version):
                 payload = results(
@@ -233,6 +238,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
 
     def test_conflicting_duplicate_direct_sources_fail_closed(self) -> None:
+        """Reject duplicate direct-source records and malformed vulnerability entries."""
         payload = results(
             "0.20.3", [vulnerability("GHSA-duplicate-source", "< 0.20.2")]
         )
@@ -249,6 +255,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
             OSV.reconcile_payload(payload, lock_text, label="bad")
 
     def test_exact_exception_version_inside_range_remains_affected(self) -> None:
+        """Retain the exception version when the advisory range still includes it."""
         payload = results(
             "0.20.3", [vulnerability("GHSA-affected-exception", "< 0.20.4")]
         )
@@ -259,6 +266,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertEqual(audit[0]["status"], "AFFECTED")
 
     def test_low_level_semver_integrity_and_source_validation_boundaries(self) -> None:
+        """Exercise malformed SemVer, digest, URL, and package-source boundaries."""
         self.assertEqual(OSV.parse_semver("0.20.3"), (0, 20, 3))
         self.assertIsNone(OSV.parse_semver("01.20.3"))
         self.assertFalse(OSV.valid_sha512_integrity("sha256-deadbeef"))
@@ -288,6 +296,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
 
     def test_direct_source_parser_handles_boundaries_and_missing_fields(self) -> None:
+        """Parse adjacent lockfile records without trusting incomplete resolutions."""
         valid_url = OFFICIAL_URL.format(version="0.20.3")
         lock = (
             "packages:\n\n"
@@ -302,6 +311,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertFalse(sources[1].valid)
 
     def test_malformed_osv_container_evidence_fails_closed(self) -> None:
+        """Reject malformed OSV containers while accepting an empty result set."""
         malformed = (
             {},
             {"results": ["bad"]},
@@ -314,6 +324,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertEqual(list(OSV.iter_packages({"results": [{"packages": []}]})), [])
 
     def test_authoritative_range_rejects_every_ambiguous_shape(self) -> None:
+        """Reject advisory shapes that cannot prove one authoritative affected range."""
         valid = vulnerability("GHSA-shape", "< 0.20.2")
         self.assertEqual(OSV.authoritative_affected_range(valid, "xlsx"), "< 0.20.2")
         malformed = [
@@ -369,6 +380,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertIsNone(OSV.authoritative_affected_range(candidate, "xlsx"))
 
     def test_reconcile_rejects_malformed_packages_and_vulnerabilities(self) -> None:
+        """Reject malformed package and vulnerability records before rewriting results."""
         bad_packages = (
             {"results": [{"packages": [{"package": None, "vulnerabilities": []}]}]},
             {"results": [{"packages": [{"package": {}, "vulnerabilities": "bad"}]}]},
@@ -389,6 +401,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
 
     def test_io_and_existing_audit_boundaries_fail_closed(self) -> None:
+        """Exercise regular-file, UTF-8, audit, and atomic-write failure boundaries."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             missing = root / "missing.json"
@@ -441,12 +454,14 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertEqual(OSV.main(), 1)
 
     def test_missing_authoritative_affected_range_fails_closed(self) -> None:
+        """Retain findings when the advisory lacks a machine-checkable range."""
         payload = results("0.20.3", [vulnerability("GHSA-unknown-range", None)])
         reconciled, audit = self.run_case(payload, direct_lock("0.20.3"))
         self.assertEqual(remaining_ids(reconciled), ["GHSA-unknown-range"])
         self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
 
     def test_reusable_security_scan_reconciles_before_reporter_verdict(self) -> None:
+        """Require provenance reconciliation before the reusable scan publishes its verdict."""
         workflow = SECURITY_WORKFLOW.read_text(encoding="utf-8")
         preserve = workflow.index("Preserve base direct-source provenance")
         head_scan = workflow.index("Scan head with OSV")
