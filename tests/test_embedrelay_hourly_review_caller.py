@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 CALLER = Path(".github/workflows/embedrelay-hourly-review-repair.yml")
+ARCHITECTURE = Path("ARCHITECTURE.md")
 CLAUDE = Path("CLAUDE.md")
 DOCTORING = Path("docs/doctoring/embedrelay-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
@@ -106,6 +107,23 @@ def test_agent_guidance_keeps_one_complete_product_caller_rule() -> None:
         "  into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`\n"
         "  on the worker, never `COPILOT_GITHUB_TOKEN`."
     ) in guidance
+
+
+def test_architecture_keeps_nonnest2_and_embedrelay_callers_complete() -> None:
+    """The EmbedRelay section must follow the complete nonnest2 contract."""
+    architecture = _read(ARCHITECTURE)
+
+    assert (
+        "It names `ContextualWisdomLab/nonnest2` and protected `master`, maps\n"
+        "only established scheduler credentials, and grants job-scoped\n"
+        "`id-token: write`. The reusable engine stays product-neutral.\n\n"
+        "## EmbedRelay hourly caller"
+    ) in architecture
+    assert (
+        "It names `ContextualWisdomLab/EmbedRelay` and protected `main`, maps\n"
+        "only established scheduler credentials, and grants job-scoped\n"
+        "`id-token: write`. The reusable engine stays product-neutral."
+    ) in architecture
 
 
 def test_embedrelay_doctoring_records_embedding_activation_and_credentials() -> None:
