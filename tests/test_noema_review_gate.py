@@ -342,6 +342,9 @@ def test_codegraph_context_rejects_paths_outside_workspace(monkeypatch, tmp_path
     monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "../outside.md")
     assert "within the workspace" in noema.load_codegraph_context()
 
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", r"..\outside.md")
+    assert "within the workspace" in noema.load_codegraph_context()
+
     link = workspace / "context.md"
     link.symlink_to(outside)
     monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "context.md")

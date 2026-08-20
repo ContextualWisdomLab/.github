@@ -394,7 +394,7 @@ def load_codegraph_context() -> str:
     if not raw_path:
         return ""
     candidate = pathlib.Path(raw_path)
-    if candidate.is_absolute() or ".." in candidate.parts:
+    if candidate.is_absolute() or "\\" in raw_path or ".." in candidate.parts:
         return "CodeGraph context unavailable: path must stay within the workspace"
     workspace = pathlib.Path.cwd().resolve()
     try:
