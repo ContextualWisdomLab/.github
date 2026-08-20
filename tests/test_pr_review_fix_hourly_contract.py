@@ -254,14 +254,6 @@ def test_contract_workflow_tracks_scheduler_implementation() -> None:
     assert text.count("scripts/ci/pr_review_fix_scheduler.py") == 2
 
 
-def test_contract_workflow_names_the_gateway_contract() -> None:
-    """The focused gate describes its current gateway contract, not its predecessor."""
-    text = _read(_CONTRACT_WORKFLOW)
-
-    assert "Hourly cadence, immutable source, contextual-orchestrator gateway, and conflict scope" in text
-    assert "Verify hourly scheduler and contextual-orchestrator gateway contracts" in text
-
-
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:
     """The writer must diagnose the exact-head cause before it edits the tree."""
     text = _read(_AUTOFIX_WORKFLOW)

@@ -30,7 +30,7 @@ The generated OpenCode configuration enables only
 function-call loop while the gateway owns provider selection. Streaming tool
 loops fail closed until the gateway exposes a shape-preserving streaming relay.
 
-The gateway's `--auto-discover-model-agents` process resolves registered
+At gateway startup, its automatic model-discovery process resolves registered
 provider credentials from its KV registry and excludes unavailable providers.
 No provider key is copied into the repository, generated OpenCode config,
 prompt, command argument, or ordinary worker log. Missing gateway URL/token
