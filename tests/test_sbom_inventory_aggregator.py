@@ -1,6 +1,7 @@
 """Unit tests for the central SBOM inventory aggregator's pure logic."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -151,10 +152,17 @@ def test_write_inventory_emits_both_files(tmp_path):
         [agg.RepoInventory(repo="acme/app", components=agg.parse_spdx_sbom(SPDX_DOCUMENT))]
     )
     markdown = agg.render_inventory_markdown(inventory, generated_at="now")
-    agg.write_inventory(inventory, markdown, tmp_path / "sbom")
+    agg.write_inventory(inventory, markdown, tmp_path / "sbom", base_dir=tmp_path)
     written = json.loads((tmp_path / "sbom" / "inventory.json").read_text())
     assert written["summary"]["repo_count"] == 1
     assert (tmp_path / "sbom" / "inventory.md").read_text().startswith("# Organization SBOM inventory")
+
+
+@pytest.mark.parametrize("output_dir", [Path("../outside"), Path("/tmp/outside")])
+def test_write_inventory_rejects_workspace_escape(tmp_path, output_dir):
+    """A caller cannot redirect generated artifacts outside its workspace."""
+    with pytest.raises(ValueError, match="within the workspace"):
+        agg.write_inventory({}, "", output_dir, base_dir=tmp_path)
 
 
 def test_self_test_passes(capsys):

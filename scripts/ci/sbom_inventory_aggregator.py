@@ -356,13 +356,31 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_inventory(inventory: dict[str, Any], markdown: str, output_dir: Path) -> None:
-    """Write the JSON and markdown inventory artifacts to ``output_dir``."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "inventory.json").write_text(
+def _resolve_output_dir(output_dir: Path, *, base_dir: Path | None = None) -> Path:
+    """Resolve an output directory while preventing writes outside the workspace."""
+    base = (base_dir or Path.cwd()).resolve()
+    resolved = (base / output_dir if not output_dir.is_absolute() else output_dir).resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("output directory must stay within the workspace") from exc
+    return resolved
+
+
+def write_inventory(
+    inventory: dict[str, Any],
+    markdown: str,
+    output_dir: Path,
+    *,
+    base_dir: Path | None = None,
+) -> None:
+    """Write inventory artifacts only inside the configured workspace."""
+    safe_output_dir = _resolve_output_dir(output_dir, base_dir=base_dir)
+    safe_output_dir.mkdir(parents=True, exist_ok=True)
+    (safe_output_dir / "inventory.json").write_text(
         json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8"
     )
-    (output_dir / "inventory.md").write_text(markdown, encoding="utf-8")
+    (safe_output_dir / "inventory.md").write_text(markdown, encoding="utf-8")
 
 
 def _run(args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
