@@ -8,8 +8,6 @@ on:
       - 'scripts/ci/javascript_coverage_gate.py'
       - 'tests/test_javascript_coverage_gate.py'
       - 'tests/test_javascript_coverage_storybook_boundary.py'
-  workflow_dispatch:
-
 permissions:
   contents: read
 
