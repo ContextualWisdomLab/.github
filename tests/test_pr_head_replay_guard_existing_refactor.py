@@ -69,6 +69,7 @@ def test_existing_case_counter_ignores_non_growth_and_unevaluable_entries(
         [
             "malformed",
             "-\t-\ttests/blob.bin",
+            "1\t-\ttests/blob2.bin",
             "3\t1\tsrc/app.py",
             "2\t2\ttests/test_same.py",
             "1\t5\ttests/test_missing_before.py",
