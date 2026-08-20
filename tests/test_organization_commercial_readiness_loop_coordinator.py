@@ -200,3 +200,24 @@ def test_private_outputs_reject_symbolic_links(tmp_path: Path) -> None:
         _open_private_output(report, append=False)
 
     assert target.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_main_creates_missing_json_output_parent(tmp_path: Path) -> None:
+    """A nested CLI report path preserves the established create-parent contract."""
+
+    output = tmp_path / "nested" / "reports" / "report.json"
+    empty = FakeClient([], {})
+
+    assert not output.parent.exists()
+    assert main(
+        [
+            "--max-repositories",
+            "0",
+            "--max-review-dispatches",
+            "0",
+            "--json-output",
+            str(output),
+        ],
+        client_factory=lambda: empty,
+    ) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["inspected_repositories"] == 0

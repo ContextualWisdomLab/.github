@@ -850,6 +850,7 @@ def main(
         return 2
     text = report.to_json() + "\n"
     if args.json_output is not None:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
         with _open_private_output(args.json_output, append=False) as handle:
             handle.write(text)
     else:
