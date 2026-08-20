@@ -69,4 +69,3 @@ jobs:
       - name: Verify clean patch
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: git diff --check
-
