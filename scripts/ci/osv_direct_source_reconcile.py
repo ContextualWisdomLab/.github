@@ -76,12 +76,13 @@ def validate_sheetjs_source(
         return False, "package is not governed by the SheetJS direct-source contract"
     try:
         parsed = urlsplit(header_url)
+        parsed_port = parsed.port
     except ValueError:
         return False, "direct source URL is malformed"
     if (
         parsed.scheme != "https"
         or parsed.hostname != "cdn.sheetjs.com"
-        or parsed.port is not None
+        or parsed_port is not None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -93,8 +94,6 @@ def validate_sheetjs_source(
         return False, "package version does not match the immutable SheetJS URL"
     if header_url != tarball_url:
         return False, "pnpm package key and resolution tarball disagree"
-    if parse_semver(version) is None:
-        return False, "package version is not a strict SemVer core"
     if not valid_sha512_integrity(integrity):
         return False, "direct source lacks one valid SHA-512 integrity receipt"
     return True, "exact official immutable SheetJS release"
