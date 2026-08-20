@@ -67,6 +67,20 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("tests/negative_fixture.rs", sample) == ()
 
 
+@pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
+def test_scan_content_does_not_treat_test_name_substrings_as_fixtures(
+    directory: str,
+) -> None:
+    """Only exact test directories are fixture boundaries for active content."""
+
+    violations = policy.scan_content(
+        f"{directory}/runtime.py",
+        "FROM nginx:1.27-alpine\n",
+    )
+
+    assert [item.rule for item in violations] == ["nginx_container_image"]
+
+
 def test_runtime_path_rule_covers_script_and_config_shapes() -> None:
     """Active Nginx filenames are blocked without relying on their contents."""
 

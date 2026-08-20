@@ -112,7 +112,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     lower_name = pure.name.lower()
     if lower_name in LICENSE_NAMES or pure.suffix.lower() in DOCUMENT_SUFFIXES:
         return True
-    if "tests" in tuple(part.lower() for part in pure.parts) and pure.suffix.lower() in SOURCE_TEST_SUFFIXES:
+    if any(part.lower() in {"test", "tests"} for part in pure.parts) and pure.suffix.lower() in SOURCE_TEST_SUFFIXES:
         return True
     return False
 
