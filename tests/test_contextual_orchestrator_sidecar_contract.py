@@ -55,3 +55,24 @@ def test_generated_opencode_config_allows_contextual_orchestrator_provider() -> 
         '"contextual-orchestrator"' in allowlist and '"nvidia-nim"' in allowlist
         for allowlist in matches
     )
+
+
+def test_sidecar_keeps_credential_registration_discovery_and_server_in_one_process() -> None:
+    """Process-local credentials must survive through discovery and serving."""
+    text = SIDECAR_SCRIPT.read_text(encoding="utf-8")
+    assert "python -m contextual_orchestrator register-credential" not in text
+    assert "python -m contextual_orchestrator discover-models" not in text
+    assert "os.environ.pop(credential_name" in text
+    assert "discover_all_models()" in text
+    assert "TaskOrchestrator(" in text
+    assert "serve(" in text
+
+
+def test_sidecar_does_not_execute_an_editable_build_and_cleans_failed_startup() -> None:
+    """The pinned source runs via PYTHONPATH and failed readiness kills the child."""
+    text = SIDECAR_SCRIPT.read_text(encoding="utf-8")
+    assert "pip install --quiet --no-deps -e" not in text
+    assert 'PYTHONPATH="$RUNTIME_DIR"' in text
+    assert 'sidecar_pid="$!"' in text
+    assert 'kill "$sidecar_pid"' in text
+    assert text.index('echo "contextual-orchestrator sidecar ready') < text.index("trap - EXIT")
