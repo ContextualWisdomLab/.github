@@ -395,7 +395,7 @@ jobs:
             --max-time 30 \
             -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
             "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"
-          if ! jq -e '(.data | type == "array") and (.data | length >= 1)' \
+          if ! jq -e '(.data | type == "array") and ([.data[]? | select((.id? | type) == "string" and (.id | length > 0))] | length >= 1)' \
               >/dev/null <<<"$models_response"; then
             echo "::error::Contextual Orchestrator gateway returned no discovered models."
             exit 1
@@ -601,7 +601,7 @@ jobs:
             --max-time 30 \
             -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
             "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"
-          if ! jq -e '(.data | type == "array") and (.data | length >= 1)' \
+          if ! jq -e '(.data | type == "array") and ([.data[]? | select((.id? | type) == "string" and (.id | length > 0))] | length >= 1)' \
               >/dev/null <<<"$models_response"; then
             echo "::error::Contextual Orchestrator gateway returned no discovered models."
             exit 1
