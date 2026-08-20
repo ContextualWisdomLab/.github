@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
+import http.client
 import json
-import urllib.error
 from typing import Any
 
 import pytest
@@ -14,6 +14,8 @@ from scripts.ci import select_nvidia_nim_model as resolver
 
 class _FakeResponse(io.BytesIO):
     """Minimal context-managed HTTP response body for catalog stubs."""
+
+    status = 200
 
     def __enter__(self) -> "_FakeResponse":
         """Return the response itself, matching urlopen's context manager."""
@@ -25,6 +27,42 @@ class _FakeResponse(io.BytesIO):
         return False
 
 
+class _FakeConnection:
+    """Minimal HTTPS connection stub for catalog requests."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        timeout: float,
+        response: _FakeResponse,
+        requests: list[Any],
+    ) -> None:
+        """Record the validated destination and canned response."""
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.response = response
+        self.requests = requests
+
+    def __enter__(self) -> "_FakeConnection":
+        """Return the connection itself for the context manager boundary."""
+        return self
+
+    def __exit__(self, *_exc_info: object) -> bool:
+        """Never suppress request failures."""
+        return False
+
+    def request(self, method: str, path: str, *, headers: dict[str, str]) -> None:
+        """Record one outbound request without opening a network socket."""
+        self.requests.append((self, method, path, headers))
+
+    def getresponse(self) -> _FakeResponse:
+        """Return the canned provider response."""
+        return self.response
+
+
 def _catalog(*model_ids: str) -> bytes:
     """Render an OpenAI-compatible model catalog payload for the given ids."""
     return json.dumps({"object": "list", "data": [{"id": model_id} for model_id in model_ids]}).encode("utf-8")
@@ -34,12 +72,19 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[Any]:
     """Serve one canned catalog payload and record the issued requests."""
     requests: list[Any] = []
 
-    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
-        """Return the canned catalog and record request security metadata."""
-        requests.append((request, timeout))
-        return _FakeResponse(payload)
+    def fake_connection(
+        host: str, port: int, *, timeout: float
+    ) -> _FakeConnection:
+        """Return a canned HTTPS connection and record its destination."""
+        return _FakeConnection(
+            host,
+            port,
+            timeout=timeout,
+            response=_FakeResponse(payload),
+            requests=requests,
+        )
 
-    monkeypatch.setattr(resolver.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
     return requests
 
 
@@ -56,6 +101,8 @@ def test_parse_candidates_keeps_preference_order_without_duplicates() -> None:
         ("https://models.example.invalid/v1", "host is not allowed"),
         ("https://integrate.api.nvidia.com:8443/v1", "default HTTPS port"),
         ("https://user:pass@integrate.api.nvidia.com/v1", "must not embed credentials"),
+        ("https://integrate.api.nvidia.com/v1?mode=models", "query or fragment"),
+        ("https://integrate.api.nvidia.com/v1#models", "query or fragment"),
     ],
 )
 def test_validate_catalog_base_url_refuses_untrusted_endpoints(base_url: str, message: str) -> None:
@@ -76,10 +123,13 @@ def test_fetch_served_model_ids_returns_the_live_catalog(monkeypatch: pytest.Mon
     served = resolver.fetch_served_model_ids(resolver.DEFAULT_BASE_URL, "secret-key", timeout_seconds=7.0)
 
     assert served == {"a/one", "b/two"}
-    request, timeout = requests[0]
-    assert request.full_url == f"{resolver.DEFAULT_BASE_URL}/models"
-    assert request.get_header("Authorization") == "Bearer secret-key"
-    assert timeout == 7.0
+    connection, method, path, headers = requests[0]
+    assert connection.host == "integrate.api.nvidia.com"
+    assert connection.port == 443
+    assert connection.timeout == 7.0
+    assert method == "GET"
+    assert path == "/v1/models"
+    assert headers["Authorization"] == "Bearer secret-key"
 
 
 def test_fetch_served_model_ids_ignores_malformed_entries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,11 +143,8 @@ def test_fetch_served_model_ids_ignores_malformed_entries(monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     ("error", "message"),
     [
-        (
-            urllib.error.HTTPError(url="https://x.invalid", code=401, msg="no", hdrs=None, fp=None),
-            "HTTP 401",
-        ),
-        (urllib.error.URLError("dns"), "unreachable"),
+        (http.client.RemoteDisconnected("closed"), "unreachable"),
+        (OSError("dns"), "unreachable"),
     ],
 )
 def test_fetch_served_model_ids_fails_closed_on_transport_errors(
@@ -105,13 +152,41 @@ def test_fetch_served_model_ids_fails_closed_on_transport_errors(
 ) -> None:
     """A catalog outage is reported, never masked by guessing a model id."""
 
-    def fake_urlopen(_request: Any, timeout: float | None = None) -> _FakeResponse:
+    def fake_connection(
+        _host: str, _port: int, *, timeout: float
+    ) -> _FakeConnection:
         """Raise the configured provider failure from the HTTP boundary."""
+        del timeout
         raise error
 
-    monkeypatch.setattr(resolver.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
 
     with pytest.raises(RuntimeError, match=message):
+        resolver.fetch_served_model_ids(resolver.DEFAULT_BASE_URL, "secret-key")
+
+
+def test_fetch_served_model_ids_reports_http_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider HTTP failures identify the status without exposing credentials."""
+    response = _FakeResponse(b"{}")
+    response.status = 401
+
+    def fake_connection(
+        _host: str, _port: int, *, timeout: float
+    ) -> _FakeConnection:
+        """Return an unauthorized provider response."""
+        return _FakeConnection(
+            "integrate.api.nvidia.com",
+            443,
+            timeout=timeout,
+            response=response,
+            requests=[],
+        )
+
+    monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
+
+    with pytest.raises(RuntimeError, match="HTTP 401"):
         resolver.fetch_served_model_ids(resolver.DEFAULT_BASE_URL, "secret-key")
 
 
