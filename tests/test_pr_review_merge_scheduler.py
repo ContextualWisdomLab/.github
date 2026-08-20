@@ -1820,6 +1820,15 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
         sched.require_workflow_starting_mutation_credential("update-branch")
 
 
+def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
+    """An unrecognized credential source cannot authorize a head mutation."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "unrecognized-token")
+
+    assert not sched.head_mutation_credential_starts_workflows()
+    with pytest.raises(RuntimeError, match="never start new workflow runs"):
+        sched.require_workflow_starting_mutation_credential("update-branch")
+
+
 def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
     head_sha = "a" * 40
 

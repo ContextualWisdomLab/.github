@@ -207,6 +207,11 @@ def mutation_token_source() -> str:
     return (os.environ.get("SCHEDULER_MUTATION_TOKEN_SOURCE") or "github-token").strip() or "github-token"
 
 
+WORKFLOW_STARTING_MUTATION_SOURCES = frozenset(
+    {"PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"}
+)
+
+
 def mutation_token_label() -> str:
     """Return a non-secret label for the scheduler mutation credential."""
     source = mutation_token_source()
@@ -231,7 +236,7 @@ def head_mutation_credential_starts_workflows() -> bool:
         GitHub. (2025). *Automatic token authentication*.
         https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication
     """
-    return mutation_token_source() != "github-token"
+    return mutation_token_source() in WORKFLOW_STARTING_MUTATION_SOURCES
 
 
 def non_triggering_head_mutation_reason(action: str) -> str:
