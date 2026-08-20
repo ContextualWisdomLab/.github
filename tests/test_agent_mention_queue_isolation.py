@@ -22,13 +22,15 @@ def _job_block(workflow: str, job_name: str, next_job_name: str | None) -> str:
 def _concurrency_block(job: str) -> str:
     """Return the job-scoped concurrency mapping before ``runs-on``."""
 
+    if "    concurrency:\n" not in job:
+        return ""
     start = job.index("    concurrency:\n")
     end = job.index("\n    runs-on:", start)
     return job[start:end]
 
 
-def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
-    """A scheduled sweep cannot replace a pending trusted mention request."""
+def test_interactive_mentions_run_without_a_replacing_concurrency_queue() -> None:
+    """Every trusted mention receives a run while sweeps stay single-flight."""
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
     header = workflow.split("\njobs:\n", 1)[0]
@@ -44,10 +46,7 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     )
 
     assert not any(line.startswith("concurrency:") for line in header.splitlines())
-    assert _concurrency_block(local_job) == (
-        "    concurrency:\n"
-        "      group: review-agent-mention-router-local-${{ github.repository }}"
-    )
+    assert _concurrency_block(local_job) == ""
     assert _concurrency_block(sweep_job) == (
         "    concurrency:\n"
         "      group: review-agent-mention-router-sweep-${{ github.repository }}\n"
@@ -55,8 +54,8 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     )
 
 
-def test_interactive_queue_retains_pending_requests_without_cancellation() -> None:
-    """The bounded interactive queue retains work and never cancels in progress."""
+def test_interactive_route_has_no_unsupported_or_replacing_queue_controls() -> None:
+    """Interactive work is neither invalid YAML nor a replaceable pending run."""
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
     local_job = _job_block(
@@ -64,7 +63,6 @@ def test_interactive_queue_retains_pending_requests_without_cancellation() -> No
         "route-local-agent-mention",
         "sweep-organization-agent-mentions",
     )
-    concurrency = _concurrency_block(local_job)
-
-    assert "queue: max" not in concurrency
-    assert "cancel-in-progress: true" not in concurrency
+    assert _concurrency_block(local_job) == ""
+    assert "queue: max" not in local_job
+    assert "cancel-in-progress" not in local_job

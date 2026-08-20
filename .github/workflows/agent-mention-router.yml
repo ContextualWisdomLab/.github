@@ -24,12 +24,10 @@ jobs:
         contains(github.event.comment.body, '@cwl-noema-review')
         || contains(github.event.comment.body, '@opencode-agent')
       )
-    concurrency:
-      group: review-agent-mention-router-local-${{ github.repository }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      actions: write
+      actions: read
       contents: write
       issues: write
       pull-requests: read

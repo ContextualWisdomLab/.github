@@ -16,7 +16,7 @@ Neither defect is evidence that the requesting maintainer, model, repository all
 The permanent regression contracts were committed before their corresponding production changes.
 
 - `tests/test_agent_mention_dispatch_payload_limit.py` requires both dispatch hops to stay at or below ten top-level payload properties and requires the router to reject an oversized payload before GitHub does.
-- `tests/test_agent_mention_queue_isolation.py` requires the interactive route and scheduled sweep to use different job-level concurrency groups, with `queue: max` on the interactive route and no cancellation of in-progress interactive work.
+- `tests/test_agent_mention_queue_isolation.py` requires the interactive route to have no replacing concurrency group while the scheduled sweep remains independently single-flight.
 
 ## Decision
 
@@ -34,15 +34,15 @@ merge_mode=disabled
 
 The wrapper-to-scheduler payload carries exactly ten fields, including the three values that override unsafe scheduler defaults. The wrapper therefore remains review-only and cannot merge or update a branch.
 
-### Isolated concurrency queues
+### Non-replacing interactive routing
 
-Concurrency is scoped to each job rather than the whole workflow:
+The event-driven local route has no concurrency group, so each eligible
+`issue_comment` event receives its own run. The scheduled sweep remains
+single-flight and cannot cancel an interactive run:
 
 ```yaml
 route-local-agent-mention:
-  concurrency:
-    group: review-agent-mention-router-local-${{ github.repository }}
-    queue: max
+  runs-on: ubuntu-24.04
 
 sweep-organization-agent-mentions:
   concurrency:
@@ -50,7 +50,13 @@ sweep-organization-agent-mentions:
     cancel-in-progress: false
 ```
 
-GitHub documents that `queue: max` permits up to 100 pending jobs or workflow runs in one concurrency group and cannot be combined with `cancel-in-progress: true`. The interactive queue therefore retains bounded pending requests instead of replacing the previous pending request. Scheduled sweeps retain coalescing behavior in a separate group and cannot displace interactive work.
+GitHub's supported concurrency contract permits at most one running and one
+pending member per group, and a newly queued member replaces an older pending
+member. The unsupported `queue: max` key cannot provide durability. Omitting a
+local concurrency group is therefore the smallest supported boundary that does
+not discard a trusted mention before its durable invocation claim exists.
+Scheduled sweeps still coalesce in their separate group and cannot displace
+interactive work.
 
 Concurrency is not the idempotency authority. Duplicate forwarding remains governed by the complete canonical invocation key, exact-key downstream concurrency, and the immutable exact-name Actions artifact ledger.
 
@@ -58,7 +64,7 @@ Concurrency is not the idempotency authority. Duplicate forwarding remains gover
 
 - No model provider, reviewer identity, repository allowlist, token name, credential scope, or branch-protection rule changes.
 - `COPILOT_GITHUB_TOKEN` remains unused.
-- Workflow-default permissions remain read-only; existing bounded jobs keep only their required writes.
+- Workflow-default permissions remain read-only; the local router has read-only Actions access and keeps only the content/comment writes required for dispatch and acknowledgement.
 - Only trusted non-bot `OWNER`, `MEMBER`, or `COLLABORATOR` comments on open pull requests are eligible.
 - Pull request number, exact head and base SHAs, base branch, source comment, requested agent, and requesting actor remain bound to the invocation key.
 - Mention routing remains unable to approve, merge, update branches, publish, or release.
@@ -81,7 +87,7 @@ Do not restore either defective boundary:
 
 - do not increase the first- or second-hop payload beyond GitHub's limit;
 - do not move local and scheduled work back into one workflow-level concurrency group;
-- do not replace `queue: max` with the default single-pending interactive queue unless another independently reviewed durable queue preserves every eligible request.
+- do not add a local concurrency group whose default single-pending contract can replace an eligible interactive request before the durable claim exists.
 
 A safe emergency degradation may suspend the scheduled sweep while retaining the isolated interactive route.
 

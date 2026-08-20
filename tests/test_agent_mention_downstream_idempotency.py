@@ -11,12 +11,12 @@ ROUTER_SCRIPT = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
-def test_router_can_dispatch_and_read_durable_central_artifacts() -> None:
-    """Local routing dispatches and sibling sweeping reads durable artifacts."""
+def test_router_uses_read_only_actions_access_for_durable_artifacts() -> None:
+    """Both local routing and sibling sweeping only read Actions artifacts."""
 
     text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
     local, sweep = text.split("\n  sweep-organization-agent-mentions:\n", 1)
-    assert "permissions:\n      actions: write" in local
+    assert "permissions:\n      actions: read" in local
     assert "permissions:\n      actions: read" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in local
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
