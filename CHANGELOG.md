@@ -21,7 +21,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
-- Classified the known Caido guest-login sandbox startup failure on `127.0.0.1:48080` as bounded Strix infrastructure evidence, while retaining fail-closed behavior for arbitrary connection failures and all vulnerability signals.
+- Classified only the known Caido `RuntimeError: loginAsGuest` sandbox startup failure on `127.0.0.1:48080` as bounded Strix infrastructure evidence, while retaining fail-closed behavior for arbitrary connection failures, repository-output text, and all vulnerability signals.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Quarantine Sandbox Runtime heartbeat at minute 14 without granting the caller model secrets, repository mutation permissions, approval, merge, release, artifact-execution, or final security-verdict authority.
 - Run the bounded Clearfolio PR review-feedback repair caller at minute 23 of every hour while keeping the shared scheduler free of product-specific timers and repository names for modular reuse by naruon, contextual-orchestrator, Inkspan, and other CWL services.

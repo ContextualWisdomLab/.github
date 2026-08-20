@@ -238,7 +238,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         self.assertTrue(
             _workflow_neutralizes(
-                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "RuntimeError: loginAsGuest failed after 10 attempts: curl exit 7: "
                 "Failed to connect to 127.0.0.1 port 48080\n"
                 "Vulnerabilities 0\n"
             )
@@ -249,9 +249,20 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         self.assertFalse(
             _workflow_neutralizes(
-                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "RuntimeError: loginAsGuest failed after 10 attempts: curl exit 7: "
                 "Failed to connect to 127.0.0.1 port 48080\n"
                 "Severity: HIGH\nVulnerabilities 1\n"
+            )
+        )
+
+    def test_outer_workflow_rejects_untrusted_caido_like_text_without_traceback(self) -> None:
+        """Require the trusted runtime-error marker before classifying Caido output."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 0\n"
             )
         )
 
