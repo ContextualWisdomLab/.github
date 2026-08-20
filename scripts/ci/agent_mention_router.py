@@ -545,7 +545,7 @@ def dispatch_request(
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing
     )
-    if not missing and not existing:
+    if not missing:
         if rejected:
             print(
                 "Rejected agent mention without target mutation "
