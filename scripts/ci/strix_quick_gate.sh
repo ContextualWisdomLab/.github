@@ -2944,6 +2944,10 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
+	if is_model_quality_warning; then
+		return 0
+	fi
+
 	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
@@ -2988,6 +2992,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	return 1
+}
+
+is_model_quality_warning() {
+	grep -Eiq 'MODEL QUALITY WARNING|is not a recommended[[:space:]]+frontier model for Strix' "$STRIX_LOG"
 }
 
 latest_strix_report_dir() {
@@ -3817,6 +3825,10 @@ is_hallucinated_source_claim_finding() {
 
 is_model_retryable_error() {
 	local model="$1"
+
+	if is_model_quality_warning; then
+		return 0
+	fi
 
 	if is_vertex_model "$model" && is_vertex_not_found_error; then
 		return 0
