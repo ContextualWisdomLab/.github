@@ -498,6 +498,22 @@ jobs:
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          case "$STALE_OPENCODE_MINUTES" in
+            ''|*[!0-9]*)
+              echo "::error::STALE_OPENCODE_MINUTES must contain only decimal digits"
+              exit 1
+              ;;
+          esac
+          if [ "${#STALE_OPENCODE_MINUTES}" -gt 4 ]; then
+            echo "::error::STALE_OPENCODE_MINUTES must be between 1 and 1440"
+            exit 1
+          fi
+          stale_opencode_minutes=$((10#$STALE_OPENCODE_MINUTES))
+          if [ "$stale_opencode_minutes" -lt 1 ] || [ "$stale_opencode_minutes" -gt 1440 ]; then
+            echo "::error::STALE_OPENCODE_MINUTES must be between 1 and 1440"
+            exit 1
+          fi
+          STALE_OPENCODE_MINUTES="$stale_opencode_minutes"
           project_flow="$PROJECT_FLOW_INPUT"
           if [ -z "$project_flow" ]; then
             case "$TARGET_DEFAULT_BRANCH" in
@@ -758,6 +774,22 @@ jobs:
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          case "$STALE_OPENCODE_MINUTES" in
+            ''|*[!0-9]*)
+              echo "::error::STALE_OPENCODE_MINUTES must contain only decimal digits"
+              exit 1
+              ;;
+          esac
+          if [ "${#STALE_OPENCODE_MINUTES}" -gt 4 ]; then
+            echo "::error::STALE_OPENCODE_MINUTES must be between 1 and 1440"
+            exit 1
+          fi
+          stale_opencode_minutes=$((10#$STALE_OPENCODE_MINUTES))
+          if [ "$stale_opencode_minutes" -lt 1 ] || [ "$stale_opencode_minutes" -gt 1440 ]; then
+            echo "::error::STALE_OPENCODE_MINUTES must be between 1 and 1440"
+            exit 1
+          fi
+          STALE_OPENCODE_MINUTES="$stale_opencode_minutes"
           if [ "$SCHEDULER_MUTATION_TOKEN_SOURCE" = "github-token" ]; then
             # github.token is repository-scoped to .github and cannot mutate
             # sibling repositories; a sweep with it would silently do nothing.

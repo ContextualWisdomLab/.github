@@ -39,6 +39,16 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
+    """Dispatch payloads must not smuggle shell syntax into scheduler arguments."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count("STALE_OPENCODE_MINUTES must contain only decimal digits") == 2
+    assert workflow.count("STALE_OPENCODE_MINUTES must be between 1 and 1440") == 4
+    assert workflow.count("stale_opencode_minutes=$((10#$STALE_OPENCODE_MINUTES))") == 2
+    assert workflow.count('STALE_OPENCODE_MINUTES="$stale_opencode_minutes"') == 2
+
+
 def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
