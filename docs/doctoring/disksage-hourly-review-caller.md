@@ -61,7 +61,10 @@ controls every mutation and merge decision.
 
 ## Credential and model boundary
 
-The queue-scanning caller has only `contents: read`. It maps only the established
+The queue-scanning caller grants `contents: read` plus `id-token: write`. The
+latter is limited to the central scheduler's OpenCode OIDC token exchange and
+does not grant repository content, issue, pull-request, status, approval, merge,
+or release write authority. The caller maps only the established
 `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` scheduler credentials and
 does not use `secrets: inherit`.
 
@@ -88,8 +91,9 @@ neutral-required, stale-head, or synthetic-merge evidence is not success.
 ## Verification and rollback
 
 Repository contracts require the exact cron, target repository, one-dispatch
-budget, two-hour retry floor, non-cancelling single-flight policy, read-only
-workflow token, explicit secret mapping, and absence of both
+budget, two-hour retry floor, non-cancelling single-flight policy, the
+least-privilege workflow token (`contents: read` plus OIDC-only
+`id-token: write`), explicit secret mapping, and absence of both
 `NVIDIA_NIM_API_KEY` and `COPILOT_GITHUB_TOKEN` from the caller.
 
 Rollback is a reviewed source change. Do not disable exact-head binding, reduce
