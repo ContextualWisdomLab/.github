@@ -96,7 +96,7 @@ flowchart LR
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
 | #1162 | fix: use review credentials for agent dispatch | `c64e0e8cbacb93f5a0d7f162b30bcc4715912897` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `1e16f9fbd7ddb7781e34cedebfce4d860cfcc5de` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `75bb4597d52481f751498d711a449ce27d7d1b58` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `e2c003171e65c631ac8f12143e04f810fdad0576` | main | BLOCKED | — |
