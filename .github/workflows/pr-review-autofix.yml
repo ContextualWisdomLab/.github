@@ -566,6 +566,9 @@ jobs:
           set -euo pipefail
           model="$MODEL"
           if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]; then
+            # The contextual gateway already owns all provider credentials. Do
+            # not let the legacy NVIDIA value reach this OpenCode process.
+            unset NVIDIA_API_KEY
             model="contextual-orchestrator/contextual-orchestrator"
             if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
               echo "::error::Contextual Orchestrator gateway token is missing."
@@ -754,6 +757,9 @@ jobs:
           fi
           model="$MODEL"
           if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]; then
+            # The contextual gateway already owns all provider credentials. Do
+            # not let the legacy NVIDIA value reach this OpenCode process.
+            unset NVIDIA_API_KEY
             model="contextual-orchestrator/contextual-orchestrator"
             if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
               echo "::error::Contextual Orchestrator gateway token is missing."

@@ -97,6 +97,26 @@ def test_contextual_orchestrator_route_uses_pinned_auto_discovery_sidecar() -> N
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
 
+def test_contextual_route_clears_legacy_nvidia_key_before_opencode() -> None:
+    """Keep the old provider secret out of gateway-backed model processes."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    assert workflow.count("unset NVIDIA_API_KEY") == 2
+    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
+    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+    ordinary = workflow[ordinary_start:ordinary_end]
+    conflict = workflow[conflict_start:]
+    for step in (ordinary, conflict):
+        contextual_branch = step.index(
+            'if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]'
+        )
+        assert step.index("unset NVIDIA_API_KEY", contextual_branch) < step.index(
+            'model="contextual-orchestrator/contextual-orchestrator"', contextual_branch
+        )
+
+
 def test_trusted_autofix_source_is_bound_to_dispatch_sha() -> None:
     """Prevent a moving default branch from replacing trusted autofix scripts."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
