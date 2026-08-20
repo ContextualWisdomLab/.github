@@ -163,6 +163,8 @@ assert_workflow_uses_are_sha_pinned() {
 assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "needs_deployment_context=0" "strix gate tracks deployment-context scoped PRs"
 	assert_file_contains "$GATE_SCRIPT" ".github/workflows/* | Dockerfile | Dockerfile.* | frontend/Dockerfile | frontend/next.config.ts | docker-compose*.yml | render.yaml" "strix gate recognizes deployment and CI files"
+	assert_file_contains "$GATE_SCRIPT" "*.rs" "strix gate recognizes Rust source files"
+	assert_file_contains "$GATE_SCRIPT" "Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock" "strix gate recognizes Rust dependency manifests"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile.test" "strix gate includes test-image Dockerfiles with workflow scan context"
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
@@ -170,6 +172,9 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
 	assert_file_contains "$GATE_SCRIPT" "frontend/postcss.config.mjs" "strix gate includes frontend build config context"
 	assert_file_contains "$GATE_SCRIPT" "VERSION" "strix gate includes release version context for workflow scans"
+	assert_file_contains "$GATE_SCRIPT" 'if [ -f "$REPO_ROOT/Cargo.toml" ]; then' "strix gate detects Rust workspaces for workflow scan context"
+	assert_file_contains "$GATE_SCRIPT" "rust-toolchain.toml" "strix gate includes Rust toolchain context for workflow scans"
+	assert_file_contains "$GATE_SCRIPT" "deny.toml" "strix gate includes Rust dependency policy context for workflow scans"
 	assert_file_contains "$GATE_SCRIPT" "scripts/ci/test_*.sh" "strix gate excludes large CI self-test harnesses from PR scan targets"
 }
 
