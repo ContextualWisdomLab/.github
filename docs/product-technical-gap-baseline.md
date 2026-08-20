@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-검토 기준일: **2026-08-20 (Asia/Seoul)**  
+검토 기준일: **2026-08-21 (Asia/Seoul)**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계  
 현재 보호된 `main`: `6479989bbff475404cc2cccc468d5fb1d6c632e5`
 현재 열린 PR 수: **100** (아래 표에 이 스냅샷의 전체 목록 포함)
@@ -74,10 +74,10 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR 99개 중 현재 main 기준 PR과 behind/dirty PR이 섞여 있고, 대부분 formal current-head approval이 없다 | “merge-ready”라고 믿은 변경이 실제 보호 규칙을 통과했는지 판단할 수 없다 | exact-head queue를 PR 단위로 재수집하고, stale approval/check를 폐기하며, 독립 approval + terminal required Checks 없이는 merge하지 않는다 |
+| G-01 | 열린 PR 100개 중 현재 main 기준 PR과 behind/dirty PR이 섞여 있고, 대부분 formal current-head approval이 없다 | “merge-ready”라고 믿은 변경이 실제 보호 규칙을 통과했는지 판단할 수 없다 | exact-head queue를 PR 단위로 재수집하고, stale approval/check를 폐기하며, 독립 approval + terminal required Checks 없이는 merge하지 않는다 |
 | G-02 | #1162는 review credential route를 고치지만 current Checks가 queued/cancelled로 반복되며 router의 403 경로가 선행 main에 남아 있다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | #1162 current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
 | G-03 | #1153의 Strix run은 `loginAsGuest`/Caido `127.0.0.1:48080` bootstrap 실패를 provider signal로 분류하지 않았다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다 |
-| G-04 | 99개 live PR 중 많은 항목이 BEHIND 또는 CHANGES_REQUESTED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
+| G-04 | 100개 live PR 중 많은 항목이 BEHIND 또는 CHANGES_REQUESTED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
 | G-06 | naruon #974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다 |
 | G-07 | multi-level/multi-membership/temporal 관계 원칙은 master context에 있으나 모든 소비 저장소의 schema/API가 동일한 reified relationship contract를 보장하는지는 미확인이다 | 개인 단위로 집계하거나 전역 권한을 적용하는 atomistic/ecological fallacy 위험이 남는다 | relationship, membership, norm_group, validity window, evidence, confidence, disclosure를 정규화하고 cross-context golden tests를 만든다 |
@@ -95,12 +95,11 @@ flowchart LR
 
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
+| #1173 | fix(strix): include Rust workspace context for CI scans | `a6764368c634e9ea3a49d162a560d771d518e37e` | main | BLOCKED | — |
 | #1172 | fix(autofix): resolve live NVIDIA NIM models instead of a retired pin | `fddd6ee51d70891e41424ba78801a1871a303d4e` | main | BLOCKED | — |
 | #1171 | fix: refuse scheduler head mutations that cannot start required checks | `fd9305869e133b9aaec9b0ecdafeb0ac1953f4d2` | main | BLOCKED | — |
 | #1170 | feat: route OpenCode reviews through contextual gateway | `0bd7630912937ce4274ed207a7a35ecf24bfee17` | main | BLOCKED | — |
-| #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1169 | fix(security): keep baseline-only Strix outages non-blocking | `24893cee8fbb33791fe77629efa35ce2d8fb7076` | main | BLOCKED | — |
-| #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
 | #1166 | fix(ci): recognize replacement tests in existing files | `9e6063dc0d7298e394de87fc8f28aa3e0a6dced8` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `38aef069b2d9f8148a5e479125585ae408306d86` | main | BLOCKED | — |
@@ -110,7 +109,7 @@ flowchart LR
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd790ba12161ad6385a46d9e3e60371103b4` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae506e777b3a21885173f8c86b2e5f2a31` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `2ba74d0dba1ccaf20fc5460bafa0f6c3b241be68` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `6aee33e2c07f8c16cea9ebf52f466196c5e38ce5` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `6ce2fe8339571637708752568d008a43c2277dbd` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `9a4d1e1439bbafa8781971fbf22ab695ae126271` | main | BLOCKED | — |
@@ -121,9 +120,9 @@ flowchart LR
 | #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
 | #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
 | #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `6915bb9395bbe653f41db944c40186e7c3f8c153` | main | BLOCKED | — |
-| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `0c700f6f931986d58bd0005ea2d248ca2e459d77` | main | BLOCKED | — |
+| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `cd9f0256c0e5d3c30f380e1473aa6966f0406f42` | main | BLOCKED | — |
 | #1114 | fix(strix): retry transient visibility API failures | `21beb66a98e30168146ee48c6593f58dd954d180` | main | BLOCKED | — |
-| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `ed42fda7fc712f09930c8c4c0398aa261291c960` | main | BLOCKED | — |
+| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `3068296010c9b8debd107652039cea175ea4db5a` | main | BLOCKED | — |
 | #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `5ae4bd244cccc69bdbe8b23eef32504e33026cf5` | main | BLOCKED | — |
 | #1107 | chore(deps): bump github/codeql-action/init from 4.37.0 to 4.37.7 | `705b854214d4624c3276c62f92a105278ebec199` | main | BLOCKED | CHANGES_REQUESTED |
 | #1106 | chore(deps): bump typing-inspection from 0.4.2 to 0.4.4 | `ed7c4b2314f7acb3c1821fdd476e6078cbaad9fb` | main | BEHIND | CHANGES_REQUESTED |
