@@ -38,10 +38,20 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
+TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
+TRUSTED_UV_VERSION_OUTPUT = f"uv {TRUSTED_UV_VERSION} ({TRUSTED_UV_TARGET_TRIPLE})"
 TRUSTED_UV_ARCHIVE_URL = (
-    "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+    "https://github.com/astral-sh/uv/releases/download/0.12.1/"
     "uv-x86_64-unknown-linux-gnu.tar.gz"
 )
+TRUSTED_UV_RELEASE_HOST = "github.com"
+TRUSTED_UV_ASSET_HOSTS = frozenset(
+    {
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+    }
+)
+TRUSTED_UV_FINAL_HOSTS = frozenset({TRUSTED_UV_RELEASE_HOST, *TRUSTED_UV_ASSET_HOSTS})
 TRUSTED_UV_ARCHIVE_SHA256 = (
     "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 )
@@ -50,10 +60,51 @@ TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRUSTED_UV_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_BINARY_MAX_BYTES = 64 * 1024 * 1024
 TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
+TRUSTED_UV_ORIGIN_ERROR = (
+    "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
+)
 
 
-class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
-    """Reject every redirect before urllib issues a request to its target."""
+def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
+    """Return whether one parsed URL uses the implicit or explicit HTTPS port."""
+    try:
+        return parsed.port in (None, 443)
+    except ValueError:
+        return False
+
+
+def _is_trusted_uv_https_host(
+    url: str,
+    allowed_hosts: frozenset[str],
+) -> bool:
+    """Return whether ``url`` is HTTPS, default-port, and host-allowlisted."""
+    parsed = urllib.parse.urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in allowed_hosts
+        and parsed.username is None
+        and parsed.password is None
+        and _https_default_port(parsed)
+    )
+
+
+def _is_trusted_uv_release_request(url: str) -> bool:
+    """Return whether the current request is still the GitHub Releases origin."""
+    return _is_trusted_uv_https_host(url, frozenset({TRUSTED_UV_RELEASE_HOST}))
+
+
+def _is_trusted_uv_asset_location(url: str) -> bool:
+    """Return whether the next hop is an official GitHub release-asset host."""
+    return _is_trusted_uv_https_host(url, TRUSTED_UV_ASSET_HOSTS)
+
+
+def _is_trusted_uv_final_origin(url: str) -> bool:
+    """Return whether the completed response stayed on a trusted HTTPS origin."""
+    return _is_trusted_uv_https_host(url, TRUSTED_UV_FINAL_HOSTS)
+
+
+class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow one GitHub Releases hop onto the official asset CDN only."""
 
     def redirect_request(
         self,
@@ -63,18 +114,31 @@ class _RejectTrustedUvRedirects(urllib.request.HTTPRedirectHandler):
         message: str,
         headers: Any,
         new_url: str,
-    ) -> None:
-        """Fail closed for all redirect status codes and target locations."""
-        del request, response, code, message, headers, new_url
-        raise RuntimeError("trusted uv archive redirects are forbidden")
+    ) -> urllib.request.Request:
+        """Allow github.com → GitHub asset CDN and reject every other hop."""
+        if not _is_trusted_uv_release_request(request.full_url) or not (
+            _is_trusted_uv_asset_location(new_url)
+        ):
+            raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
+        followed = super().redirect_request(
+            request,
+            response,
+            code,
+            message,
+            headers,
+            new_url,
+        )
+        if followed is None:
+            raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
+        return followed
 
 
 @functools.cache
 def _install_trusted_uv_url_opener() -> None:
-    """Install one process-wide no-proxy, no-redirect opener for the fixed URL."""
+    """Install one process-wide no-proxy opener for the fixed GitHub URL."""
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
-        _RejectTrustedUvRedirects(),
+        _TrustedUvReleaseAssetRedirects(),
     )
     urllib.request.install_opener(opener)
 
@@ -85,7 +149,6 @@ def _is_candidate_lock_name(name: str) -> bool:
         fnmatch.fnmatch(name, "requirements*.txt")
         and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
     )
-
 
 
 def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
@@ -180,6 +243,23 @@ def _is_hash_pinned(content: bytes) -> bool:
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
+
+
+def _is_flat_materializable_lock(content: bytes) -> bool:
+    """Return whether content is one standalone exact SHA-256 requirements lock.
+
+    Selected sources are renamed to generated flat files. Relative ``-r`` and
+    ``--requirement`` edges therefore lose the source directory that gives them
+    meaning. Only independent exact package pins cross this publication boundary
+    until a complete immutable include graph can be reconstructed and rewritten.
+    """
+    lines = _requirement_lines(content)
+    requirement_lines = [line for line in lines if line != "--require-hashes"]
+    return bool(requirement_lines) and all(
+        _is_fully_hash_pinned_requirement(line) for line in requirement_lines
+    )
+
+
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
     fields = re.split(r"\s+(?=--hash=)", line)
@@ -226,27 +306,12 @@ def _download_trusted_uv_archive() -> bytes:
         # prove that neither user data nor repository content selects a scheme,
         # host, path, query, fragment, method, or request header.
         with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            "https://releases.astral.sh/github/uv/releases/download/0.12.1/"
+            "https://github.com/astral-sh/uv/releases/download/0.12.1/"
             "uv-x86_64-unknown-linux-gnu.tar.gz",
             timeout=TRUSTED_UV_DOWNLOAD_TIMEOUT_SECONDS,
         ) as response:
-            final_url = urllib.parse.urlparse(response.geturl())
-            try:
-                final_port = final_url.port
-            except ValueError as exc:
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                ) from exc
-            if (
-                (final_url.scheme, final_url.hostname)
-                != ("https", "releases.astral.sh")
-                or final_port not in (None, 443)
-            ):
-                raise RuntimeError(
-                    "trusted uv archive redirected outside the fixed "
-                    "releases.astral.sh HTTPS origin"
-                )
+            if not _is_trusted_uv_final_origin(response.geturl()):
+                raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
             payload = bytearray()
             while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
                 chunk = response.read(
@@ -318,7 +383,7 @@ def _install_trusted_uv() -> str:
                 f"trusted uv executable verification failed: {type(exc).__name__}"
             ) from exc
         observed = completed.stdout.decode("utf-8", errors="replace").strip()
-        if completed.returncode != 0 or observed != f"uv {TRUSTED_UV_VERSION}":
+        if completed.returncode != 0 or observed != TRUSTED_UV_VERSION_OUTPUT:
             raise RuntimeError(
                 "trusted uv executable reported an unexpected version or exit status"
             )
@@ -512,9 +577,9 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     for path, candidate in regular_blobs:
-        if _is_candidate_lock_name(candidate.name):
+        if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
-            if _is_hash_pinned(content):
+            if _is_flat_materializable_lock(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
             if _uv_pyproject_path(path) not in regular_paths:

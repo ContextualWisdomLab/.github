@@ -1,0 +1,15 @@
+# uv pip compile --override for requirements-strix-ci.txt (see #952).
+#
+# strix-agent (every release from 1.4.0 through the current 1.5.3) declares
+# cryptography<49,>=48.0.1, which conflicts with this repo's cryptography==50.0.0
+# pin (commit 7616fd80, CVE-2026-39892 fix). strix-agent's own code never imports
+# `cryptography` directly (verified: no import in the installed package source);
+# the real consumers pulling it in transitively are pyjwt and google-auth, both
+# using only long-stable hazmat.primitives.asymmetric / serialization APIs for JWT
+# signing. Verified locally: strix-agent==1.5.3 imports cleanly alongside
+# cryptography==50.0.0, and a pyjwt RS256 sign/verify roundtrip against that
+# cryptography version succeeds. strix-agent's <49 upper bound reads as an
+# unreviewed "latest tested at release time" pin, not a real API incompatibility.
+#
+# Re-verify this override whenever strix-agent is bumped again.
+cryptography==50.0.0
