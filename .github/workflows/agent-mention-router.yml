@@ -10,10 +10,6 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-concurrency:
-  group: review-agent-mention-router-${{ github.repository }}
-  cancel-in-progress: false
-
 # Organization required-workflow rules do not propagate issue_comment,
 # pull_request_review_comment, or pull_request_review events into sibling
 # repositories. Keep the workflow default read-only; each bounded job
@@ -47,7 +43,7 @@ jobs:
       )
     concurrency:
       group: review-agent-mention-router-local-${{ github.repository }}
-      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

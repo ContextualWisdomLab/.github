@@ -21,6 +21,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Keep the local and scheduled agent-mention queues independently schedulable by removing the workflow-wide concurrency group; job-scoped non-cancelling concurrency now protects each surface without relying on the unsupported Actions `queue` key.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Quarantine Sandbox Runtime heartbeat at minute 14 without granting the caller model secrets, repository mutation permissions, approval, merge, release, artifact-execution, or final security-verdict authority.
 - Run the bounded Clearfolio PR review-feedback repair caller at minute 23 of every hour while keeping the shared scheduler free of product-specific timers and repository names for modular reuse by naruon, contextual-orchestrator, Inkspan, and other CWL services.
