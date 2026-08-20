@@ -5,6 +5,7 @@ from pathlib import Path
 
 CALLER = Path(".github/workflows/diagramweave-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/diagramweave-hourly-review-caller.md")
+ARCHITECTURE = Path("ARCHITECTURE.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
 
@@ -116,6 +117,29 @@ def test_diagramweave_doctoring_records_editor_activation_and_credentials() -> N
         "ContextualWisdomLab/DiagramWeave#26",
     ):
         assert phrase in doctoring
+
+
+def test_diagramweave_docs_preserve_neighboring_architecture_and_least_privilege() -> None:
+    """Adding DiagramWeave must not truncate adjacent durable governance prose."""
+    architecture = _read(ARCHITECTURE)
+    doctoring = _read(DOCTORING)
+    normalized_doctoring = " ".join(doctoring.split())
+    nonnest2_contract = (
+        "`nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute\n"
+        "16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps\n"
+        "only established scheduler credentials, and grants job-scoped\n"
+        "`id-token: write`. The reusable engine stays product-neutral."
+    )
+
+    assert nonnest2_contract in architecture
+    assert architecture.index(nonnest2_contract) < architecture.index(
+        "## DiagramWeave hourly caller"
+    )
+    assert architecture.count(
+        "tests pin workflow structure and governance prose so drift fails closed."
+    ) == 1
+    assert "The caller applies least privilege to prevent CWE-250" in normalized_doctoring
+    assert "CWE-250 forbids" not in doctoring
 
 
 def test_path_block_helpers_keep_trigger_and_compileall_sets_disjoint() -> None:

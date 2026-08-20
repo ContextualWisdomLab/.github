@@ -70,9 +70,9 @@ the reusable job `id-token: write` so the central scheduler can mint the
 OpenCode GitHub App token from GitHub OIDC when the mapped PAT is absent
 (GitHub, n.d.-c). It maps only `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN`. It never uses `secrets: inherit`, receives
-`NVIDIA_NIM_API_KEY`, or introduces `COPILOT_GITHUB_TOKEN`. CWE-250
-forbids executing the caller with write or model privileges it does not
-need (MITRE, 2026).
+`NVIDIA_NIM_API_KEY`, or introduces `COPILOT_GITHUB_TOKEN`. The caller applies
+least privilege to prevent CWE-250 by excluding write and model privileges it
+does not need (MITRE, 2026).
 
 Model execution remains inside the central worker. The model credential
 is the GitHub Secret `NVIDIA_NIM_API_KEY`; the caller does not receive or
