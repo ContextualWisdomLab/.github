@@ -289,6 +289,28 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
                 "Vulnerabilities 1\n"
             )
         )
+
+    def test_outer_workflow_classifies_caido_bootstrap_failure_without_findings(self) -> None:
+        """Treat a Strix-owned Caido bootstrap outage as incomplete infrastructure evidence."""
+
+        self.assertTrue(
+            _workflow_classifies_backend_unavailable(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
+    def test_outer_workflow_never_downgrades_caido_failure_with_findings(self) -> None:
+        """Keep a real finding blocking even when the Strix container also failed."""
+
+        self.assertFalse(
+            _workflow_classifies_backend_unavailable(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 1\n"
+            )
+        )
         self.assertFalse(
             _workflow_classifies_backend_unavailable(
                 "agents.exceptions.ModelBehaviorError: provider response failed\n"
