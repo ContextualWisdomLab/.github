@@ -88,6 +88,15 @@ Before protected-develop activation, the repository variable
 `ContextualWisdomLab/kaefa` target. Missing or mismatched
 configuration fails before mutation credential materialization.
 
+The manual repository-dispatch verification must use event type
+`pr-review-fix-scheduler` with `target_repository=ContextualWisdomLab/kaefa`
+and `base_branch=develop`. For that direct dispatch surface, the scheduler
+requires both the dispatch actor and the signed sender to equal
+`OPENCODE_REPOSITORY_DISPATCH_ACTOR`, and it requires the target to be present
+in `OPENCODE_REPOSITORY_DISPATCH_TARGETS`. A successful verification therefore
+proves the exact target, base, actor binding, and allowlist—not merely that the
+workflow started.
+
 ## Security, standalone operation, and modularity
 
 The caller adds no kaefa runtime dependency, database object, network

@@ -116,6 +116,13 @@ def test_kaefa_doctoring_records_efa_activation_and_credentials() -> None:
         "ContextualWisdomLab/kaefa#75",
         "ContextualWisdomLab/kaefa#60",
         "GPL-3.0",
+        "pr-review-fix-scheduler",
+        "target_repository=ContextualWisdomLab/kaefa",
+        "base_branch=develop",
+        "OPENCODE_REPOSITORY_DISPATCH_ACTOR",
+        "dispatch actor",
+        "signed sender",
+        "allowlist",
     ):
         assert phrase in doctoring
 
