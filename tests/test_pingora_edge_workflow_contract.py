@@ -22,6 +22,20 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert "actions/checkout" not in text
     assert "scripts/ci/pingora_edge_policy.py" in text
     assert '--api-url "https://api.github.com"' in text
-    assert "github.event.pull_request.head.sha" in text
-    assert "checkout pull-request" not in text.lower()
     assert "secrets:" not in text
+
+    # The required workflow must never turn the untrusted PR head into a source
+    # checkout ref; it is only an evidence identifier passed to the API scanner.
+    assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+    assert 'TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.sha }}' in text
+    assert 'tarball/${TRUSTED_SOURCE_REF}' in text
+
+    # The source archive must contain both the workflow and the policy helper,
+    # and symlinked replacements must fail before the helper is executed.
+    assert '[ ! -f "$trusted_source_dir/$EXPECTED_FILE" ]' in text
+    assert '[ -L "$trusted_source_dir/$EXPECTED_FILE" ]' in text
+    assert '[ ! -f "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
+    assert '[ -L "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
+    assert text.index("Verify immutable central policy source") < text.index(
+        "Enforce Cloudflare Pingora edge policy"
+    )
