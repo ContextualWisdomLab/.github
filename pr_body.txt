@@ -1,3 +1,0 @@
-🎯 What: subprocess 호출 시 shell=False 명시 누락
-⚠️ Risk: 보안 경고 발생 및 잠재적 위험
-🛡️ Solution: subprocess.Popen 및 subprocess.run 호출에 shell=False 명시
