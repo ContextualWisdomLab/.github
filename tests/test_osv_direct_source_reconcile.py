@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import importlib.util
+import copy
 import json
 from pathlib import Path
-import subprocess
+import runpy
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,12 @@ SCRIPT = REPO_ROOT / "scripts" / "ci" / "osv_direct_source_reconcile.py"
 SECURITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "security-scan.yml"
 OFFICIAL_URL = "https://cdn.sheetjs.com/xlsx-{version}/xlsx-{version}.tgz"
 INTEGRITY = "sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA=="
+
+SPEC = importlib.util.spec_from_file_location("osv_direct_source_reconcile", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+OSV = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = OSV
+SPEC.loader.exec_module(OSV)
 
 
 def vulnerability(vuln_id: str, affected_range: str | None) -> dict[str, object]:
@@ -103,9 +112,10 @@ def reconcile(tmp_path: Path, payload: dict[str, object], lock_text: str) -> tup
     audit_path = tmp_path / "audit.json"
     result_path.write_text(json.dumps(payload), encoding="utf-8")
     lock_path.write_text(lock_text, encoding="utf-8")
-    completed = subprocess.run(
+    with mock.patch.object(
+        sys,
+        "argv",
         [
-            sys.executable,
             str(SCRIPT),
             "--results",
             str(result_path),
@@ -114,11 +124,9 @@ def reconcile(tmp_path: Path, payload: dict[str, object], lock_text: str) -> tup
             "--audit",
             str(audit_path),
         ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
+    ):
+        with unittest.TestCase().assertRaisesRegex(SystemExit, "0"):
+            runpy.run_path(str(SCRIPT), run_name="__main__")
     return (
         json.loads(result_path.read_text(encoding="utf-8")),
         json.loads(audit_path.read_text(encoding="utf-8")),
@@ -197,6 +205,178 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 reconciled, audit = self.run_case(payload, lock_text)
                 self.assertEqual(remaining_ids(reconciled), ["GHSA-unknown-source"])
                 self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+
+    def test_low_level_semver_integrity_and_source_validation_boundaries(self) -> None:
+        self.assertEqual(OSV.parse_semver("0.20.3"), (0, 20, 3))
+        self.assertIsNone(OSV.parse_semver("01.20.3"))
+        self.assertFalse(OSV.valid_sha512_integrity("sha256-deadbeef"))
+        self.assertFalse(OSV.valid_sha512_integrity("sha512-%%%"))
+        self.assertFalse(OSV.valid_sha512_integrity("sha512-YQ=="))
+        valid_url = OFFICIAL_URL.format(version="0.20.3")
+        cases = (
+            ("other", valid_url, valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", "https://cdn.sheetjs.com:bad/x.xlsx", "", "0.20.3", INTEGRITY),
+            ("xlsx", valid_url.replace("https://", "http://"), valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url.replace("cdn.sheetjs.com", "example.invalid"), valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url.replace("cdn.sheetjs.com", "cdn.sheetjs.com:443"), valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url.replace("cdn.sheetjs.com", "user@cdn.sheetjs.com"), valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url.replace("cdn.sheetjs.com", "user:pass@cdn.sheetjs.com"), valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url + "?download=1", valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", valid_url + "#fragment", valid_url, "0.20.3", INTEGRITY),
+            ("xlsx", "https://cdn.sheetjs.com/not-xlsx.tgz", "", "0.20.3", INTEGRITY),
+            ("xlsx", valid_url, valid_url, "0.20.2", INTEGRITY),
+            ("xlsx", valid_url, valid_url.replace("0.20.3", "0.20.2"), "0.20.3", INTEGRITY),
+            ("xlsx", valid_url, valid_url, "0.20.3", "missing"),
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                self.assertFalse(OSV.validate_sheetjs_source(*arguments)[0])
+        self.assertTrue(
+            OSV.validate_sheetjs_source("xlsx", valid_url, valid_url, "0.20.3", INTEGRITY)[0]
+        )
+
+    def test_direct_source_parser_handles_boundaries_and_missing_fields(self) -> None:
+        valid_url = OFFICIAL_URL.format(version="0.20.3")
+        lock = (
+            "packages:\n\n"
+            f"  xlsx@{valid_url}:\n"
+            "    resolution: {}\n"
+            "  other@https://example.invalid/other.tgz:\n"
+            "    resolution: {tarball: https://example.invalid/other.tgz}\n"
+        )
+        sources = OSV.parse_direct_sources(lock)
+        self.assertEqual(len(sources), 2)
+        self.assertFalse(sources[0].valid)
+        self.assertFalse(sources[1].valid)
+
+    def test_malformed_osv_container_evidence_fails_closed(self) -> None:
+        malformed = (
+            {},
+            {"results": ["bad"]},
+            {"results": [{"packages": "bad"}]},
+            {"results": [{"packages": ["bad"]}]},
+        )
+        for payload in malformed:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                list(OSV.iter_packages(payload))
+        self.assertEqual(list(OSV.iter_packages({"results": [{"packages": []}]})), [])
+
+    def test_authoritative_range_rejects_every_ambiguous_shape(self) -> None:
+        valid = vulnerability("GHSA-shape", "< 0.20.2")
+        self.assertEqual(OSV.authoritative_affected_range(valid, "xlsx"), "< 0.20.2")
+        malformed = [
+            {},
+            {"id": 1, "affected": []},
+            {"id": "GHSA-shape", "affected": "bad"},
+            {"id": "GHSA-shape", "affected": [None]},
+        ]
+        item_mutations = (
+            ("package", None),
+            ("package", {"ecosystem": "PyPI", "name": "xlsx"}),
+            ("package", {"ecosystem": "npm", "name": "other"}),
+            ("database_specific", None),
+            ("ranges", None),
+        )
+        for key, value in item_mutations:
+            candidate = copy.deepcopy(valid)
+            candidate["affected"][0][key] = value
+            malformed.append(candidate)
+        database_mutations = (
+            ("last_known_affected_version_range", None),
+            ("source", None),
+            ("source", "https://example.invalid/advisory.json"),
+            ("source", "https://github.com/github/advisory-database/blob/main/wrong.json"),
+        )
+        for key, value in database_mutations:
+            candidate = copy.deepcopy(valid)
+            candidate["affected"][0]["database_specific"][key] = value
+            malformed.append(candidate)
+        for ranges in (
+            [],
+            [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}],
+            [
+                {"type": "SEMVER", "events": [{"introduced": "0"}]},
+                {"type": "SEMVER", "events": [{"introduced": "0"}]},
+            ],
+            [{"type": "SEMVER", "events": [{"introduced": "1.0.0"}]}],
+            [None],
+        ):
+            candidate = copy.deepcopy(valid)
+            candidate["affected"][0]["ranges"] = ranges
+            malformed.append(candidate)
+        conflicting = copy.deepcopy(valid)
+        second = copy.deepcopy(conflicting["affected"][0])
+        second["database_specific"]["last_known_affected_version_range"] = "< 0.19.3"
+        conflicting["affected"].append(second)
+        malformed.append(conflicting)
+        duplicate = copy.deepcopy(valid)
+        duplicate["affected"].append(copy.deepcopy(duplicate["affected"][0]))
+        self.assertEqual(OSV.authoritative_affected_range(duplicate, "xlsx"), "< 0.20.2")
+        for candidate in malformed:
+            with self.subTest(candidate=candidate):
+                self.assertIsNone(OSV.authoritative_affected_range(candidate, "xlsx"))
+
+    def test_reconcile_rejects_malformed_packages_and_vulnerabilities(self) -> None:
+        bad_packages = (
+            {"results": [{"packages": [{"package": None, "vulnerabilities": []}]}]},
+            {"results": [{"packages": [{"package": {}, "vulnerabilities": "bad"}]}]},
+        )
+        for payload in bad_packages:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                OSV.reconcile_payload(payload, direct_lock("0.20.3"), label="bad")
+        bad_vulnerability = results("0.20.3", [])
+        bad_vulnerability["results"][0]["packages"][0]["vulnerabilities"] = ["bad"]
+        with self.assertRaises(ValueError):
+            OSV.reconcile_payload(bad_vulnerability, direct_lock("0.20.3"), label="bad")
+        untouched, audit = OSV.reconcile_payload(
+            results("0.20.3", [vulnerability("GHSA-registry", "< 0.20.2")]),
+            registry_lock("0.20.3"),
+            label="registry",
+        )
+        self.assertEqual(remaining_ids(untouched), ["GHSA-registry"])
+        self.assertEqual(audit, [])
+
+    def test_io_and_existing_audit_boundaries_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing.json"
+            with self.assertRaises(ValueError):
+                OSV.load_json_object(missing)
+            array_path = root / "array.json"
+            array_path.write_text("[]", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                OSV.load_json_object(array_path)
+            destination = root / "atomic.json"
+            with mock.patch.object(OSV.os, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    OSV.atomic_json_write(destination, {})
+
+            results_path = root / "results.json"
+            lock_path = root / "pnpm-lock.yaml"
+            audit_path = root / "audit.json"
+            results_path.write_text(json.dumps({"results": []}), encoding="utf-8")
+            lock_path.write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+            audit_path.write_text('[{"status":"prior"}]', encoding="utf-8")
+            argv = [
+                str(SCRIPT), "--results", str(results_path), "--lockfile", str(lock_path),
+                "--audit", str(audit_path), "--label", "head",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(OSV.main(), 0)
+            self.assertEqual(json.loads(audit_path.read_text(encoding="utf-8")), [{"status": "prior"}])
+
+            audit_path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
+                OSV.main()
+            audit_path.unlink()
+            audit_target = root / "audit-target.json"
+            audit_target.write_text("[]", encoding="utf-8")
+            audit_path.symlink_to(audit_target)
+            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
+                OSV.main()
+            lock_path.unlink()
+            with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
+                OSV.main()
 
     def test_missing_authoritative_affected_range_fails_closed(self) -> None:
         payload = results("0.20.3", [vulnerability("GHSA-unknown-range", None)])
