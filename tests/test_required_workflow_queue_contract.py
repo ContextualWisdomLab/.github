@@ -1,3 +1,5 @@
+"""Verify central required-workflow queue, security, and dispatch contracts."""
+
 import json
 import os
 import shlex
@@ -14,10 +16,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def workflow_text(name: str) -> str:
+    """Read one central workflow for contract assertions."""
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
 def workflow_step(workflow: str, name: str) -> str:
+    """Extract one named workflow step without parsing YAML dynamically."""
     step = f"      - name: {name}\n"
     start = workflow.index(step)
     try:
@@ -28,6 +32,7 @@ def workflow_step(workflow: str, name: str) -> str:
 
 
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
+    """Keep the default scheduler dispatch bounded to one review."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert workflow.count('default: "1"') >= 2
@@ -50,6 +55,7 @@ def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
 
 
 def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
+    """Use stable repository-scoped concurrency keys for unscoped events."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -178,6 +184,7 @@ def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
 
 
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
+    """Ensure required pull-request workflows cancel obsolete executions."""
     for filename in (
         "close-empty-pr.yml",
         "codeql-pr.yml",
@@ -219,6 +226,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
 
 
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
+    """Keep Semgrep finding output distinct from scanner-engine failures."""
     workflow = workflow_text("sast-semgrep.yml")
 
     assert "Report every Semgrep finding in the job log" in workflow
@@ -237,6 +245,7 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
 
 
 def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
+    """Scope Strix concurrency to the target PR while preserving current-head evidence."""
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -265,6 +274,7 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
 
 
 def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
+    """Normalize the Strix executable before its trusted hash is computed."""
     workflow = workflow_text("strix.yml")
     install_step = workflow_step(workflow, "Install Strix")
 
@@ -281,6 +291,7 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
+    """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
         "close-empty-pr.yml",
         "codeql-pr.yml",
@@ -316,6 +327,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
+    """Retry invalid close-event metadata and leave the PR open on uncertainty."""
     workflow = workflow_text("close-empty-pr.yml")
 
     assert "gh_api_json_with_retry()" in workflow
@@ -327,6 +339,7 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
 
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
+    """Prevent cancelled review runs from creating follow-up queue work."""
     for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
         workflow = workflow_text(filename)
 
@@ -334,6 +347,7 @@ def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
+    """Ensure privileged workflows resolve trusted source code independently of inputs."""
     for filename in (
         "opencode-review-dispatch.yml",
         "noema-review.yml",
@@ -360,6 +374,7 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 
 
 def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
+    """Keep Noema workflow-run follow-ups isolated from PR-event reviews."""
     workflow = workflow_text("noema-review.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
@@ -369,6 +384,7 @@ def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() ->
 
 
 def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
+    """Require explicit reviewer credentials and LLM configuration."""
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
@@ -424,6 +440,7 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
 def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     tmp_path: Path,
 ) -> None:
+    """Preserve configured fallback models while rejecting an unavailable NIM secret."""
     strix_output = tmp_path / "strix-output"
     strix = subprocess.run(
         [
@@ -494,6 +511,7 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
+    """Skip unassociated workflow runs before requesting review credentials."""
     workflow = workflow_text("noema-review.yml")
 
     assert (
@@ -604,6 +622,7 @@ def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:
 
 
 def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
+    """Keep Noema and scheduler trusted checkouts pinned to central immutable sources."""
     noema = workflow_text("noema-review.yml")
     scheduler = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -631,6 +650,7 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
 
 
 def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
+    """Avoid scanning every PR when a workflow run has no associated pull request."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
@@ -863,6 +883,7 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
+    """Cancel stale scheduled repair runs before they duplicate mutation work."""
     workflow = workflow_text("pr-review-fix-scheduler.yml")
 
     assert "central-pr-review-fix-scheduler-" in workflow
@@ -872,6 +893,7 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
 def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
     None
 ):
+    """Treat unsupported dependency graphs as an explicit non-enforceable case."""
     workflow = workflow_text("security-scan.yml")
 
     assert "id: dependency_review_support" in workflow
@@ -882,6 +904,7 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
 
 
 def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
+    """Allow manifestless repositories while still requiring scan artifacts."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
@@ -892,6 +915,7 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
 
 
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
+    """Limit push secret scanning to the current branch history."""
     workflow = workflow_text("secret-scan.yml")
 
     assert "CURRENT_SHA: ${{ github.sha }}" in workflow
@@ -902,6 +926,7 @@ def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
 
 
 def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
+    """Keep the standalone OSV workflow's resolver settings singular and safe."""
     workflow = workflow_text("osv-scanner-pr.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
@@ -924,6 +949,7 @@ def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> (
     None
 ):
+    """Retry OSV direct evidence without allowing transitive resolver stalls."""
     workflow = workflow_text("security-scan.yml")
 
     assert "timeout-minutes: 25" in workflow
@@ -966,6 +992,7 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
     tmp_path: Path,
 ) -> None:
+    """Mark a clean OSV comparison as comprehensive for code-scanning closure."""
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Mark clean OSV SARIF as comprehensive\n"
     start = workflow.index(step)
@@ -1009,6 +1036,7 @@ def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
 
 
 def test_security_scan_osv_upload_uses_pr_head_for_pr_head_sarif() -> None:
+    """Upload OSV SARIF against the exact pull-request head revision."""
     workflow = workflow_text("security-scan.yml")
     upload_step = workflow_step(workflow, "Upload OSV SARIF to code scanning")
 
@@ -1086,6 +1114,7 @@ def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
     tmp_path: Path,
 ) -> None:
+    """Log zero findings when OSV returns null result arrays."""
     workflow = workflow_text("security-scan.yml")
     step = "      - name: Print OSV findings being compared\n"
     start = workflow.index(step)
@@ -1111,6 +1140,7 @@ def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
 
 
 def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> None:
+    """Make optional Strix absence visible without turning it into a lookup crash."""
     workflow = workflow_text("opencode-review-dispatch.yml")
     failed_check_evidence = (
         REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
@@ -1123,6 +1153,7 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
 
 
 def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+    """Keep provider outages non-blocking only when no vulnerability finding exists."""
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
@@ -1140,6 +1171,7 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
+    """Bind cross-repository Strix scans to the target PR and authorized token."""
     workflow = workflow_text("strix.yml")
     run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
         "      - name:", 1
@@ -1236,6 +1268,7 @@ def test_default_branch_scorecard_upload_quota_is_non_blocking() -> None:
 
 
 def test_trivy_failure_log_prints_sarif_finding_details(tmp_path: Path) -> None:
+    """Print actionable Trivy SARIF details and fail only for actual findings."""
     workflow = workflow_text("security-scan.yml")
     assert "fail-on-severity: moderate" in workflow
     assert "severity: CRITICAL,HIGH,MEDIUM" in workflow
