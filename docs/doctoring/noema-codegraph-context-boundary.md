@@ -32,9 +32,9 @@ reduces evidence rather than expanding file access.
 
 ## Standards and authoritative references (APA 7th)
 
-Joint Task Force. (2020). *Security and privacy controls for information
+Joint Task Force. (2020/2025). *Security and privacy controls for information
 systems and organizations* (NIST Special Publication 800-53, Revision 5,
-Update 1). National Institute of Standards and Technology.
+Release 5.2.0). National Institute of Standards and Technology.
 https://doi.org/10.6028/NIST.SP.800-53r5
 
 MITRE. (n.d.). *CWE-22: Improper limitation of a pathname to a restricted
