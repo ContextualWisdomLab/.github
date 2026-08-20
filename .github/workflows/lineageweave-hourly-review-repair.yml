@@ -1,13 +1,6 @@
 name: LineageWeave Hourly Review Repair
 
 on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Inspect the ordered stack without dispatching a repair
-        required: false
-        default: false
-        type: boolean
   schedule:
     # Minute 4 avoids the start-of-hour load peak and existing product callers.
     - cron: "4 * * * *"
@@ -36,7 +29,6 @@ jobs:
       RETRY_HOURS: "2"
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
       AUTOFIX_REPOSITORY: ContextualWisdomLab/.github
-      DRY_RUN: ${{ inputs.dry_run == true }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -70,7 +62,6 @@ jobs:
 
       - name: Exchange OpenCode app token for scheduler mutations
         id: scheduler_app_token
-        if: ${{ inputs.dry_run != true }}
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -153,8 +144,8 @@ jobs:
 
       - name: Dispatch one dependency-safe review repair
         env:
-          GH_TOKEN: ${{ inputs.dry_run == true && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
-          MUTATION_CREDENTIAL_AVAILABLE: ${{ inputs.dry_run == true || secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
         run: |
           set -euo pipefail
           if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
@@ -173,7 +164,4 @@ jobs:
             --autofix-workflow "$AUTOFIX_WORKFLOW"
             --autofix-repository "$AUTOFIX_REPOSITORY"
           )
-          if [ "$DRY_RUN" = "true" ]; then
-            args+=(--dry-run)
-          fi
           python3 scripts/ci/pr_review_fix_stack_scheduler.py "${args[@]}"

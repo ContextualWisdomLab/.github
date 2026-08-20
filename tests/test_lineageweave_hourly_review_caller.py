@@ -19,12 +19,12 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_lineageweave_caller_is_manual_hourly_bounded_and_ordered() -> None:
+def test_lineageweave_caller_is_hourly_bounded_and_ordered() -> None:
     """The heartbeat covers all six PRs and permits one dependency-safe repair."""
 
     caller = _read(CALLER)
 
-    assert "workflow_dispatch:" in caller
+    assert "workflow_dispatch:" not in caller
     assert 'cron: "4 * * * *"' in caller
     assert "group: lineageweave-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
@@ -50,9 +50,9 @@ def test_lineageweave_caller_is_protected_main_only_and_least_privilege() -> Non
     assert "PR_REVIEW_MERGE_TOKEN" in caller
     assert "OPENCODE_APPROVE_TOKEN" in caller
     assert "persist-credentials: false" in caller
-    assert "if: ${{ inputs.dry_run != true }}" in caller
-    assert "github.token" in caller
-    assert "MUTATION_CREDENTIAL_AVAILABLE: ${{ inputs.dry_run == true ||" in caller
+    assert "inputs.dry_run" not in caller
+    assert "github.token" not in caller
+    assert "MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' ||" in caller
     assert "--connect-timeout 10" in caller
     assert "--max-time 30" in caller
     assert "secrets: inherit" not in caller

@@ -16,11 +16,11 @@ when exact-head OpenCode feedback, a failed-check root-cause review, or an
 approved/unreviewed merge-conflict repair is actionable. It never treats a
 missing initial review as repair evidence.
 
-The caller runs at minute 4 UTC of every hour and also exposes `workflow_dispatch`
-for an operator-controlled acceptance run. It does not contain product edit
-logic, LLM credentials, approval authority, merge authority, or release
-authority. LineageWeave remains independently deployable; privileged automation
-remains in `ContextualWisdomLab/.github`.
+The caller runs at minute 4 UTC of every hour from the protected default branch.
+It deliberately exposes no branch-selected `workflow_dispatch` entry point. It
+does not contain product edit logic, LLM credentials, approval authority, merge
+authority, or release authority. LineageWeave remains independently deployable;
+privileged automation remains in `ContextualWisdomLab/.github`.
 
 ## Buyer-visible incident
 
@@ -102,8 +102,8 @@ than faster remediation.
 
 GitHub scheduled workflows execute from the default branch and can be delayed
 under Actions load. The cron expression is a heartbeat, not a real-time SLA.
-`workflow_dispatch` permits a deliberate post-merge acceptance run without
-changing the cadence or credential boundary.
+Operators perform post-merge acceptance on the next protected-default-branch
+heartbeat so an arbitrary branch can never become the privileged source.
 
 ## Credential and model boundary
 
@@ -113,9 +113,6 @@ established user token is absent. It accepts only `PR_REVIEW_MERGE_TOKEN`,
 `OPENCODE_APPROVE_TOKEN`, or that exchanged app token as mutation authority. It
 never uses `secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
 `COPILOT_GITHUB_TOKEN`.
-
-A manual `dry_run` uses the read-only `github.token`, skips app-token exchange,
-and never materializes or validates a mutation credential.
 
 Model execution remains inside the separately reviewed central worker. Before
 protected-main activation, `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain
@@ -154,7 +151,7 @@ Machine-checkable contracts require:
 - explicit ordered queue `258,260,261,262,263,264`;
 - exact child branch and parent-head validation;
 - stale-child wait without mutation;
-- minute 4 hourly cadence plus a manual acceptance entry point;
+- minute 4 hourly cadence without a branch-selected manual entry point;
 - non-cancelling repository-scoped concurrency;
 - at most one dispatch and a two-hour same-head retry floor;
 - read-only workflow contents plus job-scoped OIDC;
