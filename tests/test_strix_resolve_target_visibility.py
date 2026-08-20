@@ -34,10 +34,12 @@ class _ScriptedGh:
     """Return scripted ``gh api`` outcomes in call order."""
 
     def __init__(self, outcomes: list[object]) -> None:
+        """Initialize outcomes and an observable repository-call log."""
         self.outcomes = list(outcomes)
         self.calls: list[str] = []
 
     def __call__(self, repository: str) -> str:
+        """Return the next scripted result or raise its scripted exception."""
         self.calls.append(repository)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
@@ -471,6 +473,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     """The real ``gh api`` wrapper maps process outcomes to typed failures."""
 
     def succeed(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return a successful ``gh api`` process result."""
         assert argv == ["gh", "api", "repos/ContextualWisdomLab/aFIPC", "--jq", ".private"]
         assert kwargs["shell"] is False
         return subprocess.CompletedProcess(argv, 0, stdout="false\n", stderr="")
@@ -479,6 +482,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     assert visibility.run_gh_visibility("ContextualWisdomLab/aFIPC") == "false\n"
 
     def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Raise the subprocess timeout propagated by the wrapper."""
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
     monkeypatch.setattr(visibility.subprocess, "run", timeout)
@@ -488,6 +492,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     def missing_binary(
         argv: list[str], **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
+        """Raise the missing executable error mapped to a command failure."""
         raise FileNotFoundError("gh")
 
     monkeypatch.setattr(visibility.subprocess, "run", missing_binary)
@@ -495,6 +500,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
         visibility.run_gh_visibility("ContextualWisdomLab/aFIPC")
 
     def fail_empty(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return a nonzero process result without diagnostic output."""
         return subprocess.CompletedProcess(argv, 2, stdout="", stderr="")
 
     monkeypatch.setattr(visibility.subprocess, "run", fail_empty)
@@ -502,6 +508,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
         visibility.run_gh_visibility("ContextualWisdomLab/aFIPC")
 
     def fail_token(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return a token-bearing error that must be redacted before logging."""
         return subprocess.CompletedProcess(
             argv,
             1,
@@ -544,6 +551,7 @@ def test_cli_writes_visibility_and_fails_closed(
     assert visibility.main(["--repository", "ContextualWisdomLab/naruon"]) == 1
 
     def deny(_repository: str) -> str:
+        """Raise the typed visibility failure handled by the CLI."""
         raise visibility.VisibilityResolutionError("denied")
 
     monkeypatch.setattr(visibility, "fetch_repository_visibility", deny)
@@ -570,6 +578,7 @@ def test_cli_main_module_uses_environment(
     monkeypatch.setattr(sys, "argv", ["strix_resolve_target_visibility.py"])
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return a public visibility result for the module-entrypoint test."""
         assert argv[-1] == ".private"
         return subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
 
