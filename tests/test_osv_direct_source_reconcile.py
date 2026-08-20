@@ -22,9 +22,24 @@ def vulnerability(vuln_id: str, affected_range: str | None) -> dict[str, object]
 
     record: dict[str, object] = {"id": vuln_id, "aliases": []}
     if affected_range is not None:
-        record["database_specific"] = {
-            "last_known_affected_version_range": affected_range
-        }
+        record["affected"] = [
+            {
+                "database_specific": {
+                    "last_known_affected_version_range": affected_range,
+                    "source": (
+                        "https://github.com/github/advisory-database/blob/main/"
+                        f"advisories/github-reviewed/2026/08/{vuln_id}/{vuln_id}.json"
+                    ),
+                },
+                "package": {"ecosystem": "npm", "name": "xlsx"},
+                "ranges": [
+                    {
+                        "events": [{"introduced": "0"}],
+                        "type": "SEMVER",
+                    }
+                ],
+            }
+        ]
     return record
 
 
