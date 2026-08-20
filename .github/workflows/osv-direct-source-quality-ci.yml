@@ -1,0 +1,35 @@
+name: OSV Direct Source Quality CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/security-scan.yml'
+      - '.github/workflows/osv-direct-source-quality-ci.yml'
+      - 'scripts/ci/osv_direct_source_reconcile.py'
+      - 'tests/test_osv_direct_source_reconcile.py'
+      - 'docs/doctoring/osv-direct-source-provenance.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Verify provenance reconciliation contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v tests.test_osv_direct_source_reconcile
+          python3 -m py_compile scripts/ci/osv_direct_source_reconcile.py
+          git diff --check
