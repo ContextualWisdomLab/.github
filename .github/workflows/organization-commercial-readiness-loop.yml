@@ -56,8 +56,43 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN is required; neither the reviewer credential nor repository-scoped GITHUB_TOKEN is accepted."
-            exit 1
+            echo "::warning::PR_REVIEW_MERGE_TOKEN is not provisioned; recording a bounded no-op until the maintainer credential is configured."
+            python - "$RUNNER_TEMP/organization-commercial-readiness-loop.json" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          output_path = Path(sys.argv[1])
+          output_path.parent.resolve(strict=True)
+          if output_path.is_symlink():
+              raise RuntimeError("credential-unavailable receipt must not be a symlink")
+          rendered = (
+              json.dumps(
+                  {
+                      "status": "skipped_credential_unavailable",
+                      "reason": "PR_REVIEW_MERGE_TOKEN is not provisioned",
+                      "next_action": "Provision PR_REVIEW_MERGE_TOKEN for the next hourly pass.",
+                  },
+                  indent=2,
+              )
+              + "\n"
+          )
+          descriptor = os.open(
+              output_path,
+              os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+              0o600,
+          )
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              handle.write(rendered)
+          PY
+            {
+              echo "## Hourly coordinator: credential unavailable"
+              echo "No cross-repository dispatch was attempted. Provision PR_REVIEW_MERGE_TOKEN, then the next hourly pass can resume bounded work."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           echo "::add-mask::$GH_TOKEN"
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
