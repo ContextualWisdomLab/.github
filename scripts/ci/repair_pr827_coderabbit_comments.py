@@ -7,20 +7,24 @@ from pathlib import Path
 
 
 def replace_once(path: str, old: str, new: str) -> None:
-    """Replace one exact fragment and fail closed on drift."""
+    """Replace one exact fragment and accept an already-applied repair."""
     file_path = Path(path)
     text = file_path.read_text(encoding="utf-8")
     count = text.count(old)
+    if count == 0 and text.count(new) == 1:
+        return
     if count != 1:
         raise SystemExit(f"{path}: expected one replacement marker, found {count}")
     file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
 def replace_between(path: str, start: str, end: str, replacement: str) -> None:
-    """Replace a uniquely delimited source section."""
+    """Replace a uniquely delimited source section idempotently."""
     file_path = Path(path)
     text = file_path.read_text(encoding="utf-8")
     start_index = text.find(start)
+    if start_index < 0 and text.count(replacement) == 1:
+        return
     if start_index < 0 or text.find(start, start_index + 1) >= 0:
         raise SystemExit(f"{path}: start marker missing or ambiguous")
     end_index = text.find(end, start_index)
