@@ -18,6 +18,10 @@ HOURLY_CALLER_WORKFLOW = Path(
 )
 AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/contextual-orchestrator-autofix.md")
+ARCHITECTURE = Path("ARCHITECTURE.md")
+AUTOFIX_CONTRACT_WORKFLOW = Path(
+    ".github/workflows/hourly-nvidia-nim-review-repair.yml"
+)
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 REVIEW_DISPATCH_BLOB_SHA = "83f6830d5c21a324b4dbcd4e5c21a07968994b81"
@@ -53,6 +57,11 @@ def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
         'CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}',
         'MODEL: contextual-orchestrator/contextual-orchestrator',
         'parsed.scheme != "https"',
+        'or not parsed.hostname',
+        'or parsed.username',
+        'or parsed.password',
+        'or parsed.query',
+        'or parsed.fragment',
         'CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data',
     )
     for fragment in required_fragments:
@@ -71,6 +80,36 @@ def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
+
+
+def test_autofix_contract_check_uses_gateway_terminology() -> None:
+    """Keep the hosted contract check aligned with the gateway it validates."""
+    workflow = _workflow_text(AUTOFIX_CONTRACT_WORKFLOW)
+    assert (
+        "Hourly cadence, immutable source, gateway credential, and conflict scope"
+        in workflow
+    )
+    assert (
+        "Verify hourly scheduler and contextual-orchestrator autofix contracts"
+        in workflow
+    )
+    assert "NIM credential" not in workflow
+    assert "NVIDIA NIM autofix contracts" not in workflow
+
+
+def test_architecture_separates_reviewer_and_write_capable_gateway_flows() -> None:
+    """Prevent the independent reviewer from appearing to use the writer gateway."""
+    architecture = _workflow_text(ARCHITECTURE)
+    assert (
+        "RW->>OC: bounded evidence + independent reviewer credential" in architecture
+    )
+    assert "participant AF as Write-capable autofix worker" in architecture
+    assert "participant GW as contextual-orchestrator gateway" in architecture
+    assert "AF->>GW: bounded repair prompt" in architecture
+    assert (
+        "RW->>OC: bounded evidence + contextual-orchestrator / OpenCode"
+        not in architecture
+    )
 
 
 def test_trusted_autofix_source_is_bound_to_dispatch_sha() -> None:

@@ -111,7 +111,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Hourly cadence, immutable source, NIM credential, and conflict scope
+    name: Hourly cadence, immutable source, gateway credential, and conflict scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -132,7 +132,7 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
-      - name: Verify hourly scheduler and NVIDIA NIM autofix contracts
+      - name: Verify hourly scheduler and contextual-orchestrator autofix contracts
         run: |
           set -euo pipefail
           python -m pytest -q \
