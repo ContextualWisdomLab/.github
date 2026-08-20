@@ -42,7 +42,7 @@ only established scheduler credentials, and grants job-scoped
 ## free-router hourly caller
 
 `free-router-hourly-review-repair.yml` is a thin, read-only caller at minute
-21. It names `ContextualWisdomLab/free-router` and protected `main`, maps
+22. It names `ContextualWisdomLab/free-router` and protected `main`, maps
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 CALLER = Path(".github/workflows/free-router-hourly-review-repair.yml")
 ARCHITECTURE = Path("ARCHITECTURE.md")
+CLAUDE = Path("CLAUDE.md")
 DOCTORING = Path("docs/doctoring/free-router-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -55,7 +56,7 @@ def test_free_router_caller_is_hourly_bounded_and_non_cancelling() -> None:
     """free-router receives one realistic model-routing repair without cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "21 * * * *"' in caller
+    assert 'cron: "22 * * * *"' in caller
     assert "group: free-router-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
@@ -64,6 +65,20 @@ def test_free_router_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert 'max_prs: "50"' in caller
     assert 'max_dispatches: "1"' in caller
     assert 'retry_hours: "2"' in caller
+
+
+def test_free_router_schedule_does_not_collide_with_another_hourly_caller() -> None:
+    """The shared writer queue must receive staggered hourly heartbeats."""
+    caller_cron = next(line.strip() for line in _read(CALLER).splitlines() if "cron:" in line)
+    other_crons = {
+        line.strip()
+        for path in Path(".github/workflows").glob("*-hourly-review-repair.yml")
+        if path != CALLER
+        for line in _read(path).splitlines()
+        if "cron:" in line
+    }
+
+    assert caller_cron not in other_crons
 
 
 def test_free_router_caller_preserves_oidc_and_explicit_secret_scope() -> None:
@@ -114,6 +129,18 @@ def test_architecture_keeps_hourly_callers_and_quality_gate_coherent() -> None:
     assert architecture.count(
         "tests pin workflow structure and governance prose so drift fails closed."
     ) == 1
+
+
+def test_agent_guidance_keeps_one_complete_product_caller_rule() -> None:
+    """The free-router edit must replace, not duplicate, the caller rule."""
+    guidance = _read(CLAUDE)
+
+    assert guidance.count("- **Product hourly callers** stay thin.") == 1
+    assert (
+        "- **Product hourly callers** stay thin. Do not hard-code free-router, naruon, or Keyverse\n"
+        "  into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`\n"
+        "  on the worker, never `COPILOT_GITHUB_TOKEN`."
+    ) in guidance
 
 
 def test_free_router_doctoring_records_routing_activation_and_credentials() -> None:
