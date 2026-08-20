@@ -1092,7 +1092,7 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
@@ -1104,6 +1104,9 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
+    assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
+    assert 'exit "$strix_rc"' in workflow
+    assert "Treating as a neutral skip" not in workflow
     assert "before producing a vulnerability report" in workflow
     assert "genuine findings still fail the check" in workflow
     assert (
