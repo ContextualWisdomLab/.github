@@ -30,11 +30,10 @@ References:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from urllib.parse import urlsplit
 
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
@@ -70,6 +69,8 @@ def validate_catalog_base_url(base_url: str) -> str:
         raise ValueError(f"NVIDIA NIM base URL must use the default HTTPS port; got {parts.port}")
     if parts.username or parts.password:
         raise ValueError("NVIDIA NIM base URL must not embed credentials")
+    if parts.query or parts.fragment:
+        raise ValueError("NVIDIA NIM base URL must not include a query or fragment")
     return base_url.rstrip("/")
 
 
@@ -84,17 +85,30 @@ def fetch_served_model_ids(
     Any transport or payload problem raises, because guessing a model id would
     hide a provider outage behind a confusing downstream model error.
     """
-    request = urllib.request.Request(  # noqa: S310 - scheme and host are validated above.
-        f"{validate_catalog_base_url(base_url)}/models",
-        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-        method="GET",
-    )
+    normalized_base_url = validate_catalog_base_url(base_url)
+    parts = urlsplit(normalized_base_url)
+    request_path = f"{parts.path.rstrip('/')}/models"
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+        with http.client.HTTPSConnection(
+            parts.hostname, parts.port or 443, timeout=timeout_seconds
+        ) as connection:
+            connection.request(
+                "GET",
+                request_path,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
+            )
+            response = connection.getresponse()
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"NVIDIA NIM model catalog request failed with HTTP {response.status}"
+                )
             payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"NVIDIA NIM model catalog request failed with HTTP {error.code}") from error
-    except urllib.error.URLError as error:
+    except RuntimeError:
+        raise
+    except (OSError, http.client.HTTPException) as error:
         raise RuntimeError("NVIDIA NIM model catalog is unreachable") from error
     except json.JSONDecodeError as error:
         raise RuntimeError("NVIDIA NIM model catalog returned a non-JSON body") from error
