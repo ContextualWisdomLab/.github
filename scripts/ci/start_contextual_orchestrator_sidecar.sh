@@ -11,10 +11,10 @@ set -euo pipefail
 
 : "${GITHUB_ENV:=/dev/null}"
 : "${GITHUB_OUTPUT:=/dev/null}"
-# Reviewed protected-main commit. Callers may override it only with another exact
-# 40-hex commit SHA; mutable branches/tags are deliberately rejected because the
-# checkout receives provider credentials later in this script.
-: "${CONTEXTUAL_ORCHESTRATOR_REF:=7eb459ee72c37dead5d25f284dfa4546f149fbe1}"
+# Reviewed protected-main commit. The source identity is deliberately not an
+# environment override: changing it requires an ordinary reviewed code change in
+# this central repository before provider credentials can reach the new source.
+CONTEXTUAL_ORCHESTRATOR_REF="7eb459ee72c37dead5d25f284dfa4546f149fbe1"
 : "${CONTEXTUAL_ORCHESTRATOR_PORT:=8000}"
 : "${CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST:=3}"
 : "${CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS:=60}"
