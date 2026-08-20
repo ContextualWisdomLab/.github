@@ -74,7 +74,7 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR 98개 중 현재 main 기준 PR과 behind/dirty PR이 섞여 있고, 대부분 formal current-head approval이 없다 | “merge-ready”라고 믿은 변경이 실제 보호 규칙을 통과했는지 판단할 수 없다 | exact-head queue를 PR 단위로 재수집하고, stale approval/check를 폐기하며, 독립 approval + terminal required Checks 없이는 merge하지 않는다 |
+| G-01 | 열린 PR 99개 중 현재 main 기준 PR과 behind/dirty PR이 섞여 있고, 대부분 formal current-head approval이 없다 | “merge-ready”라고 믿은 변경이 실제 보호 규칙을 통과했는지 판단할 수 없다 | exact-head queue를 PR 단위로 재수집하고, stale approval/check를 폐기하며, 독립 approval + terminal required Checks 없이는 merge하지 않는다 |
 | G-02 | #1162는 review credential route를 고치지만 current Checks가 queued/cancelled로 반복되며 router의 403 경로가 선행 main에 남아 있다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | #1162 current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
 | G-03 | #1153의 Strix run은 `loginAsGuest`/Caido `127.0.0.1:48080` bootstrap 실패를 provider signal로 분류하지 않았다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다 |
 | G-04 | 99개 live PR 중 많은 항목이 BEHIND 또는 CHANGES_REQUESTED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
@@ -96,7 +96,7 @@ flowchart LR
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
 | #1162 | fix: use review credentials for agent dispatch | `c64e0e8cbacb93f5a0d7f162b30bcc4715912897` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `75bb4597d52481f751498d711a449ce27d7d1b58` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `2b5d574547c38e1263249d63013d6cefe397db33` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `d1da60569c079f59b211a2495cbe0fdb6a7a1d02` | main | BLOCKED | — |
