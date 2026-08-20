@@ -20,6 +20,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
+STRIX_WORKFLOW = Path(".github/workflows/strix.yml")
 REVIEW_DISPATCH_BLOB_SHA = "f464751b6630101ead8544d22e5b37aae044e93d"
 
 
@@ -423,3 +424,17 @@ def test_workflow_reconstructed_inventory_is_checked_by_the_trusted_seal() -> No
     assert f'allowed_paths_zlist="${{RUNNER_TEMP}}/{inventory}"' in ordinary
     assert '--allowed-paths "$allowed_paths_zlist"' in ordinary
     assert "pr_review_conflict_scope.py\" verify" in ordinary
+
+
+def test_strix_gate_uses_medium_threshold_and_neutral_scope_signal() -> None:
+    """Low/INFO reports do not block, while medium-or-higher findings do."""
+    strix = _workflow_text(STRIX_WORKFLOW)
+
+    assert (
+        "reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
+        "(critical|high|medium)([^A-Za-z0-9_]|$)'"
+        in strix
+    )
+    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]" not in strix
+    assert "non_assessable_scope_signal='No Assessable Application Code Found in Scope'" in strix
+    assert "produced no medium-or-higher vulnerability evidence" in strix
