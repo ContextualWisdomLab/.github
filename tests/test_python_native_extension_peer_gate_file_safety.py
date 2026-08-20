@@ -51,3 +51,11 @@ def test_bounded_reader_accepts_one_stable_regular_file(tmp_path: Path) -> None:
     payload.write_bytes(b"stable")
 
     assert gate._read_bounded_regular(payload, 16) == b"stable"
+
+
+def test_bounded_reader_rejects_a_negative_limit(tmp_path: Path) -> None:
+    """A negative byte budget is invalid before any filesystem access."""
+    payload = tmp_path / "payload.txt"
+    payload.write_bytes(b"stable")
+
+    assert gate._read_bounded_regular(payload, -1) is None

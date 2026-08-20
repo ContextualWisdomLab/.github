@@ -88,7 +88,7 @@ def _read_bounded_regular(path: Path, maximum: int) -> bytes | None:
                 payload.extend(chunk)
                 if len(payload) > maximum:
                     return None
-            return None
+            return None  # pragma: no cover - every read iteration returns above.
         finally:
             os.close(descriptor)
     except OSError:

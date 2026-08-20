@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from scripts.ci import python_native_extension_peer_gate as gate
 
@@ -127,6 +127,29 @@ def test_repo_root_must_contain_the_pyproject(tmp_path: Path) -> None:
         pyproject_path=pyproject_path,
         changed_files_path=changed_files_path,
         repo_root_path=root_link,
+    ) is None
+
+
+def test_repository_contract_rejects_a_rebound_pyproject_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A resolved pyproject whose parent changes is not trusted metadata."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("[tool.maturin]\n", encoding="utf-8")
+    original_resolve = Path.resolve
+
+    def rebound(path: Path, *args, **kwargs):
+        """Return a different parent only for the metadata file under test."""
+        if path == pyproject:
+            return tmp_path / "rebound" / "pyproject.toml"
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", rebound)
+    assert gate._repository_contract_paths(
+        repo_root_path=tmp_path,
+        pyproject_path=pyproject,
+        manifest_path=PurePosixPath("Cargo.toml"),
+        python_source=PurePosixPath("."),
     ) is None
 
 
