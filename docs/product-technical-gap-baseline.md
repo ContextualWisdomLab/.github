@@ -166,7 +166,7 @@ flowchart LR
 | #991 | fix(automation): reuse review node_id for mention eyes | `1fa547ae56c3cb829dfbba3177c2ec0c3fa41fe3` | main | BEHIND | — |
 | #949 | fix(opencode-review): discover multi-line run: blocks in safe_pytest_command | `de073535569b7e4904cac699df9f159ee8f93dd7` | main | BLOCKED | CHANGES_REQUESTED |
 | #946 | fix(review): publish substantive OpenCode LLM evidence | `efc069b56abf142312aa4f3bb7b5b98e3698b9c9` | main | BLOCKED | CHANGES_REQUESTED |
-| #941 | fix(semgrep): make the pinned image digest authoritative | `52e6af04a7b1953dc18a0b34faacf81c403bf86a` | main | DIRTY | CHANGES_REQUESTED |
+| #941 | fix(semgrep): make the pinned image digest authoritative | `84b2b924547502db72856c657a171814e64142fb` | main | BLOCKED | — |
 | #939 | fix: keep cross-repo OpenCode evidence healthy | `050f2b036d90e4b6a9f9e85683efcbfb5c4d3fdd` | main | BEHIND | CHANGES_REQUESTED |
 | #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
 | #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
