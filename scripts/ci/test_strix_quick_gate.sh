@@ -5417,7 +5417,10 @@ EOS
 			python3 - <<'PY'
 from pathlib import Path
 
-path = Path("frontend/src/App.tsx")
+repo_root = Path.cwd().resolve(strict=True)
+path = (repo_root / "frontend/src/App.tsx").resolve(strict=False)
+if not path.is_relative_to(repo_root):
+    raise RuntimeError("test fixture output escaped the repository root")
 lines = path.read_text(encoding="utf-8").splitlines()
 lines[119] = f"{lines[119]} // changed search line"
 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
