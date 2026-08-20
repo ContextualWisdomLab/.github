@@ -6,13 +6,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cwl_catalog_contract import (
-    MAX_COLLECTION_ITEMS,
-    MAX_DEPTH,
-    MAX_FILE_BYTES,
-    MAX_STRING_LENGTH,
-    CatalogValidationError,
-)
+if __package__:  # pragma: no cover - exercised by the module CLI subprocess
+    from .cwl_catalog_contract import (
+        MAX_COLLECTION_ITEMS,
+        MAX_DEPTH,
+        MAX_FILE_BYTES,
+        MAX_STRING_LENGTH,
+        CatalogValidationError,
+    )
+else:
+    from cwl_catalog_contract import (
+        MAX_COLLECTION_ITEMS,
+        MAX_DEPTH,
+        MAX_FILE_BYTES,
+        MAX_STRING_LENGTH,
+        CatalogValidationError,
+    )
 
 
 def _reject_constant(value: str) -> None:

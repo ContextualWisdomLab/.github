@@ -4,24 +4,44 @@ from __future__ import annotations
 
 from typing import Any
 
-from cwl_catalog_contract import (
-    CONTRACT_KINDS,
-    CREDENTIAL_FLOWS,
-    DATA_CLASSIFICATIONS,
-    DATA_FLOW_CLASSES,
-    EVIDENCE_CLASSES,
-    MATURITY_LEVELS,
-    MATURITY_RANK,
-    RELATIONSHIP_FIELDS,
-    CatalogValidationError,
-    require_boolean,
-    require_closed_object,
-    require_enum,
-    require_identifier,
-    require_immutable_reference,
-    require_semver,
-)
-from cwl_catalog_service import validate_next_actions
+if __package__:  # pragma: no cover - exercised by the module CLI subprocess
+    from .cwl_catalog_contract import (
+        CONTRACT_KINDS,
+        CREDENTIAL_FLOWS,
+        DATA_CLASSIFICATIONS,
+        DATA_FLOW_CLASSES,
+        EVIDENCE_CLASSES,
+        MATURITY_LEVELS,
+        MATURITY_RANK,
+        RELATIONSHIP_FIELDS,
+        CatalogValidationError,
+        require_boolean,
+        require_closed_object,
+        require_enum,
+        require_identifier,
+        require_immutable_reference,
+        require_semver,
+    )
+    from .cwl_catalog_service import validate_next_actions
+else:
+    from cwl_catalog_contract import (
+        CONTRACT_KINDS,
+        CREDENTIAL_FLOWS,
+        DATA_CLASSIFICATIONS,
+        DATA_FLOW_CLASSES,
+        EVIDENCE_CLASSES,
+        MATURITY_LEVELS,
+        MATURITY_RANK,
+        RELATIONSHIP_FIELDS,
+        CatalogValidationError,
+        require_boolean,
+        require_closed_object,
+        require_enum,
+        require_identifier,
+        require_immutable_reference,
+        require_semver,
+    )
+    from cwl_catalog_service import validate_next_actions
 
 
 def validate_relationship(value: object, index: int, services: dict[str, dict[str, Any]]) -> dict[str, Any]:

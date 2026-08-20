@@ -235,6 +235,23 @@ def test_cli_and_callable_entry_points_use_stable_codes(
         and "validated" in accepted.stdout
         and accepted.stderr == ""
     )
+    packaged = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.ci.validate_cwl_ecosystem_catalog",
+            str(CATALOG),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (
+        packaged.returncode == 0
+        and "validated" in packaged.stdout
+        and packaged.stderr == ""
+    )
     catalog = load_catalog()
     first_relation(catalog)["direct_cross_repository_sql"] = True
     rejected_path = write_catalog_tree(tmp_path / "rejected", catalog)

@@ -8,21 +8,38 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from cwl_catalog_contract import (
-    CATALOG_FIELDS,
-    MANIFEST_REFERENCE_FIELDS,
-    MATURITY_LEVELS,
-    CatalogValidationError,
-    require_array,
-    require_closed_object,
-    require_enum,
-    require_identifier,
-    require_manifest_path,
-    require_semver,
-)
-from cwl_catalog_io import load_json, resolve_manifest_path, validate_bounded_value
-from cwl_catalog_relationship import validate_relationship
-from cwl_catalog_service import validate_service
+if __package__:  # pragma: no cover - exercised by the module CLI subprocess
+    from .cwl_catalog_contract import (
+        CATALOG_FIELDS,
+        MANIFEST_REFERENCE_FIELDS,
+        MATURITY_LEVELS,
+        CatalogValidationError,
+        require_array,
+        require_closed_object,
+        require_enum,
+        require_identifier,
+        require_manifest_path,
+        require_semver,
+    )
+    from .cwl_catalog_io import load_json, resolve_manifest_path, validate_bounded_value
+    from .cwl_catalog_relationship import validate_relationship
+    from .cwl_catalog_service import validate_service
+else:
+    from cwl_catalog_contract import (
+        CATALOG_FIELDS,
+        MANIFEST_REFERENCE_FIELDS,
+        MATURITY_LEVELS,
+        CatalogValidationError,
+        require_array,
+        require_closed_object,
+        require_enum,
+        require_identifier,
+        require_manifest_path,
+        require_semver,
+    )
+    from cwl_catalog_io import load_json, resolve_manifest_path, validate_bounded_value
+    from cwl_catalog_relationship import validate_relationship
+    from cwl_catalog_service import validate_service
 
 
 def _load_services(catalog: dict[str, Any], catalog_path: Path) -> dict[str, dict[str, Any]]:
