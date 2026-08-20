@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Documented the live product and technical gap baseline, current open-PR inventory, ownership boundaries, acceptance criteria, and buyer next-action loop in `docs/product-technical-gap-baseline.md`.
+
 All notable changes to the organization automation repository are documented in
 this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
