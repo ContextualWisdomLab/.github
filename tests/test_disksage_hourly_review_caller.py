@@ -28,12 +28,12 @@ def test_disksage_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert 'retry_hours: "2"' in caller
 
 
-def test_disksage_caller_preserves_credentials_and_read_only_token_scope() -> None:
-    """The queue scanner maps established credentials without exposing model secrets."""
+def test_disksage_caller_preserves_credentials_and_oidc_token_scope() -> None:
+    """The caller grants only read access plus the scheduler's OIDC exchange scope."""
     caller = _read(CALLER)
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
-    assert "\npermissions:\n  contents: read\n" in workflow_scope
+    assert "\npermissions:\n  contents: read\n  id-token: write\n" in workflow_scope
     assert "\n    permissions:\n" not in jobs_scope
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
@@ -62,6 +62,8 @@ def test_disksage_caller_doctoring_records_rca_feasibility_and_latency() -> None
         "NVIDIA_NIM_API_KEY",
         "COPILOT_GITHUB_TOKEN",
         "ContextualWisdomLab/disksage",
+        "`id-token: write`",
+        "OIDC token exchange",
         "APA 7th references",
     ):
         assert phrase in doctoring
