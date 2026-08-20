@@ -40,7 +40,9 @@ the ruleset was scoped to `~DEFAULT_BRANCH`. Ruleset `18156473` now uses
 `ref_name.include=["~ALL"]`; the existing scheduler already enumerates open
 PRs across base branches and dispatches exact-head review-only work for
 stacked PRs. The audit script and regression test enforce this scope so a
-future ruleset rollback fails closed.
+future ruleset rollback fails closed. The live repair also restored the
+checked-in two-approval contract; workflow source, repository exclusions, and
+stale-review/thread-resolution/last-push protections were preserved.
 
 ## OpenCode required workflow posture
 
