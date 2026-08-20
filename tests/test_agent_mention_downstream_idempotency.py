@@ -18,8 +18,11 @@ def test_router_can_read_durable_central_artifacts() -> None:
     local, sweep = text.split("\n  sweep-organization-agent-mentions:\n", 1)
     assert "permissions:\n      actions: read" in local
     assert "permissions:\n      actions: read" in sweep
-    assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in local
-    assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
+    assert (
+        "AGENT_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}"
+        in local
+    )
+    assert 'export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"' in sweep
 
 
 def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
