@@ -57,6 +57,19 @@ class SnapshotChanged(RuntimeError):
     """Signal that a repository moved while one snapshot was materialized."""
 
 
+def _open_private_output(path: Path, *, append: bool) -> Any:
+    """Open an existing-parent output path without following its final link."""
+
+    parent = path.parent.resolve(strict=True)
+    target = parent / path.name
+    if target.exists() and target.is_symlink():
+        raise ValueError(f"output path must not be a symbolic link: {path}")
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= os.O_APPEND if append else os.O_TRUNC
+    descriptor = os.open(target, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    return os.fdopen(descriptor, "a" if append else "w", encoding="utf-8")
+
+
 class ActionKind(str, enum.Enum):
     """Supported coordinator mutation classes."""
 
@@ -837,13 +850,13 @@ def main(
         return 2
     text = report.to_json() + "\n"
     if args.json_output is not None:
-        args.json_output.parent.mkdir(parents=True, exist_ok=True)
-        args.json_output.write_text(text, encoding="utf-8")
+        with _open_private_output(args.json_output, append=False) as handle:
+            handle.write(text)
     else:
         sys.stdout.write(text)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
-        with Path(summary_path).open("a", encoding="utf-8") as handle:
+        with _open_private_output(Path(summary_path), append=True) as handle:
             handle.write(report.to_markdown())
     all_selected_inspections_failed = (
         report.inspected_repositories == 0 and bool(report.inspection_errors)

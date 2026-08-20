@@ -19,6 +19,7 @@ from scripts.ci.organization_commercial_readiness_loop import (
     GitHubError,
     PlanItem,
     SnapshotChanged,
+    _open_private_output,
     main,
     run_once,
 )
@@ -185,3 +186,17 @@ def test_main_writes_file_summary_stdout_and_failure_paths(
     ) == 2
     assert "GitHubError: auth" in capsys.readouterr().err
     assert main(["--max-repositories", "-1"], client_factory=lambda: empty) == 2
+
+
+def test_private_outputs_reject_symbolic_links(tmp_path: Path) -> None:
+    """The coordinator cannot overwrite a report or summary symlink."""
+
+    target = tmp_path / "target.txt"
+    target.write_text("keep\n", encoding="utf-8")
+    report = tmp_path / "report.json"
+    report.symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _open_private_output(report, append=False)
+
+    assert target.read_text(encoding="utf-8") == "keep\n"
