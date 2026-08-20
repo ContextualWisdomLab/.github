@@ -26,6 +26,7 @@ TERMINAL_STATES = {"COMPLETED"}
 DEFAULT_QUEUE_AGE_SLO_SECONDS = 900
 SCHEMA_VERSION = "actions.queue_health.v1"
 MAX_API_PAGE_SIZE = 100
+WORKFLOW_RUN_PAGE_SIZE = 50
 MAX_API_PAGES = 20
 PAGINATED_PAGES_KEY = "_queue_health_pages"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -268,7 +269,7 @@ def collect_snapshot(
         for status in ("in_progress", "queued"):
             runs = _list_payload(
                 github_json(
-                    f"repos/{repository}/actions/runs?status={status}&per_page={MAX_API_PAGE_SIZE}",
+                    f"repos/{repository}/actions/runs?status={status}&per_page={WORKFLOW_RUN_PAGE_SIZE}",
                     paginate=True,
                     runner=runner,
                 ),

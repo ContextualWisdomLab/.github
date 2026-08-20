@@ -336,8 +336,8 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
     responses = {
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
-        "repos/owner/repo/actions/runs?status=queued&per_page=100": [queued_current, current],
-        "repos/owner/repo/actions/runs?status=in_progress&per_page=100": [current, unlinked],
+        "repos/owner/repo/actions/runs?status=queued&per_page=50": [queued_current, current],
+        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [current, unlinked],
         "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
     }
 
@@ -370,7 +370,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
         queue_health.collect_snapshot(["owner/repo"], runner=bad_metadata_runner)
 
     invalid_run_responses = dict(responses)
-    invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=100"] = [{"id": 0}]
+    invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=50"] = [{"id": 0}]
 
     def invalid_run_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         payload = invalid_run_responses[args[-1]]
@@ -421,6 +421,36 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
 
     with pytest.raises(queue_health.QueueHealthError, match="owner/repo"):
         queue_health.collect_snapshot(["owner/repo"], runner=invalid_pull_runner)
+
+
+def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
+    """Avoid oversized Actions run responses while retaining bounded pagination."""
+    requested_paths: list[str] = []
+
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        path = args[-1]
+        requested_paths.append(path)
+        if path == "repos/owner/repo":
+            payload: object = {"default_branch": "main"}
+        elif path == "repos/owner/repo/pulls?state=open&per_page=100":
+            payload = []
+        elif "/actions/runs?status=" in path:
+            payload = {"total_count": 0, "workflow_runs": []}
+        else:  # pragma: no cover - a new endpoint must be explicitly governed
+            raise AssertionError(f"unexpected endpoint: {path}")
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    queue_health.collect_snapshot(
+        ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
+    )
+
+    run_paths = [path for path in requested_paths if "/actions/runs?status=" in path]
+    assert run_paths == [
+        "repos/owner/repo/actions/runs?status=in_progress&per_page=50",
+        "repos/owner/repo/actions/runs?status=queued&per_page=50",
+    ]
 
 
 def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:

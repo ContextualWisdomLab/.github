@@ -21,9 +21,11 @@ Queued runs use run-level evidence because GitHub has not assigned their jobs;
 only current-head `in_progress` runs make the additional jobs API read needed
 to inspect a concrete runner assignment.
 
-List endpoints use GitHub CLI pagination with at most 20 pages of 100 records.
-An incomplete, malformed, or larger response fails closed instead of silently
-claiming that the visible page is the whole queue.
+List endpoints use GitHub CLI pagination with at most 20 pages. Pull-request
+and job lists use pages of 100 records; workflow-run lists use pages of 50 so a
+large Actions queue does not require one oversized response. An incomplete,
+malformed, or larger response fails closed instead of silently claiming that
+the visible page is the whole queue.
 
 The default queue-age SLO is 900 seconds. A current-head job that remains
 unassigned beyond that limit produces a warning and an explicit manual action
