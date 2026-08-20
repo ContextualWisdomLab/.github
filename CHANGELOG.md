@@ -35,6 +35,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Added a direct regression contract for Vertex custom-model resource paths and a filterable Strix harness case, so model normalization can be reproduced independently of the full scenario order.
 - Documented GitHubClient initialization so the attempt-scoped artifact quality workflow reaches the repository-wide 100% docstring contract on every current head.
 - Bound OpenCode coverage source evidence to a validated immutable artifact ID and producer-attested workflow attempt, retained one-day source evidence, and made selective reruns fail closed before download on missing, malformed, or prior-attempt identity with full-rerun or fresh-dispatch guidance.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.

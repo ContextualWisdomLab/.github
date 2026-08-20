@@ -5803,6 +5803,16 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/hallucination-primary" \
 			"<unset>"
 		;;
+	vertex-custom-model-resource-path)
+		run_gate_case "vertex-custom-model-resource-path" \
+			"projects/my-proj/locations/us-central1/models/my-custom-model-123" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/my-custom-model-123'." \
+			"1" \
+			"vertex_ai/my-custom-model-123" \
+			"<unset>"
+		;;
 	target-path-src-default-source-dirs)
 		run_gate_case "target-path-src-default-source-dirs" \
 			"vertex_ai/hallucination-primary" \
@@ -11802,6 +11812,12 @@ assert_normalized_model \
 	"projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai" \
 	"vertex_ai/gemini-2.5-pro"
+
+assert_normalized_model \
+	"vertex-custom-resource-path" \
+	"projects/my-proj/locations/us-central1/models/my-custom-model-123" \
+	"vertex_ai" \
+	"vertex_ai/my-custom-model-123"
 
 assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"
