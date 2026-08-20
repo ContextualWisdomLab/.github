@@ -104,6 +104,17 @@ jobs:
             --allow-no-lockfiles
             -r
             ./
+      - name: Preserve base direct-source provenance
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/osv-base-provenance"
+          if [ -L pnpm-lock.yaml ]; then
+            echo "::error::Base pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+            exit 1
+          fi
+          if [ -f pnpm-lock.yaml ]; then
+            cp -- pnpm-lock.yaml "$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+          fi
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -143,6 +154,41 @@ jobs:
             --allow-no-lockfiles
             -r
             ./
+      - name: Checkout exact central provenance policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          path: .cwl-trusted-security-policy
+          persist-credentials: false
+      - name: Reconcile immutable direct-source provenance
+        run: |
+          set -euo pipefail
+          reconciler=".cwl-trusted-security-policy/scripts/ci/osv_direct_source_reconcile.py"
+          audit="osv-provenance-audit.json"
+          test -f "$reconciler"
+          test ! -L "$reconciler"
+
+          base_lock="$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+          if [ -f "$base_lock" ]; then
+            python3 "$reconciler" \
+              --results old-results.json \
+              --lockfile "$base_lock" \
+              --audit "$audit" \
+              --label base
+          fi
+
+          if [ -L pnpm-lock.yaml ]; then
+            echo "::error::Head pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+            exit 1
+          fi
+          if [ -f pnpm-lock.yaml ]; then
+            python3 "$reconciler" \
+              --results new-results.json \
+              --lockfile pnpm-lock.yaml \
+              --audit "$audit" \
+              --label head
+          fi
       - name: Require OSV scan output
         run: |
           set -euo pipefail
@@ -247,6 +293,7 @@ jobs:
             old-results.json
             new-results.json
             results.sarif
+            osv-provenance-audit.json
           if-no-files-found: ignore
           retention-days: 5
 
