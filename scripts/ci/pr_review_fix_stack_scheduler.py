@@ -29,6 +29,9 @@ except ModuleNotFoundError:
 
 BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 NUMBER_RE = re.compile(r"^[1-9][0-9]*$")
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+MAX_BRANCH_NAME_LENGTH = 255
+VALID_ACTIONS = frozenset({"dispatch", "error", "skip", "wait"})
 NO_REPAIR_REASON = (
     "no current-head autofixable review, failed-check RCA, or approved merge conflict"
 )
@@ -39,8 +42,8 @@ def parse_pull_request_numbers(raw: str, *, maximum: int) -> tuple[int, ...]:
 
     if maximum < 1:
         raise ValueError("maximum must be positive")
-    tokens = tuple(part.strip() for part in raw.split(",") if part.strip())
-    if not tokens:
+    tokens = tuple(part.strip() for part in raw.split(","))
+    if not tokens or any(not token for token in tokens):
         raise ValueError("at least one pull request number is required")
     numbers: list[int] = []
     seen: set[int] = set()
@@ -63,11 +66,47 @@ def _single_pull_request(repo: str, number: int) -> dict[str, Any]:
     """Fetch exactly one pull request snapshot or fail closed."""
 
     records = fetch_pr(repo, number)
+    if not isinstance(records, list):
+        raise RuntimeError("pull request response must be a list")
     if len(records) != 1:
         raise RuntimeError(
             f"expected one pull request for #{number}; received {len(records)}"
         )
-    return records[0]
+    record = records[0]
+    if not isinstance(record, dict):
+        raise RuntimeError("pull request response item must be an object")
+    if type(record.get("number")) is not int or record["number"] != number:
+        raise RuntimeError(f"pull request response number does not match #{number}")
+    for field in ("baseRefName", "headRefName"):
+        branch_name = record.get(field)
+        if (
+            not isinstance(branch_name, str)
+            or len(branch_name) > MAX_BRANCH_NAME_LENGTH
+            or ".." in branch_name
+            or not BRANCH_RE.fullmatch(branch_name)
+        ):
+            raise RuntimeError(f"pull request response has an unsafe {field}")
+    for field in ("baseRefOid", "headRefOid"):
+        if not isinstance(record.get(field), str) or not SHA_RE.fullmatch(record[field]):
+            raise RuntimeError(f"pull request response has an invalid {field}")
+    return record
+
+
+def _normalize_decision(
+    decision: object,
+) -> tuple[str, tuple[str, ...]]:
+    """Validate a shared scheduler decision before recording or acting on it."""
+
+    if not isinstance(decision, tuple) or len(decision) != 2:
+        return "error", ("shared scheduler returned a malformed decision",)
+    action, reasons = decision
+    if not isinstance(action, str) or action not in VALID_ACTIONS:
+        return "error", ("shared scheduler returned an unknown action",)
+    if not isinstance(reasons, (tuple, list)) or not reasons:
+        return "error", ("shared scheduler returned empty reasons",)
+    if any(not isinstance(reason, str) or not reason.strip() for reason in reasons):
+        return "error", ("shared scheduler returned non-string reasons",)
+    return str(action), tuple(reason.strip() for reason in reasons)
 
 
 def _base_branch_error(
@@ -128,16 +167,35 @@ def process_stack(args: argparse.Namespace) -> int:
     """Inspect the stack in order and stop after one dispatch or blocker."""
 
     previous: dict[str, Any] | None = None
+    previous_number: int | None = None
     inspected = 0
     dispatched = 0
     failed = False
     decisions: list[dict[str, Any]] = []
     for number in args.pull_request_numbers:
-        try:
-            pr = _single_pull_request(args.repo, number)
-        except RuntimeError as exc:
-            action, reasons = "error", (str(exc),)
-        else:
+        pr: dict[str, Any] | None = None
+        action = ""
+        reasons: tuple[str, ...] = ()
+        if previous is not None and previous_number is not None:
+            try:
+                refreshed_parent = _single_pull_request(args.repo, previous_number)
+            except RuntimeError as exc:
+                action, reasons = "error", (str(exc),)
+            else:
+                if refreshed_parent["headRefOid"].lower() != previous["headRefOid"].lower():
+                    action, reasons = "wait", (
+                        f"parent PR #{previous_number} head moved from "
+                        f"{previous['headRefOid']} to {refreshed_parent['headRefOid']}; "
+                        "restack before descendant repair",
+                    )
+                else:
+                    previous = refreshed_parent
+        if not action:
+            try:
+                pr = _single_pull_request(args.repo, number)
+            except RuntimeError as exc:
+                action, reasons = "error", (str(exc),)
+        if not action:
             expected_name = (
                 args.base_branch
                 if previous is None
@@ -164,7 +222,9 @@ def process_stack(args: argparse.Namespace) -> int:
                 local_args = argparse.Namespace(**vars(args))
                 local_args.base_branch = expected_name
                 try:
-                    action, reasons = inspect_pr(args.repo, pr, local_args)
+                    action, reasons = _normalize_decision(
+                        inspect_pr(args.repo, pr, local_args)
+                    )
                 except (RuntimeError, ValueError) as exc:
                     action, reasons = "error", (str(exc),)
 
@@ -184,6 +244,7 @@ def process_stack(args: argparse.Namespace) -> int:
         if action != "skip" or tuple(reasons) != (NO_REPAIR_REASON,):
             break
         previous = pr
+        previous_number = number
 
     print(
         _summary(

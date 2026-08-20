@@ -59,12 +59,59 @@ def test_parse_pull_request_numbers_preserves_order_and_rejects_ambiguity() -> N
         ("0", 3),
         ("x", 3),
         ("258,258", 3),
+        ("258,,260", 3),
+        (",258", 3),
+        ("258,", 3),
         ("1,2", 1),
     ):
         with pytest.raises(ValueError):
             stack.parse_pull_request_numbers(raw, maximum=maximum)
     with pytest.raises(ValueError):
         stack.parse_pull_request_numbers("1", maximum=0)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        ("not-a-list", "list"),
+        ([], "one pull request"),
+        ([None], "object"),
+        ([{"number": 259}], "number"),
+        (
+            [
+                {
+                    "number": 258,
+                    "baseRefName": "main",
+                    "headRefName": "x" * 256,
+                    "baseRefOid": "0" * 40,
+                    "headRefOid": "1" * 40,
+                }
+            ],
+            "headRefName",
+        ),
+        (
+            [
+                {
+                    "number": 258,
+                    "baseRefName": "main",
+                    "headRefName": "feat/root",
+                    "baseRefOid": "0" * 39,
+                    "headRefOid": "1" * 40,
+                }
+            ],
+            "baseRefOid",
+        ),
+    ],
+)
+def test_single_pull_request_rejects_malformed_identity(
+    monkeypatch,
+    response,
+) -> None:
+    """Malformed API identity never reaches dependency or repair logic."""
+
+    monkeypatch.setattr(stack, "fetch_pr", lambda _repo, _number: response[0])
+    with pytest.raises(RuntimeError, match=response[1]):
+        stack._single_pull_request("owner/repo", 258)
 
 
 def test_stack_dispatches_once_in_declared_dependency_order(
@@ -114,7 +161,7 @@ def test_stack_dispatches_once_in_declared_dependency_order(
     monkeypatch.setattr(stack, "inspect_pr", fake_inspect)
 
     assert stack.process_stack(arguments((258, 260, 261))) == 0
-    assert fetched == [258, 260]
+    assert fetched == [258, 258, 260]
     assert inspected == [(258, "main"), (260, "feat/root")]
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["autofix_dispatches"] == 1
@@ -153,6 +200,82 @@ def test_stack_waits_when_child_base_sha_is_stale(monkeypatch, capsys) -> None:
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["decisions"][-1]["action"] == "wait"
     assert "expected parent head" in payload["decisions"][-1]["reasons"][0]
+
+
+def test_stack_refreshes_parent_before_child_validation(monkeypatch, capsys) -> None:
+    """A parent moving after inspection blocks the child without dispatch."""
+
+    root = make_pr(
+        258,
+        base_name="main",
+        base_oid="0" * 40,
+        head_name="feat/root",
+        head_oid="1" * 40,
+    )
+    moved_root = {**root, "headRefOid": "4" * 40}
+    child = make_pr(
+        260,
+        base_name="feat/root",
+        base_oid="1" * 40,
+        head_name="feat/child",
+        head_oid="2" * 40,
+    )
+    fetch_counts = {258: 0, 260: 0}
+
+    def fake_fetch(_repo: str, number: int) -> list[dict]:
+        fetch_counts[number] += 1
+        if number == 258:
+            return [root if fetch_counts[number] == 1 else moved_root]
+        return [child]
+
+    inspected: list[int] = []
+    monkeypatch.setattr(stack, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(
+        stack,
+        "inspect_pr",
+        lambda _repo, pr, _args: inspected.append(pr["number"])
+        or ("skip", (stack.NO_REPAIR_REASON,)),
+    )
+
+    assert stack.process_stack(arguments((258, 260))) == 0
+    assert inspected == [258]
+    assert fetch_counts == {258: 2, 260: 0}
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["decisions"][-1]["action"] == "wait"
+    assert "head moved" in payload["decisions"][-1]["reasons"][0]
+
+
+def test_stack_fails_when_parent_refresh_is_invalid(monkeypatch, capsys) -> None:
+    """An invalid parent refresh blocks the child without inspecting it."""
+
+    root = make_pr(
+        258,
+        base_name="main",
+        base_oid="0" * 40,
+        head_name="feat/root",
+        head_oid="1" * 40,
+    )
+    fetch_count = 0
+
+    def fake_fetch(_repo: str, number: int) -> list[dict]:
+        nonlocal fetch_count
+        assert number == 258
+        fetch_count += 1
+        return [root] if fetch_count == 1 else []
+
+    inspected: list[int] = []
+    monkeypatch.setattr(stack, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(
+        stack,
+        "inspect_pr",
+        lambda _repo, pr, _args: inspected.append(pr["number"])
+        or ("skip", (stack.NO_REPAIR_REASON,)),
+    )
+
+    assert stack.process_stack(arguments((258, 260))) == 1
+    assert inspected == [258]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["decisions"][-1]["action"] == "error"
 
 
 def test_stack_fails_closed_on_wrong_parent_branch(monkeypatch, capsys) -> None:
@@ -321,6 +444,38 @@ def test_stack_handles_inspection_failure_and_empty_queue(
     assert stack.process_stack(empty_args) == 0
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["inspected"] == 0
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        None,
+        ("unknown", ("reason",)),
+        ("skip", ()),
+        ("skip", "reason"),
+        ("skip", (None,)),
+    ],
+)
+def test_stack_rejects_malformed_shared_decisions(
+    monkeypatch,
+    capsys,
+    decision,
+) -> None:
+    """Malformed shared-scheduler outputs become explicit errors."""
+
+    pr = make_pr(
+        258,
+        base_name="main",
+        base_oid="0" * 40,
+        head_name="feat/root",
+        head_oid="1" * 40,
+    )
+    monkeypatch.setattr(stack, "fetch_pr", lambda _repo, _number: [pr])
+    monkeypatch.setattr(stack, "inspect_pr", lambda _repo, _pr, _args: decision)
+
+    assert stack.process_stack(arguments((258,))) == 1
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["decisions"][0]["action"] == "error"
 
 
 def test_cli_covers_invalid_base_stack_value_and_normal_main(monkeypatch) -> None:
