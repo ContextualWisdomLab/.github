@@ -61,7 +61,7 @@ Live work and roadmap live on
 The narrative brief is [docs/CWL-MASTER-CONTEXT.md](docs/CWL-MASTER-CONTEXT.md).
 The last checked-in ruleset ledger is
 [docs/org-required-workflow-rollout.md](docs/org-required-workflow-rollout.md)
-(updated 2026-07-23 KST).
+(updated 2026-08-21 KST).
 
 Checked-in operator facts:
 

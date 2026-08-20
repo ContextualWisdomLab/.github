@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-23 06:35 KST
+Updated: 2026-08-21 03:30 KST
 
 ## Decision
 
