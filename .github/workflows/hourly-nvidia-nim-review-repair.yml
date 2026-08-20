@@ -80,11 +80,8 @@ on:
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_nonnest2_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
-<<<<<<< HEAD
       - tests/test_quarantine_sandbox_hourly_review_caller.py
-=======
       - tests/test_free_router_hourly_review_caller.py
->>>>>>> bfbd718c (feat(automation): run free-router hourly NVIDIA NIM review repair)
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_control_files.py
@@ -108,11 +105,8 @@ on:
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
-<<<<<<< HEAD
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
-=======
       - docs/doctoring/free-router-hourly-review-caller.md
->>>>>>> bfbd718c (feat(automation): run free-router hourly NVIDIA NIM review repair)
 
 permissions:
   contents: read
