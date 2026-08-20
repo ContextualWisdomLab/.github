@@ -111,10 +111,10 @@ flowchart LR
 | #1146 | fix(figma): retain style references and component sets | `38fbf9fc86af0e03bde334958616086707244373` | main | BLOCKED | — |
 | #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
 | #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
-| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `41a59e16234bf6cfb01cdd3fd58172d4681d4859` | main | BEHIND | — |
-| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `8193f0a12e733a2370b7384df42f05919f624c57` | main | BEHIND | — |
+| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `6915bb9395bbe653f41db944c40186e7c3f8c153` | main | BLOCKED | — |
+| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `0c700f6f931986d58bd0005ea2d248ca2e459d77` | main | BLOCKED | — |
 | #1114 | fix(strix): retry transient visibility API failures | `61a82288fddd714a80abb201839631897490f7a9` | main | BLOCKED | CHANGES_REQUESTED |
-| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `1e854d0e8547fbaa32d5cd2ab180bd5e07e3df69` | main | BEHIND | — |
+| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `ed42fda7fc712f09930c8c4c0398aa261291c960` | main | BLOCKED | — |
 | #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `4e233c48ecfadf3d3af9ec30f9158da5052102b6` | main | BLOCKED | — |
 | #1107 | chore(deps): bump github/codeql-action/init from 4.37.0 to 4.37.7 | `705b854214d4624c3276c62f92a105278ebec199` | main | BLOCKED | CHANGES_REQUESTED |
 | #1106 | chore(deps): bump typing-inspection from 0.4.2 to 0.4.4 | `ed7c4b2314f7acb3c1821fdd476e6078cbaad9fb` | main | BEHIND | CHANGES_REQUESTED |
