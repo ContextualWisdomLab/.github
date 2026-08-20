@@ -118,6 +118,8 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   ecosystem.
 - [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
   — Project #1 operation.
+- [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md)
+  — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
