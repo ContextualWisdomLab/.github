@@ -416,6 +416,14 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 self.assertEqual(OSV.main(), 0)
             self.assertEqual(json.loads(audit_path.read_text(encoding="utf-8")), [{"status": "prior"}])
 
+            lock_path.write_bytes(b"lockfileVersion: '9.0'\n\xc0\xc0")
+            with mock.patch.object(sys, "argv", argv), self.assertRaisesRegex(
+                ValueError, "pnpm lock provenance input is not valid UTF-8"
+            ):
+                OSV.main()
+
+            lock_path.write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
             audit_path.write_text("{}", encoding="utf-8")
             with mock.patch.object(sys, "argv", argv), self.assertRaises(ValueError):
                 OSV.main()

@@ -395,10 +395,24 @@ def load_json_object(path: Path) -> dict[str, Any]:
 
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"required JSON input is not a regular file: {path}")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(read_utf8_text(path, "required JSON input"))
     if not isinstance(value, dict):
         raise ValueError(f"required JSON input is not an object: {path}")
     return value
+
+
+def read_utf8_text(path: Path, description: str) -> str:
+    """Read trusted text input and turn malformed UTF-8 into an explicit error.
+
+    Lockfiles and scanner receipts are attacker-controlled repository inputs.
+    Rejecting malformed bytes at this boundary keeps the security scan
+    fail-closed without exposing an unhandled decoder traceback.
+    """
+
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{description} is not valid UTF-8: {path}") from error
 
 
 def parse_args() -> argparse.Namespace:
@@ -420,13 +434,13 @@ def main() -> int:
         raise ValueError("pnpm lock provenance input must be a regular file")
     payload = load_json_object(args.results)
     reconciled, new_audit = reconcile_payload(
-        payload, args.lockfile.read_text(encoding="utf-8"), label=args.label
+        payload, read_utf8_text(args.lockfile, "pnpm lock provenance input"), label=args.label
     )
     existing_audit: list[dict[str, str]] = []
     if args.audit.exists():
         if args.audit.is_symlink() or not args.audit.is_file():
             raise ValueError("audit output must be a regular file")
-        loaded_audit = json.loads(args.audit.read_text(encoding="utf-8"))
+        loaded_audit = json.loads(read_utf8_text(args.audit, "audit input"))
         if not isinstance(loaded_audit, list):
             raise ValueError("audit output must contain an array")
         existing_audit = loaded_audit
