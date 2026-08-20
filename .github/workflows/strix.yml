@@ -865,8 +865,8 @@ jobs:
             exit "$strix_rc"
           fi
 
-          # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
+          # Recognized signals that the LLM backend or Strix scanner runtime was unavailable / starved.
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|loginAsGuest failed|Failed to connect to 127\.0\.0\.1 port 48080'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
@@ -879,7 +879,7 @@ jobs:
           # from blocking current-head merge progress.
           if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
-            echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
+            echo "::warning title=Strix infrastructure unavailable::Strix could not complete because its LLM backend or scanner runtime was unavailable before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
             exit 0
           fi
 
