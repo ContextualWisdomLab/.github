@@ -151,9 +151,12 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
+    ordinary = workflow[ordinary_start:ordinary_end]
+    conflict = workflow[conflict_start:]
     assert workflow.count(guard) == 2
-    assert guard in workflow[ordinary_start:ordinary_end]
-    assert guard in workflow[conflict_start:]
+    for repair in (ordinary, conflict):
+        assert guard in repair
+        assert repair.index(guard) < repair.index("timeout 18000 opencode run")
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:
@@ -174,18 +177,25 @@ def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     ordinary = workflow[ordinary_start:ordinary_end]
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+    conflict = workflow[conflict_start:]
 
     snapshot = 'pr_review_conflict_scope.py" snapshot'
     verify = 'pr_review_conflict_scope.py" verify'
     temporary_config = 'cp "$OPENCODE_AUTOFIX_WORKDIR/opencode.jsonc"'
-    restore = "restore_workspace_config\n          trap - EXIT"
-    sealed_inventory = "pr-review-autofix-allowed-paths.zlist"
-
-    assert snapshot in ordinary
-    assert verify in ordinary
-    assert sealed_inventory in ordinary
-    assert ordinary.index(snapshot) < ordinary.index(temporary_config)
-    assert ordinary.index(restore) < ordinary.index(verify)
+    restore = "restore_workspace_config"
+    for repair, inventory in (
+        (ordinary, "pr-review-autofix-allowed-paths.zlist"),
+        (conflict, "opencode-conflicted-files.zlist"),
+    ):
+        assert snapshot in repair
+        assert verify in repair
+        assert inventory in repair
+        assert repair.index(snapshot) < repair.index(temporary_config)
+        assert repair.index(restore) < repair.index(verify)
+    assert 'sha256sum "$conflicted_paths_file"' in conflict
 
 
 def test_model_cannot_edit_git_control_files_or_execute_repository_hooks() -> None:
@@ -256,6 +266,20 @@ def test_allowed_path_seal_rejects_markdown_reconstruction_drift(
     allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
     trusted_payload = b"src/reviewed.py\0"
     allowed.write_bytes(trusted_payload + b"docs/injected.md\0")
+    Path(f"{allowed}.sha256").write_text(
+        f"{hashlib.sha256(trusted_payload).hexdigest()}\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(ValueError, match="trusted seal"):
+        scope._read_allowed_paths(allowed)
+
+
+def test_allowed_path_seal_rejects_reordered_inventory(tmp_path: Path) -> None:
+    """A reordered trusted path list cannot satisfy the original seal."""
+    allowed = tmp_path / "pr-review-autofix-allowed-paths.zlist"
+    trusted_payload = b"src/reviewed.py\0docs/guide.md\0"
+    allowed.write_bytes(b"docs/guide.md\0src/reviewed.py\0")
     Path(f"{allowed}.sha256").write_text(
         f"{hashlib.sha256(trusted_payload).hexdigest()}\n",
         encoding="ascii",
@@ -386,8 +410,16 @@ def test_workflow_reconstructed_inventory_is_checked_by_the_trusted_seal() -> No
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     collect = workflow[collect_start:ordinary_start]
     ordinary = workflow[ordinary_start:ordinary_end]
+    inventory = "pr-review-autofix-allowed-paths.zlist"
 
     assert '--output "$RUNNER_TEMP/pr-review-autofix-context.md"' in collect
-    assert "pr-review-autofix-allowed-paths.zlist" in ordinary
+    assert f'--allowed-paths-output "$RUNNER_TEMP/{inventory}"' in collect
+    assert 'Path(f"{output}.sha256")' in _workflow_text(
+        Path("scripts/ci/pr_review_autofix_context.py")
+    )
+    assert 'Path(f"{path}.sha256")' in _workflow_text(
+        Path("scripts/ci/pr_review_conflict_scope.py")
+    )
+    assert f'allowed_paths_zlist="${{RUNNER_TEMP}}/{inventory}"' in ordinary
     assert '--allowed-paths "$allowed_paths_zlist"' in ordinary
     assert "pr_review_conflict_scope.py\" verify" in ordinary

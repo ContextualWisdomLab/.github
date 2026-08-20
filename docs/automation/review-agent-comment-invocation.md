@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-06
+Updated: 2026-08-19
 
 ## Purpose
 
@@ -28,6 +28,8 @@ Wrapper workflows use the verified key in their non-cancelling concurrency group
 
 Target-repository acknowledgement comments and reactions are user-experience signals only. They are not dispatch authority because repository writers, bot identities, or credential rotation could otherwise forge or invalidate a marker. A failed acknowledgement cannot cause completed agent work to be redispatched.
 
+When a live claim exists without a visible receipt comment, the router republishes the acknowledgement without forwarding the request again; reaction failures are warnings and do not block the durable comment.
+
 A user or fine-grained token enumerates organization repositories. When the OpenCode GitHub App installation token is the available credential, the sweep instead uses GitHub's installation-repositories endpoint, which returns only repositories accessible to that installation. This avoids depending on an organization-issues endpoint whose documented fine-grained token support is user-token-oriented.
 
 This preserves the central MSA boundary without copying privileged workflow code into every product repository.
@@ -45,7 +47,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
 - The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
-- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are explicit in the dispatch payload.
+- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are bound into the OpenCode invocation claim and hardcoded in the wrapper. GitHub's create-repository-dispatch endpoint allows at most 10 top-level `client_payload` properties (HTTP 422 otherwise), so those review-only constants are not copied onto the first-hop mention payload. The wrapper's merge-scheduler forward keeps the three flags that override scheduler defaults, together with repository, PR, head/base SHA, base branch, invocation key, and source comment identity.
 - Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
 - A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.

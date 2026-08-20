@@ -593,6 +593,7 @@ jobs:
             conflicted_paths_file="${RUNNER_TEMP}/opencode-conflicted-files.zlist"
             conflict_scope_snapshot="${RUNNER_TEMP}/opencode-conflict-workspace-before.json"
             git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"
+            sha256sum "$conflicted_paths_file" | awk '{print $1}' >"${conflicted_paths_file}.sha256"
             python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_conflict_scope.py" snapshot \
               --root "$TARGET_WORKSPACE" \
               --output "$conflict_scope_snapshot"

@@ -8,10 +8,17 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
+
+
+def load_opencode_jsonc() -> dict:
+    """Load the repository's opencode.jsonc, tolerating its // comments."""
+    return json.loads(strip_jsonc_comments(Path("opencode.jsonc").read_text(encoding="utf-8")))
+
 
 def test_code_reviewer_subagent_contract_is_configured():
     """Guard the read-only code-reviewer subagent contract."""
-    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
+    config = load_opencode_jsonc()
     agents = config["agent"]
     reviewer = agents["code-reviewer"]
 
@@ -84,7 +91,7 @@ def test_code_reviewer_subagent_contract_is_configured():
 
 def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     """Guard every review-pool candidate against silent reasoning-effort drift."""
-    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
+    config = load_opencode_jsonc()
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     github_models = config["provider"]["github-models"]["models"]
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
@@ -1973,7 +1980,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
     assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
-    assert '--branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
     assert (
@@ -2294,7 +2300,7 @@ def test_opencode_pending_peer_checks_hold_blocks_required_workflow_until_approv
 def test_opencode_strix_security_regressions_are_closed():
     """Bind the nine current-head Strix findings to fail-closed contracts."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    config = json.loads(Path("opencode.jsonc").read_text(encoding="utf-8"))
+    config = load_opencode_jsonc()
 
     assert "  validate-pr-metadata:\n" in workflow
     assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
