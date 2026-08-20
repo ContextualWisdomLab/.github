@@ -125,8 +125,9 @@ def reconcile(tmp_path: Path, payload: dict[str, object], lock_text: str) -> tup
             str(audit_path),
         ],
     ):
-        with unittest.TestCase().assertRaisesRegex(SystemExit, "0"):
+        with unittest.TestCase().assertRaises(SystemExit) as exit_context:
             runpy.run_path(str(SCRIPT), run_name="__main__")
+        assert exit_context.exception.code == 0
     return (
         json.loads(result_path.read_text(encoding="utf-8")),
         json.loads(audit_path.read_text(encoding="utf-8")),
