@@ -795,6 +795,7 @@ def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
     assert "opencode-exhausted-retry:" not in workflow
     assert "RETRY_DISPATCH_TOKEN" not in workflow
     assert "contents: write" not in workflow
+    assert "models: read" not in workflow
 
 
 def test_sandbox_git_config_env_trusts_only_the_validated_worktree(tmp_path):

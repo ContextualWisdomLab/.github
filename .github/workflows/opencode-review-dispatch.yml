@@ -2186,7 +2186,6 @@ jobs:
       id-token: write
       contents: read
       security-events: read
-      models: read
       statuses: write
       deployments: read
       pull-requests: write
