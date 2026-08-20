@@ -96,19 +96,19 @@ flowchart LR
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
 | #1162 | fix: use review credentials for agent dispatch | `c64e0e8cbacb93f5a0d7f162b30bcc4715912897` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `b8f57e1f8b748a740017f937f04aea5d8cad0ad5` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `1e16f9fbd7ddb7781e34cedebfce4d860cfcc5de` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
-| #1158 | fix(osv): preserve immutable direct-source provenance | `c3636cc2962a24e50e0f1b545f22fed824df26f8` | main | BLOCKED | — |
+| #1158 | fix(osv): preserve immutable direct-source provenance | `e2c003171e65c631ac8f12143e04f810fdad0576` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `19b53a7d22ce8eb26aa780e24eea2a742240b3ea` | main | BLOCKED | — |
-| #1155 | Fix duplicate repository dispatch scheduler runs | `03eab731ac9635379b4999dd15160f89f492af11` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `f19549cde7c8afbe4ab23f44a1814f770d741930` | main | BLOCKED | — |
+| #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `48dcca4f98b41dc1f891c3addffec5f0949d14fd` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `e21951d73fbe05a3b9dda871b18c7480f1fe3e41` | main | BLOCKED | — |
 | #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `a37fecbe96c01f5d3638085876371313713823c4` | main | BLOCKED | — |
 | #1150 | feat: add read-only Actions queue health evidence | `3196c2db08f84235aaf58bf612806e75d2b33023` | main | BLOCKED | — |
 | #1147 | feat(integration): add ecosystem capability catalogue | `9ac03e0c1f9f2e12f0d29d354f5e9541a1feffbb` | main | BLOCKED | — |
-| #1146 | fix(figma): retain style references and component sets | `38fbf9fc86af0e03bde334958616086707244373` | main | BLOCKED | CHANGES_REQUESTED |
+| #1146 | fix(figma): retain style references and component sets | `38fbf9fc86af0e03bde334958616086707244373` | main | BLOCKED | — |
 | #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
 | #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
 | #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `41a59e16234bf6cfb01cdd3fd58172d4681d4859` | main | BEHIND | — |
