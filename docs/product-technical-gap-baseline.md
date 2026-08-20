@@ -103,7 +103,7 @@ flowchart LR
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
 | #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `d4948f21818a351db22292a686b361581f33b6ed` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
-| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `48dcca4f98b41dc1f891c3addffec5f0949d14fd` | main | BLOCKED | — |
+| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `b3f00c51602a145eabd3d332583ed07b6cf12a88` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `e21951d73fbe05a3b9dda871b18c7480f1fe3e41` | main | BLOCKED | — |
 | #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `a37fecbe96c01f5d3638085876371313713823c4` | main | BLOCKED | — |
 | #1150 | feat: add read-only Actions queue health evidence | `3196c2db08f84235aaf58bf612806e75d2b33023` | main | BLOCKED | — |
