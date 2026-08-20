@@ -95,6 +95,10 @@ flowchart LR
 
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
+| #1172 | fix(autofix): resolve live NVIDIA NIM models instead of a retired pin | `fddd6ee51d70891e41424ba78801a1871a303d4e` | main | BLOCKED | — |
+| #1171 | fix: refuse scheduler head mutations that cannot start required checks | `fd9305869e133b9aaec9b0ecdafeb0ac1953f4d2` | main | BLOCKED | — |
+| #1170 | feat: route OpenCode reviews through contextual gateway | `0bd7630912937ce4274ed207a7a35ecf24bfee17` | main | BLOCKED | — |
+| #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1169 | fix(security): keep baseline-only Strix outages non-blocking | `24893cee8fbb33791fe77629efa35ce2d8fb7076` | main | BLOCKED | — |
 | #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
@@ -106,10 +110,10 @@ flowchart LR
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd790ba12161ad6385a46d9e3e60371103b4` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae506e777b3a21885173f8c86b2e5f2a31` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `7655ab630f954d27deaff365b0b21c437bf5bd34` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `2ba74d0dba1ccaf20fc5460bafa0f6c3b241be68` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `6ce2fe8339571637708752568d008a43c2277dbd` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
-| #1153 | fix(strix): fail closed on incomplete provider scans | `a0fe0501b6a4d0f3c532b5feeaf7a7038db41bb4` | main | BLOCKED | — |
+| #1153 | fix(strix): fail closed on incomplete provider scans | `9a4d1e1439bbafa8781971fbf22ab695ae126271` | main | BLOCKED | — |
 | #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `77165e64aea6e448632100c366680f98a9e46152` | main | BLOCKED | — |
 | #1150 | feat: add read-only Actions queue health evidence | `7bbd13393b7d7bfc7f76b544d4e33fc572ccb471` | main | BLOCKED | — |
 | #1147 | feat(integration): add ecosystem capability catalogue | `9ac03e0c1f9f2e12f0d29d354f5e9541a1feffbb` | main | BLOCKED | — |
@@ -118,9 +122,9 @@ flowchart LR
 | #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
 | #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `6915bb9395bbe653f41db944c40186e7c3f8c153` | main | BLOCKED | — |
 | #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `0c700f6f931986d58bd0005ea2d248ca2e459d77` | main | BLOCKED | — |
-| #1114 | fix(strix): retry transient visibility API failures | `61a82288fddd714a80abb201839631897490f7a9` | main | BLOCKED | CHANGES_REQUESTED |
+| #1114 | fix(strix): retry transient visibility API failures | `21beb66a98e30168146ee48c6593f58dd954d180` | main | BLOCKED | — |
 | #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `ed42fda7fc712f09930c8c4c0398aa261291c960` | main | BLOCKED | — |
-| #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `4e233c48ecfadf3d3af9ec30f9158da5052102b6` | main | BLOCKED | — |
+| #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `5ae4bd244cccc69bdbe8b23eef32504e33026cf5` | main | BLOCKED | — |
 | #1107 | chore(deps): bump github/codeql-action/init from 4.37.0 to 4.37.7 | `705b854214d4624c3276c62f92a105278ebec199` | main | BLOCKED | CHANGES_REQUESTED |
 | #1106 | chore(deps): bump typing-inspection from 0.4.2 to 0.4.4 | `ed7c4b2314f7acb3c1821fdd476e6078cbaad9fb` | main | BEHIND | CHANGES_REQUESTED |
 | #1105 | chore(deps): bump openai from 2.54.0 to 3.1.0 | `4f6e3f63e72111c29329b9bc0a767127a1315e9d` | main | BEHIND | — |
