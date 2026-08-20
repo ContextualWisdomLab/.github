@@ -773,14 +773,6 @@ jobs:
             echo "::error::ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer; got '${ORG_SWEEP_MAX_UNAVAILABLE}'. Fix the ORG_SWEEP_MAX_UNAVAILABLE repository variable."
             exit 1
           fi
-          if ! [[ "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
-            echo "::error::ORG_SWEEP_REVIEW_DISPATCH_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_REVIEW_DISPATCH_LIMIT}'. Fix the ORG_SWEEP_REVIEW_DISPATCH_LIMIT repository variable."
-            exit 1
-          fi
-          if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
-            echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
-            exit 1
-          fi
 
           repositories_json="$(
             gh api \
@@ -800,11 +792,6 @@ jobs:
           failures=0
           unavailable=0
           unavailable_repos=()
-          # These are organization-wide budgets. They must be consumed across
-          # the repository loop, not reset for every target repository; resetting
-          # them here can enqueue hundreds of long-running review jobs per sweep.
-          org_review_dispatches_used=0
-          org_branch_updates_used=0
           for target in "${sweep_targets[@]}"; do
             repo_full_name="${target%%$'\t'*}"
             default_branch="${target##*$'\t'}"
@@ -832,31 +819,14 @@ jobs:
               *) project_flow="github-flow" ;;
             esac
 
-            if [ "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT" = "-1" ]; then
-              review_dispatch_limit=-1
-            else
-              review_dispatch_limit=$((ORG_SWEEP_REVIEW_DISPATCH_LIMIT - org_review_dispatches_used))
-              if (( review_dispatch_limit < 0 )); then
-                review_dispatch_limit=0
-              fi
-            fi
-            if [ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" = "-1" ]; then
-              branch_update_limit=-1
-            else
-              branch_update_limit=$((ORG_SWEEP_BRANCH_UPDATE_LIMIT - org_branch_updates_used))
-              if (( branch_update_limit < 0 )); then
-                branch_update_limit=0
-              fi
-            fi
-
             args=(
               --repo "$repo_full_name"
               --base-branch "$default_branch"
               --project-flow "$project_flow"
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
-              --review-dispatch-limit "$review_dispatch_limit"
-              --branch-update-limit "$branch_update_limit"
+              --review-dispatch-limit "$ORG_SWEEP_REVIEW_DISPATCH_LIMIT"
+              --branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
               --merge-mode "$ORG_SWEEP_MERGE_MODE"
             )
@@ -877,11 +847,6 @@ jobs:
             sweep_rc=$?
             set -e
             printf '%s\n' "$sweep_output"
-            repo_review_dispatches="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: (review_dispatch|security_dispatch):' || true)"
-            repo_branch_updates="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: (update_branch|restamp_head):' || true)"
-            org_review_dispatches_used=$((org_review_dispatches_used + repo_review_dispatches))
-            org_branch_updates_used=$((org_branch_updates_used + repo_branch_updates))
-            echo "Org sweep budget consumed: review dispatches=${org_review_dispatches_used}/${ORG_SWEEP_REVIEW_DISPATCH_LIMIT}, branch updates=${org_branch_updates_used}/${ORG_SWEEP_BRANCH_UPDATE_LIMIT}."
             if [ "$sweep_rc" -ne 0 ]; then
               # A structural access denial ("Resource not accessible by
               # integration") means the sweep credential cannot read this

@@ -1,159 +1,151 @@
 # Contextual Wisdom Lab
 
-Organization special repository for **맥락지혜 연구실 / Contextual Wisdom Lab**.
+Organization profile repository for **맥락지혜 연구실 / Contextual Wisdom Lab**.
 
-This repository is the org profile source and the central required-workflow
-source. It is not naruon and it does not own product data. It runs alone.
-Sibling product repositories consume it by inheriting the organization
-required workflows; they do not copy workflow files from here.
+The public GitHub organization profile lives in [profile/README.md](profile/README.md).
 
-The public GitHub organization profile lives in
-[profile/README.md](profile/README.md) and is what GitHub renders at
-https://github.com/ContextualWisdomLab. Homepage:
-https://contextualwisdomlab.github.io/
+Homepage: https://contextualwisdomlab.github.io/
 
-Bot and agent PR-review procedure (exact-head CI, successor heads,
-do-not-merge / `DIRTY`–`CONFLICTING` repair, writer boundaries, approve-gate)
-is in [docs/pr-review-and-merge-procedure.md](docs/pr-review-and-merge-procedure.md).
+PR governance live audit: [PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md).
+The audit includes repository-by-repository DX/UX transfer decisions: what the
+central workflow borrows because it reduces friction, and what it rejects
+because it adds noise or misleading review experience.
 
-## What this repository is
+## PR review and merge policy
 
-Three operator-facing roles:
+OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.
+The scheduler updates a same-repository PR branch only when the latest OpenCode
+review is approved, no current-head failed check is present, and GitHub reports
+the PR as behind. After that update, the new head must pass OpenCode, Strix,
+required checks, and review-thread gates again before auto-merge or
+`--match-head-commit` merge can proceed.
+Branch updates and merges run through the central scheduler mutation credential:
+`PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, the exchanged OpenCode GitHub
+App token, or finally the target workflow token. The scheduler reports the
+credential class in its decision output. The OpenCode review job does not widen
+its own `pull_request_target` job token to repository-write permission; its
+immediate post-approval scheduler follow-up uses only an explicit merge token or
+the OpenCode app token, otherwise it leaves the separate scheduler required
+workflow and schedule authoritative.
+Post-approval reuse and follow-up accept only an exact-head review authored by
+the OpenCode GitHub App; a GitHub Actions-authored review is not OpenCode
+approval evidence. The separate scheduler also listens for that App review,
+waits for the publishing OpenCode check to finish, and then retries direct merge
+outside the review job when repository auto-merge is unavailable. Every merge
+keeps `--match-head-commit`; it prefers squash and retries with a merge commit
+only when the target repository explicitly reports that squash is disabled.
+Superseded queued or running workflow cleanup remains mandatory, but a GitHub
+cancel or force-cancel API failure cannot make an old head authoritative or
+block a policy-clean current head. The scheduler logs the exact run id and
+bounded API error as an Actions warning, then continues the current-head
+decision.
+That `update_branch` path is deliberately not used for `DIRTY` or
+`CONFLICTING` PRs: GitHub cannot synthesize a safe conflict resolution for the
+author, so the merge scheduler must give the author a repair path instead of pretending
+the merger can fix it. A current-head approved PR may still keep or queue native
+GitHub auto-merge while the conflict is repaired; queued auto-merge is a wait
+state, not evidence that the conflict is solved. Separately, the edit-capable
+autofix flow (`scripts/ci/pr_review_fix_scheduler.py` →
+`.github/workflows/pr-review-autofix.yml`) may, for an approved
+same-repository-head PR, merge the base into the head and resolve the conflict
+markers with OpenCode, then push the resolved head; that head is fully
+re-reviewed and re-checked before it can merge, so a wrong resolution cannot
+merge unreviewed.
+When GitHub reports `DIRTY` or `CONFLICTING`, the scheduler does not pretend to
+fix the branch. It blocks the PR with repair guidance: merge or rebase the
+latest base branch into the PR branch, resolve conflict markers in that PR
+branch, rerun focused checks, and push the same branch. OpenCode comments must
+include a compact command block covering `gh pr checkout`, `git fetch`, merge or
+rebase, `git status --short`, resolved-file staging, normal push, and
+`--force-with-lease` only for rebased branches.
 
-1. **Org profile and public introduction assets.** `profile/README.md` plus
-   `profile/assets/` are the lab page. Org-wide defaults `SECURITY.md`,
-   `.github/CODEOWNERS`, and `.github/dependabot.yml` also live here.
-2. **Central required-workflow source.** Workflows under `.github/workflows/`
-   are the canonical PR review, security scan, and merge-automation
-   implementation for sibling repositories. Organization ruleset
-   `CWL Central required workflows` (id `18156473`) runs those workflows in
-   each target repository's context. Repository-local copies are drift
-   sources, not repo-specific contracts.
-3. **Infrastructure as code for org DNS and Pages.** `infra/cloudflare/`
-   manages zones and Cloudflare Pages hosting with `zones.json` and
-   `reconcile.sh` (curl + jq only). Dry-run is the default; writes happen
-   only on an explicit manual `mode = apply`. Pull requests never see the
-   Cloudflare API token.
+Strix, OpenCode, and the scheduler are sourced from the central
+`ContextualWisdomLab/.github` workflows rather than copied into each repository.
+Required-workflow runs execute in the target repository context, so mechanical
+branch updates, stale-thread resolution, and merges use the configured central
+mutation credential while the trusted implementation still comes from the
+central repository. The scheduler dispatches same-head Strix evidence first,
+then dispatches OpenCode for the same PR head when review evidence is missing or
+stale.
+This avoids running PR-head review, CodeGraph, coverage, or PoC code as an
+unbounded local workflow copy.
+Scheduled review-feedback autofix is also centralized. The
+`PR Review Fix Scheduler` dispatches the central `PR Review Autofix` worker in
+`ContextualWisdomLab/.github` and passes the target repository, PR number, base
+SHA, head ref, and head SHA as explicit inputs. The worker mutates only
+same-repository PR heads, rechecks the live head before checkout and before
+push, and commits as `github-actions[bot]` only when a conservative OpenCode
+autofix produces a validated diff. A repository-local autofix worker remains an
+explicit compatibility override through `--autofix-repository`; it is no longer
+the default contract.
+Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
+force-push, but PR-scoped concurrency includes the head SHA so an obsolete scan
+does not serialize newer current-head evidence.
 
-Naruon is the composition hub that can receive other CWL products. That is
-the platform job, not a defect of this repository. This control plane still
-shows an independent run: profile, required workflows, and Cloudflare
-reconciliation do not require naruon to be present, imported, or running.
+OpenCode approval is evidence-gated. Before approval, the review summary must
+name changed files, CodeGraph or structural MCP evidence, a Change Flow DAG,
+passing supported test-suite evidence, configured docstring-gate evidence or advisory docstring status, and a concrete
+PoC/execution result. It must also split `Developer experience:` from
+`User experience:` so maintainability/review/CI friction is not confused with
+product, documentation, review-comment, or status-check reader outcomes. The PoC
+can be a temporary scratch repro, focused test, lint, security check,
+performance probe, or UI verification command, but it must be actually run and
+cited. Every adversarial probe must also state an observed result such as an
+exit code, passed or failed test/assertion, rejected input, log value, or source
+trace outcome. Generic `source inspection` or `test coverage verifies` prose
+without that observation is not reusable approval evidence. Execution evidence
+must be sandboxed in the CI workspace or an isolated
+temporary directory, with a credential-scrubbed environment by default and no
+persistent mutation outside test caches or scratch files. When repo-native
+verification legitimately needs network access or GitHub Secrets, pass only the
+specific environment variable names required and record why they were needed.
+The central helper is
+`python3 scripts/ci/sandboxed_verify.py --repo-root <reviewed worktree> --
+<verification command>`; reviews should cite its `SANDBOXED_VERIFY_RESULT` line
+when the helper is used. Use `--network required`, `--allow-env NAME`, and
+`--evidence-note "why"` only for repository-required verification. This helper
+does not replace the existing bash, task, webfetch, websearch, lsp, CodeGraph,
+DeepWiki, Context7, or web_search review policy. Scratch PoC files are not
+committed.
+For web applications with both backend and frontend surfaces, the preferred
+execution proof is the central E2E helper:
+`python3 scripts/ci/sandboxed_web_e2e.py --repo-root <reviewed worktree>
+--backend-cmd <backend command> --frontend-cmd <frontend command> --e2e-cmd
+<e2e command>`. Reviews should include readiness URLs when the repository
+defines them and cite `SANDBOXED_WEB_E2E_RESULT`. If a repo lacks an executable
+backend, frontend, E2E, or readiness contract, the review must name the missing
+contract instead of presenting a partial run as full E2E evidence.
+OpenCode bounded evidence also includes a `Review execution contracts` section
+that discovers runtime matrices, package manifests, test, coverage, docstring,
+E2E, lint, security, Docker, and unpackaged-source gaps before the agent chooses
+commands.
+The configured `code-reviewer` subagent is reviewer-only: it may read, grep,
+glob, and run safe local verification commands, but it must not edit files,
+stage changes, commit, push, install dependencies, mutate branches, or touch
+production state. Blocking findings must be source-backed, severity-labeled,
+impactful, remediable, and include suggested verification.
 
-## 따로, 또 같이
+Failed GitHub Checks are not reviewed as URL lists. OpenCode must explain the
+failed check name, failing step, source-backed file and line when available,
+root cause, fix direction, and focused rerun command. Cancelled or superseded
+checks must be described as queue or evidence blockers rather than invented
+source-code findings.
 
-Every CWL component is standalone and also composable. For this repository
-that means:
+Operational cases folded into the central policy:
 
-| Mode | What happens |
-| --- | --- |
-| **따로 (this repo alone)** | Clone, test, and operate `.github` as the org profile and workflow source. Local quality gates, Cloudflare dry-run, and this repository's own PRs do not depend on naruon or any sibling product checkout. |
-| **또 같이 (siblings call it)** | A sibling enables the org required-workflow ruleset (already `repository_name.include=["~ALL"]` on default branches). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` in that sibling's repository context. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
-
-Do not copy Strix, OpenCode, Noema, or scheduler workflow files into a
-sibling to "satisfy CI." Thick downstream sync PRs are an anti-pattern
-unless they are a temporary rollback bridge.
-
-## Current status
-
-Live work and roadmap live on
-[GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1).
-The narrative brief is [docs/CWL-MASTER-CONTEXT.md](docs/CWL-MASTER-CONTEXT.md).
-The last checked-in ruleset ledger is
-[docs/org-required-workflow-rollout.md](docs/org-required-workflow-rollout.md)
-(updated 2026-07-23 KST).
-
-Checked-in operator facts:
-
-- Ruleset `18156473` is **active**. It targets every repository default
-  branch (`~ALL` / `~DEFAULT_BRANCH`) and sources workflows from this
-  repository at `refs/heads/main`.
-- Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
-  `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
-  `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.
-- This repository itself is GitHub Flow on `main`. It is the central source,
-  so it keeps the workflow files; siblings should not.
-- Public profile, DIKW checkpoints, project catalog, and the existing APA 7th
-  DIKW citations stay in [profile/README.md](profile/README.md#references).
-- Control-plane trust boundaries and the hourly NVIDIA NIM repair gate are
-  diagrammed in [ARCHITECTURE.md](ARCHITECTURE.md).
-
-If live organization ruleset inspection reports a different ref or a missing
-required workflow path, treat that as operations drift and restore ruleset
-`18156473` to the current `main` head. Do not compensate by copying
-workflows into siblings.
-
-## How a sibling consumes the central workflows
-
-1. Confirm the repository is in the ContextualWisdomLab organization. New
-   public repositories inherit ruleset `18156473` without a name-list update.
-2. Keep product, build, release, and repo-specific security workflows local.
-   Do not add local copies of OpenCode, Strix, Noema, or the merge scheduler.
-3. On each default-branch pull request, GitHub creates the required checks in
-   the sibling context. Review judgment stays with OpenCode (and the
-   independent Noema reviewer). Mechanical branch update and merge stay with
-   GitHub Actions in that sibling context, using the configured central
-   mutation credential.
-4. Optional: call a reusable workflow instead of copying it.
-
-```yaml
-jobs:
-  deploy:
-    uses: ContextualWisdomLab/.github/.github/workflows/deploy-pages.yml@main
-    with:
-      project_name: example-marketing
-      build_dir: ./public
-    secrets: inherit
-```
-
-5. If a repository cannot inherit the ruleset (for example a public fork
-   still onboarding), add a **thin caller** that passes PR number, base
-   ref/SHA, head ref/SHA, and inherited secrets into this repository. Do not
-   paste the scheduler or review implementation. Thin callers must not define
-   a matching scheduler concurrency group.
-
-Private-repository onboarding and fork capability gates are recorded in
-[PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md). A public fork can be
-governed by the same reusable workflow if it opts in; an external PR head can
-still be non-mutable at runtime. The scheduler decides from observed PR
-permissions and current-head evidence, not from the repository `fork` flag
-alone.
-
-## How to run and maintain this repository alone
-
-From the repository root, after installing the hash-pinned OpenCode review
-toolchain:
-
-```bash
-python3 -m pip install --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-coverage run -m pytest tests && coverage report --show-missing
-interrogate
-```
-
-`pyproject.toml` sets `pythonpath = ["."]`, coverage source `scripts/ci`
-with `fail_under = 100`, and interrogate `fail-under = 100` excluding
-`tests`.
-
-Hash-pinned CI sets are regenerated from the un-hashed `requirements-*-ci.txt`
-inputs with the `uv pip compile` command recorded in each `*-hashes.txt`
-header. Do not hand-edit a hashes file. Cloudflare reconciliation stays
-dry-run unless an operator runs the workflow with `mode = apply`.
-
-Contract tests pin workflow structure and governance prose
-(`PR_GOVERNANCE_AUDIT.md`, `docs/org-required-workflow-rollout.md`,
-`opencode.jsonc`, and several workflow files). Edit those files only with the
-test suite.
-
-## Related documents
-
-| Document | Role |
-| --- | --- |
-| [profile/README.md](profile/README.md) | Public org profile, DIKW checkpoints, project catalog, APA 7th references |
-| [docs/pr-review-and-merge-procedure.md](docs/pr-review-and-merge-procedure.md) | Bot/agent review, exact-head, successor-head, and merge procedure |
-| [PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md) | Live audit and per-repo DX/UX transfer decisions |
-| [docs/org-required-workflow-rollout.md](docs/org-required-workflow-rollout.md) | Ruleset `18156473` ledger and sibling onboarding |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Control-plane diagram and trust boundaries |
-| [docs/CWL-MASTER-CONTEXT.md](docs/CWL-MASTER-CONTEXT.md) | Mission, ecosystem, and naruon-as-platform brief |
-| [docs/agent-github-project-protocol.md](docs/agent-github-project-protocol.md) | How agents operate Project #1 |
-| [infra/cloudflare/README.md](infra/cloudflare/README.md) | DNS/Pages reconcile and reusable Pages deploy |
-| [SECURITY.md](SECURITY.md) | Vulnerability reporting |
+- `naruon`: approved PRs can become `BEHIND`; the scheduler treats that as an
+  update request, not as a merge signal. GitHub Actions updates the branch with
+  `expected_head_sha`, then the new head is reviewed again.
+- `pg-erd-cloud`: successful bot merges used current-head evidence and
+  `--match-head-commit`; the centralized path keeps that head-SHA guard.
+- `.github`: PRs that edit trusted review workflows can fail because
+  `pull_request_target` runs the base branch's trusted scripts. A same-head
+  manual `workflow_dispatch` Strix run may supply evidence for review, but it
+  does not replace required PR checks until the trusted base branch catches up.
+- `naruon#745`: new OpenCode review-flow work improves Mermaid output by
+  replacing generic risk sketches with changed-file flow DAGs. The central
+  workflow carries that review contract while keeping the self-test drift fix.
+- Cross-repo DX/UX: helpful sibling-repo patterns should be adopted when they
+  reduce maintainer, reviewer, CI-operator, contributor, user, or reader
+  friction. Noisy automation, repeated waiting, false failures, misleading
+  statuses, and URL-only diagnostics are treated as review-experience defects.

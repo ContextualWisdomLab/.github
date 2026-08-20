@@ -2388,19 +2388,6 @@ def inspect_pr(
         return decide("block", f"{unresolved} unresolved review thread(s)")
 
     if has_current_head_changes_requested(pr):
-        behind_by = branch_outdated_by_base(pr, merge_state)
-        if (
-            merge_state not in {"DIRTY", "CONFLICTING"}
-            and behind_by
-            and not pr.get("autoMergeRequest")
-            and update_branches
-            and trigger_reviews
-            and review_dispatch_allowed
-            and can_update_pr_head(repo, pr)
-        ):
-            return request_branch_update(
-                "current-head OpenCode review requested changes; branch is outdated before re-review"
-            )
         if pr.get("autoMergeRequest"):
             return finish(
                 disable_auto_merge_decision(
