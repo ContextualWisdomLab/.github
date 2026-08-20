@@ -17,7 +17,8 @@ merge.  It blocks, regardless of diff size:
   reverted an accessibility wrapper and deleted its regression tests in a
   push far below the bulk thresholds);
 - test regression without replacement: post-merge commits deleting test files
-  or reducing declared test cases while adding no replacement test file;
+  or reducing declared test cases while adding no replacement test file or
+  declared test case in an existing test file;
 - the conservative bulk-regression signature: at least five tracked files and
   500 lines removed, with deletions at least four times additions.
 
@@ -74,6 +75,7 @@ class ReplayEvidence:
     unmerged_paths: tuple[str, ...] = ()
     regressed_test_paths: tuple[str, ...] = ()
     added_test_files: int = 0
+    added_test_cases: int = 0
 
     @property
     def suspicious_bulk_regression(self) -> bool:
@@ -91,8 +93,12 @@ class ReplayEvidence:
 
     @property
     def suspicious_test_regression(self) -> bool:
-        """Return whether test cases were lost with no replacement test file."""
-        return bool(self.regressed_test_paths) and self.added_test_files == 0
+        """Return whether test cases were lost with no replacement test evidence."""
+        return (
+            bool(self.regressed_test_paths)
+            and self.added_test_files == 0
+            and self.added_test_cases == 0
+        )
 
     @property
     def blocked(self) -> bool:
@@ -234,10 +240,15 @@ def test_case_count(
     return len(pattern.findall(source)) if pattern is not None else None
 
 
-def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
-    """Return deleted or test-case-reducing paths and the added-test count."""
+def test_file_changes(
+    repo_root: Path,
+    start: str,
+    end: str,
+) -> tuple[tuple[str, ...], int, int]:
+    """Return regressed paths, added test files, and added existing-file test cases."""
     regressed: set[str] = set()
-    added = 0
+    added_files = 0
+    added_paths: set[str] = set()
     for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
         fields = line.split("\t")
         if len(fields) < 2 or not is_test_path(fields[-1]):
@@ -246,19 +257,27 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
         if status == "D":
             regressed.add(fields[-1])
         elif status == "A":
-            added += 1
+            added_files += 1
+            added_paths.add(fields[-1])
+
+    added_cases = 0
     for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
         path = fields[2]
-        if not is_test_path(path) or int(fields[1]) <= int(fields[0]):
+        if not is_test_path(path) or path in added_paths:
             continue
         before_count = test_case_count(repo_root, start, path)
         after_count = test_case_count(repo_root, end, path)
-        if before_count is None or after_count is None or after_count < before_count:
+        if before_count is not None and after_count is not None:
+            if after_count < before_count:
+                regressed.add(path)
+            elif after_count > before_count:
+                added_cases += after_count - before_count
+        elif int(fields[1]) > int(fields[0]):
             regressed.add(path)
-    return tuple(sorted(regressed)), added
+    return tuple(sorted(regressed)), added_files, added_cases
 
 
 def summarize_paths(paths: Sequence[str]) -> str:
@@ -293,7 +312,11 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         head_sha,
     )
     unmerged = unmerged_base_paths(repo_root, merge_anchor, head_sha)
-    regressed_tests, added_tests = test_file_changes(repo_root, merge_anchor, head_sha)
+    regressed_tests, added_test_files, added_test_cases = test_file_changes(
+        repo_root,
+        merge_anchor,
+        head_sha,
+    )
     return ReplayEvidence(
         base_sha=base_sha,
         head_sha=head_sha,
@@ -305,7 +328,8 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         deleted_lines=deleted_lines,
         unmerged_paths=unmerged,
         regressed_test_paths=regressed_tests,
-        added_test_files=added_tests,
+        added_test_files=added_test_files,
+        added_test_cases=added_test_cases,
     )
 
 
@@ -322,6 +346,7 @@ def format_report(evidence: ReplayEvidence) -> str:
         f"- Paths reverted to pre-merge content: {summarize_paths(evidence.unmerged_paths) or 'none'}",
         f"- Regressed test files: {summarize_paths(evidence.regressed_test_paths) or 'none'}",
         f"- Added test files: {evidence.added_test_files}",
+        f"- Added declared test cases in existing files: {evidence.added_test_cases}",
     ]
     reasons = []
     if evidence.exact_replay_of is not None:
@@ -337,7 +362,7 @@ def format_report(evidence: ReplayEvidence) -> str:
     if evidence.suspicious_test_regression:
         reasons.append(
             "post-merge commits deleted test files or reduced declared test cases "
-            "without adding any replacement test file: "
+            "without replacement test-file or existing-file declared test-case evidence: "
             f"{summarize_paths(evidence.regressed_test_paths)}."
         )
     if evidence.suspicious_bulk_regression:
