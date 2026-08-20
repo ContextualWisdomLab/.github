@@ -53,6 +53,11 @@ def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
         'CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}',
         'MODEL: contextual-orchestrator/contextual-orchestrator',
         'parsed.scheme != "https"',
+        'or not parsed.hostname',
+        'or parsed.username',
+        'or parsed.password',
+        'or parsed.query',
+        'or parsed.fragment',
         'CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data',
     )
     for fragment in required_fragments:

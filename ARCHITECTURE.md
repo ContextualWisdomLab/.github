@@ -79,14 +79,21 @@ sequenceDiagram
   participant PR as Pull request
   participant RW as Required workflows
   participant OC as OpenCode reviewer
+  participant AW as OpenCode autofix worker
+  participant GW as Contextual-orchestrator gateway
   participant SV as sandboxed_verify / web E2E
   participant MS as Merge scheduler
 
   PR->>RW: pull_request_target on trusted base
-  RW->>OC: bounded evidence + contextual-orchestrator / OpenCode
+  RW->>OC: bounded evidence + independent review credential
   OC->>SV: PoC command in isolated copy
   SV-->>OC: redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
+  RW->>AW: exact-head repair context after changes requested
+  AW->>GW: scoped gateway URL/token request
+  GW-->>AW: bounded model output
+  AW->>SV: verify candidate edit in isolated copy
+  SV-->>AW: tests and changed-path evidence
   MS->>PR: merge only on current-head approval + green checks
 ```
 
