@@ -10,10 +10,10 @@ stack **#258 → #260 → #261 → #262 → #263 → #264**, passes that explici
 to a product-neutral ordered-stack repair driver, and dispatches at most one
 bounded current-head repair per heartbeat.
 
-The initial formal OpenCode generation remains owned by the central mention
-router and the organization review/merge scheduler. This caller begins only
-when exact-head OpenCode feedback, a failed-check root-cause review, or an
-approved/unreviewed merge-conflict repair is actionable. It never treats a
+Initial formal OpenCode generation remains owned by the central mention router
+and review/merge scheduler. The hourly caller now reuses that same product-neutral
+scheduler for one bounded all-open, stacked-PR-only review dispatch before it
+inspects the declared repair stack. The repair driver still never treats a
 missing initial review as repair evidence.
 
 The caller runs at minute 4 UTC of every hour from the protected default branch.
@@ -105,6 +105,14 @@ under Actions load. The cron expression is a heartbeat, not a real-time SLA.
 Operators perform post-merge acceptance on the next protected-default-branch
 heartbeat so an arbitrary branch can never become the privileged source.
 
+The 2026-08-20 production sweep inspected 66 repositories after its single
+organization-wide review budget had already been consumed. It reached
+LineageWeave later and recorded the current stacked PRs as `OpenCode review
+absent`. The dedicated hourly scan therefore spends its one review budget only
+on non-draft PRs whose base differs from protected `main`; direct PRs retain the
+organization required-workflow path. Review publication remains centralized and
+the caller receives no merge authority.
+
 ## Credential and model boundary
 
 The caller keeps workflow `GITHUB_TOKEN` at `contents: read`. Its one job receives
@@ -149,6 +157,7 @@ Machine-checkable contracts require:
 
 - exact `ContextualWisdomLab/LineageWeave` target and protected `main` source;
 - explicit ordered queue `258,260,261,262,263,264`;
+- one all-open stacked-PR review scan with a single dispatch budget;
 - exact child branch and parent-head validation;
 - stale-child wait without mutation;
 - minute 4 hourly cadence without a branch-selected manual entry point;

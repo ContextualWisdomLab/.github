@@ -25,6 +25,7 @@ jobs:
       ROOT_BASE_BRANCH: main
       PULL_REQUEST_NUMBERS: "258,260,261,262,263,264"
       MAX_PRS: "6"
+      OPEN_PR_SCAN_LIMIT: "1000"
       MAX_DISPATCHES: "1"
       RETRY_HOURS: "2"
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
@@ -141,6 +142,27 @@ jobs:
           python3 scripts/ci/pr_review_fix_scheduler.py --self-test
           python3 scripts/ci/pr_review_fix_stack_scheduler.py --self-test
           git diff --check
+
+      - name: Dispatch one missing stacked-PR review
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          SCHEDULER_ACTIONS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          SCHEDULER_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/pr_review_merge_scheduler.py \
+            --repo "$TARGET_REPOSITORY" \
+            --base-branch "$ROOT_BASE_BRANCH" \
+            --project-flow github-flow \
+            --max-prs "$OPEN_PR_SCAN_LIMIT" \
+            --stacked-only \
+            --trigger-reviews \
+            --review-dispatch-limit 1 \
+            --branch-update-limit 0 \
+            --no-enable-auto-merge \
+            --merge-mode disabled \
+            --no-update-branches
 
       - name: Dispatch one dependency-safe review repair
         env:

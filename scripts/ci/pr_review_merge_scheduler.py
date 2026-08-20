@@ -3733,6 +3733,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("MERGE_MODE", "direct_or_auto"),
     )
     parser.add_argument("--update-branches", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--stacked-only",
+        action="store_true",
+        help="Inspect only PRs whose base differs from --base-branch",
+    )
     parser.add_argument("--review-workflow", default="Required OpenCode Review")
     parser.add_argument("--security-workflow", default="Strix Security Scan")
     parser.add_argument(
@@ -3763,6 +3768,8 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if args.stacked_only:
+        prs = [pr for pr in prs if pr.get("baseRefName") != args.base_branch]
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0

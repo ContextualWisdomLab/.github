@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CALLER = REPO_ROOT / ".github/workflows/lineageweave-hourly-review-repair.yml"
 QUALITY_WORKFLOW = REPO_ROOT / ".github/workflows/lineageweave-hourly-review-repair-quality.yml"
 STACK_DRIVER = REPO_ROOT / "scripts/ci/pr_review_fix_stack_scheduler.py"
+MERGE_DRIVER = REPO_ROOT / "scripts/ci/pr_review_merge_scheduler.py"
 DOCTORING = REPO_ROOT / "docs/doctoring/lineageweave-hourly-review-caller.md"
 INCIDENT = REPO_ROOT / "docs/doctoring/lineageweave-buyer-surface-opencode-incident.md"
 ONE_SHOT = REPO_ROOT / ".github/workflows/one-shot-repair-lineageweave-stack.yml"
@@ -33,8 +34,16 @@ def test_lineageweave_caller_is_hourly_bounded_and_ordered() -> None:
     assert 'PULL_REQUEST_NUMBERS: "258,260,261,262,263,264"' in caller
     assert 'MAX_PRS: "6"' in caller
     assert 'MAX_DISPATCHES: "1"' in caller
+    assert 'OPEN_PR_SCAN_LIMIT: "1000"' in caller
     assert 'RETRY_HOURS: "2"' in caller
     assert "pr_review_fix_stack_scheduler.py" in caller
+    assert "pr_review_merge_scheduler.py" in caller
+    assert "--stacked-only" in caller
+    assert "--review-dispatch-limit 1" in caller
+    assert "--branch-update-limit 0" in caller
+    assert "--no-enable-auto-merge" in caller
+    assert "--merge-mode disabled" in caller
+    assert "--no-update-branches" in caller
     assert "--pull-request-numbers \"$PULL_REQUEST_NUMBERS\"" in caller
 
 
@@ -72,7 +81,9 @@ def test_stack_driver_is_product_neutral_and_one_shot_is_absent() -> None:
     """LineageWeave identity and PR numbers remain in the thin caller only."""
 
     driver = _read(STACK_DRIVER)
+    merge_driver = _read(MERGE_DRIVER)
     assert "ContextualWisdomLab/LineageWeave" not in driver
+    assert "ContextualWisdomLab/LineageWeave" not in merge_driver
     for number in ("258", "260", "261", "262", "263", "264"):
         assert re.search(rf"(?<![0-9]){number}(?![0-9])", driver) is None
     assert "expected parent head" in driver
@@ -130,8 +141,10 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
         ".github/workflows/lineageweave-hourly-review-repair.yml",
         ".github/workflows/lineageweave-hourly-review-repair-quality.yml",
         "scripts/ci/pr_review_fix_stack_scheduler.py",
+        "scripts/ci/pr_review_merge_scheduler.py",
         "tests/test_pr_review_fix_stack_scheduler.py",
         "tests/test_pr_review_fix_scheduler.py",
+        "tests/test_pr_review_merge_scheduler.py",
         "tests/test_lineageweave_hourly_review_caller.py",
         "docs/doctoring/lineageweave-hourly-review-caller.md",
         "docs/doctoring/lineageweave-buyer-surface-opencode-incident.md",
@@ -147,6 +160,7 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     assert "--require-hashes" in quality
     assert "tests/test_pr_review_fix_stack_scheduler.py" in quality
     assert "tests/test_pr_review_fix_scheduler.py" in quality
+    assert "tests/test_pr_review_merge_scheduler.py" in quality
     assert "--fail-under=100" in quality
     assert "interrogate -vv --fail-under 100" in quality
     assert "python -m compileall -q \\" in quality

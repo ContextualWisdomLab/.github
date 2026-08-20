@@ -4388,6 +4388,36 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     )
 
 
+def test_main_stacked_only_excludes_default_branch_pull_requests(monkeypatch):
+    """A dedicated stack caller spends its review budget only on stacked PRs."""
+
+    prs = [make_pr(number=1), make_pr(number=2, baseRefName="feature-parent")]
+    seen = []
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "inspect_pr",
+        lambda _repo, pr, **_kwargs: seen.append(pr["number"])
+        or sched.Decision(pr["number"], "skip", "done"),
+    )
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--stacked-only",
+            ]
+        )
+        == 0
+    )
+    assert seen == [2]
+
+
 def test_main_rejects_invalid_review_dispatch_limit():
     with pytest.raises(SystemExit, match="--review-dispatch-limit must be -1 or greater"):
         sched.main(
@@ -4463,6 +4493,7 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
             "5",
             "--pr-number",
             "12",
+            "--stacked-only",
         ]
     )
     assert parsed.repo == "owner/repo"
@@ -4470,6 +4501,7 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     assert parsed.security_workflow == "Strix Security Scan"
     assert parsed.stale_opencode_minutes == 5
     assert parsed.pr_number == 12
+    assert parsed.stacked_only
     assert parsed.merge_mode == "direct_or_auto"
 
     assert sched.main(["--self-test"]) == 0
