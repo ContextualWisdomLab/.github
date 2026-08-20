@@ -147,7 +147,7 @@ flowchart LR
 | #1065 | fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails | `d080c09161c92ffad7b9cf630ab774b6262eeba6` | main | BEHIND | — |
 | #1062 | fix(strix): map official modes without branch-selected dispatch | `74079e5bddd69bf7eac6d3b2492f25d598517905` | main | BEHIND | — |
 | #1061 | fix(scheduler): ignore manual Strix dispatch as merge evidence | `3865b1fccb3d5325b35f3bcf837613cb9ee6a1fd` | main | DIRTY | — |
-| #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `5bd705be8d5e3ea5e85ee38dfda9c809ccb4eb9f` | main | BEHIND | — |
+| #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `8edf65f1021c885c446da3aad2d892f3b248c603` | main | BEHIND | — |
 | #1058 | fix(operability): reject impossible control-plane SLI counts | `c2240af1e6e1d701c3a795ae60f0d89bc0ee738c` | main | BEHIND | — |
 | #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `3eac8c1f78ebb82272429d1804f3d039b5da86b8` | main | BEHIND | — |
 | #1053 | fix(redaction): skip gh run view job/step prefixes | `cd4b30e560e651f3d2d3c4e418d8f51ee650f9a2` | main | BEHIND | — |
@@ -167,7 +167,7 @@ flowchart LR
 | #949 | fix(opencode-review): discover multi-line run: blocks in safe_pytest_command | `de073535569b7e4904cac699df9f159ee8f93dd7` | main | BLOCKED | CHANGES_REQUESTED |
 | #946 | fix(review): publish substantive OpenCode LLM evidence | `efc069b56abf142312aa4f3bb7b5b98e3698b9c9` | main | BLOCKED | CHANGES_REQUESTED |
 | #941 | fix(semgrep): make the pinned image digest authoritative | `84b2b924547502db72856c657a171814e64142fb` | main | BLOCKED | — |
-| #939 | fix: keep cross-repo OpenCode evidence healthy | `a78991a3ada7a11efa2c4b41f3042b4143e8d1d1` | main | BEHIND | CHANGES_REQUESTED |
+| #939 | fix: keep cross-repo OpenCode evidence healthy | `663b53d025424b32625d7a935fbbbe09d33b78c5` | main | BEHIND | CHANGES_REQUESTED |
 | #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
 | #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
 | #932 | fix(sbom): preserve Markdown report integrity | `9df515e07b60b66014bbe96fe83ed70718837b10` | main | BEHIND | CHANGES_REQUESTED |
@@ -192,7 +192,7 @@ flowchart LR
 | #797 | release: attest exact sealed SBOM evidence | `bbf5519bd676e666869d5292b744245255345e8f` | main | BLOCKED | — |
 | #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `8c0e6b3823b3e595a08512616e3bcc10dd8e328d` | main | BLOCKED | CHANGES_REQUESTED |
 | #790 | fix(coverage): retry transient trusted uv downloads | `afad81361377f1fe2e651018f1008a590f5344a5` | main | BEHIND | — |
-| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `07c1358b151b610de1dab37d543534934c16829e` | main | BEHIND | CHANGES_REQUESTED |
+| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `30eb18762af9d8a6208c18d0bc01b6abba366023` | main | BEHIND | CHANGES_REQUESTED |
 | #785 | fix(coverage): materialize requirements-directory locks | `efd2ae85538bdb389da99f0fed6d1799ead5b343` | main | BEHIND | — |
 
 ## 5. 실행 루프와 고객의 다음 행동
