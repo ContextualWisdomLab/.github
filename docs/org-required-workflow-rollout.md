@@ -191,7 +191,8 @@ SARIF/dependency evidence, test evidence, and review marker all bind to
 
 The active ruleset no longer maintains a repository-name allowlist. Live
 ruleset inspection on 2026-07-02 18:15 KST reports
-`repository_name.include=["~ALL"]`, so all current and future organization
+`repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and
+`noema` excluded, so all current and future non-excluded organization
 repositories inherit the seven central required workflows on their default
 branch unless a later ruleset exclusion is added. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.

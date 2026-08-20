@@ -104,6 +104,8 @@ def test_default_branch_only_scope_rejects_stacked_pull_requests() -> None:
 
 
 def test_ref_scope_rejects_branch_exclusions() -> None:
+    """All branch refs must be included without exclusions."""
+
     payload = ruleset_payload()
     payload["conditions"]["ref_name"]["exclude"] = ["refs/heads/release/*"]
 
@@ -113,6 +115,7 @@ def test_ref_scope_rejects_branch_exclusions() -> None:
 
 
 def test_ref_scope_rejects_string_include() -> None:
+    """The ruleset API contract requires an exact include list."""
     payload = ruleset_payload()
     payload["conditions"]["ref_name"]["include"] = "~ALL"
 

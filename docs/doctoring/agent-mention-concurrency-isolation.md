@@ -65,6 +65,7 @@ Concurrency is not the idempotency authority. Duplicate forwarding remains gover
 - No model provider, reviewer identity, repository allowlist, token name, credential scope, or branch-protection rule changes.
 - `COPILOT_GITHUB_TOKEN` remains unused.
 - Workflow-default permissions remain read-only; the local router has read-only Actions access and keeps only the content/comment writes required for dispatch and acknowledgement.
+- Local sibling-repository acknowledgement writes prefer the established `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` reviewer credentials; `github.token` remains the central repository-dispatch fallback and no new credential name is introduced.
 - Only trusted non-bot `OWNER`, `MEMBER`, or `COLLABORATOR` comments on open pull requests are eligible.
 - Pull request number, exact head and base SHAs, base branch, source comment, requested agent, and requesting actor remain bound to the invocation key.
 - Mention routing remains unable to approve, merge, update branches, publish, or release.
@@ -77,7 +78,8 @@ After protected integration:
 2. require the hidden receipt marker, acknowledgement comment, or durable exact-name artifact for the source comment;
 3. require the trusted OpenCode wrapper and review-only scheduler dispatch to start for the same repository, pull request, and exact head;
 4. verify that a scheduled sweep cannot cancel or replace the interactive route;
-5. distinguish downstream provider or review failure from routing failure rather than treating every missing verdict as the same incident.
+5. verify the local route uses an established cross-repository reviewer token for target acknowledgement when configured;
+6. distinguish downstream provider or review failure from routing failure rather than treating every missing verdict as the same incident.
 
 A receipt proves routing and durable claim processing. It is not an approval and never substitutes for exact-head checks or branch protection.
 

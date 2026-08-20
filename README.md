@@ -48,7 +48,7 @@ that means:
 | Mode | What happens |
 | --- | --- |
 | **따로 (this repo alone)** | Clone, test, and operate `.github` as the org profile and workflow source. Local quality gates, Cloudflare dry-run, and this repository's own PRs do not depend on naruon or any sibling product checkout. |
-| **또 같이 (siblings call it)** | A sibling enables the org required-workflow ruleset (already `repository_name.include=["~ALL"]` with exclusions `.github`, `IRT-bibliography-set`, and `noema`, plus `ref_name.include=["~ALL"]`). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` in that sibling's repository context, including stacked PR base branches. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
+| **또 같이 (siblings call it)** | A sibling enables the org required-workflow ruleset (already `repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and `noema` excluded, plus `ref_name.include=["~ALL"]`). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` in every non-excluded sibling repository branch, including stacked PR base branches. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
 
 Do not copy Strix, OpenCode, Noema, or scheduler workflow files into a
 sibling to "satisfy CI." Thick downstream sync PRs are an anti-pattern

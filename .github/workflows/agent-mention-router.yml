@@ -58,9 +58,18 @@ jobs:
             "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
 
       - name: Route trusted local agent mention
-        run: >-
-          python3 scripts/ci/agent_mention_router.py
-          --event-path "${RUNNER_TEMP}/agent-mention-event.json"
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
+            export TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"
+          elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then
+            export TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
+          fi
+          python3 scripts/ci/agent_mention_router.py \
+            --event-path "${RUNNER_TEMP}/agent-mention-event.json"
 
   sweep-organization-agent-mentions:
     if: >-

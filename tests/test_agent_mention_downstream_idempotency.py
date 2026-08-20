@@ -22,6 +22,19 @@ def test_router_uses_read_only_actions_access_for_durable_artifacts() -> None:
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
 
 
+def test_local_router_prefers_existing_cross_repository_review_tokens() -> None:
+    """Sibling acknowledgements use the existing reviewer token scheme."""
+
+    text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
+    local = text.split("\n  sweep-organization-agent-mentions:\n", 1)[0]
+    assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in local
+    assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in local
+    assert 'if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then' in local
+    assert 'elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then' in local
+    assert 'export TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"' in local
+    assert 'export TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"' in local
+
+
 def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
     """Exact-key concurrency serializes claims before authoritative forwarding."""
 
