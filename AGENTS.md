@@ -5,5 +5,11 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. The current write-capable repair boundary is the contextual-orchestrator gateway; the former NVIDIA NIM record is historical provenance in [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md), while the active contract is [`docs/doctoring/contextual-orchestrator-autofix.md`](docs/doctoring/contextual-orchestrator-autofix.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-OriginWeave hourly review repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
-nonnest2 hourly review repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+OriginWeave hourly review repair is a thin caller at minute 10; its historical
+NVIDIA NIM-only worker description remains in the doctoring record. See
+[`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
+nonnest2 hourly review repair is a thin caller at minute 16; its historical
+NVIDIA NIM-only worker description remains in the doctoring record. See
+[`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+The materialization contract is also covered by
+[`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
