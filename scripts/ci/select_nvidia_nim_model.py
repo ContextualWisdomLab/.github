@@ -33,6 +33,7 @@ import argparse
 import http.client
 import json
 import os
+import ssl
 import sys
 from urllib.parse import urlsplit
 
@@ -90,7 +91,10 @@ def fetch_served_model_ids(
     request_path = f"{parts.path.rstrip('/')}/models"
     try:
         with http.client.HTTPSConnection(
-            parts.hostname, parts.port or 443, timeout=timeout_seconds
+            parts.hostname,
+            parts.port or 443,
+            timeout=timeout_seconds,
+            context=ssl.create_default_context(),
         ) as connection:
             connection.request(
                 "GET",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import http.client
 import json
+import ssl
 from typing import Any
 
 import pytest
@@ -36,6 +37,7 @@ class _FakeConnection:
         port: int,
         *,
         timeout: float,
+        context: ssl.SSLContext,
         response: _FakeResponse,
         requests: list[Any],
     ) -> None:
@@ -43,6 +45,7 @@ class _FakeConnection:
         self.host = host
         self.port = port
         self.timeout = timeout
+        self.context = context
         self.response = response
         self.requests = requests
 
@@ -73,13 +76,14 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[Any]:
     requests: list[Any] = []
 
     def fake_connection(
-        host: str, port: int, *, timeout: float
+        host: str, port: int, *, timeout: float, context: ssl.SSLContext
     ) -> _FakeConnection:
         """Return a canned HTTPS connection and record its destination."""
         return _FakeConnection(
             host,
             port,
             timeout=timeout,
+            context=context,
             response=_FakeResponse(payload),
             requests=requests,
         )
@@ -127,6 +131,8 @@ def test_fetch_served_model_ids_returns_the_live_catalog(monkeypatch: pytest.Mon
     assert connection.host == "integrate.api.nvidia.com"
     assert connection.port == 443
     assert connection.timeout == 7.0
+    assert connection.context.verify_mode == ssl.CERT_REQUIRED
+    assert connection.context.check_hostname is True
     assert method == "GET"
     assert path == "/v1/models"
     assert headers["Authorization"] == "Bearer secret-key"
@@ -153,10 +159,11 @@ def test_fetch_served_model_ids_fails_closed_on_transport_errors(
     """A catalog outage is reported, never masked by guessing a model id."""
 
     def fake_connection(
-        _host: str, _port: int, *, timeout: float
+        _host: str, _port: int, *, timeout: float, context: ssl.SSLContext
     ) -> _FakeConnection:
         """Raise the configured provider failure from the HTTP boundary."""
         del timeout
+        del context
         raise error
 
     monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
@@ -173,13 +180,14 @@ def test_fetch_served_model_ids_reports_http_status(
     response.status = 401
 
     def fake_connection(
-        _host: str, _port: int, *, timeout: float
+        _host: str, _port: int, *, timeout: float, context: ssl.SSLContext
     ) -> _FakeConnection:
         """Return an unauthorized provider response."""
         return _FakeConnection(
             "integrate.api.nvidia.com",
             443,
             timeout=timeout,
+            context=context,
             response=response,
             requests=[],
         )
