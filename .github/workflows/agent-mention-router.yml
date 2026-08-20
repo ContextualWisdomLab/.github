@@ -25,8 +25,8 @@ jobs:
         || contains(github.event.comment.body, '@opencode-agent')
       )
     concurrency:
-      group: review-agent-mention-router-local-${{ github.repository }}
-      queue: max
+      group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.comment.id }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -38,7 +38,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
       TARGET_REPOSITORY_TOKEN: ${{ github.token }}
-      AGENT_DISPATCH_TOKEN: ${{ github.token }}
+      AGENT_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
       OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
     steps:
       - name: Check out trusted default-branch router
@@ -61,9 +61,12 @@ jobs:
             "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
 
       - name: Route trusted local agent mention
-        run: >-
-          python3 scripts/ci/agent_mention_router.py
-          --event-path "${RUNNER_TEMP}/agent-mention-event.json"
+        run: |
+          if [ -z "${AGENT_DISPATCH_TOKEN:-}" ]; then
+            echo "::warning::No configured review dispatch credential; the mention remains available for the scheduled sweep."
+            exit 0
+          fi
+          python3 scripts/ci/agent_mention_router.py --event-path "${RUNNER_TEMP}/agent-mention-event.json"
 
   sweep-organization-agent-mentions:
     if: >-
@@ -157,7 +160,6 @@ jobs:
         env:
           PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
           OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
-          AGENT_DISPATCH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
@@ -171,6 +173,7 @@ jobs:
             TARGET_REPOSITORY_SOURCE="${TARGET_REPOSITORY_TOKEN:+installation}"
           fi
           export TARGET_REPOSITORY_TOKEN
+          export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"
           if [ -z "$TARGET_REPOSITORY_TOKEN" ] || [ -z "$TARGET_REPOSITORY_SOURCE" ]; then
             echo "::error::Agent mention sweep requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app token exchange."
             exit 1
