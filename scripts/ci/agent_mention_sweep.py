@@ -8,7 +8,6 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Iterator, Sequence
 
 from agent_mention_router import (
@@ -22,6 +21,14 @@ from agent_mention_router import (
 ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
+SHARED_BUDGET_MARKERS = (
+    "api rate limit exceeded",
+    "rate limit exceeded",
+    "secondary rate limit",
+    "abuse detection",
+    "retry-after",
+    "x-ratelimit-reset",
+)
 
 
 @dataclass
@@ -29,6 +36,13 @@ class SweepMetrics:
     """Mutable operational counters returned to the CLI boundary."""
 
     failures: int = 0
+
+
+def _is_shared_budget_exhaustion(error: Exception) -> bool:
+    """Return whether an API error means later repository calls must stop."""
+
+    message = " ".join(str(error).casefold().split())
+    return any(marker in message for marker in SHARED_BUDGET_MARKERS)
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -156,9 +170,6 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    if not repositories:  # pragma: no cover
-        return
-
     def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
         """Fetch open pull requests for one repository."""
 
@@ -215,31 +226,15 @@ def list_recent_pull_requests(
             page += 1
         return repo_pulls
 
-    if len(repositories) == 1:
+    for repository in repositories:
         try:
-            yield from fetch_repo_pulls(repositories[0])
+            yield from fetch_repo_pulls(repository)
         except Exception as exc:  # noqa: BLE001 - repository isolation boundary
             if on_error is None:  # pragma: no cover
                 raise
-            on_error(repositories[0], exc)
-        return
-
-    executor = ThreadPoolExecutor(max_workers=10)
-    try:
-        future_to_repo = {
-            executor.submit(fetch_repo_pulls, repo): repo
-            for repo in repositories
-        }
-        for future in as_completed(future_to_repo):
-            repo = future_to_repo[future]
-            try:
-                yield from future.result()
-            except Exception as exc:  # noqa: BLE001 - repository isolation boundary
-                if on_error is None:  # pragma: no cover
-                    raise
-                on_error(repo, exc)
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+            on_error(repository, exc)
+            if _is_shared_budget_exhaustion(exc):
+                return
 
 
 def list_recent_comments(

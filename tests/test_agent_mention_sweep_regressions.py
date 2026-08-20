@@ -123,6 +123,64 @@ def test_pull_pagination_stops_on_empty_followup_page() -> None:
     assert not any("page=3" in args for args in pull_calls)
 
 
+def test_empty_repository_inventory_is_a_clean_noop() -> None:
+    """An empty organization inventory performs no pull-request calls."""
+
+    sweep = module()
+    client = PagingClient(
+        {
+            ("orgs/ContextualWisdomLab/repos", 1): [[]],
+        }
+    )
+
+    assert list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+        )
+    ) == []
+    assert [args[0] for args in client.calls] == [
+        "orgs/ContextualWisdomLab/repos"
+    ]
+
+
+def test_shared_rate_limit_stops_later_repository_requests() -> None:
+    """A shared GitHub budget error stops the serial repository walk."""
+
+    sweep = module()
+    client = PagingClient(
+        {
+            ("orgs/ContextualWisdomLab/repos", 1): [[
+                repository("broken"),
+                repository("healthy"),
+            ]],
+            ("repos/ContextualWisdomLab/broken/pulls", 1): RuntimeError(
+                "API rate limit exceeded"
+            ),
+            ("repos/ContextualWisdomLab/healthy/pulls", 1): [pull(7)],
+        }
+    )
+    failures: list[tuple[str, str]] = []
+
+    results = list(
+        sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2026-08-05T00:00:00Z",
+            on_error=lambda scope, error: failures.append((scope, str(error))),
+        )
+    )
+
+    assert results == []
+    assert failures == [
+        ("ContextualWisdomLab/broken", "API rate limit exceeded")
+    ]
+    assert not any("healthy/pulls" in args[0] for args in client.calls)
+
+
 def test_invalid_pull_number_fails_closed_without_error_sink() -> None:
     """Malformed pull metadata raises when no isolation sink is supplied."""
 
