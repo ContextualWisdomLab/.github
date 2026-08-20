@@ -68,6 +68,35 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         assert fragment not in workflow, fragment
 
 
+def test_contextual_orchestrator_route_uses_pinned_auto_discovery_sidecar() -> None:
+    """Route only the contextual product through its pinned multi-provider gateway."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    gateway_start = workflow.index("      - name: Checkout pinned contextual-orchestrator gateway source")
+    gateway_end = workflow.index("      - name: Install OpenCode CLI", gateway_start)
+    gateway = workflow[gateway_start:gateway_end]
+
+    assert "ref: e226e1197bdfc890c9d8e5b9b648c78857d7e465" in gateway
+    for provider_key in (
+        "BYTEZ_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "NVIDIA_NIM_API_KEY_SUB",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+    ):
+        assert f"{provider_key}: ${{{{ secrets.{provider_key} }}}}" in gateway
+    for fragment in (
+        "register_credential",
+        "discover_all_models",
+        "select_top_n_cheapest_discovered_agents",
+        "Contextual Orchestrator gateway is ready",
+        '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
+        "contextual-orchestrator/contextual-orchestrator",
+        "/v1/models",
+    ):
+        assert fragment in workflow, fragment
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+
+
 def test_trusted_autofix_source_is_bound_to_dispatch_sha() -> None:
     """Prevent a moving default branch from replacing trusted autofix scripts."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)

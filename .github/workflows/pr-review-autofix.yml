@@ -205,6 +205,161 @@ jobs:
           git -C "$target_workspace" config user.name "github-actions[bot]"
           echo "TARGET_WORKSPACE=$target_workspace" >>"$GITHUB_ENV"
 
+      - name: Checkout pinned contextual-orchestrator gateway source
+        if: env.TARGET_REPOSITORY == 'ContextualWisdomLab/contextual-orchestrator'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/contextual-orchestrator
+          ref: e226e1197bdfc890c9d8e5b9b648c78857d7e465
+          token: ${{ steps.target_app_token.outputs.token || github.token }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: contextual-orchestrator-gateway-source
+
+      - name: Start contextual-orchestrator auto-discovery gateway
+        if: env.TARGET_REPOSITORY == 'ContextualWisdomLab/contextual-orchestrator'
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_GATEWAY_PORT: "8787"
+        run: |
+          set -euo pipefail
+          provider_keys=(
+            BYTEZ_API_KEY
+            NVIDIA_NIM_API_KEY
+            NVIDIA_NIM_API_KEY_SUB
+            OPENROUTER_API_KEY
+            OPENAI_API_KEY
+          )
+          for provider_key in "${provider_keys[@]}"; do
+            if [ -z "${!provider_key:-}" ]; then
+              echo "::error::${provider_key} is required for the contextual-orchestrator gateway route."
+              exit 1
+            fi
+          done
+
+          gateway_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$gateway_token"
+          export CONTEXTUAL_GATEWAY_TOKEN="$gateway_token"
+          gateway_source="$GITHUB_WORKSPACE/contextual-orchestrator-gateway-source"
+          bootstrap="$RUNNER_TEMP/contextual-orchestrator-gateway.py"
+          cat >"$bootstrap" <<'PY'
+          """Bootstrap one isolated CI gateway from KV-registered providers."""
+
+          from __future__ import annotations
+
+          import os
+          from dataclasses import replace
+          from urllib.parse import urlparse
+
+          from contextual_orchestrator import ModelClient, TaskOrchestrator
+          from contextual_orchestrator.credentials import register_credential
+          from contextual_orchestrator.cost_ledger import PriceBook
+          from contextual_orchestrator.kv_config import InMemoryConfigStore
+          from contextual_orchestrator.model_discovery import (
+              agent_from_discovered,
+              agent_id_for,
+              discover_all_models,
+              refresh_price_book,
+              select_top_n_cheapest_discovered_agents,
+          )
+          from contextual_orchestrator.server import SecurityConfig, serve
+
+          PROVIDER_KEYS = (
+              "BYTEZ_API_KEY",
+              "NVIDIA_NIM_API_KEY",
+              "NVIDIA_NIM_API_KEY_SUB",
+              "OPENROUTER_API_KEY",
+              "OPENAI_API_KEY",
+          )
+
+          for provider_key in PROVIDER_KEYS:
+              register_credential(provider_key, os.environ[provider_key])
+              # Provider keys are bootstrap transport only. The running gateway
+              # resolves them from its in-memory KV registry.
+              os.environ.pop(provider_key, None)
+
+          discovered, errors = discover_all_models()
+          if not discovered:
+              raise SystemExit(
+                  "contextual-orchestrator auto-discovery found no provider models "
+                  f"after {len(errors)} provider errors"
+              )
+
+          price_book = PriceBook(InMemoryConfigStore())
+          refresh_price_book(discovered, price_book)
+          selected = select_top_n_cheapest_discovered_agents(
+              discovered, price_book, min(3, len(discovered))
+          )
+          selected_ids = {agent_id_for(model) for model in selected}
+          candidates = [
+              replace(
+                  agent_from_discovered(model),
+                  disabled=agent_id_for(model) not in selected_ids,
+              )
+              for model in discovered
+          ]
+          allowed_hosts = {
+              parsed.hostname
+              for parsed in (urlparse(model.chat_base_url) for model in selected)
+              if parsed.hostname
+          }
+          orchestrator = TaskOrchestrator(
+              candidates,
+              client=ModelClient(
+                  timeout=180,
+                  max_output_tokens=4096,
+                  allowed_provider_hosts=allowed_hosts,
+              ),
+          )
+          print(f"contextual-orchestrator discovered {len(discovered)} models")
+          if errors:
+              print(f"contextual-orchestrator retained {len(errors)} provider discovery warnings")
+          server = serve(
+              orchestrator,
+              host="127.0.0.1",
+              port=int(os.environ["CONTEXTUAL_GATEWAY_PORT"]),
+              security=SecurityConfig(
+                  auth_token=os.environ["CONTEXTUAL_GATEWAY_TOKEN"],
+                  max_concurrent_runs=1,
+              ),
+          )
+          server.serve_forever()
+          PY
+
+          PYTHONPATH="$gateway_source" \
+            python3 "$bootstrap" >"$RUNNER_TEMP/contextual-orchestrator-gateway.log" 2>&1 &
+          gateway_pid=$!
+          echo "$gateway_pid" >"$RUNNER_TEMP/contextual-orchestrator-gateway.pid"
+          printf 'CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\n' "$gateway_token" >>"$GITHUB_ENV"
+          printf 'CONTEXTUAL_ORCHESTRATOR_GATEWAY_URL=http://127.0.0.1:%s/v1\n' \
+            "$CONTEXTUAL_GATEWAY_PORT" >>"$GITHUB_ENV"
+
+          for attempt in $(seq 1 60); do
+            : "$attempt"
+            if models_json="$(curl -fsS \
+                -H "Authorization: Bearer ${gateway_token}" \
+                "http://127.0.0.1:${CONTEXTUAL_GATEWAY_PORT}/v1/models" 2>/dev/null)"; then
+              model_count="$(jq '.data | length' <<<"$models_json")"
+              if [ "$model_count" -ge 1 ]; then
+                echo "Contextual Orchestrator gateway is ready with ${model_count} discovered model entries."
+                exit 0
+              fi
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              echo "::error::Contextual Orchestrator gateway exited during bootstrap."
+              sed -n '1,240p' "$RUNNER_TEMP/contextual-orchestrator-gateway.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::Contextual Orchestrator gateway did not become ready."
+          sed -n '1,240p' "$RUNNER_TEMP/contextual-orchestrator-gateway.log"
+          exit 1
+
       - name: Install OpenCode CLI
         env:
           OPENCODE_VERSION: "1.17.13"
@@ -366,6 +521,37 @@ jobs:
               }
             }
           }' >"${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc"
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]; then
+            jq \
+              --arg model "contextual-orchestrator" \
+              --arg base_url "${CONTEXTUAL_ORCHESTRATOR_GATEWAY_URL}" \
+              ' .model = ("contextual-orchestrator/" + $model)
+              | .small_model = ("contextual-orchestrator/" + $model)
+              | .enabled_providers = ["contextual-orchestrator"]
+              | .agent["ci-autofix"].model = ("contextual-orchestrator/" + $model)
+              | .provider = {
+                  "contextual-orchestrator": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "Contextual Orchestrator",
+                    "options": {
+                      "baseURL": $base_url,
+                      "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+                    },
+                    "models": {
+                      "contextual-orchestrator": {
+                        "name": "Contextual Orchestrator auto-discovery",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "limit": {"context": 128000, "output": 32768}
+                      }
+                    }
+                  }
+                }' \
+              "${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc" \
+              >"${OPENCODE_AUTOFIX_WORKDIR}/opencode.contextual.jsonc"
+            mv "${OPENCODE_AUTOFIX_WORKDIR}/opencode.contextual.jsonc" \
+              "${OPENCODE_AUTOFIX_WORKDIR}/opencode.jsonc"
+          fi
 
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
@@ -378,9 +564,18 @@ jobs:
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
+          model="$MODEL"
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]; then
+            model="contextual-orchestrator/contextual-orchestrator"
+            if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+              echo "::error::Contextual Orchestrator gateway token is missing."
+              exit 1
+            fi
+          else
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
             echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
             exit 1
+          fi
           fi
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
@@ -454,7 +649,7 @@ jobs:
             timeout 18000 opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-autofix \
-            --model "$MODEL" \
+            --model "$model" \
             --title "PR #${PR_NUMBER} review autofix"
           restore_workspace_config
           trap - EXIT
@@ -557,9 +752,18 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
+          model="$MODEL"
+          if [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/contextual-orchestrator" ]; then
+            model="contextual-orchestrator/contextual-orchestrator"
+            if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+              echo "::error::Contextual Orchestrator gateway token is missing."
+              exit 1
+            fi
+          else
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
             echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
             exit 1
+          fi
           fi
           cd "$TARGET_WORKSPACE"
 
@@ -630,7 +834,7 @@ jobs:
               timeout 18000 opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-autofix \
-              --model "$MODEL" \
+              --model "$model" \
               --title "PR #${PR_NUMBER} merge conflict resolution"
             restore_workspace_config
             trap - EXIT
@@ -668,3 +872,14 @@ jobs:
           git -c core.hooksPath=/dev/null commit --no-edit -m "merge(pr-${PR_NUMBER}): resolve conflicts with ${PR_BASE_REF}"
           git -c core.hooksPath=/dev/null push "$expected_origin" "HEAD:${PR_HEAD_REF}"
           echo "Pushed conflict resolution; the new head will be re-reviewed and re-checked before merge."
+
+      - name: Stop contextual-orchestrator gateway
+        if: always() && env.TARGET_REPOSITORY == 'ContextualWisdomLab/contextual-orchestrator'
+        run: |
+          set -euo pipefail
+          pid_file="$RUNNER_TEMP/contextual-orchestrator-gateway.pid"
+          if [ -s "$pid_file" ]; then
+            gateway_pid="$(cat "$pid_file")"
+            kill "$gateway_pid" 2>/dev/null || true
+            wait "$gateway_pid" 2>/dev/null || true
+          fi

@@ -5,6 +5,9 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `contextual-orchestrator-hourly-review-repair.yml` owns Contextual
+  Orchestrator's heartbeat at minute 17 of every hour and points at the same
+  reusable scheduler with an explicit `main` base branch.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
