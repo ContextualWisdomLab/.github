@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-06
+Updated: 2026-08-19
 
 ## Purpose
 
@@ -27,6 +27,8 @@ The exact-name Actions artifact ledger uses `cwl-agent-invocation-<SHA-256 key>`
 Wrapper workflows use the verified key in their non-cancelling concurrency group, inspect the exact artifact name, and upload a 30-day immutable claim before forwarding to the authoritative review plane. Exact-key concurrency serializes duplicate wrapper runs. If a prior live claim exists, the wrapper performs no forward. If artifact visibility is delayed and a duplicate upload collides, the upload fails before the forwarding step, so the control plane fails closed rather than forwarding twice. Completed or failed authoritative work remains claimed for the retention window; a maintainer who needs a new attempt creates a new trusted source comment, which produces a distinct key.
 
 Target-repository acknowledgement comments and reactions are user-experience signals only. They are not dispatch authority because repository writers, bot identities, or credential rotation could otherwise forge or invalidate a marker. A failed acknowledgement cannot cause completed agent work to be redispatched.
+
+When a live claim exists without a visible receipt comment, the router republishes the acknowledgement without forwarding the request again; reaction failures are warnings and do not block the durable comment.
 
 A user or fine-grained token enumerates organization repositories. When the OpenCode GitHub App installation token is the available credential, the sweep instead uses GitHub's installation-repositories endpoint, which returns only repositories accessible to that installation. This avoids depending on an organization-issues endpoint whose documented fine-grained token support is user-token-oriented.
 
