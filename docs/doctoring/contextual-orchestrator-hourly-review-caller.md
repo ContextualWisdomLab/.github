@@ -20,7 +20,8 @@ semantics and remains independently operable as a standalone module.
 
 ## Authority and secret contract
 
-The caller keeps `GITHUB_TOKEN` at `contents: read` and maps only
+The caller keeps `GITHUB_TOKEN` at `contents: read`, grants job-scoped OIDC for
+the reusable scheduler's app-token exchange, and maps only
 `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN`. It never uses
 `secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
 `COPILOT_GITHUB_TOKEN`. CWE-269 forbids granting the caller the worker's

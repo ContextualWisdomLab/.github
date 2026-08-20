@@ -35,7 +35,7 @@ def test_orchestrator_caller_preserves_read_only_explicit_secret_scope() -> None
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n" not in jobs_scope
+    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
