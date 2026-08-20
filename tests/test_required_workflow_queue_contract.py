@@ -615,8 +615,9 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. The sweep runs
-    every 15 minutes so an approval that lands after a PR's last event is
-    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
+    every 15 minutes with an hourly fallback so an approval that lands after a
+    PR's last event is auto-updated/merged promptly instead of idling
+    indefinitely. Its cron has a
     distinct concurrency key from the separate 30-minute scan, and the job has
     enough runtime headroom to finish a complete organization walk.
     """
@@ -624,8 +625,10 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
 
     assert "org-queue-sweep:" in workflow
     assert '- cron: "*/15 * * * *"' in workflow
+    assert '- cron: "0 * * * *"' in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
     assert "github.event.schedule == '*/15 * * * *'" in workflow
+    assert "github.event.schedule == '0 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
     assert (
         "github.event_name == 'schedule' && format('schedule-{0}', "
@@ -643,6 +646,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
         assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
     # The single-repository scan must not double-run on the sweep cron.
     assert "github.event.schedule != '*/15 * * * *'" in workflow
+    assert "github.event.schedule != '0 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (

@@ -74,15 +74,12 @@ on:
         type: string
   schedule:
     - cron: "*/30 * * * *"
-    # Every-15-minutes org-wide sweep cadence for the org-queue-sweep job below. Target
-    # repositories only receive scheduler runs on PR events, review/security
-    # workflow completion, and protected-branch pushes; a PR whose approval or
-    # required checks land AFTER its last event has no later trigger and sits
-    # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat. Runs every 15 minutes so an approval or
-    # required check that lands after a PR's last event is auto-updated/merged
-    # within ~15 minutes instead of sitting idle for up to an hour.
+    # The org-wide sweep closes the late-approval/late-check gap for PRs whose
+    # event-driven scheduler run already completed. Keep both a 15-minute
+    # operational heartbeat and an hourly fallback for scheduler starvation or
+    # delayed event delivery.
     - cron: "*/15 * * * *"
+    - cron: "0 * * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -134,7 +131,10 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        github.event.schedule != '*/15 * * * *'
+        (
+          github.event.schedule != '*/15 * * * *' &&
+          github.event.schedule != '0 * * * *'
+        )
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -553,7 +553,8 @@ jobs:
     # published after the scheduler pass, required merge-preview checks landing
     # late, a base-branch policy blocker clearing) stays approved-but-unmerged
     # with no later trigger. This job re-runs the same trusted scheduler against
-    # every organization repository on an hourly heartbeat so each such PR is
+    # every organization repository on the 15-minute heartbeat and its hourly
+    # fallback so each such PR is
     # merged, branch-updated, or leaves a concrete per-PR blocker reason in this
     # log. It never bypasses policy: all mutations go through the same guarded
     # scheduler contract as the per-repository runs.
@@ -561,11 +562,12 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       (
         (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-latest
     # The complete organization walk exceeded the legacy 30-minute boundary in
-    # production. Keep one running and one latest pending */15 sweep through the
+    # production. Keep one running and one latest pending sweep through the
     # schedule-specific concurrency key above, while allowing the current walk
     # enough time to finish instead of cancelling before later repositories.
     timeout-minutes: 60
