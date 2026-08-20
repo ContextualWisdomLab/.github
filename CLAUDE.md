@@ -28,6 +28,8 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    repo-specific contracts. Central Semgrep binds one job-level `SEMGREP_IMAGE`
    digest for log evidence and `docker run`. See `README.md` (policy summary) and `PR_GOVERNANCE_AUDIT.md`
    (live audit + per-repo DX/UX transfer decisions).
+   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
+   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
@@ -45,7 +47,7 @@ PRs repair guidance. A separate edit-capable autofix flow
 approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
 resulting head is fully re-reviewed and re-checked before it can merge, so a wrong resolution cannot
 merge unreviewed. Old approvals and old checks are not merge evidence after the head SHA changes.
-Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
+Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 
 ## Structure
 
