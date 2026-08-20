@@ -81,7 +81,7 @@ def test_asyncio_helper_executes_the_trusted_import() -> None:
     assert "python3 -I" in helper
     assert _HELPER_IMPORT_LINE in helper
     completed = subprocess.run(
-        [sys.executable, "-c", _HELPER_IMPORT_LINE],
+        ["bash", str(_HELPER_PATH)],
         check=False,
         capture_output=True,
         text=True,
