@@ -85,7 +85,7 @@ def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     return match.group(1)
 
 
-def _workflow_neutralizes(log_text: str) -> bool:
+def _workflow_classifies_backend_unavailable(log_text: str) -> bool:
     """Execute the outer workflow's backend-neutralization condition."""
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
@@ -203,12 +203,12 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Reject provider-like target text in the outer neutralization gate."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "source literal: Nvidia_nimException Error code: 404\n"
             )
         )
         self.assertTrue(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: Nvidia_nimException - "
                 "Error code: 404\nVulnerabilities 0\n"
             )
@@ -218,7 +218,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Require exception, provider, and 404 evidence on one physical line."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: provider unavailable\n"
                 "Nvidia_nimException Error code: 404\n"
             )
@@ -228,22 +228,22 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Require LiteLLM NotFoundError context, not just NVIDIA + 404."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "Nvidia_nimException Error code: 404\nVulnerabilities 0\n"
             )
         )
 
-    def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
+    def test_outer_workflow_never_classifies_reported_vulnerabilities(self) -> None:
         """Keep a real vulnerability signal blocking despite provider failure."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: Nvidia_nimException - "
                 "Error code: 404\nVulnerabilities 1\n"
             )
         )
 
-    def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
+    def test_workflow_classifies_backend_unavailable_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
@@ -259,35 +259,38 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             '! grep -Eiq "$reported_vulnerability_signal"',
             workflow,
         )
+        self.assertIn("::error title=STRIX_PROVIDER_UNAVAILABLE::", workflow)
+        self.assertIn('exit "$strix_rc"', workflow)
+        self.assertNotIn("Treating as a neutral skip", workflow)
 
-    def test_outer_workflow_neutralizes_model_behavior_error_without_findings(
+    def test_outer_workflow_classifies_backend_unavailable_model_behavior_error_without_findings(
         self,
     ) -> None:
-        """Require the actual scanner ModelBehaviorError format before neutralizing."""
+        """Require the actual scanner ModelBehaviorError format before classifying."""
 
         self.assertFalse(
-            _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 0\n")
+            _workflow_classifies_backend_unavailable("ModelBehaviorError\nVulnerabilities 0\n")
         )
         self.assertTrue(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "agents.exceptions.ModelBehaviorError: provider response failed\n"
                 "Vulnerabilities 0\n"
             )
         )
 
-    def test_outer_workflow_never_neutralizes_model_behavior_error_with_findings(
+    def test_outer_workflow_never_classifies_model_behavior_error_with_findings(
         self,
     ) -> None:
         """Keep Vulnerabilities [1-9] fail-closed for the actual model exception."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "agents.exceptions.ModelBehaviorError: provider response failed\n"
                 "Vulnerabilities 1\n"
             )
         )
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "agents.exceptions.ModelBehaviorError: provider response failed\n"
                 "Vulnerabilities 9\n"
             )
