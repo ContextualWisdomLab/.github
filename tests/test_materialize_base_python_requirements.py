@@ -1,3 +1,5 @@
+"""Verify trusted base lock discovery, materialization, and exporter failures."""
+
 from __future__ import annotations
 
 import hashlib
@@ -121,6 +123,10 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
         "fastapi==1 --hash=sha256:" + ("a" * 64) + "\n",
         encoding="utf-8",
     )
+    (service / "requirements-dev.lock").write_text(
+        "uvicorn==1 --hash=sha256:" + ("c" * 64) + "\n",
+        encoding="utf-8",
+    )
     (repo / "requirements-test.txt").write_text(
         "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\n",
         encoding="utf-8",
@@ -138,6 +144,7 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
     assert [entry["source"] for entry in manifest] == [
         "requirements-test.txt",
+        "services/account_unification/requirements-dev.lock",
         "services/account_unification/requirements-dev.txt",
     ]
 
@@ -215,6 +222,7 @@ def test_rejects_malformed_git_tree_entries(
     """Malformed git output cannot be interpreted as a trusted lock blob."""
 
     def fake_git(_repo_root: Path, *_args: str) -> bytes:
+        """Return the malformed tree fixture for the parser under test."""
         return tree_output
 
     monkeypatch.setattr(materializer, "_git", fake_git)
@@ -247,6 +255,7 @@ def test_main_reports_each_materialized_lock(
     def fake_materialize(
         _repo_root: Path, _base_sha: str, _output_dir: Path
     ) -> list[dict[str, str]]:
+        """Return one deterministic manifest for the CLI reporting test."""
         return [
             {
                 "file": "requirements-000.txt",
@@ -310,6 +319,7 @@ def test_main_fails_with_the_materialization_reason(
     """A materialization exception fails closed and remains diagnosable in CI."""
 
     def fail_materialize(_repo_root: Path, _base_sha: str, _output_dir: Path) -> None:
+        """Raise the fixture failure that the CLI must report."""
         raise OSError("fixture failure")
 
     monkeypatch.setattr(materializer, "materialize", fail_materialize)
@@ -369,6 +379,7 @@ def test_skips_non_blob_tree_entries(
     )
 
     def fake_git(_repo_root: Path, *args: str) -> bytes:
+        """Return one regular blob and one skipped gitlink tree entry."""
         if args[0] == "ls-tree":
             return tree
         if args[0] == "show":
@@ -433,6 +444,7 @@ def test_uv_lock_fails_closed_when_trusted_uv_bootstrap_fails(
     repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
 
     def fail_install() -> str:
+        """Raise the bootstrap failure expected for a tracked uv project."""
         raise RuntimeError("trusted uv bootstrap failed")
 
     monkeypatch.setattr(materializer, "_install_trusted_uv", fail_install)
@@ -448,6 +460,7 @@ def test_uv_lock_skipped_when_pyproject_is_absent(
     repo, base_sha = _uv_repo(tmp_path, with_pyproject=False, lock_dir="service")
 
     def unexpected_install() -> str:
+        """Fail if an orphan uv lock attempts to bootstrap the trusted exporter."""
         raise AssertionError("orphan uv.lock must not bootstrap uv")
 
     monkeypatch.setattr(materializer, "_install_trusted_uv", unexpected_install)
@@ -723,6 +736,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     calls = 0
 
     def verify(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Return the exact pinned uv version and count verification executions."""
         nonlocal calls
         calls += 1
         return subprocess.CompletedProcess(
@@ -765,6 +779,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     monkeypatch.setattr(materializer, "_verified_uv_binary", lambda _payload: b"binary")
 
     def fail(*_args: object, **_kwargs: object) -> None:
+        """Raise the parameterized process failure from the fake executable."""
         raise failure
 
     monkeypatch.setattr(materializer.subprocess, "run", fail)
@@ -821,6 +836,7 @@ def test_run_uv_export_invokes_uv_with_frozen_offline_flags(
     captured: dict[str, object] = {}
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Capture uv export arguments while returning a successful result."""
         captured["argv"] = argv
         captured["cwd"] = kwargs.get("cwd")
         captured["timeout"] = kwargs.get("timeout")
@@ -856,6 +872,7 @@ def test_uv_export_process_failures_fail_closed(
     monkeypatch.setattr(materializer, "_install_trusted_uv", lambda: "/usr/bin/uv")
 
     def fail_export(_work: Path, _uv_path: str) -> None:
+        """Raise the parameterized exporter failure for the fail-closed test."""
         raise export_error
 
     monkeypatch.setattr(materializer, "_run_uv_export", fail_export)
