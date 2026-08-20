@@ -192,7 +192,7 @@ flowchart LR
 | #797 | release: attest exact sealed SBOM evidence | `bbf5519bd676e666869d5292b744245255345e8f` | main | BLOCKED | — |
 | #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `8c0e6b3823b3e595a08512616e3bcc10dd8e328d` | main | BLOCKED | CHANGES_REQUESTED |
 | #790 | fix(coverage): retry transient trusted uv downloads | `afad81361377f1fe2e651018f1008a590f5344a5` | main | BEHIND | — |
-| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `1053a14387e53298dc5de887d6637288eb446a70` | main | BEHIND | CHANGES_REQUESTED |
+| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `6146bb99f7e4ffc2ce6ddc9d5d7f2b934ad26f2f` | main | BEHIND | CHANGES_REQUESTED |
 | #785 | fix(coverage): materialize requirements-directory locks | `efd2ae85538bdb389da99f0fed6d1799ead5b343` | main | BEHIND | — |
 
 ## 5. 실행 루프와 고객의 다음 행동
