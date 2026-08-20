@@ -69,14 +69,15 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         cursor += 1
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
         return None
-    key_chars: list[str] = []
-    while cursor < len(text) and text[cursor] in KEY_CHARS:
-        key_chars.append(text[cursor])
-        cursor += 1
+    key_chars: list[str] = [text[cursor]]
+    cursor += 1
+    while cursor < len(text):
         separator_start = cursor
         while cursor < len(text) and text[cursor] in "\\ \t\r\n":
             cursor += 1
         if cursor < len(text) and text[cursor] in KEY_CHARS:
+            key_chars.append(text[cursor])
+            cursor += 1
             continue
         cursor = max(separator_start, cursor)
         break
