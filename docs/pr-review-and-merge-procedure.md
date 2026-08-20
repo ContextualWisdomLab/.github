@@ -22,9 +22,16 @@ production state. Blocking findings must be source-backed, severity-labeled,
 impactful, remediable, and include suggested verification.
 
 The OpenCode review job does not widen its own `pull_request_target` job token
-to repository-write permission. Its immediate post-approval scheduler
-follow-up uses only an explicit merge token or the OpenCode app token;
-otherwise it leaves the separate scheduler required workflow and schedule
+to repository-write permission. The scheduler's `GH_TOKEN` merge/read fallback
+order is `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, the exchanged
+OpenCode app token, then the receiving workflow's `github.token`. For
+repository-dispatch calls that target another repository, the
+`SCHEDULER_ACTIONS_TOKEN` and `SCHEDULER_READ_TOKEN` values use the same first
+three explicit credentials and do not fall back to a central-repository token;
+for same-repository calls they may use `github.token`. A central
+`github.token` cannot mutate or read a different target repository, so the
+scheduler leaves that cross-repository operation blocked when no explicit
+credential is available; the separate required workflow and schedule remain
 authoritative.
 
 Branch updates and merges run through the central scheduler mutation
