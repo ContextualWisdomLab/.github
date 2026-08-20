@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -105,7 +106,11 @@ def test_bounded_reader_rejects_missing_directory_symlink_large_and_oserror(
     assert gate._read_bounded_regular(large, 3) is None
     assert gate._read_bounded_regular(target, 10) == b"ok"
 
-    monkeypatch.setattr(Path, "read_bytes", lambda _self: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        os,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
     assert gate._read_bounded_regular(target, 10) is None
 
 

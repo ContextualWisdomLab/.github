@@ -50,7 +50,7 @@ def test_failed_python_suite_uses_bounded_repo_root_aware_classifier() -> None:
     assert "classify-pytest" in workflow
     assert _HELPER in workflow
     assert '--repo-root "$COVERAGE_SOURCE_WORKDIR"' in workflow
-    assert '--pyproject "$project_dir/pyproject.toml"' in workflow
+    assert '--logical-pyproject "$project_dir/pyproject.toml"' in workflow
     assert "changed_files_for_coverage" in workflow
     assert "python_native_pytest_log" in workflow
     assert "python_native_changed_files" in workflow

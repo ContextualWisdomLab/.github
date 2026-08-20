@@ -819,6 +819,7 @@ jobs:
           summary_file="${RUNNER_TEMP}/coverage-evidence.md"
           summary_output_file="${RUNNER_TEMP}/coverage-evidence-output.md"
           failures=0
+          python_native_peer_check_required=0
           r_peer_check_required=0
 
           append() {

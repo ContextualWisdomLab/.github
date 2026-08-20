@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 from typing import Any, Sequence
 
@@ -63,12 +65,32 @@ def _read_bounded_regular(path: Path, maximum: int) -> bytes | None:
     """Return bounded regular-file bytes, or ``None`` for unsafe input."""
 
     try:
-        if not path.is_file() or path.is_symlink():
+        if maximum < 0:
             return None
-        size = path.stat().st_size
-        if size > maximum:
+        candidate = path.absolute()
+        current = Path(candidate.anchor)
+        for component in candidate.parts[1:]:
+            current /= component
+            if current.is_symlink():
+                return None
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(candidate, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+                return None
+            payload = bytearray()
+            while len(payload) <= maximum:
+                chunk = os.read(descriptor, maximum + 1 - len(payload))
+                if not chunk:
+                    return bytes(payload)
+                payload.extend(chunk)
+                if len(payload) > maximum:
+                    return None
             return None
-        return path.read_bytes()
+        finally:
+            os.close(descriptor)
     except OSError:
         return None
 

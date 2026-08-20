@@ -708,9 +708,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GIT_CONFIG_NOSYSTEM=1" in measure_step
     assert "GIT_CONFIG_GLOBAL=/dev/null" in measure_step
     assert "-c safe.directory=/work" in measure_step
-    assert measure_step.count("GIT_CONFIG_COUNT=1") == 3
-    assert measure_step.count("GIT_CONFIG_KEY_0=safe.directory") == 3
-    assert measure_step.count("GIT_CONFIG_VALUE_0=/work") == 3
+    assert measure_step.count("GIT_CONFIG_COUNT=1") == 4
+    assert measure_step.count("GIT_CONFIG_KEY_0=safe.directory") == 4
+    assert measure_step.count("GIT_CONFIG_VALUE_0=/work") == 4
     assert "-c core.fsmonitor=false" in measure_step
     assert "-c core.hooksPath=/dev/null" in measure_step
     assert "git -c core.quotePath=false ls-files" not in measure_step
@@ -2133,11 +2133,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert syntax_step < measure_step
     assert "\n      - name:" not in measure.split("\n        run: |", 1)[1]
     assert 'UV_NO_BUILD: "1"' in measure
-    assert measure.count("GITHUB_ENV=/dev/null") == 3
-    assert measure.count("GITHUB_PATH=/dev/null") == 3
-    assert measure.count("GITHUB_OUTPUT=/dev/null") == 3
-    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 3
-    assert measure.count("BASH_ENV=/dev/null") == 3
+    assert measure.count("GITHUB_ENV=/dev/null") == 4
+    assert measure.count("GITHUB_PATH=/dev/null") == 4
+    assert measure.count("GITHUB_OUTPUT=/dev/null") == 4
+    assert measure.count("GITHUB_STEP_SUMMARY=/dev/null") == 4
+    assert measure.count("BASH_ENV=/dev/null") == 4
     assert "uv sync --project" not in measure
     assert "uv run --no-project" not in measure
     assert "uv run --no-build" not in measure
