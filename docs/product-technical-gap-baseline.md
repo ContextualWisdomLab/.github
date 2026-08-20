@@ -2,8 +2,8 @@
 
 검토 기준일: **2026-08-20 (Asia/Seoul)**  
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계  
-현재 보호된 `main`: `aa8503f4383e8328d89104796bc3e9f7da810376`  
-현재 열린 PR 수: **99** (아래 표에 이 스냅샷의 전체 목록 포함)
+현재 보호된 `main`: `6479989bbff475404cc2cccc468d5fb1d6c632e5`
+현재 열린 PR 수: **100** (아래 표에 이 스냅샷의 전체 목록 포함)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다.
 
@@ -95,12 +95,14 @@ flowchart LR
 
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
+| #1169 | fix(security): keep baseline-only Strix outages non-blocking | `24893cee8fbb33791fe77629efa35ce2d8fb7076` | main | BLOCKED | — |
+| #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
 | #1166 | fix(ci): recognize replacement tests in existing files | `634303023cea09e8496b8abd10ec47d5ca76f732` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `941e4bdf7e11157c3f9b596bd6648e7491501054` | main | BLOCKED | — |
 | #1162 | fix: use review credentials for agent dispatch | `fad1ed4de66e090d31881348a7c3c3f6518aa177` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `3b0e0043c1433f9d7a0366740fad7f858603fae3` | main | BLOCKED | — |
-| #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `e0c96d567a0ecf67340b64f6fdccb7567a4f9769` | main | BLOCKED | — |
+| #1161 | fix: make hourly coordinator credential absence auditable | `dbc3eca51444e46ce7a3a07ea818c72ad8bf124a` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `d1da60569c079f59b211a2495cbe0fdb6a7a1d02` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
