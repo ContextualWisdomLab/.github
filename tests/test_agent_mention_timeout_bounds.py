@@ -72,6 +72,7 @@ def test_github_client_applies_one_finite_timeout(monkeypatch) -> None:
     observed = []
 
     def fake_run(command, **kwargs):
+        """Return a successful JSON response while recording subprocess options."""
         observed.append((command, kwargs))
         return SimpleNamespace(stdout='{"ok": true}\n', returncode=0)
 
@@ -88,6 +89,7 @@ def test_github_client_converts_timeout_to_bounded_diagnostic(monkeypatch) -> No
     router = router_module()
 
     def timeout_run(command, **kwargs):
+        """Raise the same timeout the production wrapper must translate."""
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(router.subprocess, "run", timeout_run)
@@ -107,6 +109,7 @@ def test_repository_fanout_uses_exactly_four_workers_at_scale(monkeypatch) -> No
     worker_limits = []
 
     def recording_executor(*, max_workers):
+        """Record the configured worker ceiling before creating real workers."""
         worker_limits.append(max_workers)
         return real_executor(max_workers=max_workers)
 
@@ -193,6 +196,7 @@ def test_empty_inventory_does_not_construct_an_executor(monkeypatch) -> None:
     sweep = sweep_module()
 
     def forbidden_executor(*args, **kwargs):
+        """Fail the test if the empty inventory allocates an executor."""
         raise AssertionError(f"executor called with {args!r} {kwargs!r}")
 
     monkeypatch.setattr(
@@ -224,6 +228,7 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
         """Keep the second repository in one bounded in-flight request."""
 
         def request(self, args, *, input_payload=None):
+            """Return page one or pause page two until the closer releases it."""
             del input_payload
             endpoint = args[0]
             if endpoint == "orgs/ContextualWisdomLab/repos":
@@ -248,12 +253,15 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
         """Expose the moment shutdown begins while delegating real workers."""
 
         def __init__(self, *, max_workers):
+            """Create the real bounded executor used by this test double."""
             self._inner = real_executor(max_workers=max_workers)
 
         def submit(self, *args, **kwargs):
+            """Forward one repository fetch to the delegated executor."""
             return self._inner.submit(*args, **kwargs)
 
         def shutdown(self, *, wait, cancel_futures):
+            """Record shutdown before forwarding the bounded cancellation call."""
             shutdown_started.set()
             return self._inner.shutdown(
                 wait=wait,
