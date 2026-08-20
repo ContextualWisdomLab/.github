@@ -7,9 +7,10 @@ CALLER = Path(".github/workflows/lineageweave-hourly-review-repair.yml")
 QUALITY_WORKFLOW = Path(
     ".github/workflows/lineageweave-hourly-review-repair-quality.yml"
 )
+STACK_DRIVER = Path("scripts/ci/pr_review_fix_stack_scheduler.py")
 DOCTORING = Path("docs/doctoring/lineageweave-hourly-review-caller.md")
 INCIDENT = Path("docs/doctoring/lineageweave-buyer-surface-opencode-incident.md")
-SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
+ONE_SHOT = Path(".github/workflows/one-shot-repair-lineageweave-stack.yml")
 
 
 def _read(path: Path) -> str:
@@ -18,8 +19,8 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_lineageweave_caller_is_manual_hourly_bounded_and_non_cancelling() -> None:
-    """LineageWeave receives one bounded repair without cancelling live RCA work."""
+def test_lineageweave_caller_is_manual_hourly_bounded_and_ordered() -> None:
+    """The heartbeat covers all six PRs and permits one dependency-safe repair."""
 
     caller = _read(CALLER)
 
@@ -27,27 +28,30 @@ def test_lineageweave_caller_is_manual_hourly_bounded_and_non_cancelling() -> No
     assert 'cron: "4 * * * *"' in caller
     assert "group: lineageweave-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
-    assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
-    assert "target_repository: ContextualWisdomLab/LineageWeave" in caller
-    assert "base_branch: main" in caller
-    assert 'max_prs: "50"' in caller
-    assert 'max_dispatches: "1"' in caller
-    assert 'retry_hours: "2"' in caller
+    assert "TARGET_REPOSITORY: ContextualWisdomLab/LineageWeave" in caller
+    assert "ROOT_BASE_BRANCH: main" in caller
+    assert 'PULL_REQUEST_NUMBERS: "258,260,261,262,263,264"' in caller
+    assert 'MAX_PRS: "6"' in caller
+    assert 'MAX_DISPATCHES: "1"' in caller
+    assert 'RETRY_HOURS: "2"' in caller
+    assert "pr_review_fix_stack_scheduler.py" in caller
+    assert "--pull-request-numbers \"$PULL_REQUEST_NUMBERS\"" in caller
 
 
-def test_lineageweave_caller_preserves_oidc_and_explicit_secret_scope() -> None:
-    """The caller maps established credentials without model or mutation scope."""
+def test_lineageweave_caller_is_protected_main_only_and_least_privilege() -> None:
+    """Only protected central main can materialize the established mutation path."""
 
     caller = _read(CALLER)
-    workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
-    assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert (
-        "\n    permissions:\n      contents: read\n      id-token: write\n"
-        in jobs_scope
-    )
-    assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
-    assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
+    assert "contents: read" in caller
+    assert "id-token: write" in caller
+    assert 'GITHUB_REF" != "refs/heads/main"' in caller
+    assert "OPENCODE_REPOSITORY_DISPATCH_TARGETS" in caller
+    assert "PR_REVIEW_MERGE_TOKEN" in caller
+    assert "OPENCODE_APPROVE_TOKEN" in caller
+    assert "persist-credentials: false" in caller
+    assert "--connect-timeout 10" in caller
+    assert "--max-time 30" in caller
     assert "secrets: inherit" not in caller
     assert "NVIDIA_NIM_API_KEY" not in caller
     assert "COPILOT_GITHUB_TOKEN" not in caller
@@ -61,19 +65,26 @@ def test_lineageweave_caller_preserves_oidc_and_explicit_secret_scope() -> None:
         assert forbidden not in caller
 
 
-def test_lineageweave_target_is_not_hard_coded_in_shared_scheduler() -> None:
-    """Product identity remains in the thin caller rather than the engine."""
+def test_stack_driver_is_product_neutral_and_one_shot_is_absent() -> None:
+    """LineageWeave identity and PR numbers remain in the thin caller only."""
 
-    assert "ContextualWisdomLab/LineageWeave" not in _read(SCHEDULER)
+    driver = _read(STACK_DRIVER)
+    assert "ContextualWisdomLab/LineageWeave" not in driver
+    for number in ("258", "260", "261", "262", "263", "264"):
+        assert number not in driver
+    assert "expected parent head" in driver
+    assert "max_dispatches != 1" in driver
+    assert not ONE_SHOT.exists()
 
 
 def test_lineageweave_doctoring_preserves_operational_boundaries() -> None:
-    """The original doctoring retains target, credential, and approval rules."""
+    """Doctoring retains target, credential, stack, and approval rules."""
 
     doctoring = _read(DOCTORING)
 
     for phrase in (
         "ContextualWisdomLab/LineageWeave",
+        "#258 → #260 → #261 → #262 → #263 → #264",
         "OPENCODE_REPOSITORY_DISPATCH_TARGETS",
         "independent non-author approval",
         "NVIDIA_NIM_API_KEY",
@@ -109,12 +120,14 @@ def test_incident_doctoring_tracks_current_buyer_surface_stack() -> None:
 
 
 def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
-    """Caller, quality, test, and both doctoring records rerun the focused gate."""
+    """Caller, driver, tests, and doctoring edits rerun the focused gate."""
 
     quality = _read(QUALITY_WORKFLOW)
     owned_paths = (
         ".github/workflows/lineageweave-hourly-review-repair.yml",
         ".github/workflows/lineageweave-hourly-review-repair-quality.yml",
+        "scripts/ci/pr_review_fix_stack_scheduler.py",
+        "tests/test_pr_review_fix_stack_scheduler.py",
         "tests/test_lineageweave_hourly_review_caller.py",
         "docs/doctoring/lineageweave-hourly-review-caller.md",
         "docs/doctoring/lineageweave-buyer-surface-opencode-incident.md",
@@ -124,7 +137,10 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     assert "cancel-in-progress: true" in quality
     assert "persist-credentials: false" in quality
     assert "--require-hashes" in quality
-    assert "tests/test_lineageweave_hourly_review_caller.py" in quality
+    assert "tests/test_pr_review_fix_stack_scheduler.py" in quality
+    assert "tests/test_pr_review_fix_scheduler.py" in quality
+    assert "--fail-under=100" in quality
+    assert "interrogate -vv --fail-under 100" in quality
     assert "python -m compileall -q \\" in quality
     assert "git diff --check" in quality
     for path in owned_paths:

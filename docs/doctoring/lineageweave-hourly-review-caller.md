@@ -6,13 +6,18 @@
 
 ContextualWisdomLab operates one protected hourly caller for
 `ContextualWisdomLab/LineageWeave`. The caller covers the current buyer-surface
-stack **#258 → #260 → #261 → #262 → #263 → #264**, delegates to the
-product-neutral central review-fix scheduler, inspects at most 50 open pull
-requests targeting protected `main`, and dispatches at most one bounded repair
-per heartbeat.
+stack **#258 → #260 → #261 → #262 → #263 → #264**, passes that explicit queue
+to a product-neutral ordered-stack repair driver, and dispatches at most one
+bounded current-head repair per heartbeat.
+
+The initial formal OpenCode generation remains owned by the central mention
+router and the organization review/merge scheduler. This caller begins only
+when exact-head OpenCode feedback, a failed-check root-cause review, or an
+approved/unreviewed merge-conflict repair is actionable. It never treats a
+missing initial review as repair evidence.
 
 The caller runs at minute 4 of every hour and also exposes `workflow_dispatch`
-for an operator-controlled acceptance run. It does not contain product mutation
+for an operator-controlled acceptance run. It does not contain product edit
 logic, LLM credentials, approval authority, merge authority, or release
 authority. LineageWeave remains independently deployable; privileged automation
 remains in `ContextualWisdomLab/.github`.
@@ -67,10 +72,17 @@ requests:
           → #264
 ```
 
-A child is reviewed against its exact declared parent head. When a parent moves,
-the child is stale until its base is updated and all exact-head checks and
-reviews are regenerated. A green result from an ancestor, predecessor head, or
-sibling cannot satisfy a descendant gate.
+The driver refetches every PR in declared order. A child must target the
+immediately preceding parent branch, and its base SHA must equal that parent's
+exact current head. A branch-name mismatch fails closed as a structural error.
+A stale base SHA is a non-mutating wait that names the required restack. The
+review/merge scheduler owns branch updates; the repair caller never edits a
+stale descendant against obsolete evidence.
+
+Only the exact no-repair result permits the driver to advance to the next child.
+A draft parent, recent same-head marker, active repair, structural error, or
+other blocker stops the pass. A green result from an ancestor, predecessor head,
+or sibling cannot satisfy a descendant gate.
 
 ## Cadence and concurrency
 
@@ -95,11 +107,11 @@ changing the cadence or credential boundary.
 
 ## Credential and model boundary
 
-The caller keeps workflow `GITHUB_TOKEN` at `contents: read`. Only the reusable
-job receives `id-token: write`, allowing the reviewed central scheduler to use
-its established GitHub OIDC credential path when required. The caller maps only
-`PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN`; it never uses
-`secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
+The caller keeps workflow `GITHUB_TOKEN` at `contents: read`. Its one job receives
+`id-token: write`, allowing the reviewed OpenCode GitHub App exchange when an
+established user token is absent. It accepts only `PR_REVIEW_MERGE_TOKEN`,
+`OPENCODE_APPROVE_TOKEN`, or that exchanged app token as mutation authority. It
+never uses `secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
 `COPILOT_GITHUB_TOKEN`.
 
 Model execution remains inside the separately reviewed central worker. Before
@@ -135,19 +147,24 @@ receipt, or a green status alone is not a review verdict.
 
 Machine-checkable contracts require:
 
-- exact `ContextualWisdomLab/LineageWeave` target and protected `main` base;
+- exact `ContextualWisdomLab/LineageWeave` target and protected `main` source;
+- explicit ordered queue `258,260,261,262,263,264`;
+- exact child branch and parent-head validation;
+- stale-child wait without mutation;
 - minute 4 hourly cadence plus a manual acceptance entry point;
 - non-cancelling repository-scoped concurrency;
 - at most one dispatch and a two-hour same-head retry floor;
 - read-only workflow contents plus job-scoped OIDC;
-- explicit scheduler-secret mapping;
-- absence of model, Copilot, merge, release, and target-mutation authority;
-- a focused path-filtered quality workflow for caller, test, and doctoring; and
-- no product identity hard-coded in the reusable scheduler.
+- explicit scheduler-secret or app-token selection;
+- absence of model, Copilot, merge, release, and target-setting authority;
+- production statement and branch coverage 100% for the stack driver;
+- public API docstring coverage 100%; and
+- a focused path-filtered quality workflow for caller, driver, tests, and doctoring.
 
-Rollback removes only this caller, its focused quality workflow, its contract
-test, and its doctoring records. It must not remove the product-neutral
-scheduler, the central mention-router repair, or another product caller.
+Rollback removes only this caller, its focused quality workflow, the product-neutral
+stack driver if no other caller consumes it, its tests, and its doctoring records.
+It must not remove the central mention-router repair, the organization
+review/merge scheduler, or another product caller.
 
 ## APA 7th references
 

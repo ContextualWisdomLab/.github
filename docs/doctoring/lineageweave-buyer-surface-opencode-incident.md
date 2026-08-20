@@ -46,9 +46,13 @@ The central repair must:
 - retain exact repository, pull request, head, base, actor, source comment, and
   review-only behavior binding.
 
-The dedicated LineageWeave hourly caller complements the mention path. It gives
-all current heads in the stack a bounded repair heartbeat while keeping the
-shared scheduler product-neutral.
+The dedicated LineageWeave hourly caller complements the mention path. Initial
+OpenCode review generation remains with the mention router and organization
+review/merge scheduler. The hourly caller handles only actionable exact-head
+review feedback, failed-check RCA, and conflict repair. It inspects the explicit
+six-PR queue in dependency order, advances only after an exact no-repair result,
+waits without mutation when a child is not based on its current parent head, and
+dispatches no more than one repair.
 
 ## Stack order
 
