@@ -27,6 +27,11 @@ graph.
 A missing plugin is a coverage-evidence failure. It is not permission to skip
 async tests and still claim 100% execution of the repository suite.
 
+The Strix changed-path quality workflow runs the complete central test tree as
+well. Its independently hash-pinned runner therefore carries the same
+`pytest-asyncio` and `typing-extensions` wheels; otherwise the security check
+would fail during collection before it could inspect the changed shell path.
+
 ## Why the pin is required
 
 PEP 492 defines native coroutines as first-class Python syntax (Selivanov,
