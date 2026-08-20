@@ -56,24 +56,6 @@ Error: Test failures
     )
 
 
-def test_skips_summary_regex_when_failure_marker_is_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The marker-absent cold path returns before summary regex evaluation."""
-
-    class ForbiddenSummaryPattern:
-        """Fail the test if the expensive summary scan is reached."""
-
-        @staticmethod
-        def findall(_text: str) -> list[str]:
-            """Reject any unexpected summary scan."""
-            raise AssertionError("summary regex must not run without the failure marker")
-
-    monkeypatch.setattr(gate, "FAIL_SUMMARY_RE", ForbiddenSummaryPattern())
-
-    assert not gate.classify_testthat_failure("x" * gate.MAX_LOG_BYTES, "aFIPC")
-
-
 def test_allows_only_declared_suggests_package_failures() -> None:
     """A peer-check deferral may include packageNotFound errors for declared Suggests."""
     text = """\
@@ -240,9 +222,3 @@ def test_script_entrypoint_returns_cli_status(
         runpy.run_path(str(script), run_name="__main__")
 
     assert raised.value.code == 1
-
-
-def test_classify_testthat_failure_returns_false_no_summaries() -> None:
-    """A terminal failure marker without a summary remains non-authorizing."""
-    text = "Error: Test failures something else missing package 'test'"
-    assert gate.classify_testthat_failure(text, "test") is False

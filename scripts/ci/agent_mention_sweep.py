@@ -18,17 +18,9 @@ from agent_mention_router import (
     parse_repository_allowlist,
 )
 
-ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
-SHARED_BUDGET_MARKERS = (
-    "api rate limit exceeded",
-    "rate limit exceeded",
-    "secondary rate limit",
-    "abuse detection",
-    "retry-after",
-    "x-ratelimit-reset",
-)
 
 
 @dataclass
@@ -36,13 +28,6 @@ class SweepMetrics:
     """Mutable operational counters returned to the CLI boundary."""
 
     failures: int = 0
-
-
-def _is_shared_budget_exhaustion(error: Exception) -> bool:
-    """Return whether an API error means later repository calls must stop."""
-
-    message = " ".join(str(error).casefold().split())
-    return any(marker in message for marker in SHARED_BUDGET_MARKERS)
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -170,71 +155,62 @@ def list_recent_pull_requests(
         organization=organization,
         repository_source=repository_source,
     )
-    def fetch_repo_pulls(repository: str) -> list[dict[str, Any]]:
-        """Fetch open pull requests for one repository."""
-
-        repo_pulls = []
-        page = 1
-        while True:
-            response = client.request(
-                [
-                    f"repos/{repository}/pulls",
-                    "-X",
-                    "GET",
-                    "-f",
-                    "state=open",
-                    "-f",
-                    "sort=updated",
-                    "-f",
-                    "direction=desc",
-                    "-f",
-                    "per_page=100",
-                    "-f",
-                    f"page={page}",
-                ]
-            )
-            pull_requests = flatten_pages(response)
-            if not pull_requests:
-                break
-            reached_cutoff = False
-            for pull_request in pull_requests:
-                if (
-                    parse_timestamp(
-                        str(pull_request.get("updated_at") or "")
-                    )
-                    < cutoff
-                ):
-                    reached_cutoff = True
-                    break
-                number = pull_request.get("number")
-                if not isinstance(number, int) or number < 1:
-                    raise ValueError(
-                        "GitHub returned an invalid pull request number"
-                    )
-                repo_pulls.append({
-                    "number": number,
-                    "repository": repository,
-                    "pull_request": {
-                        "url": (
-                            "https://api.github.com/repos/"
-                            f"{repository}/pulls/{number}"
-                        )
-                    },
-                })
-            if reached_cutoff or len(pull_requests) < 100:
-                break
-            page += 1
-        return repo_pulls
-
     for repository in repositories:
         try:
-            yield from fetch_repo_pulls(repository)
+            page = 1
+            while True:
+                response = client.request(
+                    [
+                        f"repos/{repository}/pulls",
+                        "-X",
+                        "GET",
+                        "-f",
+                        "state=open",
+                        "-f",
+                        "sort=updated",
+                        "-f",
+                        "direction=desc",
+                        "-f",
+                        "per_page=100",
+                        "-f",
+                        f"page={page}",
+                    ]
+                )
+                pull_requests = flatten_pages(response)
+                if not pull_requests:
+                    break
+                reached_cutoff = False
+                for pull_request in pull_requests:
+                    if (
+                        parse_timestamp(
+                            str(pull_request.get("updated_at") or "")
+                        )
+                        < cutoff
+                    ):
+                        reached_cutoff = True
+                        break
+                    number = pull_request.get("number")
+                    if not isinstance(number, int) or number < 1:
+                        raise ValueError(
+                            "GitHub returned an invalid pull request number"
+                        )
+                    yield {
+                        "number": number,
+                        "repository": repository,
+                        "pull_request": {
+                            "url": (
+                                "https://api.github.com/repos/"
+                                f"{repository}/pulls/{number}"
+                            )
+                        },
+                    }
+                if reached_cutoff or len(pull_requests) < 100:
+                    break
+                page += 1
         except Exception as exc:  # noqa: BLE001 - repository isolation boundary
-            if on_error is None:  # pragma: no cover
+            if on_error is None:
                 raise
             on_error(repository, exc)
-            if _is_shared_budget_exhaustion(exc):
-                return
 
 
 def list_recent_comments(

@@ -256,10 +256,28 @@ if not isinstance(alerts, list):
 
 ID_RE = re.compile(r"(CVE-\d{4}-\d{3,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})", re.I)
 
+PACKAGE_PATTERNS = [
+    re.compile(r"Package:\s*([A-Za-z0-9._/+-]+)", re.I),
+    re.compile(r"['\"`]([A-Za-z0-9._/+-]+)@[0-9]", re.I),
+    re.compile(r"Package\s+['\"]([A-Za-z0-9._/+-]+?)(?:@[^'\"]*)?['\"]", re.I),
+    re.compile(r"for (?:the )?package[:\s]+['\"`]?([A-Za-z0-9._/+-]+)['\"`]?", re.I),
+]
+
+INSTALLED_PATTERNS = [
+    re.compile(r"Installed Version:\s*([^\s,;]+)", re.I),
+    re.compile(r"@([0-9][A-Za-z0-9._+-]*)", re.I),
+    re.compile(r"currently[:\s]+([0-9][A-Za-z0-9._+-]*)", re.I),
+]
+
+FIXED_PATTERNS = [
+    re.compile(r"Fixed Version:\s*([^\s,;]+)", re.I),
+    re.compile(r"[Ff]ixed in[:\s]+([0-9][A-Za-z0-9._+-]*)", re.I),
+    re.compile(r"[Pp]atched in[:\s]+([0-9][A-Za-z0-9._+-]*)", re.I),
+]
 
 def first(patterns, text):
     for pattern in patterns:
-        match = re.search(pattern, text, re.I)
+        match = pattern.search(text)
         if match:
             return match.group(1).strip().strip("`'\"")
     return ""
@@ -295,37 +313,11 @@ for alert in alerts:
         or rule.get("severity")
         or "high"
     ).upper()
-    package = first(
-        [
-            r"Package:\s*([A-Za-z0-9._/+-]+)",
-            r"['\"`]([A-Za-z0-9._/+-]+)@[0-9]",
-            r"Package\s+['\"]([A-Za-z0-9._/+-]+?)(?:@[^'\"]*)?['\"]",
-            r"for (?:the )?package[:\s]+['\"`]?([A-Za-z0-9._/+-]+)['\"`]?",
-        ],
-        text,
-    )
+    package = first(PACKAGE_PATTERNS, text)
     # A package name may still arrive as pkg@version; keep only the name.
     package = package.split("@", 1)[0]
-    installed = clean_version(
-        first(
-            [
-                r"Installed Version:\s*([^\s,;]+)",
-                r"@([0-9][A-Za-z0-9._+-]*)",
-                r"currently[:\s]+([0-9][A-Za-z0-9._+-]*)",
-            ],
-            text,
-        )
-    )
-    fixed = clean_version(
-        first(
-            [
-                r"Fixed Version:\s*([^\s,;]+)",
-                r"[Ff]ixed in[:\s]+([0-9][A-Za-z0-9._+-]*)",
-                r"[Pp]atched in[:\s]+([0-9][A-Za-z0-9._+-]*)",
-            ],
-            text,
-        )
-    )
+    installed = clean_version(first(INSTALLED_PATTERNS, text))
+    fixed = clean_version(first(FIXED_PATTERNS, text))
     if not (vuln_id and package and manifest):
         continue
     key = (manifest.lower(), package.lower(), vuln_id.lower())

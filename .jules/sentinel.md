@@ -35,7 +35,3 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
-## 2026-08-15 - SSRF via Path Traversal in Organization and Repository Parameters
-**Vulnerability:** Path traversal sequences (`.`, `..`, `...`) were allowed in organization and repository names in `scripts/ci/agent_mention_sweep.py` due to overly permissive regex patterns (`^[A-Za-z0-9_.-]+$`). This could lead to Server-Side Request Forgery (SSRF) when these parameters are used in API endpoint construction (e.g., `f"orgs/{organization}/repos"`).
-**Learning:** Naive regex patterns allowing dot characters without restricting their position or repetition can be exploited for path traversal.
-**Prevention:** Implement strict regex validation that prohibits leading/trailing dots, consecutive dots, and dot-only values, such as `^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$`.

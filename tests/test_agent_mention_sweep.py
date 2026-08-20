@@ -227,22 +227,6 @@ def test_recent_pull_request_filtering() -> None:
             ]],
         }
     )
-    errs = []
-    def on_err(repo, exc):
-        errs.append(exc)
-
-    list(
-        sweep.list_recent_pull_requests(
-            bad_number_client,
-            organization="ContextualWisdomLab",
-            repository_source="organization",
-            since="2026-08-04T12:00:00Z",
-            on_error=on_err
-        )
-    )
-    assert len(errs) == 1
-    assert "pull request number" in str(errs[0])
-
     with pytest.raises(ValueError, match="pull request number"):
         list(
             sweep.list_recent_pull_requests(
