@@ -203,6 +203,23 @@ def test_missing_contextual_gateway_configuration_fails_closed_before_model_exec
     assert guard in workflow[conflict_start:]
 
 
+def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model() -> None:
+    """Do not start either writer when the gateway has no auto-discovered model."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    readiness = (
+        'models_response="$(curl -fsS \\\n'
+        '            --connect-timeout 10 \\\n'
+        '            --max-time 30 \\\n'
+        '            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \\\n'
+        '            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"'
+    )
+    assert workflow.count(readiness) == 2
+    assert workflow.count("jq -e '(.data | type == \"array\") and (.data | length >= 1)'") == 2
+    assert workflow.count(
+        "Contextual Orchestrator gateway returned no discovered models."
+    ) == 2
+
+
 def test_independent_review_agent_key_system_is_unchanged() -> None:
     """Pin the existing read-only reviewer workflow byte-for-byte."""
     result = subprocess.run(

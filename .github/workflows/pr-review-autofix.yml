@@ -390,6 +390,16 @@ jobs:
           ):
               raise SystemExit("CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data")
           PY
+          models_response="$(curl -fsS \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
+            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"
+          if ! jq -e '(.data | type == "array") and (.data | length >= 1)' \
+              >/dev/null <<<"$models_response"; then
+            echo "::error::Contextual Orchestrator gateway returned no discovered models."
+            exit 1
+          fi
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
           allowed_paths_context="$(
@@ -586,6 +596,16 @@ jobs:
           ):
               raise SystemExit("CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data")
           PY
+          models_response="$(curl -fsS \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
+            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"
+          if ! jq -e '(.data | type == "array") and (.data | length >= 1)' \
+              >/dev/null <<<"$models_response"; then
+            echo "::error::Contextual Orchestrator gateway returned no discovered models."
+            exit 1
+          fi
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays
