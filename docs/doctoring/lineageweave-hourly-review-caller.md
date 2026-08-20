@@ -109,9 +109,9 @@ target fails before a mutation credential is materialized.
 
 ## Operational acceptance
 
-Source checks are necessary but do not constitute **protected-main operational
-acceptance**. Closure requires all of the following after the central repair and
-this caller reach protected `main`:
+Source checks are necessary but do not constitute protected-main operational acceptance.
+Closure requires all of the following after the central repair and this caller
+reach protected `main`:
 
 1. Post one fresh trusted `@opencode-agent` request against the then-current
    exact head of LineageWeave #258.
