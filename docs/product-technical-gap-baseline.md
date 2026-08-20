@@ -173,7 +173,7 @@ flowchart LR
 | #932 | fix(sbom): preserve Markdown report integrity | `9df515e07b60b66014bbe96fe83ed70718837b10` | main | BEHIND | CHANGES_REQUESTED |
 | #931 | fix(security): contain sandbox paths and output | `c2f28e0a85f03b38739eac7cc827e280a4db1dab` | main | BLOCKED | — |
 | #930 | fix(noema): fail closed on unsafe model endpoints | `43940c128bbe00b721cf8589039df04d15769576` | main | BLOCKED | CHANGES_REQUESTED |
-| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `3d622bd552bb91370452a1886936e040eae458d6` | main | BLOCKED | — |
+| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `87506eceb152eb563190aea1e0dea5b143101f24` | main | BLOCKED | — |
 | #921 | chore(deps): bump google/osv-scanner-action/osv-scanner-action from a82132c0bd6c7261ffcb78e754c46c70ab57ad9a to f4cfcc01edc9c8b756a9b873b7a623ca674da51e | `60c708cc084d738ced9747792b3243e926663304` | main | BLOCKED | — |
 | #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `ed08a94ba3eaeb217b2b0e3cc4745483b18a162d` | main | BLOCKED | — |
 | #919 | chore(deps): bump step-security/harden-runner from 2.20.0 to 2.20.1 | `1c5a38eaa193dd3482b729ec7e9cd1a61bbe6e5f` | main | BLOCKED | — |
