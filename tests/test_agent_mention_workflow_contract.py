@@ -29,7 +29,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "route-local-agent-mention:" in local
     assert "github.repository == 'ContextualWisdomLab/.github'" in local
     for permission in (
-        "actions: read",
+        "actions: write",
         "contents: write",
         "issues: write",
         "pull-requests: read",

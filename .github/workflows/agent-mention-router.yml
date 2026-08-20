@@ -26,11 +26,10 @@ jobs:
       )
     concurrency:
       group: review-agent-mention-router-local-${{ github.repository }}
-      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      actions: read
+      actions: write
       contents: write
       issues: write
       pull-requests: read
