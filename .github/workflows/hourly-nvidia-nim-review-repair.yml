@@ -37,7 +37,7 @@ on:
       - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_context_head_binding.py
-      - tests/test_pr_review_autofix_nvidia_nim_contract.py
+      - tests/test_pr_review_autofix_contextual_orchestrator_contract.py
       - tests/test_pr_review_autofix_writer_security_contract.py
       - docs/automation/hourly-review-repair.md
       - docs/doctoring/bandscope-hourly-review-caller.md
@@ -47,7 +47,7 @@ on:
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
-      - docs/doctoring/hourly-nvidia-nim-autofix.md
+      - docs/doctoring/contextual-orchestrator-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
@@ -87,7 +87,7 @@ on:
       - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_context_head_binding.py
-      - tests/test_pr_review_autofix_nvidia_nim_contract.py
+      - tests/test_pr_review_autofix_contextual_orchestrator_contract.py
       - tests/test_pr_review_autofix_writer_security_contract.py
       - docs/automation/hourly-review-repair.md
       - docs/doctoring/bandscope-hourly-review-caller.md
@@ -97,7 +97,7 @@ on:
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
-      - docs/doctoring/hourly-nvidia-nim-autofix.md
+      - docs/doctoring/contextual-orchestrator-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
@@ -166,6 +166,6 @@ jobs:
             tests/test_pr_review_fix_scheduler.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_context_head_binding.py \
-            tests/test_pr_review_autofix_nvidia_nim_contract.py \
+            tests/test_pr_review_autofix_contextual_orchestrator_contract.py \
             tests/test_pr_review_autofix_writer_security_contract.py
           git diff --check

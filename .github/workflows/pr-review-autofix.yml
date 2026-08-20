@@ -279,9 +279,9 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
-            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
-            "enabled_providers": ["nvidia-nim"],
+            "model": "contextual-orchestrator/contextual-orchestrator",
+            "small_model": "contextual-orchestrator/contextual-orchestrator",
+            "enabled_providers": ["contextual-orchestrator"],
             "permission": {
               "edit": {
                 "*": "allow",
@@ -306,7 +306,7 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
-                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "model": "contextual-orchestrator/contextual-orchestrator",
                 "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
@@ -333,32 +333,23 @@ jobs:
               }
             },
             "provider": {
-              "nvidia-nim": {
+              "contextual-orchestrator": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM",
+                "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "https://integrate.api.nvidia.com/v1",
-                  "apiKey": "{env:NVIDIA_API_KEY}"
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}",
+                  "headers": {
+                    "X-Contextual-Orchestrator-Tool-Loop": "v1"
+                  }
                 },
                 "models": {
-                  "mistralai/mistral-small-4-119b-2603": {
-                    "name": "Mistral Small 4 119B 2603",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "limit": {
-                      "context": 128000,
-                      "output": 4096
-                    }
-                  },
-                  "nvidia/nemotron-3-nano-30b-a3b": {
-                    "name": "Nemotron 3 Nano 30B A3B",
+                  "contextual-orchestrator": {
+                    "name": "Contextual Orchestrator (auto-routed)",
                     "tool_call": true,
                     "reasoning": true,
                     "limit": {
-                      "context": 128000,
+                      "context": 200000,
                       "output": 32768
                     }
                   }
@@ -370,18 +361,35 @@ jobs:
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+          CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
+          MODEL: contextual-orchestrator/contextual-orchestrator
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||
+            [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "::error::CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
             exit 1
           fi
+          python3 - "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" <<'PY'
+          import sys
+          from urllib.parse import urlparse
+
+          parsed = urlparse(sys.argv[1])
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or parsed.username
+              or parsed.password
+              or parsed.query
+              or parsed.fragment
+          ):
+              raise SystemExit("CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data")
+          PY
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
           allowed_paths_context="$(
@@ -542,11 +550,12 @@ jobs:
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+          CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/contextual-orchestrator
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -557,10 +566,26 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||
+            [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "::error::CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
             exit 1
           fi
+          python3 - "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" <<'PY'
+          import sys
+          from urllib.parse import urlparse
+
+          parsed = urlparse(sys.argv[1])
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or parsed.username
+              or parsed.password
+              or parsed.query
+              or parsed.fragment
+          ):
+              raise SystemExit("CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data")
+          PY
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays
