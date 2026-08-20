@@ -99,9 +99,9 @@ flowchart LR
 | #1163 | docs: establish live product and technical gap baseline | `75bb4597d52481f751498d711a449ce27d7d1b58` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
-| #1158 | fix(osv): preserve immutable direct-source provenance | `e2c003171e65c631ac8f12143e04f810fdad0576` | main | BLOCKED | — |
+| #1158 | fix(osv): preserve immutable direct-source provenance | `d1da60569c079f59b211a2495cbe0fdb6a7a1d02` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `dee25282af855dda4f45989367cb83e7b52801ed` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `d4948f21818a351db22292a686b361581f33b6ed` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `48dcca4f98b41dc1f891c3addffec5f0949d14fd` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `e21951d73fbe05a3b9dda871b18c7480f1fe3e41` | main | BLOCKED | — |
