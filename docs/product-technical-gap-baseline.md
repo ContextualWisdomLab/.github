@@ -101,11 +101,11 @@ flowchart LR
 | #1166 | fix(ci): recognize replacement tests in existing files | `9e6063dc0d7298e394de87fc8f28aa3e0a6dced8` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `38aef069b2d9f8148a5e479125585ae408306d86` | main | BLOCKED | — |
 | #1162 | fix: use review credentials for agent dispatch | `fad1ed4de66e090d31881348a7c3c3f6518aa177` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `a758566b` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `4780ea08` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `dbc3eca51444e46ce7a3a07ea818c72ad8bf124a` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd79` | main | BLOCKED | — |
-| #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
+| #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae` | main | BLOCKED | — |
 | #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `d4948f21818a351db22292a686b361581f33b6ed` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
