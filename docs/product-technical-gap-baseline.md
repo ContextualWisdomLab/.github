@@ -95,6 +95,7 @@ flowchart LR
 
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
+| #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
 | #1166 | fix(ci): recognize replacement tests in existing files | `634303023cea09e8496b8abd10ec47d5ca76f732` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `941e4bdf7e11157c3f9b596bd6648e7491501054` | main | BLOCKED | — |
 | #1162 | fix: use review credentials for agent dispatch | `a885441bb4d9b09dabf7d3bf4c39eee1bd0dc4cc` | main | BLOCKED | — |
