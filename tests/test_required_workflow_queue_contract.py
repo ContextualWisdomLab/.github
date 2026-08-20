@@ -44,6 +44,35 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_organization_readiness_does_not_echo_untrusted_http_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep arbitrary HTTP method text out of organization-loop diagnostics."""
+    from types import SimpleNamespace
+
+    from scripts.ci.organization_commercial_readiness_loop import (
+        GitHubClient,
+        GitHubError,
+    )
+
+    token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB"
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="request rejected",
+        ),
+    )
+
+    with pytest.raises(GitHubError) as raised:
+        GitHubClient("client-token").request("/repos/example", method=token)
+
+    message = str(raised.value)
+    assert token.upper() not in message
+    assert "[REDACTED_METHOD]" in message
+
+
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     """Guard the runner-token dispatch credential for central review workflows.
 
