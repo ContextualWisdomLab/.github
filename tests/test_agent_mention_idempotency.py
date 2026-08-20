@@ -354,4 +354,5 @@ def test_reaction_or_ack_failure_cannot_redispatch_completed_agents() -> None:
         opencode_allowlist=frozenset({mention_request.repository}),
     ) == ()
     assert dispatch_events(retry) == []
-    assert retry_target.calls == []
+    assert len(retry_target.calls) == 2
+    assert all(not call[0][0].endswith("/dispatches") for call in retry_target.calls)

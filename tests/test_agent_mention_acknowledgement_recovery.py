@@ -138,19 +138,19 @@ def test_reaction_failure_does_not_hide_successful_dispatch(capsys) -> None:
     assert "::warning::" in capsys.readouterr().out
 
 
-def test_acknowledgement_comment_failure_remains_visible() -> None:
-    """A missing durable receipt still fails so a later sweep can repair it."""
+def test_acknowledgement_comment_failure_remains_visible(capsys) -> None:
+    """A cosmetic comment failure preserves durable dispatch and warning evidence."""
 
     module = load_module()
     central = FakeClient()
     target = FakeClient(fail_comment=True)
 
-    with pytest.raises(RuntimeError, match="comment publication failed"):
-        module.dispatch_request(
-            request(module),
-            target_client=target,
-            dispatch_client=central,
-            opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
-        )
+    assert module.dispatch_request(
+        request(module),
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
+    ) == ("@opencode-agent",)
 
     assert len(dispatch_mutations(central)) == 1
+    assert "durable dispatch state is preserved" in capsys.readouterr().out

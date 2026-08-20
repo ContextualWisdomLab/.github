@@ -322,7 +322,7 @@ def _validate_repository_dispatch_payload(
     if property_count > MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES:
         raise ValueError(
             "repository-dispatch client_payload has "
-            f"{property_count} properties; GitHub permits at most "
+            f"{property_count} properties; GitHub allows at most "
             f"{MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES}"
         )
     try:
@@ -441,16 +441,10 @@ def repository_dispatch_body(
     so mention routing cannot enqueue a review.
     """
 
-    if len(client_payload) > REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS:
-        raise ValueError(
-            "repository_dispatch client_payload has "
-            f"{len(client_payload)} keys; GitHub allows at most "
-            f"{REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS}"
-        )
-    return {
+    return _validate_repository_dispatch_payload({
         "event_type": event_type,
         "client_payload": client_payload,
-    }
+    })
 
 
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
@@ -545,7 +539,7 @@ def dispatch_request(
     existing_handles = tuple(
         f"@{agent}" for agent in dispatchable if agent in existing
     )
-    if not missing:
+    if not missing and not existing:
         if rejected:
             print(
                 "Rejected agent mention without target mutation "
