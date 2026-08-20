@@ -20,6 +20,8 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 
 Runner = Callable[[Sequence[str]], int]
 SKIP_DISCOVERY_PARTS = frozenset(
@@ -86,13 +88,27 @@ def _requirement_lines(path: pathlib.Path) -> list[str]:
 def _is_exact_hashed_requirement(line: str) -> bool:
     """Return whether one line is an exact ``==`` pin plus SHA-256 hashes."""
 
-    fields = re.split(r"\s+(?=--hash=)", line)
-    requirement = fields[0].strip()
-    hash_fields = fields[1:]
-    if not requirement or requirement.startswith("-") or "==" not in requirement:
+    fields = line.split()
+    first_hash = next(
+        (index for index, field in enumerate(fields) if field.startswith("--hash=")),
+        None,
+    )
+    if first_hash in (None, 0):
         return False
-    return bool(hash_fields) and all(
-        _HASH_FIELD.fullmatch(field) is not None for field in hash_fields
+    requirement_text = " ".join(fields[:first_hash])
+    hash_fields = fields[first_hash:]
+    if not all(_HASH_FIELD.fullmatch(field) is not None for field in hash_fields):
+        return False
+    try:
+        requirement = Requirement(requirement_text)
+    except InvalidRequirement:
+        return False
+    specifiers = list(requirement.specifier)
+    return (
+        requirement.url is None
+        and len(specifiers) == 1
+        and specifiers[0].operator == "=="
+        and "*" not in specifiers[0].version
     )
 
 
@@ -108,11 +124,12 @@ def _is_pip_config_option(line: str) -> bool:
 def _reject_escaped_requirement_path(root: pathlib.Path, path: pathlib.Path) -> None:
     """Fail closed when discovery leaves the audit root via a directory symlink.
 
-    ``Path.rglob`` follows directory symbolic links, so a repository-controlled
-    ``vendor -> /outside`` hop can make an external ``requirements*.txt`` look
-    like a descendant of the audit root. Intermediate parents are inspected
-    with ``is_symlink`` before ``resolve``, and the canonical target must stay
-    inside the resolved root (CWE-22, CWE-59).
+    Even though supported CPython ``Path.rglob`` does not descend through
+    directory symbolic links, a repository-controlled ``vendor -> /outside``
+    hop must remain fail-closed if a matching path is presented directly.
+    Intermediate parents are inspected with ``is_symlink`` before ``resolve``,
+    and the canonical target must stay inside the resolved root (CWE-22,
+    CWE-59).
     """
 
     current = path.parent

@@ -44,6 +44,33 @@ def _write_valid_lock(path: pathlib.Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("requirement", "expected"),
+    (
+        ('demo; python_version == "3.11"', False),
+        ("demo @ https://example.invalid/demo==1.whl", False),
+        ("demo===1.0.0", False),
+        ("demo!=1.0.0,==1.0.1", False),
+        ("demo==1.*", False),
+        ('demo==1.0.0; python_version >= "3.11"', True),
+        ("demo==1.0.0", True),
+    ),
+)
+def test_hashed_lock_requires_one_pep508_exact_pin(
+    tmp_path: pathlib.Path, requirement: str, expected: bool
+) -> None:
+    """Only one non-wildcard PEP 508 equality pin may bypass resolution."""
+
+    module = load_module()
+    path = tmp_path / "requirements-contract.txt"
+    path.write_text(
+        f"{requirement} --hash=sha256:{'a' * 64}\n",
+        encoding="utf-8",
+    )
+
+    assert module.is_hashed_lock(path) is expected
+
+
 def test_invalid_hash_sibling_cannot_suppress_source_audit(
     tmp_path: pathlib.Path,
 ) -> None:
