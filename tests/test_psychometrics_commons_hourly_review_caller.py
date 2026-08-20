@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 CALLER = Path(".github/workflows/psychometrics-commons-hourly-review-repair.yml")
+CHANGELOG = Path("CHANGELOG.md")
 DOCTORING = Path("docs/doctoring/psychometrics-commons-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -93,6 +94,24 @@ def test_psychometrics_commons_caller_preserves_oidc_and_explicit_secret_scope()
 def test_psychometrics_commons_target_is_not_hard_coded_in_shared_scheduler() -> None:
     """Product identity remains in the thin caller rather than the engine."""
     assert "ContextualWisdomLab/psychometrics-commons" not in _read(SCHEDULER)
+
+
+def test_changelog_keeps_psychometrics_entry_categorized_and_unique() -> None:
+    """The caller entry belongs in Changed without duplicating shared notes."""
+    unreleased = _read(CHANGELOG).split("## [Unreleased]\n", maxsplit=1)[1]
+    changed = unreleased.split("### Changed\n", maxsplit=1)[1].split("\n### ", maxsplit=1)[0]
+    heartbeat = (
+        "Run the bounded psychometrics-commons repair heartbeat at minute 9 of every hour "
+        "with one-dispatch scope and a two-hour same-head floor"
+    )
+
+    assert heartbeat in changed
+    assert unreleased.count(heartbeat) == 1
+    assert unreleased.count("### Fixed\n") == 1
+    assert unreleased.count("Use NVIDIA NIM `mistralai/mistral-small-4-119b-2603`") == 1
+    assert unreleased.count("Apply one NUL-delimited exact-path") == 1
+    assert unreleased.count("Documented the ordinary and conflict repair write-scope parity") == 1
+    assert unreleased.count("Documented the review-authentication boundary") == 1
 
 
 def test_psychometrics_commons_doctoring_records_measurement_activation() -> None:
