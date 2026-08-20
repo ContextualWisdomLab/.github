@@ -124,7 +124,7 @@ flowchart LR
 | #1101 | feat(automation): run EmbedRelay hourly NVIDIA NIM review repair | `430a3b63c7e081bd89ffea38755b26d982c5e755` | main | BEHIND | CHANGES_REQUESTED |
 | #1100 | feat(automation): run RankWeave hourly NVIDIA NIM review repair | `6181c705e244aa39db6d14a117c037e3090e7696` | main | BEHIND | CHANGES_REQUESTED |
 | #1097 | feat(automation): run html4tree hourly NVIDIA NIM review repair | `22c3e8874238ac2196657823860e7673d0f8676e` | main | BEHIND | — |
-| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `b87f66e1632992c5acb1df6e96889a39f76fca4a` | main | BEHIND | CHANGES_REQUESTED |
+| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `0a1aa80e994b73ed50a2c0242aac1b3abf37a3af` | main | BEHIND | CHANGES_REQUESTED |
 | #1094 | feat(automation): run DiagramWeave hourly NVIDIA NIM review repair | `c2e164621755cd275c9b4aef78ff511fc6eb7ca2` | main | BEHIND | — |
 | #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `6bb0d991098cb70a8f3e0df09a5a9424b867117f` | main | BEHIND | CHANGES_REQUESTED |
 | #1089 | fix(opencode): system llvm for cargo-llvm-cov (v3 concurrency) | `cd7d72c64443572c77343f1456a52b54f956240e` | main | BEHIND | — |
