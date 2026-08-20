@@ -9,8 +9,6 @@ on:
       - 'scripts/ci/osv_direct_source_reconcile.py'
       - 'tests/test_osv_direct_source_reconcile.py'
       - 'docs/doctoring/osv-direct-source-provenance.md'
-  workflow_dispatch:
-
 permissions:
   contents: read
 
