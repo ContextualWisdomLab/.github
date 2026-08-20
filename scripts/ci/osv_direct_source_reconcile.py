@@ -150,6 +150,56 @@ def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
             yield package
 
 
+def authoritative_affected_range(
+    vulnerability: dict[str, Any], package_name: str
+) -> str | None:
+    """Return one GitHub-reviewed npm affected bound with live OSV shape."""
+
+    vulnerability_id = vulnerability.get("id")
+    affected = vulnerability.get("affected")
+    if not isinstance(vulnerability_id, str) or not isinstance(affected, list):
+        return None
+    candidates: list[str] = []
+    for item in affected:
+        if not isinstance(item, dict):
+            continue
+        package = item.get("package")
+        database_specific = item.get("database_specific")
+        ranges = item.get("ranges")
+        if (
+            not isinstance(package, dict)
+            or package.get("ecosystem") != "npm"
+            or package.get("name") != package_name
+            or not isinstance(database_specific, dict)
+            or not isinstance(ranges, list)
+        ):
+            continue
+        affected_range = database_specific.get("last_known_affected_version_range")
+        source = database_specific.get("source")
+        expected_source_fragment = f"/{vulnerability_id}/{vulnerability_id}.json"
+        if (
+            not isinstance(affected_range, str)
+            or not isinstance(source, str)
+            or not source.startswith(
+                "https://github.com/github/advisory-database/blob/"
+            )
+            or not source.endswith(expected_source_fragment)
+        ):
+            continue
+        semver_ranges = [
+            range_item
+            for range_item in ranges
+            if isinstance(range_item, dict) and range_item.get("type") == "SEMVER"
+        ]
+        if len(semver_ranges) != 1:
+            continue
+        events = semver_ranges[0].get("events")
+        if events != [{"introduced": "0"}]:
+            continue
+        candidates.append(affected_range)
+    return candidates[0] if len(set(candidates)) == 1 and candidates else None
+
+
 def audit_entry(
     *,
     label: str,
@@ -203,12 +253,9 @@ def reconcile_payload(
         for vulnerability in vulnerabilities:
             if not isinstance(vulnerability, dict):
                 raise ValueError("OSV vulnerability entries must be objects")
-            database_specific = vulnerability.get("database_specific")
-            affected_range = None
-            if isinstance(database_specific, dict):
-                raw_range = database_specific.get("last_known_affected_version_range")
-                if isinstance(raw_range, str):
-                    affected_range = raw_range
+            affected_range = authoritative_affected_range(
+                vulnerability, package_name
+            )
             if not source.valid:
                 retained.append(vulnerability)
                 audit.append(
