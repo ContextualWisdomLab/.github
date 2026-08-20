@@ -106,12 +106,12 @@ flowchart LR
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
 | #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `d4948f21818a351db22292a686b361581f33b6ed` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
-| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `4757c68c44e6157966870979ff814cfe8c3a3557` | main | BLOCKED | — |
+| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `e21951d73fbe05a3b9dda871b18c7480f1fe3e41` | main | BLOCKED | — |
 | #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `a37fecbe96c01f5d3638085876371313713823c4` | main | BLOCKED | — |
 | #1150 | feat: add read-only Actions queue health evidence | `3196c2db08f84235aaf58bf612806e75d2b33023` | main | BLOCKED | — |
 | #1147 | feat(integration): add ecosystem capability catalogue | `9ac03e0c1f9f2e12f0d29d354f5e9541a1feffbb` | main | BLOCKED | — |
-| #1146 | fix(figma): retain style references and component sets | `83759d97c9ad4c396a2c57106a04cb73fe7de348` | main | BLOCKED | — |
+| #1146 | fix(figma): retain style references and component sets | `54cb0220ca95603831dc8defeedd766d47cf4a62` | main | BLOCKED | — |
 | #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
 | #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
 | #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `6915bb9395bbe653f41db944c40186e7c3f8c153` | main | BLOCKED | — |
@@ -173,7 +173,7 @@ flowchart LR
 | #939 | fix: keep cross-repo OpenCode evidence healthy | `663b53d025424b32625d7a935fbbbe09d33b78c5` | main | BEHIND | CHANGES_REQUESTED |
 | #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
 | #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
-| #932 | fix(sbom): preserve Markdown report integrity | `eb10d8cbd52e4a1639fbbfdd4bae5eaafa8340f6` | main | BLOCKED | — |
+| #932 | fix(sbom): preserve Markdown report integrity | `509690b9edac82b4ca1e2f6689526796a4f50838` | main | BLOCKED | — |
 | #931 | fix(security): contain sandbox paths and output | `c2f28e0a85f03b38739eac7cc827e280a4db1dab` | main | BLOCKED | — |
 | #930 | fix(noema): fail closed on unsafe model endpoints | `43940c128bbe00b721cf8589039df04d15769576` | main | BLOCKED | CHANGES_REQUESTED |
 | #928 | fix(opencode): bind coverage artifacts to workflow attempts | `9315e4ae87074549f0147627fa3ff55f673091ae` | main | BLOCKED | — |
