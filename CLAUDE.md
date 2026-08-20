@@ -25,8 +25,9 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    An organization required-workflow ruleset (`CWL Central required workflows`, id `18156473`) runs
    Strix, OpenCode Review, and the PR Review Merge Scheduler from this repo in each target
    repository's context. Repository-local copies of these workflows are drift sources, not
-   repo-specific contracts. See `README.md` (policy summary) and `PR_GOVERNANCE_AUDIT.md`
-   (live audit + per-repo DX/UX transfer decisions).
+   repo-specific contracts. See `README.md` (operator overview),
+   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
+   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
@@ -44,7 +45,7 @@ PRs repair guidance. A separate edit-capable autofix flow
 approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
 resulting head is fully re-reviewed and re-checked before it can merge, so a wrong resolution cannot
 merge unreviewed. Old approvals and old checks are not merge evidence after the head SHA changes.
-Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
+Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 
 ## Structure
 
@@ -60,7 +61,9 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
   configuration (GitHub Models provider, CodeGraph/DeepWiki/Context7/web-search MCP). All reviewer
   agents have `"edit": "deny"`: they are reviewers, never implementers. Keep it that way.
 - `requirements-{bandit,pip-audit,strix,opencode-review}-ci.txt` + `*-hashes.txt` — pinned CI
-  dependency sets (see below).
+  dependency sets (see below). `requirements-strix-ci-overrides.txt` documents one deliberate
+  `uv pip compile --override` (strix-agent's declared `cryptography<49` vs. this repo's
+  `cryptography==50.0.0` security pin; see #952) — re-verify it whenever strix-agent bumps again.
 - `fuzz/` + `.clusterfuzzlite/` — Atheris fuzz targets for the review-output normalizer and the
   ClusterFuzzLite discovery marker.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
@@ -96,7 +99,7 @@ e.g.:
 ```bash
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-bandit-ci.txt -o requirements-bandit-ci-hashes.txt
 uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 requirements-pip-audit-ci.txt -o requirements-pip-audit-ci-hashes.txt
-uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
+uv pip compile --generate-hashes --python-version 3.13 --python-platform x86_64-manylinux_2_28 --override requirements-strix-ci-overrides.txt --output-file requirements-strix-ci-hashes.txt requirements-strix-ci.txt
 ./scripts/ci/compile_opencode_review_lock.sh
 ```
 
@@ -114,6 +117,9 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
+- **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
+  into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
+  on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
