@@ -2811,6 +2811,18 @@ strix_log_has_github_models_context() {
 }
 
 is_github_models_unavailable_model_error() {
+	# GitHub Models may retire a provider model with HTTP 410. Treat that as a
+	# bounded family-unavailable signal only when one physical provider-error
+	# line carries all three facts: an anchored LiteLLM/OpenAI exception, trusted
+	# GitHub Models context, and a complete HTTP 410 token. Anchoring the provider
+	# exception prevents target/repository output prefixes from spoofing fallback;
+	# the non-digit boundary rejects numeric continuations such as 4100/4104.
+	if grep -Ei '^[[:space:]]*(Error:[[:space:]]*)?((litellm(\.exceptions)?|openai)\.[A-Za-z0-9_]*(Error|Exception)|OpenAIException)([[:space:]:-]|$)' "$STRIX_LOG" |
+		grep -Ei '(models\.github\.ai|GitHub Models|github_models)' |
+		grep -Eq 'HTTP[[:space:]]+410([^0-9]|$)'; then
+		return 0
+	fi
+
 	if grep -Eiq 'Unavailable model:[[:space:]]*[^[:space:]]+' "$STRIX_LOG" &&
 		grep -Eiq '(litellm\.BadRequestError|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|models\.github\.ai|GitHub Models|openai)' "$STRIX_LOG"; then
 		return 0

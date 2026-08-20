@@ -3721,6 +3721,44 @@ REPORT
 			;;
 		esac
 		;;
+	github-models-http410-authenticated-fallback-success | github-models-http410-missing-http-token | github-models-http410-missing-provider-error | github-models-http410-numeric-continuation-4100 | github-models-http410-numeric-continuation-4104 | github-models-http410-target-output-spoof | github-models-retirement-brownout-phrase-only)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5)
+			case "${FAKE_STRIX_SCENARIO:?}" in
+			github-models-http410-authenticated-fallback-success)
+				echo "Error: litellm.BadRequestError: GitHub Models provider error at models.github.ai/inference: HTTP 410 Gone"
+				;;
+			github-models-http410-missing-http-token)
+				echo "Error: litellm.BadRequestError: GitHub Models provider retirement at models.github.ai/inference"
+				;;
+			github-models-http410-missing-provider-error)
+				echo "GitHub Models response at models.github.ai/inference: HTTP 410 Gone"
+				;;
+			github-models-http410-numeric-continuation-4100)
+				echo "Error: litellm.BadRequestError: GitHub Models provider error at models.github.ai/inference: HTTP 4100"
+				;;
+			github-models-http410-numeric-continuation-4104)
+				echo "Error: litellm.BadRequestError: GitHub Models provider error at models.github.ai/inference: HTTP 4104"
+				;;
+			github-models-http410-target-output-spoof)
+				echo "TARGET OUTPUT: Error: litellm.BadRequestError: GitHub Models provider error HTTP 410"
+				;;
+			github-models-retirement-brownout-phrase-only)
+				echo "GitHub Models retirement brownout"
+				;;
+			esac
+			exit 1
+			;;
+		openai/deepseek/deepseek-r1-0528)
+			echo "scan ok after authenticated GitHub Models HTTP 410 retirement"
+			exit 0
+			;;
+		*)
+			echo "Error: GitHub Models HTTP 410 fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 39
+			;;
+		esac
+		;;
 	github-models-primary-ratelimit-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
@@ -5738,6 +5776,45 @@ run_gate_case_allow_provider_signal() {
 	run_gate_case_with_provider_signal_mode "0" "$@"
 }
 
+run_github_models_http410_case() {
+	local scenario="$1"
+	local expected_exit="$2"
+	local expected_calls="$3"
+	local expected_models="$4"
+	local expected_api_bases="$5"
+	local expected_message="${6-}"
+
+	run_gate_case "$scenario" \
+		"openai/gpt-5" \
+		"" \
+		"$expected_exit" \
+		"$expected_message" \
+		"$expected_calls" \
+		"$expected_models" \
+		"$expected_api_bases" \
+		"openai" \
+		"https://models.github.ai/inference" \
+		"" \
+		"0" \
+		"CRITICAL" \
+		"0" \
+		"" \
+		"" \
+		"1200" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"__SAME_AS_FALLBACK_MODELS__" \
+		"deepseek/deepseek-r1-0528" \
+		"1"
+}
+
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
@@ -6071,6 +6148,23 @@ run_filtered_gate_case_if_requested() {
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
+		;;
+	github-models-http410-authenticated-fallback-success)
+		run_github_models_http410_case \
+			"$STRIX_TEST_CASE_FILTER" \
+			"0" \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\."
+		;;
+	github-models-http410-missing-http-token | github-models-http410-missing-provider-error | github-models-http410-numeric-continuation-4100 | github-models-http410-numeric-continuation-4104 | github-models-http410-target-output-spoof | github-models-retirement-brownout-phrase-only)
+		run_github_models_http410_case \
+			"$STRIX_TEST_CASE_FILTER" \
+			"1" \
+			"1" \
+			"openai/gpt-5" \
+			"https://models.github.ai/inference"
 		;;
 	github-models-fallback-provider-signal-tries-next)
 		run_gate_case "github-models-fallback-provider-signal-tries-next" \
@@ -9474,6 +9568,29 @@ run_gate_case_allow_provider_signal "github-models-primary-denied-fallback-succe
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
+
+run_github_models_http410_case \
+	"github-models-http410-authenticated-fallback-success" \
+	"0" \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-r1-0528' in [0-9]+s\\."
+
+for scenario in \
+	github-models-http410-missing-http-token \
+	github-models-http410-missing-provider-error \
+	github-models-http410-numeric-continuation-4100 \
+	github-models-http410-numeric-continuation-4104 \
+	github-models-http410-target-output-spoof \
+	github-models-retirement-brownout-phrase-only; do
+	run_github_models_http410_case \
+		"$scenario" \
+		"1" \
+		"1" \
+		"openai/gpt-5" \
+		"https://models.github.ai/inference"
+done
 
 run_gate_case "github-models-primary-ratelimit-fallback-success" \
 	"openai/gpt-5" \
