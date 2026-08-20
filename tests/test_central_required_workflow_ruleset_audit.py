@@ -103,6 +103,24 @@ def test_default_branch_only_scope_rejects_stacked_pull_requests() -> None:
     ]
 
 
+def test_ref_scope_rejects_branch_exclusions() -> None:
+    payload = ruleset_payload()
+    payload["conditions"]["ref_name"]["exclude"] = ["refs/heads/release/*"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset does not target stacked and default-branch PRs"
+    ]
+
+
+def test_ref_scope_rejects_string_include() -> None:
+    payload = ruleset_payload()
+    payload["conditions"]["ref_name"]["include"] = "~ALL"
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset does not target stacked and default-branch PRs"
+    ]
+
+
 def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
     payload = inherited_ruleset_payload()
     payload[audit.INHERITED_SCOPE_FIELD].pop("IRT-bibliography-set")

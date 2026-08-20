@@ -31,6 +31,6 @@ security evidence used for main-targeting PRs.
 
 ## Verification
 
-The exact live ruleset was read before and after the change. TEPP PRs #158 and
-#159 were re-read at their current heads before review-only dispatch. Hosted
-Checks remain authoritative for merge decisions.
+The exact live ruleset was read before and after the change. TEPP pull requests
+`#158` and `#159` were re-read at their current heads before review-only
+dispatch. Hosted Checks remain authoritative for merge decisions.

@@ -9,7 +9,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Ruleset: `CWL Central required workflows`
 - Ruleset ID: `18156473`
 - Enforcement: `active`
-- Target: branch rules on every repository branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~ALL"]`), including stacked pull-request base branches
+- Target: branch rules on every non-excluded repository branch (`repository_name.include=["~ALL"]`, `repository_name.exclude=[".github", "IRT-bibliography-set", "noema"]`, `ref_name.include=["~ALL"]`, `ref_name.exclude=[]`), including stacked pull-request base branches
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:

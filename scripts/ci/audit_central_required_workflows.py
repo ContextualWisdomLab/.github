@@ -112,7 +112,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
 
     ref_names = conditions.get("ref_name")
     ref_names = ref_names if isinstance(ref_names, dict) else {}
-    if "~ALL" not in (ref_names.get("include") or []):
+    if ref_names.get("include") != ["~ALL"] or ref_names.get("exclude") != []:
         errors.append("central ruleset does not target stacked and default-branch PRs")
 
     workflow_rules = _typed_rules(payload, "workflows")
