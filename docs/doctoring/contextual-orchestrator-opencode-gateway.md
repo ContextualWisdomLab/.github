@@ -16,12 +16,15 @@ flowchart LR
   E --> F["Existing provider-qualified fallbacks"]
 ```
 
-The gateway candidate is first in the model pool only when the sidecar reaches
-the unauthenticated `/healthz` liveness check. If startup or discovery fails,
-the candidate is skipped and the established OpenCode, OpenAI, OpenRouter,
-NVIDIA NIM, and GitHub Models paths remain available. Review publication,
-current-head binding, independent approval, Strix, and branch protection are
-unchanged. `COPILOT_GITHUB_TOKEN` is not used.
+The gateway candidate is first in the model pool only for public repositories,
+after the pinned checkout succeeds and the sidecar reaches the unauthenticated
+`/healthz` liveness check. A missing or unreadable pinned revision is non-fatal:
+the gateway candidate is skipped and the established provider-qualified pool
+remains available. Private repositories never start or select the gateway,
+because its auto-discovered catalog includes providers excluded by the review
+workflow's private-source retention policy. Review publication, current-head
+binding, independent approval, Strix, and branch protection are unchanged.
+`COPILOT_GITHUB_TOKEN` is not used.
 
 The sidecar receives the five provider credentials only in the model-execution
 step. It does not receive review-write tokens, and the generated local bearer
