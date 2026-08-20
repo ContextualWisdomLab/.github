@@ -9,8 +9,9 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -310,20 +311,26 @@ def _artifact_records(
     """
 
     if not isinstance(value, dict):
-        raise ValueError("artifact response must be an object")
+        raise ValueError(  # noqa: TRY004 - malformed external data is validation failure
+            "artifact response must be an object"
+        )
     total_count = value.get("total_count")
     artifacts = value.get("artifacts")
     if type(total_count) is not int or total_count < 0:
         raise ValueError("artifact response has an invalid total_count")
     if not isinstance(artifacts, list):
-        raise ValueError("artifact response has an invalid artifacts collection")
+        raise ValueError(  # noqa: TRY004 - malformed external data is validation failure
+            "artifact response has an invalid artifacts collection"
+        )
     if total_count != len(artifacts):
         raise ValueError("artifact response is truncated or internally inconsistent")
 
     live: list[dict[str, Any]] = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
-            raise ValueError("artifact response contains a non-object record")
+            raise ValueError(  # noqa: TRY004 - malformed external data is validation failure
+                "artifact response contains a non-object record"
+            )
         artifact_id = artifact.get("id")
         name = artifact.get("name")
         expired = artifact.get("expired")
@@ -586,7 +593,9 @@ def load_event(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as handle:
         value = json.load(handle)
     if not isinstance(value, dict):
-        raise ValueError("GitHub event payload must be a JSON object")
+        raise ValueError(  # noqa: TRY004 - malformed external data is validation failure
+            "GitHub event payload must be a JSON object"
+        )
     return value
 
 
