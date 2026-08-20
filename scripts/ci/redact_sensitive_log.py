@@ -15,7 +15,7 @@ KEY_CHARS = frozenset(
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|"
-    r"t[\s\\]*o[\s\\]*k[\s\\]*e[\s\\]*n)",
+    r"t(?:[^a-zA-Z]*o|0)[^a-zA-Z]*k(?:[^a-zA-Z]*e|3)[^a-zA-Z]*n)",
     re.IGNORECASE,
 )
 NON_SENSITIVE_KEY_RE = re.compile(

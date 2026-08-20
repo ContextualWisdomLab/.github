@@ -49,6 +49,8 @@ def test_redacts_split_key_value_assignments_across_log_lines() -> None:
         'token\r=\r"secret123"',
         't\\o\\k\\e\\n = "secret123"',
         'to ken = "secret123"',
+        't0k3n=secret123',
+        't-o-k-e-n=secret123',
     ):
         cleaned = redact_sensitive_log.redact_text(source)
         assert "secret123" not in cleaned
