@@ -151,7 +151,7 @@ flowchart LR
 | #1061 | fix(scheduler): ignore manual Strix dispatch as merge evidence | `3865b1fccb3d5325b35f3bcf837613cb9ee6a1fd` | main | DIRTY | — |
 | #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `8edf65f1021c885c446da3aad2d892f3b248c603` | main | BEHIND | — |
 | #1058 | fix(operability): reject impossible control-plane SLI counts | `c2240af1e6e1d701c3a795ae60f0d89bc0ee738c` | main | BEHIND | — |
-| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `3eac8c1f78ebb82272429d1804f3d039b5da86b8` | main | BEHIND | — |
+| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `674ace3a` | main | BEHIND | — |
 | #1053 | fix(redaction): skip gh run view job/step prefixes | `cd4b30e560e651f3d2d3c4e418d8f51ee650f9a2` | main | BEHIND | — |
 | #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `030af95f78e2910191d5e7f53a771e26f87f4dee` | main | BEHIND | CHANGES_REQUESTED |
 | #1051 | fix(pip-audit): keep index-url locks hashed and reject symlink parents | `4deb1376d3bb661e9d9934511f46bbf52d9b5b1c` | main | BEHIND | CHANGES_REQUESTED |
