@@ -149,6 +149,7 @@ def test_default_file_opener_refuses_non_allowlisted_paths(
     constructed: list[object] = []
 
     def forbidden_connection(*args: object, **kwargs: object) -> object:
+        """Fail if a rejected Figma path reaches the network constructor."""
         constructed.append((args, kwargs))
         raise AssertionError("file opener must not connect for a refused path")
 
@@ -428,6 +429,7 @@ def test_fetch_file_document_reads_url_and_extra_node_ids() -> None:
     seen: dict[str, Any] = {}
 
     def opener(path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Capture the allowlisted file path and return a bounded fixture."""
         seen["path"] = path
         seen["headers"] = dict(headers)
         return 200, _file_body(
@@ -451,6 +453,7 @@ def test_fetch_file_document_rejects_unauthorized_token() -> None:
     """401/403 stay distinct from a missing file key."""
 
     def opener(path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return an unauthorized Figma response."""
         del path, headers
         return 403, b'{"status":403,"err":"Invalid token"}'
 
@@ -474,6 +477,7 @@ def test_main_writes_json_and_error_channels() -> None:
     stderr = io.StringIO()
 
     def opener(path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return a valid file fixture for the CLI success path."""
         del path, headers
         return 200, _file_body(name="Checkout")
 
@@ -510,6 +514,7 @@ def test_main_uses_process_streams_when_unspecified(
     monkeypatch.setenv(auth.TOKEN_ENV_NAME, TOKEN)
 
     def opener(path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return a valid file fixture through process streams."""
         del path
         assert headers[auth.TOKEN_HEADER] == TOKEN
         return 200, _file_body(name="Home")
@@ -545,6 +550,7 @@ def test_main_maps_system_exit_shapes(exc: SystemExit, expected: int) -> None:
     stderr = io.StringIO()
 
     def boom(_argv: list[str]) -> None:
+        """Raise the parametrized argparse shape under test."""
         raise exc
 
     original = files.parse_cli_args

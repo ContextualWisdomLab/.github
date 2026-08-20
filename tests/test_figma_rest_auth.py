@@ -96,6 +96,7 @@ def test_verify_rest_auth_accepts_valid_token() -> None:
     seen: dict[str, Any] = {}
 
     def opener(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Capture the fixed endpoint and return a valid identity payload."""
         seen["url"] = url
         seen["headers"] = dict(headers)
         return 200, _whoami_body(handle="seonghobae", id="abc")
@@ -113,6 +114,7 @@ def test_verify_rest_auth_rejects_unauthorized_token(status: int) -> None:
     """Figma 401/403 mean the secret must be rotated, not that MCP is up."""
 
     def opener(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return the parametrized authentication rejection response."""
         del url, headers
         return status, b'{"status":403,"err":"Invalid token"}'
 
@@ -127,6 +129,7 @@ def test_verify_rest_auth_treats_unexpected_status_as_transport() -> None:
     """Non-auth HTTP failures stay distinct from a missing or rejected token."""
 
     def opener(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return a non-authentication transport failure."""
         del url, headers
         return 503, b"unavailable"
 
@@ -188,6 +191,7 @@ def test_default_opener_rejects_non_whoami_urls(monkeypatch: pytest.MonkeyPatch)
     constructed: list[object] = []
 
     def forbidden_connection(*args: object, **kwargs: object) -> object:
+        """Fail if URL validation reaches the network constructor."""
         constructed.append((args, kwargs))
         raise AssertionError("whoami opener must not connect for a refused URL")
 
@@ -335,6 +339,7 @@ def test_main_writes_identity_and_error_channels() -> None:
     stderr = io.StringIO()
 
     def opener(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return a valid identity response for the CLI success path."""
         del url, headers
         return 200, _whoami_body(handle="seonghobae")
 
@@ -368,6 +373,7 @@ def test_main_writes_identity_and_error_channels() -> None:
     rejected_err = io.StringIO()
 
     def reject(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return an unauthorized response for the CLI error path."""
         del url, headers
         return 401, b'{"err":"Invalid token"}'
 
@@ -391,6 +397,7 @@ def test_main_uses_process_streams_when_unspecified(
     monkeypatch.setenv(auth.TOKEN_ENV_NAME, TOKEN)
 
     def opener(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """Return a valid identity response through process streams."""
         del url
         assert headers[auth.TOKEN_HEADER] == TOKEN
         return 200, _whoami_body(id="xyz")
