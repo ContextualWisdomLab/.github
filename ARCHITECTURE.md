@@ -36,6 +36,9 @@ only established scheduler credentials, and grants job-scoped
 
 `nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
 16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## free-router hourly caller
 
 `free-router-hourly-review-repair.yml` is a thin, read-only caller at minute
@@ -115,7 +118,6 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
-tests pin workflow structure and governance prose so drift fails closed.
 
 ## Related durable documents
 

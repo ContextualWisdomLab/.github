@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 CALLER = Path(".github/workflows/free-router-hourly-review-repair.yml")
+ARCHITECTURE = Path("ARCHITECTURE.md")
 DOCTORING = Path("docs/doctoring/free-router-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -93,6 +94,26 @@ def test_free_router_caller_preserves_oidc_and_explicit_secret_scope() -> None:
 def test_free_router_target_is_not_hard_coded_in_shared_scheduler() -> None:
     """Product identity remains in the thin caller rather than the engine."""
     assert "ContextualWisdomLab/free-router" not in _read(SCHEDULER)
+
+
+def test_architecture_keeps_hourly_callers_and_quality_gate_coherent() -> None:
+    """The free-router insertion must not split or duplicate adjacent contracts."""
+    architecture = _read(ARCHITECTURE)
+
+    assert (
+        "It names `ContextualWisdomLab/nonnest2` and protected `master`, maps\n"
+        "only established scheduler credentials, and grants job-scoped\n"
+        "`id-token: write`. The reusable engine stays product-neutral.\n\n"
+        "## free-router hourly caller"
+    ) in architecture
+    assert (
+        "It names `ContextualWisdomLab/free-router` and protected `main`, maps\n"
+        "only established scheduler credentials, and grants job-scoped\n"
+        "`id-token: write`. The reusable engine stays product-neutral."
+    ) in architecture
+    assert architecture.count(
+        "tests pin workflow structure and governance prose so drift fails closed."
+    ) == 1
 
 
 def test_free_router_doctoring_records_routing_activation_and_credentials() -> None:
