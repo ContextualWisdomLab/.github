@@ -7,6 +7,7 @@ CALLER = Path(".github/workflows/scopeweave-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/scopeweave-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
+STRIX_WORKFLOW = Path(".github/workflows/strix.yml")
 
 
 def _read(path: Path) -> str:
@@ -164,3 +165,17 @@ def test_focused_quality_workflow_tracks_scopeweave_contracts() -> None:
     assert contract in compileall_paths
     assert caller not in compileall_paths
     assert doctoring not in compileall_paths
+
+
+def test_strix_gate_uses_medium_threshold_and_neutral_scope_signal() -> None:
+    """Low/INFO reports do not block, while medium-or-higher findings do."""
+    strix = _read(STRIX_WORKFLOW)
+
+    assert (
+        "reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
+        "(critical|high|medium)([^A-Za-z0-9_]|$)'"
+        in strix
+    )
+    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]" not in strix
+    assert "non_assessable_scope_signal='No Assessable Application Code Found in Scope'" in strix
+    assert "produced no medium-or-higher vulnerability evidence" in strix
