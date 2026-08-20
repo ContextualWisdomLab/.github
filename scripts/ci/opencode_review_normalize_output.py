@@ -885,9 +885,12 @@ def label_section(text: str, label: str) -> str:
 
     def label_starts(candidate: str) -> list[int]:
         """Return exact verification-label starts without suffix collisions."""
+        if candidate not in text:
+            return []
+
         starts = []
         pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
-        if pattern is None:
+        if pattern is None:  # pragma: no cover
             pattern = re.compile(re.escape(candidate))
         for match in pattern.finditer(text):
             index = match.start()
