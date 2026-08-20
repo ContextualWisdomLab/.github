@@ -3,17 +3,19 @@
 Observed required-check flake: Strix exits 1 with `ModelBehaviorError` and
 `Vulnerabilities 0` after the scanner model fails to complete a turn.
 
-The outer `strix.yml` backend-unavailable signal now includes
-`ModelBehaviorError`. Neutral skip still requires the absence of
-`Vulnerabilities [1-9]` and of a `severity:` finding. A scan that reports
-any numbered vulnerability stays fail-closed even when the model also
-emits `ModelBehaviorError`.
+The outer `strix.yml` backend-unavailable signal includes
+`ModelBehaviorError` so operators receive a typed
+`STRIX_PROVIDER_UNAVAILABLE` result when no vulnerability finding was emitted.
+The workflow preserves the scanner's nonzero result: an incomplete provider
+turn is never passing security evidence. A scan that reports any numbered
+vulnerability also stays fail-closed.
 
 ## Operator action
 
-If this check repeats, inspect the exact Strix log for the qualified exception
-and confirm that no numbered vulnerability or `severity:` signal is present;
-any finding remains fail-closed before retrying.
+If this check repeats, inspect the exact Strix log and artifact for the
+qualified exception. Retry provider execution without changing source
+classification; both incomplete analysis and any reported finding remain
+non-passing.
 
 ## References
 
