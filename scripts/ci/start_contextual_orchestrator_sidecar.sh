@@ -2,12 +2,11 @@
 # Starts contextual-orchestrator as a same-job, loopback-only sidecar: checks out
 # the org's own contextual-orchestrator repo at an immutable reviewed commit,
 # installs its hash-locked dependencies, registers whichever of the five upstream
-# provider credentials are present as job secrets into its KV, runs model auto-
-# discovery + cost-based auto-enable, then serves on 127.0.0.1 with a freshly
-# generated bearer token. Intended to be sourced/invoked as an early step in a
-# job that later calls into OpenCode/Noema/Strix so they can use contextual-
-# orchestrator as their LLM backend. Not for public/shared exposure: loopback-
-# only, one ephemeral token per job run, torn down with the runner.
+# provider credentials are present into a process-local KV, discovers and enables
+# a bounded model pool, then serves it from the same Python process. The single
+# process is essential: the default credential backend is intentionally
+# process-local, so separate register/discover/serve CLI invocations would lose
+# the credentials between phases.
 set -euo pipefail
 
 : "${GITHUB_ENV:=/dev/null}"
@@ -28,8 +27,8 @@ if [[ ! "$CONTEXTUAL_ORCHESTRATOR_PORT" =~ ^[0-9]+$ ]] || [ "$CONTEXTUAL_ORCHEST
 	echo "ERROR: CONTEXTUAL_ORCHESTRATOR_PORT must be a valid TCP port." >&2
 	exit 2
 fi
-if [[ ! "$CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST" =~ ^[0-9]+$ ]]; then
-	echo "ERROR: CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST must be a non-negative integer." >&2
+if [[ ! "$CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST" =~ ^[0-9]+$ ]] || [ "$CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST" -lt 1 ]; then
+	echo "ERROR: CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST must be a positive integer." >&2
 	exit 2
 fi
 if [[ ! "$CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [ "$CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS" -lt 3 ]; then
@@ -37,13 +36,19 @@ if [[ ! "$CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [ "$C
 	exit 2
 fi
 
+PROVIDER_CREDENTIAL_NAMES=(
+	BYTEZ_API_KEY
+	NVIDIA_NIM_API_KEY
+	NVIDIA_NIM_API_KEY_SUB
+	OPENROUTER_API_KEY
+	OPENAI_API_KEY
+)
+
 # Self-gating: callers can invoke this unconditionally from every workflow.
 # With none of the five upstream provider credentials present, there is
-# nothing for contextual-orchestrator to discover or serve, so no-op cleanly
-# (exit 0, CONTEXTUAL_ORCHESTRATOR_BASE_URL left unset) rather than making
-# every caller duplicate this check in workflow YAML `if:` conditions.
+# nothing for contextual-orchestrator to discover or serve, so no-op cleanly.
 has_any_provider_credential=0
-for credential_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY; do
+for credential_name in "${PROVIDER_CREDENTIAL_NAMES[@]}"; do
 	if [ -n "${!credential_name:-}" ]; then
 		has_any_provider_credential=1
 		break
@@ -55,10 +60,18 @@ if [ "$has_any_provider_credential" -eq 0 ]; then
 fi
 
 RUNTIME_DIR="$(mktemp -d)"
-cleanup_checkout() {
+sidecar_pid=""
+cleanup_failed_startup() {
+	local exit_status=$?
+	trap - EXIT
+	if [ -n "$sidecar_pid" ] && kill -0 "$sidecar_pid" 2>/dev/null; then
+		kill "$sidecar_pid" 2>/dev/null || true
+		wait "$sidecar_pid" 2>/dev/null || true
+	fi
 	rm -rf -- "$RUNTIME_DIR"
+	exit "$exit_status"
 }
-trap cleanup_checkout EXIT
+trap cleanup_failed_startup EXIT
 
 echo "Checking out ContextualWisdomLab/contextual-orchestrator@${CONTEXTUAL_ORCHESTRATOR_REF}..."
 git init --quiet "$RUNTIME_DIR"
@@ -80,46 +93,117 @@ python3 -m venv "$RUNTIME_DIR/.venv-sidecar"
 # shellcheck disable=SC1091
 source "$RUNTIME_DIR/.venv-sidecar/bin/activate"
 python -m pip install --quiet --require-hashes -r "$RUNTIME_DIR/requirements.lock"
-python -m pip install --quiet --no-deps -e "$RUNTIME_DIR"
-
-# Register only the credentials this job actually has; discovery silently
-# skips any provider whose credential is missing (see model_discovery.py).
-for credential_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY; do
-	if [ -n "${!credential_name:-}" ]; then
-		python -m contextual_orchestrator register-credential \
-			--name "$credential_name" --from-env "$credential_name"
-	fi
-done
-
-POOL_DB="$RUNTIME_DIR/agent-pool.db"
-echo "Discovering models and auto-enabling the ${CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST} cheapest..."
-python -m contextual_orchestrator discover-models \
-	--agents-db "$POOL_DB" \
-	--enable-cheapest "$CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST"
 
 TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 echo "::add-mask::$TOKEN"
-
 LOG_FILE="$RUNTIME_DIR/sidecar.log"
-(
-	cd "$RUNTIME_DIR"
-	python -m contextual_orchestrator --serve \
-		--agents examples/agents.mock.json \
-		--agents-db "$POOL_DB" \
-		--host 127.0.0.1 --port "$CONTEXTUAL_ORCHESTRATOR_PORT" \
-		--auth-token "$TOKEN" \
-		>"$LOG_FILE" 2>&1 &
-	echo $! >"$RUNTIME_DIR/sidecar.pid"
+
+# Register credentials, discover models, build the failover-capable orchestrator,
+# and serve from one Python process. Source is imported directly from the exact
+# reviewed checkout; no editable build backend or unpinned build dependency runs.
+PYTHONPATH="$RUNTIME_DIR" \
+CONTEXTUAL_ORCHESTRATOR_SIDECAR_TOKEN="$TOKEN" \
+CONTEXTUAL_ORCHESTRATOR_SIDECAR_PORT="$CONTEXTUAL_ORCHESTRATOR_PORT" \
+CONTEXTUAL_ORCHESTRATOR_SIDECAR_ENABLE_CHEAPEST="$CONTEXTUAL_ORCHESTRATOR_ENABLE_CHEAPEST" \
+"$RUNTIME_DIR/.venv-sidecar/bin/python" - >"$LOG_FILE" 2>&1 <<'PY' &
+from __future__ import annotations
+
+from dataclasses import replace
+import os
+
+credential_names = (
+    "BYTEZ_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
 )
-# The checkout is only needed to launch the server; once it's up, remove the
-# EXIT trap so the running process (and its still-open log/pool files) survive
-# for the rest of the job. The server holds its own open file handles, so
-# deleting the directory entry is safe on Linux runners even with it running.
-trap - EXIT
+credentials: dict[str, str] = {}
+for credential_name in credential_names:
+    credential_value = os.environ.pop(credential_name, "")
+    if credential_value:
+        credentials[credential_name] = credential_value
+
+auth_token = os.environ.pop("CONTEXTUAL_ORCHESTRATOR_SIDECAR_TOKEN", "")
+port_text = os.environ.pop("CONTEXTUAL_ORCHESTRATOR_SIDECAR_PORT", "")
+enable_text = os.environ.pop("CONTEXTUAL_ORCHESTRATOR_SIDECAR_ENABLE_CHEAPEST", "")
+if not credentials:
+    raise RuntimeError("no provider credentials survived sidecar bootstrap")
+if not auth_token:
+    raise RuntimeError("sidecar authentication token is missing")
+
+port = int(port_text)
+enable_cheapest = int(enable_text)
+if not 1 <= port <= 65535:
+    raise RuntimeError("sidecar port is outside the valid range")
+if enable_cheapest < 1:
+    raise RuntimeError("sidecar model count must be positive")
+
+from contextual_orchestrator import TaskOrchestrator, register_credential
+from contextual_orchestrator.cost_ledger import PriceBook
+from contextual_orchestrator.kv_config import InMemoryConfigStore
+from contextual_orchestrator.model_discovery import (
+    agent_from_discovered,
+    discover_all_models,
+    refresh_price_book,
+    select_top_n_cheapest_discovered_agents,
+)
+from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.server import SecurityConfig, serve
+
+for credential_name, credential_value in credentials.items():
+    register_credential(credential_name, credential_value)
+credentials.clear()
+
+discovered_models, discovery_errors = discover_all_models()
+if not discovered_models:
+    providers_with_errors = sorted(
+        {getattr(error, "provider_name", "unknown") for error in discovery_errors}
+    )
+    provider_summary = ",".join(providers_with_errors) or "none"
+    raise RuntimeError(
+        "model discovery returned no candidates; providers_with_errors="
+        + provider_summary
+    )
+
+price_book = PriceBook(InMemoryConfigStore())
+refresh_price_book(discovered_models, price_book)
+selected_models = select_top_n_cheapest_discovered_agents(
+    discovered_models,
+    price_book,
+    enable_cheapest,
+)
+if not selected_models:
+    raise RuntimeError("model discovery produced no enableable candidates")
+
+active_agents = [
+    replace(agent_from_discovered(model), disabled=False)
+    for model in selected_models
+]
+orchestrator = TaskOrchestrator(active_agents, client=ModelClient())
+serve(
+    orchestrator,
+    host="127.0.0.1",
+    port=port,
+    security=SecurityConfig(auth_token=auth_token),
+)
+PY
+sidecar_pid="$!"
+
+# The shell no longer needs provider keys; prevent readiness probes or any other
+# child process in this step from inheriting them.
+for credential_name in "${PROVIDER_CREDENTIAL_NAMES[@]}"; do
+	unset "$credential_name"
+done
 
 BASE_URL="http://127.0.0.1:${CONTEXTUAL_ORCHESTRATOR_PORT}/v1"
 deadline=$((SECONDS + CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS))
 until curl --connect-timeout 1 --max-time 2 -fsS "http://127.0.0.1:${CONTEXTUAL_ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
+	if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+		echo "ERROR: contextual-orchestrator sidecar exited before becoming ready." >&2
+		tail -n 200 "$LOG_FILE" >&2 || true
+		exit 1
+	fi
 	if [ "$SECONDS" -ge "$deadline" ]; then
 		echo "ERROR: contextual-orchestrator sidecar did not become ready within ${CONTEXTUAL_ORCHESTRATOR_READY_TIMEOUT_SECONDS}s." >&2
 		tail -n 200 "$LOG_FILE" >&2 || true
@@ -128,6 +212,11 @@ until curl --connect-timeout 1 --max-time 2 -fsS "http://127.0.0.1:${CONTEXTUAL_
 	sleep 1
 done
 echo "contextual-orchestrator sidecar ready at $BASE_URL"
+
+# Keep the process and its exact-SHA checkout alive for the remainder of the
+# GitHub job. The runner tears them down at job completion. Failed startup paths
+# retain the EXIT trap above and therefore kill the child and remove the checkout.
+trap - EXIT
 
 {
 	echo "CONTEXTUAL_ORCHESTRATOR_BASE_URL=$BASE_URL"
