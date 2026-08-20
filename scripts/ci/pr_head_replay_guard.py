@@ -240,15 +240,10 @@ def test_case_count(
     return len(pattern.findall(source)) if pattern is not None else None
 
 
-def test_file_changes(
-    repo_root: Path,
-    start: str,
-    end: str,
-) -> tuple[tuple[str, ...], int, int]:
-    """Return regressed paths, added test files, and added existing-file test cases."""
+def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
+    """Return deleted or test-case-reducing paths and the added-test-file count."""
     regressed: set[str] = set()
     added_files = 0
-    added_paths: set[str] = set()
     for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
         fields = line.split("\t")
         if len(fields) < 2 or not is_test_path(fields[-1]):
@@ -258,26 +253,35 @@ def test_file_changes(
             regressed.add(fields[-1])
         elif status == "A":
             added_files += 1
-            added_paths.add(fields[-1])
+    for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
+        fields = line.split("\t", 2)
+        if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
+            continue
+        path = fields[2]
+        if not is_test_path(path) or int(fields[1]) <= int(fields[0]):
+            continue
+        before_count = test_case_count(repo_root, start, path)
+        after_count = test_case_count(repo_root, end, path)
+        if before_count is None or after_count is None or after_count < before_count:
+            regressed.add(path)
+    return tuple(sorted(regressed)), added_files
 
+
+def added_existing_test_cases(repo_root: Path, start: str, end: str) -> int:
+    """Return declared test cases added to test files that exist at both revisions."""
     added_cases = 0
     for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
         path = fields[2]
-        if not is_test_path(path) or path in added_paths:
+        if not is_test_path(path):
             continue
         before_count = test_case_count(repo_root, start, path)
         after_count = test_case_count(repo_root, end, path)
-        if before_count is not None and after_count is not None:
-            if after_count < before_count:
-                regressed.add(path)
-            elif after_count > before_count:
-                added_cases += after_count - before_count
-        elif int(fields[1]) > int(fields[0]):
-            regressed.add(path)
-    return tuple(sorted(regressed)), added_files, added_cases
+        if before_count is not None and after_count is not None and after_count > before_count:
+            added_cases += after_count - before_count
+    return added_cases
 
 
 def summarize_paths(paths: Sequence[str]) -> str:
@@ -312,11 +316,8 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         head_sha,
     )
     unmerged = unmerged_base_paths(repo_root, merge_anchor, head_sha)
-    regressed_tests, added_test_files, added_test_cases = test_file_changes(
-        repo_root,
-        merge_anchor,
-        head_sha,
-    )
+    regressed_tests, added_test_files = test_file_changes(repo_root, merge_anchor, head_sha)
+    added_test_cases = added_existing_test_cases(repo_root, merge_anchor, head_sha)
     return ReplayEvidence(
         base_sha=base_sha,
         head_sha=head_sha,
