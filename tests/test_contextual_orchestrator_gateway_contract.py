@@ -16,6 +16,7 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
 
     assert "ContextualWisdomLab/contextual-orchestrator" in workflow
     assert GATEWAY_COMMIT in workflow
+    assert "persist-credentials: false" in workflow
     assert '"contextual-orchestrator"' in workflow
     assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow

@@ -2299,6 +2299,7 @@ jobs:
           ref: 5d989c6177514d30dace2afa2cf61c64a7d41f67
           path: trusted-contextual-orchestrator
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Detect central review-process scope
         id: central_review_process_fallback_scope
