@@ -15,6 +15,7 @@ import pathlib
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -63,6 +64,11 @@ TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
 TRUSTED_UV_ORIGIN_ERROR = (
     "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
 )
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_REQUIRED_DIR_FD_FUNCTIONS = (os.open, os.mkdir, os.stat, os.unlink)
+_REQUIRED_FD_FUNCTIONS = (os.listdir,)
+_REQUIRED_FOLLOW_SYMLINK_FUNCTIONS = (os.stat,)
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
@@ -588,34 +594,201 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return sorted(locks, key=lambda item: item[0])
 
 
+def _require_descriptor_relative_capabilities() -> None:
+    """Require the descriptor-relative primitives used for race-safe writes."""
+    dir_fd_supported = getattr(os, "supports_dir_fd", set())
+    fd_supported = getattr(os, "supports_fd", set())
+    follow_symlinks_supported = getattr(os, "supports_follow_symlinks", set())
+    if (
+        any(function not in dir_fd_supported for function in _REQUIRED_DIR_FD_FUNCTIONS)
+        or any(function not in fd_supported for function in _REQUIRED_FD_FUNCTIONS)
+        or any(
+            function not in follow_symlinks_supported
+            for function in _REQUIRED_FOLLOW_SYMLINK_FUNCTIONS
+        )
+    ):
+        raise ValueError("descriptor-relative output operations are unavailable")
+    if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise ValueError("descriptor-relative output operations are unavailable")
+
+
+def _reject_symlinked_output_components(output_dir: pathlib.Path) -> None:
+    """Reject symlinked ancestors before opening the materialization directory."""
+    candidate = output_dir.absolute()
+    if candidate == pathlib.Path(candidate.anchor):
+        raise ValueError("output directory must not be the filesystem root")
+    current = pathlib.Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            raise ValueError(
+                "output directory must not be a symlink; "
+                f"path must not contain symlinks: {current}"
+            )
+        if not current.exists():
+            break
+        if not current.is_dir():
+            raise ValueError(
+                f"output directory path component must be a directory: {current}"
+            )
+
+
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int]:
+    """Return the device/inode identity of a regular directory."""
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("output directory binding changed during secure materialization")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _verify_output_directory_binding(
+    output_dir: pathlib.Path,
+    output_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    """Fail closed if the published path no longer names the opened directory."""
+    descriptor_metadata = os.fstat(output_fd)
+    try:
+        path_metadata = os.stat(output_dir.absolute(), follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError("output directory changed during secure materialization") from exc
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or (descriptor_metadata.st_dev, descriptor_metadata.st_ino) != identity
+        or (path_metadata.st_dev, path_metadata.st_ino) != identity
+    ):
+        raise ValueError("output directory changed during secure materialization")
+
+
+def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
+    """Open or create each child directory without following symlinks."""
+    current_fd = os.dup(root_fd)
+    try:
+        for part in parts:
+            created = False
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                created = True
+            except FileExistsError:
+                pass
+            expected_identity = _directory_identity(
+                os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+            )
+            if created:
+                os.fsync(current_fd)
+            next_fd = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=current_fd)
+            try:
+                if _directory_identity(os.fstat(next_fd)) != expected_identity:
+                    raise ValueError(
+                        "output directory binding changed during secure materialization"
+                    )
+                os.fsync(next_fd)
+            except BaseException:
+                os.close(next_fd)
+                raise
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _open_output_directory(output_dir: pathlib.Path) -> tuple[int, tuple[int, int]]:
+    """Open a no-follow output directory and bind it to its observed inode."""
+    candidate = output_dir.absolute()
+    _reject_symlinked_output_components(candidate)
+    anchor = pathlib.Path(candidate.anchor)
+    anchor_fd = os.open(anchor, _DIRECTORY_OPEN_FLAGS)
+    try:
+        output_fd = _open_relative_directory(anchor_fd, tuple(candidate.parts[1:]))
+        try:
+            os.fsync(output_fd)
+            metadata = os.fstat(output_fd)
+            identity = (metadata.st_dev, metadata.st_ino)
+            _verify_output_directory_binding(candidate, output_fd, identity)
+            return output_fd, identity
+        except BaseException:
+            os.close(output_fd)
+            raise
+    finally:
+        os.close(anchor_fd)
+
+
+def _write_new_file(parent_fd: int, filename: str, content: bytes) -> None:
+    """Create and synchronize one singly-linked regular file by directory FD."""
+    try:
+        file_fd = os.open(filename, _NEW_FILE_FLAGS, 0o600, dir_fd=parent_fd)
+    except FileExistsError as exc:
+        raise ValueError(f"generated output file must not pre-exist: {filename}") from exc
+    initial_metadata = os.fstat(file_fd)
+    identity = (initial_metadata.st_dev, initial_metadata.st_ino)
+    try:
+        if not stat.S_ISREG(initial_metadata.st_mode) or initial_metadata.st_nlink != 1:
+            raise ValueError("generated output files must be singly linked regular files")
+        view = memoryview(content)
+        offset = 0
+        while offset < len(view):
+            written = os.write(file_fd, view[offset:])
+            if written <= 0:
+                raise OSError("output write made no progress")
+            offset += written
+        os.fsync(file_fd)
+        final_metadata = os.fstat(file_fd)
+        path_metadata = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(path_metadata.st_mode)
+            or (final_metadata.st_dev, final_metadata.st_ino)
+            != (path_metadata.st_dev, path_metadata.st_ino)
+            or final_metadata.st_nlink != 1
+            or path_metadata.st_nlink != 1
+        ):
+            raise ValueError("output file changed during secure materialization")
+        os.fsync(parent_fd)
+    except BaseException:
+        try:
+            path_metadata = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+            if (path_metadata.st_dev, path_metadata.st_ino) == identity:
+                os.unlink(filename, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(file_fd)
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
     """Write base lock blobs under generated names safe for a Docker build context."""
-    if output_dir.exists() and output_dir.is_symlink():
-        raise ValueError("output directory must not be a symlink")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _require_descriptor_relative_capabilities()
+    output_fd, output_identity = _open_output_directory(output_dir)
+    try:
+        manifest: list[dict[str, str]] = []
+        for index, (source_path, content) in enumerate(
+            base_hash_locks(repo_root.resolve(), base_sha)
+        ):
+            generated_name = f"requirements-{index:03d}.txt"
+            _write_new_file(output_fd, generated_name, content)
+            manifest.append({"file": generated_name, "source": source_path})
 
-    manifest: list[dict[str, str]] = []
-    for index, (source_path, content) in enumerate(
-        base_hash_locks(repo_root.resolve(), base_sha)
-    ):
-        generated_name = f"requirements-{index:03d}.txt"
-        destination = output_dir / generated_name
-        destination.write_bytes(content)
-        manifest.append({"file": generated_name, "source": source_path})
-
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (output_dir / "manifest.txt").write_text(
-        "".join(f"{entry['file']}\n" for entry in manifest),
-        encoding="utf-8",
-    )
-    return manifest
+        _write_new_file(
+            output_fd,
+            "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        )
+        _write_new_file(
+            output_fd,
+            "manifest.txt",
+            "".join(f"{entry['file']}\n" for entry in manifest).encode("utf-8"),
+        )
+        os.fsync(output_fd)
+        _verify_output_directory_binding(output_dir, output_fd, output_identity)
+        return manifest
+    finally:
+        os.close(output_fd)
 
 
 def main(argv: list[str] | None = None) -> int:

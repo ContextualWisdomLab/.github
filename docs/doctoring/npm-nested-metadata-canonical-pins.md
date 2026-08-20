@@ -47,7 +47,7 @@ The canonical root pin is a provenance anchor for metadata-only locations, not a
 
 ### Filesystem publication boundary
 
-Materialized evidence is published only when the runtime supports descriptor-relative directory operations, descriptor-backed enumeration, `O_DIRECTORY`, `O_NOFOLLOW`, and no-follow `stat`. The capability gate runs before any output path is created. Missing output components are then created and opened one component at a time from a held filesystem-root descriptor; each name is inspected without following links, opened relative to its pinned parent, and matched to the observed device/inode identity. The final absolute pathname must still identify the pinned output directory before any project file is written.
+Materialized JavaScript and Python evidence is published only when the runtime supports descriptor-relative directory operations, descriptor-backed enumeration, `O_DIRECTORY`, `O_NOFOLLOW`, and no-follow `stat`. The capability gate runs before any output path is created. Missing output components are then created and opened one component at a time from a held filesystem-root descriptor; each name is inspected without following links, opened relative to its pinned parent, and matched to the observed device/inode identity. The final absolute pathname must still identify the pinned output directory before any project file is written.
 
 Generated files use exclusive, no-follow descriptor-relative creation, forward-progress-checked writes, file and directory synchronization, and post-write identity and link-count validation. A project directory is fresh and owned exclusively by one attempt. If a later write fails, cleanup walks only that held project descriptor, removes only inode-matched regular files and directories in reverse publication order, and never follows links. A raced, replaced, symlink, or special entry is retained for forensic inspection; cleanup never masks the original fail-closed error or removes pre-existing operator entries outside the owned project directory.
 
@@ -71,7 +71,7 @@ The permanent regression suite includes:
 - nested-directory and generated-file identity replacement; and
 - late-write rollback that preserves pre-existing operator data.
 
-The dedicated quality workflow runs Python 3.10 compilation, Python 3.14 focused tests with 100% production statement and branch coverage, 100% production docstrings, the complete central test suite, and a clean-patch check.
+The dedicated quality workflow runs Python 3.10 compilation, Python 3.14 focused tests with 100% production statement and branch coverage, 100% production docstrings, the complete central test suite, and a clean-patch check. The Python materializer regression tests additionally cover capability refusal, ancestor and output rebinding, exclusive creation, non-regular targets, partial-write cleanup, and final identity validation.
 
 ## Incident recovery and rollback
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import runpy
 import subprocess
 import sys
@@ -234,6 +235,184 @@ def test_rejects_symlink_output_directory(
 
     with pytest.raises(ValueError, match="must not be a symlink"):
         materializer.materialize(tmp_path, "a" * 40, output)
+
+
+def test_descriptor_operations_fail_closed_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialization refuses platforms without descriptor-relative primitives."""
+    monkeypatch.setattr(materializer.os, "supports_dir_fd", set())
+    with pytest.raises(ValueError, match="descriptor-relative"):
+        materializer._require_descriptor_relative_capabilities()
+
+    monkeypatch.setattr(
+        materializer.os,
+        "supports_dir_fd",
+        set(materializer._REQUIRED_DIR_FD_FUNCTIONS),
+    )
+    monkeypatch.setattr(materializer.os, "supports_fd", set())
+    with pytest.raises(ValueError, match="descriptor-relative"):
+        materializer._require_descriptor_relative_capabilities()
+
+    monkeypatch.setattr(
+        materializer.os,
+        "supports_fd",
+        set(materializer._REQUIRED_FD_FUNCTIONS),
+    )
+    monkeypatch.setattr(materializer.os, "supports_follow_symlinks", set())
+    with pytest.raises(ValueError, match="descriptor-relative"):
+        materializer._require_descriptor_relative_capabilities()
+
+
+def test_descriptor_operations_require_no_follow_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialization refuses an operating system without no-follow flags."""
+    monkeypatch.delattr(materializer.os, "O_DIRECTORY")
+    with pytest.raises(ValueError, match="descriptor-relative"):
+        materializer._require_descriptor_relative_capabilities()
+
+
+def test_output_path_components_and_directory_identity_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Root, file, and non-directory identities are never accepted as outputs."""
+    with pytest.raises(ValueError, match="filesystem root"):
+        materializer._reject_symlinked_output_components(Path("/"))
+
+    file_path = tmp_path / "not-a-directory"
+    file_path.write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a directory"):
+        materializer._reject_symlinked_output_components(file_path)
+    with pytest.raises(ValueError, match="changed"):
+        materializer._directory_identity(file_path.stat())
+
+
+def test_output_binding_detects_removed_or_rebound_directory(
+    tmp_path: Path,
+) -> None:
+    """The opened descriptor must continue to name the published output path."""
+    output = tmp_path / "output"
+    output.mkdir()
+    output_fd, identity = materializer._open_output_directory(output)
+    try:
+        output.rmdir()
+        with pytest.raises(ValueError, match="changed"):
+            materializer._verify_output_directory_binding(output, output_fd, identity)
+    finally:
+        os.close(output_fd)
+
+    output.mkdir()
+    output_fd, identity = materializer._open_output_directory(output)
+    try:
+        with pytest.raises(ValueError, match="changed"):
+            materializer._verify_output_directory_binding(output, output_fd, (0, 0))
+    finally:
+        os.close(output_fd)
+
+
+def test_relative_directory_rejects_inode_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child directory replaced between stat and open is rejected."""
+    root_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    identities = iter(((1, 1), (2, 2)))
+    monkeypatch.setattr(
+        materializer,
+        "_directory_identity",
+        lambda _metadata: next(identities),
+    )
+    try:
+        with pytest.raises(ValueError, match="changed"):
+            materializer._open_relative_directory(root_fd, ("child",))
+    finally:
+        os.close(root_fd)
+
+
+def test_output_open_closes_descriptor_when_binding_verification_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed binding check does not leak the pinned output descriptor."""
+    output = tmp_path / "output"
+    original_verify = materializer._verify_output_directory_binding
+    monkeypatch.setattr(
+        materializer,
+        "_verify_output_directory_binding",
+        lambda *_args: (_ for _ in ()).throw(ValueError("changed")),
+    )
+    with pytest.raises(ValueError, match="changed"):
+        materializer._open_output_directory(output)
+    monkeypatch.setattr(materializer, "_verify_output_directory_binding", original_verify)
+
+
+def test_new_file_rejects_existing_and_non_regular_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generated names cannot overwrite existing files or represent directories."""
+    parent_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    try:
+        materializer._write_new_file(parent_fd, "created.txt", b"ok")
+        with pytest.raises(ValueError, match="must not pre-exist"):
+            materializer._write_new_file(parent_fd, "created.txt", b"again")
+
+        real_fstat = materializer.os.fstat
+        monkeypatch.setattr(
+            materializer.os,
+            "fstat",
+            lambda file_fd: (tmp_path / "directory-marker").stat(),
+        )
+        (tmp_path / "directory-marker").mkdir()
+        with pytest.raises(ValueError, match="regular files"):
+            materializer._write_new_file(parent_fd, "not-regular.txt", b"x")
+        monkeypatch.setattr(materializer.os, "fstat", real_fstat)
+    finally:
+        os.close(parent_fd)
+
+
+def test_new_file_cleans_up_after_write_or_binding_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partially written or rebound files are removed only when still owned."""
+    parent_fd = os.open(tmp_path, materializer._DIRECTORY_OPEN_FLAGS)
+    try:
+        monkeypatch.setattr(materializer.os, "write", lambda *_args: 0)
+        with pytest.raises(OSError, match="no progress"):
+            materializer._write_new_file(parent_fd, "failed.txt", b"x")
+        assert not (tmp_path / "failed.txt").exists()
+
+        monkeypatch.undo()
+        monkeypatch.setattr(materializer.os, "write", lambda *_args: 0)
+        monkeypatch.setattr(
+            materializer.os,
+            "stat",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("stat race")),
+        )
+        with pytest.raises(OSError, match="no progress"):
+            materializer._write_new_file(parent_fd, "cleanup-error.txt", b"x")
+        monkeypatch.undo()
+
+        alternate = tmp_path / "alternate.txt"
+        alternate.write_text("other", encoding="utf-8")
+        real_stat = materializer.os.stat
+        calls = 0
+
+        def rebound_stat(path, *args, **kwargs):
+            nonlocal calls
+            if kwargs.get("dir_fd") == parent_fd and path == "rebound.txt" and calls == 0:
+                calls += 1
+                return real_stat(alternate)
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(materializer.os, "stat", rebound_stat)
+        with pytest.raises(ValueError, match="changed"):
+            materializer._write_new_file(parent_fd, "rebound.txt", b"x")
+        assert not (tmp_path / "rebound.txt").exists()
+    finally:
+        os.close(parent_fd)
 
 
 def test_main_reports_each_materialized_lock(
