@@ -31,6 +31,20 @@ Each `opencode run` attempt starts under `setsid`. A structured fatal
 provider event sends `SIGTERM` then `SIGKILL` to the negative process-group
 id so descendants cannot hold stdout/stderr after the launcher returns.
 
+## OriginWeave hourly caller
+
+`originweave-hourly-review-repair.yml` is a thin, read-only caller at minute
+10. It names `ContextualWisdomLab/OriginWeave` and protected `main`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
+## nonnest2 hourly caller
+
+`nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
+16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -100,7 +114,9 @@ sequenceDiagram
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
 CI installs Python tools only with `pip install --require-hashes`. Contract
-tests pin workflow structure and governance prose so drift fails closed.
+tests pin workflow structure and governance prose so drift fails closed. The
+trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
+`uv` 0.12.1; `releases.astral.sh` is not the network sink.
 
 ## Related durable documents
 
@@ -108,6 +124,8 @@ tests pin workflow structure and governance prose so drift fails closed.
   ecosystem.
 - [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
   — Project #1 operation.
+- [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md)
+  — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)

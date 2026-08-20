@@ -78,8 +78,13 @@ def classify_testthat_failure(
         if any(not PACKAGE_NAME_RE.fullmatch(name) for name in allowed_missing):
             return False
         allowed_packages.update(allowed_missing)
+
+    # ⚡ Bolt: Fast-path rejection before running expensive regex on potentially 2MB logs
+    if "Error: Test failures" not in text:
+        return False
+
     summaries = FAIL_SUMMARY_RE.findall(text)
-    if not summaries or "Error: Test failures" not in text:
+    if not summaries:
         return False
     failure_count = int(summaries[-1])
     if failure_count <= 0:
