@@ -187,7 +187,7 @@ flowchart LR
 | #834 | fix(noema): replay OIDC envelope repair on current main | `93d3102ea1b96f2aae3ac1f0e6c5d83c664ce7c1` | main | BLOCKED | CHANGES_REQUESTED |
 | #831 | feat(opencode): add head-matched gold corpus tooling | `16f9ec8b49b7bae8c51f4fb27e373f53eb94bb05` | main | BLOCKED | CHANGES_REQUESTED |
 | #828 | fix(scheduler): require independent exact-head approval | `7e15d2ffc288ba447d95c4e43f776be03d06dd22` | main | BLOCKED | CHANGES_REQUESTED |
-| #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `178f969a069d5c105f00a054a36001d2fc36cef3` | main | DIRTY | CHANGES_REQUESTED |
+| #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `5a099cd7a4ce8bb5724401da901a63236980c284` | main | BLOCKED | — |
 | #807 | fix(coverage): validate nested npm metadata through canonical pins | `cb4596cbe8f82db215f6f4a1216a5998f728c9b1` | main | BLOCKED | CHANGES_REQUESTED |
 | #797 | release: attest exact sealed SBOM evidence | `bbf5519bd676e666869d5292b744245255345e8f` | main | BLOCKED | — |
 | #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `8c0e6b3823b3e595a08512616e3bcc10dd8e328d` | main | BLOCKED | CHANGES_REQUESTED |
