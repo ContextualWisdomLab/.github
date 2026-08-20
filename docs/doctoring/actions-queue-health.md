@@ -51,3 +51,14 @@ The allowlist is deliberately explicit in
 `config/actions_queue_health_repositories.json`; adding a repository requires
 review of its governance and data boundary. This first slice does not claim
 that a queued run is obsolete or safe to cancel.
+
+## References
+
+GitHub. (n.d.). *REST API endpoints for workflow runs*. Retrieved August 20,
+2026, from https://docs.github.com/en/rest/actions/workflow-runs
+
+Internet Engineering Task Force. (2022). *HTTP semantics* (RFC 9110).
+https://www.rfc-editor.org/rfc/rfc9110
+
+OWASP Foundation. (n.d.). *Path traversal*. Retrieved August 20, 2026, from
+https://owasp.org/www-community/attacks/Path_Traversal
