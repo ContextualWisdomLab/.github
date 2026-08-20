@@ -5,6 +5,7 @@ from pathlib import Path
 
 CALLER = Path(".github/workflows/mightyetl-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/mightyetl-hourly-review-caller.md")
+CONTRIBUTOR_GUIDE = Path("CLAUDE.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
 
@@ -117,6 +118,32 @@ def test_mightyetl_doctoring_records_cdc_activation_and_credentials() -> None:
         "ContextualWisdomLab/mightyETL#321",
     ):
         assert phrase in doctoring
+
+
+def test_mightyetl_docs_match_schedule_oidc_and_contributor_contracts() -> None:
+    """Durable guidance must describe the actual trigger and credential boundary."""
+    caller = _read(CALLER)
+    doctoring = _read(DOCTORING)
+    normalized_doctoring = " ".join(doctoring.split())
+    contributor_guide = _read(CONTRIBUTOR_GUIDE)
+    normalized_guide = " ".join(contributor_guide.split())
+
+    assert "workflow_dispatch:" not in caller
+    assert "scheduled protected-develop consumer run" in normalized_doctoring
+    assert "scheduled or manual protected-develop consumer run" not in normalized_doctoring
+    assert "request a GitHub OIDC JWT" in normalized_doctoring
+    assert "scheduler governs any subsequent credential exchange" in normalized_doctoring
+    assert "mint the OpenCode GitHub App token from GitHub OIDC" not in normalized_doctoring
+    assert "least privilege to prevent CWE-250" in normalized_doctoring
+    assert "CWE-250 forbids" not in normalized_doctoring
+    assert "*OpenID Connect reference*" in doctoring
+    assert "https://docs.github.com/en/actions/reference/security/oidc" in doctoring
+    assert contributor_guide.count("- **Product hourly callers** stay thin.") == 1
+    assert (
+        "Do not hard-code OriginWeave, mightyETL, naruon, or Keyverse into "
+        "`pr-review-fix-scheduler.yml`."
+        in normalized_guide
+    )
 
 
 def test_path_block_helpers_keep_trigger_and_compileall_sets_disjoint() -> None:

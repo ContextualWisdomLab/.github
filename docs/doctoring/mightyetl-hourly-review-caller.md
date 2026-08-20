@@ -66,13 +66,13 @@ real-time SLA.
 ## Credential and model boundary
 
 The caller keeps workflow `GITHUB_TOKEN` at `contents: read` and grants
-the reusable job `id-token: write` so the central scheduler can mint the
-OpenCode GitHub App token from GitHub OIDC when the mapped PAT is absent
+the reusable job `id-token: write` so the central scheduler can request
+a GitHub OIDC JWT. The scheduler governs any subsequent credential exchange
 (GitHub, n.d.-c). It maps only `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN`. It never uses `secrets: inherit`, receives
-`NVIDIA_NIM_API_KEY`, or introduces `COPILOT_GITHUB_TOKEN`. CWE-250
-forbids executing the caller with write or model privileges it does not
-need (MITRE, 2026).
+`NVIDIA_NIM_API_KEY`, or introduces `COPILOT_GITHUB_TOKEN`. The caller
+applies least privilege to prevent CWE-250 by excluding write and model
+privileges it does not need (MITRE, 2026).
 
 Model execution remains inside the central worker. The model credential
 is the GitHub Secret `NVIDIA_NIM_API_KEY`; the caller does not receive or
@@ -100,8 +100,8 @@ retry floor, explicit secret mapping, read-only contents plus job-scoped
 Copilot credentials. Independent `pull_request`, `push`, and `compileall`
 path blocks must each name the caller, doctoring, or contract they own.
 
-After source integration, closure requires a scheduled or manual
-protected-develop consumer run proving the exact mightyETL repository and
+After source integration, closure requires a scheduled protected-develop
+consumer run proving the exact mightyETL repository and
 `develop` base. Source checks alone are not protected-develop operational acceptance.
 Merge still requires zero unresolved valid findings and a
 qualifying independent non-author approval.
@@ -120,9 +120,9 @@ GitHub, Inc. (n.d.-b). *Reuse workflows*. GitHub Docs. Retrieved August
 17, 2026, from
 https://docs.github.com/en/actions/how-tos/sharing-automations/reuse-workflows
 
-GitHub, Inc. (n.d.-c). *Automatic token authentication*. GitHub Docs.
+GitHub, Inc. (n.d.-c). *OpenID Connect reference*. GitHub Docs.
 Retrieved August 17, 2026, from
-https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
+https://docs.github.com/en/actions/reference/security/oidc
 
 MITRE. (2026). *CWE-250: Execution with unnecessary privileges*.
 https://cwe.mitre.org/data/definitions/250.html
