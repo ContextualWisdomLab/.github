@@ -35,6 +35,13 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Run Strix with an explicit canonical scan target from a temporary working
+  directory outside that target, so scanner state and relative reports cannot
+  become self-scanned source findings; preserve those reports as gate evidence.
+  PR-scoped Python scans also include the PostgreSQL introspection security
+  helpers when that package exists in the target repository. PR scopes now live
+  below the gate's private runtime directory so unrelated temporary-file
+  cleanup cannot remove scan input during PR-head materialization.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).

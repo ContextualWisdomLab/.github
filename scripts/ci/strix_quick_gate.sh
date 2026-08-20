@@ -28,6 +28,8 @@ STRIX_RUNTIME_DIR="$(mktemp -d /tmp/strix-runtime.XXXXXX)"
 STRIX_LOG="$STRIX_RUNTIME_DIR/strix.log"
 ACTIVE_REPORTS_DIR="$STRIX_RUNTIME_DIR/reports"
 ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
+STRIX_SCAN_WORKING_DIR="$STRIX_RUNTIME_DIR/scan-cwd"
+STRIX_SCAN_OUTPUT_DIR="$STRIX_SCAN_WORKING_DIR/strix_runs"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
 STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
@@ -136,6 +138,9 @@ publish_artifact_reports() {
 			cp -R -- "$scope_reports_dir"/. "$ARTIFACT_REPORTS_DIR"/
 		fi
 	done
+	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
+		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ARTIFACT_REPORTS_DIR"/
+	fi
 }
 
 preserve_attempt_log() {
@@ -232,6 +237,16 @@ cleanup_runtime() {
 }
 
 trap cleanup_runtime EXIT INT TERM
+
+make_pull_request_scope_dir() {
+	local scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"
+	if [ -L "$scope_parent" ]; then
+		echo "ERROR: pull request scope parent must not be a symlink." >&2
+		return 2
+	fi
+	mkdir -p -- "$scope_parent"
+	mktemp -d "$scope_parent/strix-pr-scope.XXXXXX"
+}
 
 STRIX_LLM_FILE="${STRIX_LLM_FILE:-}"
 if [ -z "$STRIX_LLM_FILE" ]; then
@@ -1255,6 +1270,22 @@ backend/services/llm_provider_urls.py
 backend/services/text_safety.py
 backend/services/threading_service.py
 EOF
+		# PostgreSQL introspection helpers are a security boundary for repositories
+		# that expose this package. Include their trusted base copies when present;
+		# the conditional keeps the shared gate usable by repositories without it.
+		local context_file
+		for context_file in \
+			backend/app/pg_introspect/__init__.py \
+			backend/app/pg_introspect/column_examples.py \
+			backend/app/pg_introspect/dsn_guard.py \
+			backend/app/pg_introspect/forward_ddl.py \
+			backend/app/pg_introspect/introspect.py \
+			backend/app/pg_introspect/queries.py \
+			backend/app/pg_introspect/snapshot_collect.py; do
+			if [ -f "$REPO_ROOT/$context_file" ] && [ ! -L "$REPO_ROOT/$context_file" ]; then
+				printf '%s\n' "$context_file"
+			fi
+		done
 	fi
 
 	if [ "$needs_frontend_email_api_context" -eq 1 ]; then
@@ -1302,7 +1333,7 @@ changed_file_list_contains() {
 
 build_pull_request_scope_dir() {
 	local scope_dir
-	scope_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-pr-scope.XXXXXX")"
+	scope_dir="$(make_pull_request_scope_dir)" || return 2
 	scope_dir="$({ CDPATH='' && cd -P -- "$scope_dir" && pwd -P; })"
 	PULL_REQUEST_SCOPE_DIRS+=("$scope_dir")
 
@@ -1475,7 +1506,7 @@ PY
 
 build_pull_request_head_tree_scope_dir() {
 	local scope_dir
-	scope_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-pr-scope.XXXXXX")"
+	scope_dir="$(make_pull_request_scope_dir)" || return 2
 	scope_dir="$({ CDPATH='' && cd -P -- "$scope_dir" && pwd -P; })"
 	PULL_REQUEST_SCOPE_DIRS+=("$scope_dir")
 
@@ -2375,7 +2406,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
-	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
+python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
 import os
@@ -2389,6 +2420,7 @@ timeout_seconds = int(sys.argv[1])
 target_path = sys.argv[2]
 scan_mode = sys.argv[3]
 log_path = pathlib.Path(sys.argv[4])
+scan_working_dir = pathlib.Path(sys.argv[5])
 # Failure classifiers read this path even when trusted executable or target
 # validation fails before a child process starts. Materialize it first so the
 # primary log shows one configuration error instead of repeated grep noise.
@@ -2528,12 +2560,29 @@ if any(ch in str(target_cwd) for ch in ("\x00", "\n", "\r")):
     sys.stderr.write("ERROR: Strix target path contains unsupported control characters.\n")
     raise SystemExit(2)
 
-command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]
+if scan_working_dir.is_symlink():
+    sys.stderr.write("ERROR: Strix scan working directory must not be a symlink.\n")
+    raise SystemExit(2)
+scan_working_dir.mkdir(parents=True, exist_ok=True)
+scan_output_dir = scan_working_dir / "strix_runs"
+if scan_output_dir.is_symlink():
+    sys.stderr.write("ERROR: Strix scan output directory must not be a symlink.\n")
+    raise SystemExit(2)
+if scan_output_dir.exists():
+    import shutil
+
+    shutil.rmtree(scan_output_dir)
+scan_output_dir.mkdir()
+
+# Keep scanner-created state and relative report files outside the untrusted
+# scan target. The target remains explicit and absolute, so changing cwd cannot
+# change which source tree is scanned.
+command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
 
 try:
     process = subprocess.Popen(
         command,
-        cwd=str(target_cwd),
+        cwd=str(scan_working_dir),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -2566,6 +2615,9 @@ except subprocess.TimeoutExpired:
 PY
 	rc=$?
 	set -e
+	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
+		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ACTIVE_REPORTS_DIR"/
+	fi
 	local end_epoch
 	end_epoch="$(date +%s)"
 	local elapsed=$((end_epoch - start_epoch))
