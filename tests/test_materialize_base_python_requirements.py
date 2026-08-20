@@ -164,6 +164,41 @@ def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> 
     )
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "-r requirements.lock extra",
+        "x requirements.lock",
+        "-r -requirements.lock",
+        "-r ~requirements.lock",
+        r"-r service\\requirements.lock",
+        "-r https://example.invalid/requirements.lock",
+        "-r requirements.lock?download=1",
+        "-r requirements.lock#fragment",
+        "-r /requirements.lock",
+        "-r requirements/./requirements.lock",
+        "-r requirements/../requirements.lock",
+        "-r requirements//requirements.lock",
+        "-r other.txt",
+    ],
+)
+def test_bounded_requirement_include_rejects_unsafe_or_non_lock_targets(
+    line: str,
+) -> None:
+    """Only normalized relative requirement-lock includes cross the boundary."""
+    assert not materializer._is_bounded_requirement_include(line)
+
+
+@pytest.mark.parametrize(
+    "line", ["-r requirements.lock", "--requirement requirements-dev.txt"]
+)
+def test_bounded_requirement_include_accepts_normalized_relative_lock_targets(
+    line: str,
+) -> None:
+    """Both supported include spellings accept a normalized lock filename."""
+    assert materializer._is_bounded_requirement_include(line)
+
+
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
     """Git options and symbolic refs cannot cross the exact-SHA boundary."""
     with pytest.raises(ValueError, match="40 hexadecimal"):
@@ -682,6 +717,8 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -730,6 +767,8 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -769,6 +808,8 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

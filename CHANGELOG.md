@@ -38,6 +38,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Made the pinned `uv` installer tests emulate their Linux x86_64 release target on macOS development hosts, so local full-coverage verification exercises the same production contract without changing runtime platform enforcement.
 - Bound the native peer-gate focused coverage workflow to its complete focused test set and refreshed the current reviewer workflow blob contract, restoring exact-head 100% coverage and preventing unrelated protected-workflow drift from failing the peer-gate PR.
 - Closed the remaining Python native-extension peer-gate coverage gaps for negative byte limits and rebound metadata paths, documenting the intentionally unreachable bounded-read sentinel and restoring 100% statement/branch evidence.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
