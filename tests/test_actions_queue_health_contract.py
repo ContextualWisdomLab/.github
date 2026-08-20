@@ -1,3 +1,5 @@
+"""Contract tests for the scheduled read-only Actions queue report."""
+
 import json
 from pathlib import Path
 
@@ -6,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
+    """Keep the scheduled collector bounded, read-only, and supply-chain pinned."""
     workflow = (ROOT / ".github/workflows/actions-queue-health.yml").read_text(encoding="utf-8")
 
     assert 'cron: "7 * * * *"' in workflow
@@ -32,6 +35,7 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
 
 
 def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
+    """Keep the first product slice limited to its reviewed repositories."""
     payload = json.loads(
         (ROOT / "config/actions_queue_health_repositories.json").read_text(encoding="utf-8")
     )

@@ -1,3 +1,5 @@
+"""Contract and behavior tests for the read-only Actions queue collector."""
+
 import importlib.util
 from datetime import datetime, timezone
 import io
@@ -129,22 +131,26 @@ def report_snapshot() -> dict:
 
 @pytest.mark.parametrize("value", [None, "", "  ", "not-a-time", "2026-08-19T12:00:00"])
 def test_parse_timestamp_rejects_ambiguous_or_invalid_values(value: object) -> None:
+    """Reject missing, malformed, and timezone-free timestamps."""
     with pytest.raises(queue_health.QueueHealthError):
         queue_health.parse_timestamp(value)  # type: ignore[arg-type]
 
 
 def test_parse_timestamp_normalises_z_and_offsets() -> None:
+    """Normalize UTC and offset timestamps to the same instant."""
     assert queue_health.parse_timestamp("2026-08-19T12:00:00Z") == NOW
     assert queue_health.parse_timestamp("2026-08-19T21:00:00+09:00") == NOW
 
 
 @pytest.mark.parametrize("value", ["owner", "owner/repo/extra", "../..", "./repo", "owner/.", 1])
 def test_repository_name_rejects_non_repository_identifiers(value: object) -> None:
+    """Reject malformed and traversal-like repository identifiers."""
     with pytest.raises(queue_health.QueueHealthError):
         queue_health._repository_name(value)
 
 
 def test_load_allowlist_accepts_array_and_object_and_rejects_bad_inputs(tmp_path: Path) -> None:
+    """Load both supported allowlist shapes and reject unsafe input files."""
     array_path = tmp_path / "array.json"
     array_path.write_text(json.dumps(["z/repo", "a/repo"]), encoding="utf-8")
     assert queue_health.load_allowlist(array_path) == ["a/repo", "z/repo"]
@@ -180,6 +186,7 @@ def test_load_allowlist_accepts_array_and_object_and_rejects_bad_inputs(tmp_path
     ],
 )
 def test_list_payload_accepts_api_list_shapes(payload: object, key: str, expected: list[dict]) -> None:
+    """Accept the bounded list response shapes emitted by GitHub APIs."""
     assert queue_health._list_payload(payload, key) == expected
 
 
@@ -197,11 +204,13 @@ def test_list_payload_accepts_api_list_shapes(payload: object, key: str, expecte
     ],
 )
 def test_list_payload_rejects_untrusted_shapes(payload: object) -> None:
+    """Reject malformed, oversized, and dishonest list responses."""
     with pytest.raises(queue_health.QueueHealthError):
         queue_health._list_payload(payload, "items")
 
 
 def test_list_payload_flattens_bounded_paginated_responses() -> None:
+    """Flatten bounded pages while validating every page and total count."""
     assert queue_health._list_payload(
         {"_queue_health_pages": [[{"id": 1}], [{"id": 2}]]}, "items"
     ) == [{"id": 1}, {"id": 2}]
@@ -225,7 +234,9 @@ def test_list_payload_flattens_bounded_paginated_responses() -> None:
 
 
 def test_github_json_is_read_only_and_rejects_failures() -> None:
+    """Use safe read-only CLI arguments and fail closed on transport errors."""
     def success_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return one successful non-paginated API response."""
         assert args[0] == ["gh", "api", "repos/a/repo"]
         assert kwargs == {
             "capture_output": True,
@@ -238,6 +249,7 @@ def test_github_json_is_read_only_and_rejects_failures() -> None:
     assert queue_health.github_json("repos/a/repo", runner=success_runner) == [{"id": 1}]
 
     def paginated_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return one successful paginated API response."""
         assert args[0] == ["gh", "api", "--paginate", "--slurp", "repos/a/repo"]
         return CompletedProcess([], 0, "[[{\"id\": 1}]]", "")
 
@@ -255,24 +267,28 @@ def test_github_json_is_read_only_and_rejects_failures() -> None:
         queue_health.github_json("orgs/a/repos", runner=success_runner)
 
     def failed_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return a failed API response with stderr evidence."""
         return CompletedProcess([], 1, "fallback", "api failed")
 
     with pytest.raises(queue_health.QueueHealthError, match="api failed"):
         queue_health.github_json("repos/a/repo", runner=failed_runner)
 
     def stdout_failure_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return a failed API response with stdout-only evidence."""
         return CompletedProcess([], 1, "stdout failure", "")
 
     with pytest.raises(queue_health.QueueHealthError, match="stdout failure"):
         queue_health.github_json("repos/a/repo", runner=stdout_failure_runner)
 
     def empty_failure_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return a failed API response without diagnostic text."""
         return CompletedProcess([], 1, "", "")
 
     with pytest.raises(queue_health.QueueHealthError, match="GitHub API read failed"):
         queue_health.github_json("repos/a/repo", runner=empty_failure_runner)
 
     def invalid_json_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Return a successful process containing invalid JSON."""
         return CompletedProcess([], 0, "not json", "")
 
     with pytest.raises(queue_health.QueueHealthError, match="invalid JSON"):
@@ -282,6 +298,7 @@ def test_github_json_is_read_only_and_rejects_failures() -> None:
 def test_github_json_fails_closed_when_external_read_times_out() -> None:
     """A stalled GitHub CLI read must not occupy the workflow indefinitely."""
     def timeout_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        """Raise the subprocess timeout seen by the production boundary."""
         raise TimeoutExpired(args[0], timeout=30)
 
     with pytest.raises(queue_health.QueueHealthError, match="timed out after 30 seconds"):
@@ -289,6 +306,7 @@ def test_github_json_fails_closed_when_external_read_times_out() -> None:
 
 
 def test_normalise_pull_request_preserves_exact_head_identity() -> None:
+    """Retain exact pull-request identity and reject incomplete records."""
     normalized = queue_health._normalise_pull_request(pull_request())
     assert normalized["number"] == 1
     assert normalized["head_sha"] == "head"
@@ -303,6 +321,7 @@ def test_normalise_pull_request_preserves_exact_head_identity() -> None:
 
 
 def test_normalise_job_preserves_runner_assignment_and_fails_closed() -> None:
+    """Retain runner evidence while rejecting malformed job identities."""
     normalized = queue_health._normalise_job(job(1, runner_id=3, runner_name="runner"))
     assert normalized["runner_id"] == 3
     assert normalized["steps_count"] == 0
@@ -316,6 +335,7 @@ def test_normalise_job_preserves_runner_assignment_and_fails_closed() -> None:
 
 
 def test_normalise_run_validates_links_jobs_and_fallback_names() -> None:
+    """Normalize workflow links and jobs with bounded fallback values."""
     normalized = queue_health._normalise_run(
         "owner/repo",
         {
@@ -349,6 +369,7 @@ def test_normalise_run_validates_links_jobs_and_fallback_names() -> None:
 def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Deduplicate status views and isolate malformed repository evidence."""
     queued_current = workflow_run(10, pull_requests=[{"number": 1, "head": {"sha": "head"}}])
     current = workflow_run(
         12,
@@ -366,6 +387,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     }
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return the deterministic API response for each requested endpoint."""
         payload = responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
@@ -385,6 +407,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     bad_responses["repos/owner/repo"] = []
 
     def bad_metadata_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return malformed repository metadata for the isolation case."""
         payload = bad_responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
@@ -398,6 +421,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=50"] = [{"id": 0}]
 
     def invalid_run_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return an invalid workflow-run identity for the isolation case."""
         payload = invalid_run_responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
@@ -414,6 +438,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     monkeypatch.setattr(queue_health.time, "sleep", sleep_calls.append)
 
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return one incomplete pull response followed by a valid response."""
         nonlocal retry_calls
         payload = responses[args[-1]]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
@@ -428,6 +453,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
 
     def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return an incomplete pull response on every retry."""
         payload = [bad_pull] if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100" else responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
@@ -442,6 +468,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     bad_number = pull_request(number=0)
 
     def invalid_pull_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return a pull request with an invalid number."""
         payload = (
             [bad_number]
             if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
@@ -459,7 +486,9 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
 
 def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evidence() -> None:
+    """Continue healthy collection while recording one repository's failure."""
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return a rate-limit failure for one repository and valid data for another."""
         path = args[-1]
         if path == "repos/bad/repo":
             return CompletedProcess(args, 1, "", "rate limit")
@@ -499,6 +528,7 @@ def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evid
     ],
 )
 def test_build_report_rejects_malformed_collection_errors(collection_errors: object) -> None:
+    """Reject malformed collection errors without inventing missing evidence."""
     snapshot = report_snapshot()
     snapshot["collection_errors"] = collection_errors
     with pytest.raises(queue_health.QueueHealthError):
@@ -513,6 +543,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
     requested_paths: list[str] = []
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return empty bounded run pages and record the requested endpoints."""
         path = args[-1]
         requested_paths.append(path)
         if path == "repos/owner/repo":
@@ -539,6 +570,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
 
 
 def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:
+    """Load offline snapshots and classify current, obsolete, and unlinked runs."""
     path = tmp_path / "snapshot.json"
     path.write_text(json.dumps(report_snapshot()), encoding="utf-8")
     assert queue_health.load_snapshot(path)["generated_at"] == "2026-08-19T11:00:00Z"
@@ -558,6 +590,7 @@ def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:
 
 
 def test_job_state_and_queue_age_cover_pending_terminal_and_unknown_paths() -> None:
+    """Classify job assignment states and calculate bounded queue age."""
     assert queue_health._job_state({"status": "queued", "runner_id": 1}) == ("queued_assigned", True, True)
     assert queue_health._job_state({"status": "in_progress", "runner_name": "runner"}) == (
         "queued_assigned",
@@ -575,6 +608,7 @@ def test_job_state_and_queue_age_cover_pending_terminal_and_unknown_paths() -> N
 
 
 def test_build_report_classifies_exact_head_and_external_blockers() -> None:
+    """Report exact-head, stale, unlinked, terminal, and SLO evidence separately."""
     report = queue_health.build_report(report_snapshot(), now=NOW, queue_age_slo_seconds=900)
     assert report["schema_version"] == "actions.queue_health.v1"
     assert report["summary"]["observed_job_count"] == 7
@@ -613,11 +647,13 @@ def test_build_report_classifies_exact_head_and_external_blockers() -> None:
     ],
 )
 def test_build_report_rejects_malformed_snapshot_shapes(snapshot: dict, message: str) -> None:
+    """Reject malformed snapshot containers before counting jobs."""
     with pytest.raises(queue_health.QueueHealthError, match=message):
         queue_health.build_report(snapshot, now=NOW)
 
 
 def test_build_report_rejects_duplicate_and_invalid_entries() -> None:
+    """Reject duplicate identities and invalid report boundaries."""
     duplicate_repository = report_snapshot()
     duplicate_repository["repositories"].append(
         dict(duplicate_repository["repositories"][0])
@@ -658,6 +694,7 @@ def test_build_report_rejects_duplicate_and_invalid_entries() -> None:
 
 
 def test_render_and_write_reports_escape_fields_and_support_empty_reports(tmp_path: Path) -> None:
+    """Escape HTML fields and write both populated and empty reports."""
     report = queue_health.build_report(report_snapshot(), now=NOW)
     report["runs"][0]["blocker"] = "<script>alert(1)</script>"
     rendered = queue_health.render_html(report)
@@ -676,6 +713,7 @@ def test_render_and_write_reports_escape_fields_and_support_empty_reports(tmp_pa
 
 
 def test_cli_arguments_and_main_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Exercise snapshot mode, allowlist mode, and bounded CLI failures."""
     args = queue_health.parse_args(
         ["--snapshot", "snapshot.json", "--output-json", "out.json", "--output-html", "out.html"]
     )
