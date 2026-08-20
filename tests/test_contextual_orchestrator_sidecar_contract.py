@@ -22,6 +22,10 @@ def test_sidecar_source_is_immutable_and_readiness_is_bounded() -> None:
 def test_noema_auto_sidecar_is_public_repository_only() -> None:
     """Private repositories require explicit Noema provider configuration."""
     text = NOEMA_WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "if: env.PR_NUMBER != '' && steps.target_visibility.outputs.is_private == 'false'"
+        in text
+    )
     sidecar_condition = re.search(
         r'if \[ "\$TARGET_REPOSITORY_PRIVATE" = "false" \].{0,240}CONTEXTUAL_ORCHESTRATOR_BASE_URL',
         text,

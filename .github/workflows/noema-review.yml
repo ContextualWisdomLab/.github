@@ -135,16 +135,6 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
-      - name: Start contextual-orchestrator sidecar
-        if: env.PR_NUMBER != ''
-        env:
-          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: bash scripts/ci/start_contextual_orchestrator_sidecar.sh
-
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
         id: noema_credential
@@ -276,6 +266,16 @@ jobs:
               ;;
           esac
           echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
+
+      - name: Start contextual-orchestrator sidecar
+        if: env.PR_NUMBER != '' && steps.target_visibility.outputs.is_private == 'false'
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: bash scripts/ci/start_contextual_orchestrator_sidecar.sh
 
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
