@@ -114,12 +114,12 @@ flowchart LR
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `9a4d1e1439bbafa8781971fbf22ab695ae126271` | main | BLOCKED | — |
 | #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `77165e64aea6e448632100c366680f98a9e46152` | main | BLOCKED | — |
-| #1150 | feat: add read-only Actions queue health evidence | `7bbd13393b7d7bfc7f76b544d4e33fc572ccb471` | main | BLOCKED | — |
-| #1147 | feat(integration): add ecosystem capability catalogue | `9ac03e0c1f9f2e12f0d29d354f5e9541a1feffbb` | main | BLOCKED | — |
+| #1150 | feat: add read-only Actions queue health evidence | `4467d5a6e45d301ce83fcce8461ab17e2ff49122` | main | BLOCKED | — |
+| #1147 | feat(integration): add ecosystem capability catalogue | `db5e704203a7b005ebaa35688c268209670fd969` | main | BLOCKED | — |
 | #1146 | fix(figma): retain style references and component sets | `54cb0220ca95603831dc8defeedd766d47cf4a62` | main | BLOCKED | — |
-| #1145 | feat: enforce adaptive orchestration defaults | `f96c80b70d024bdaad13efd3a728caa4c1ce12bf` | main | BLOCKED | — |
-| #1143 | ci: schedule naruon hourly review repair | `3a7a7039741069d16204d40633d3a1cd754e376b` | main | BLOCKED | — |
-| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `6915bb9395bbe653f41db944c40186e7c3f8c153` | main | BLOCKED | — |
+| #1145 | feat: enforce adaptive orchestration defaults | `f8dd01dafd2c91f842a74677f2124528f3bce881` | main | BLOCKED | — |
+| #1143 | ci: schedule naruon hourly review repair | `361f9eb34f3297a68d7ea1f327f98538aded9199` | main | BLOCKED | — |
+| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `2bc3f627999569cd057f33e1ef510a0c621b429f` | main | BLOCKED | — |
 | #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `cd9f0256c0e5d3c30f380e1473aa6966f0406f42` | main | BLOCKED | — |
 | #1114 | fix(strix): retry transient visibility API failures | `21beb66a98e30168146ee48c6593f58dd954d180` | main | BLOCKED | — |
 | #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `3068296010c9b8debd107652039cea175ea4db5a` | main | BLOCKED | — |
@@ -129,12 +129,12 @@ flowchart LR
 | #1105 | chore(deps): bump openai from 2.54.0 to 3.1.0 | `4f6e3f63e72111c29329b9bc0a767127a1315e9d` | main | BEHIND | — |
 | #1104 | chore(deps): bump charset-normalizer from 3.4.7 to 3.5.1 | `97ffca37a169e41c15da8976fcb3484a3ee526ff` | main | BEHIND | — |
 | #1103 | chore(deps): bump google-cloud-resource-manager from 1.17.0 to 1.18.0 | `d76211d0038afe90b8374dfa1fa6e1dae680ced5` | main | BEHIND | — |
-| #1101 | feat(automation): run EmbedRelay hourly NVIDIA NIM review repair | `430a3b63c7e081bd89ffea38755b26d982c5e755` | main | BEHIND | CHANGES_REQUESTED |
-| #1100 | feat(automation): run RankWeave hourly NVIDIA NIM review repair | `6181c705e244aa39db6d14a117c037e3090e7696` | main | BEHIND | CHANGES_REQUESTED |
+| #1101 | feat(automation): run EmbedRelay hourly NVIDIA NIM review repair | `2429d1f4e8471874749dafcf43ac21d09d04226b` | main | BLOCKED | — |
+| #1100 | feat(automation): run RankWeave hourly NVIDIA NIM review repair | `4b62883a455589aa90e2604b171bdc08451aafa0` | main | BLOCKED | — |
 | #1097 | feat(automation): run html4tree hourly NVIDIA NIM review repair | `22c3e8874238ac2196657823860e7673d0f8676e` | main | BEHIND | — |
-| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `0a1aa80e994b73ed50a2c0242aac1b3abf37a3af` | main | BEHIND | CHANGES_REQUESTED |
+| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `ee4357f845a9d29a20f6265dc795a94c63aacf2f` | main | BLOCKED | — |
 | #1094 | feat(automation): run DiagramWeave hourly NVIDIA NIM review repair | `c2e164621755cd275c9b4aef78ff511fc6eb7ca2` | main | BEHIND | — |
-| #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `6bb0d991098cb70a8f3e0df09a5a9424b867117f` | main | BEHIND | CHANGES_REQUESTED |
+| #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `cebc2c1a75b32c0daa786756da6f6212bf4b2aa4` | main | BLOCKED | — |
 | #1089 | fix(opencode): system llvm for cargo-llvm-cov (v3 concurrency) | `cd7d72c64443572c77343f1456a52b54f956240e` | main | BEHIND | — |
 | #1088 | feat(automation): run mightyETL hourly NVIDIA NIM review repair | `38e9d80c908f060f738a7e890ae509a66cf7b2a5` | main | BEHIND | — |
 | #1087 | feat(automation): run life-os hourly NVIDIA NIM review repair | `cdb5d773c93628a6f22450fc9dafbc0d7495e40c` | main | BEHIND | — |
