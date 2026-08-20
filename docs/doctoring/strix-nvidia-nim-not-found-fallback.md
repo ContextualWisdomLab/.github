@@ -35,6 +35,11 @@ when the run log contains no vulnerability signal. Any reported severity or
 non-zero vulnerability count remains blocking. Scanner reports and attempt logs
 remain available as artifacts.
 
+The same bounded infrastructure classification covers the known Caido guest-login
+sandbox startup failure (`loginAsGuest` followed by `curl exit 7` to the local
+`127.0.0.1:48080` service). It does not cover arbitrary loopback or curl failures,
+and a vulnerability signal still fails the check.
+
 ## Verification contract
 
 Regression evidence proves that:
