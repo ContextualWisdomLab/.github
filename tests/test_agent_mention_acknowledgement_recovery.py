@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 
