@@ -120,6 +120,8 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/qwen3.6-plus-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
+    assert candidates_text.startswith("contextual-orchestrator/contextual-orchestrator ")
+    candidates_text = candidates_text.removeprefix("contextual-orchestrator/contextual-orchestrator ")
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
         "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",

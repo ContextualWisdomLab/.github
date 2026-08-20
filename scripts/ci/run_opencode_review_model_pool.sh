@@ -368,6 +368,13 @@ is_nvidia_nim_candidate() {
 	esac
 }
 
+is_contextual_orchestrator_candidate() {
+	case "$1" in
+	contextual-orchestrator/contextual-orchestrator) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 is_schema_repair_candidate() {
 	case "$1" in
 	nvidia-nim/* | opencode-free/*) return 0 ;;
@@ -414,6 +421,14 @@ should_skip_model_candidate() {
 	fi
 	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
 		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
+		return 0
+	fi
+	if is_contextual_orchestrator_candidate "$model_candidate" && {
+		[ "${CONTEXTUAL_ORCHESTRATOR_ENABLED:-false}" != "true" ] ||
+		[ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||
+		[ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]
+	}; then
+		printf 'Skipping OpenCode %s because the contextual-orchestrator gateway is unavailable; falling back to the existing provider-qualified candidates.\n' "$model_candidate"
 		return 0
 	fi
 	return 1
