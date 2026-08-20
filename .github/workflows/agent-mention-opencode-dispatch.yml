@@ -11,7 +11,6 @@ on:
 concurrency:
   group: agent-mention-opencode-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
   cancel-in-progress: false
-  queue: max
 
 permissions:
   contents: read
@@ -36,11 +35,15 @@ jobs:
       BASE_BRANCH: ${{ github.event.client_payload.base_branch || '' }}
       REQUESTED_BY: ${{ github.event.client_payload.requested_by || '' }}
       SOURCE_COMMENT_ID: ${{ github.event.client_payload.source_comment_id || '' }}
-      TRIGGER_REVIEWS: "true"
-      REVIEW_DISPATCH_LIMIT: "1"
-      ENABLE_AUTO_MERGE: "false"
-      UPDATE_BRANCHES: "false"
-      MERGE_MODE: "disabled"
+      # The router intentionally omits these immutable review-only controls so
+      # the repository_dispatch payload stays under GitHub's 10-property cap.
+      # The trusted wrapper reconstructs the canonical values before validating
+      # the invocation key, so transport minimization cannot weaken claim binding.
+      TRIGGER_REVIEWS: ${{ github.event.client_payload.trigger_reviews || 'true' }}
+      REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || '1' }}
+      ENABLE_AUTO_MERGE: ${{ github.event.client_payload.enable_auto_merge || 'false' }}
+      UPDATE_BRANCHES: ${{ github.event.client_payload.update_branches || 'false' }}
+      MERGE_MODE: ${{ github.event.client_payload.merge_mode || 'disabled' }}
     steps:
       - name: Validate exact invocation payload
         run: |
@@ -195,8 +198,6 @@ jobs:
             --arg pr_head_sha "$PR_HEAD_SHA" \
             --arg pr_base_sha "$PR_BASE_SHA" \
             --arg base_branch "$BASE_BRANCH" \
-            --arg agent_invocation_key "$INVOCATION_KEY" \
-            --argjson source_comment_id "$SOURCE_COMMENT_ID" \
             '{
               event_type: "merge-scheduler",
               client_payload: {
@@ -205,11 +206,11 @@ jobs:
                 pr_head_sha: $pr_head_sha,
                 pr_base_sha: $pr_base_sha,
                 base_branch: $base_branch,
+                trigger_reviews: true,
+                review_dispatch_limit: "1",
                 enable_auto_merge: false,
                 update_branches: false,
-                merge_mode: "disabled",
-                agent_invocation_key: $agent_invocation_key,
-                source_comment_id: $source_comment_id
+                merge_mode: "disabled"
               }
             }' \
             | gh api "repos/${GITHUB_REPOSITORY}/dispatches" -X POST --input -

@@ -226,6 +226,27 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE\"" "strix workflow executes trusted temp gate script"
 	assert_file_contains "$workflow_file" "Collect Strix reports for artifact upload" "strix workflow preserves reports from trusted workspace"
 	assert_file_contains "$workflow_file" "scan-summary.txt" "strix workflow creates a fallback artifact when Strix emits no report files"
+	assert_file_contains "$workflow_file" "Validate Strix report provenance" "strix workflow validates structured report provenance before publishing evidence"
+	assert_file_contains "$workflow_file" "scan_results.scan_completed == true" "strix workflow requires a completed Strix scan result"
+	assert_file_contains "$workflow_file" 'pipeline_status=("${PIPESTATUS[@]}")' "strix workflow captures both gate and tee exit statuses"
+	assert_file_contains "$workflow_file" 'tee_rc="${pipeline_status[1]}"' "strix workflow fails closed when evidence log capture fails"
+	assert_file_contains "$workflow_file" "candidate_expiration_state" "strix workflow evaluates candidate expiration metadata"
+	assert_file_contains "$workflow_file" "eligible_run_files" "strix workflow collects every eligible evidence candidate"
+	assert_file_contains "$workflow_file" 'exactly one eligible completed successful run.json' "strix workflow binds only one unambiguous evidence candidate"
+	assert_file_contains "$workflow_file" "strix_scan_head_sha" "strix workflow records the head SHA at scan start"
+	assert_file_contains "$workflow_file" "scan-head-sha.txt" "strix workflow preserves the scan-stage head SHA artifact"
+	assert_file_contains "$workflow_file" "Strix scan-start head SHA does not match the evidence head." "strix workflow binds the scan-start SHA to the evidence head"
+	assert_file_contains "$workflow_file" "candidate_head_sha" "strix workflow binds each candidate report to a head SHA"
+	assert_file_contains "$workflow_file" "candidate_metadata_count" "strix workflow inspects every candidate head metadata field"
+	assert_file_contains "$workflow_file" "candidate_metadata_matches" "strix workflow rejects conflicting candidate head metadata"
+	assert_file_contains "$workflow_file" "scan_stage_head_sha" "strix workflow still records the scan-stage head SHA for mismatch checks"
+	assert_file_not_contains "$workflow_file" 'candidate_head_sha="$scan_stage_head_sha"' "strix provenance does not treat a run.json with no head metadata as current-head evidence"
+	assert_file_contains "$workflow_file" "__invalid_metadata_type__" "strix workflow rejects non-string candidate head metadata"
+	assert_file_contains "$workflow_file" "((.scan_results // {}).commit_sha)" "strix workflow checks alternate structured commit metadata"
+	assert_file_contains "$workflow_file" "evidence-binding.json" "strix workflow binds the report artifact to the scanned head SHA"
+	assert_file_contains "$workflow_file" "fail-closed/provider-infrastructure marker" "strix workflow rejects provider-failure evidence even when a report exists"
+	assert_file_contains "$GATE_SCRIPT" 'strict_primary_provider_fallback" -eq 0 ] && has_only_below_threshold_vulnerabilities' "strix gate cannot bypass strict primary provider fallback with below-threshold findings"
+	assert_file_contains "$GATE_SCRIPT" 'strict_fallback_provider_signal" -eq 0 ] && has_only_below_threshold_vulnerabilities' "strix gate cannot bypass strict fallback provider signal with below-threshold findings"
 	local checkout_count
 	checkout_count="$(grep -Fc "uses: actions/checkout@" "$workflow_file")"
 	assert_equals "1" "$checkout_count" "strix workflow uses actions/checkout exactly once for the central trusted source"
@@ -708,8 +729,10 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$workflow_file" "Never return raw tool-call markup" "opencode review prompt forbids raw tool-call transcripts as final review output"
 	assert_file_contains "$workflow_file" "Do not spend the session listing every changed path before reviewing" "opencode review prompt prevents fallback sessions from exhausting steps on file listing"
 	assert_file_contains "$workflow_file" "Always return a final control block instead of a progress summary" "opencode review prompt requires a gate conclusion instead of a progress summary"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'timeout --kill-after=30s "${run_timeout_seconds}s"' "opencode review model pool has a kill-after bounded timeout"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN' "opencode review model pool scrubs GitHub credentials before model execution"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "run_opencode_in_process_group" "opencode review model pool starts each attempt in a dedicated process group"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'os.setsid()' "opencode review model pool isolates the attempt session from the parent shell"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '"--kill-after=30s"' "opencode review model pool has a kill-after bounded timeout"
+	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '"GH_TOKEN"' "opencode review model pool scrubs GitHub credentials before model execution"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "assert_reasoning_effort_for_candidate" "opencode review validates high reasoning effort before running capable model candidates"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "assert_opencode_reasoning_effort.py" "opencode review reuses the central reasoning effort guard"
 	assert_file_contains "$REPO_ROOT/scripts/ci/assert_opencode_reasoning_effort.py" "options.reasoningEffort=high" "opencode review requires high reasoning effort in opencode.jsonc for capable models"
@@ -725,7 +748,63 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "not a generic model-exhaustion message" "opencode review tells models to return concrete missing-evidence findings instead of progress-only output"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "tokens_limit_reached" "opencode review detects provider context-window overflow"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'if [ "$strix_rc" -ne 0 ]; then' "strix wrapper fails when the trusted gate does not produce clean evidence"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'exit "$strix_rc"' "strix wrapper propagates nonzero trusted-gate results"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'CWL_STRIX_GATE_MARKER_${GITHUB_RUN_ID}:' "strix wrapper scopes fail-closed marker detection to gate-generated run markers"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "emit_strix_gate_marker" "strix gate prefixes fail-closed evidence markers before log publication"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "Redact Strix evidence before artifact publication" "strix workflow redacts all retained evidence before upload"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "redact_sensitive_log.py" "strix artifact redaction uses the tested trusted scrubber"
+	redactor_test_mode="live"
+	redactor_fixture="sk_${redactor_test_mode}_abc123def456ghi789jkl012"
+	redactor_json_output="$(printf '%s\n' "{\"result\":\"$redactor_fixture\"}" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if grep -Fq -- "$redactor_fixture" <<<"$redactor_json_output" ||
+		! grep -Fq -- '"result":"[REDACTED]"' <<<"$redactor_json_output"; then
+		record_failure "trusted scrubber must redact known tokens in JSON values under non-sensitive keys"
+	fi
+	redactor_sensitive_json_output="$(printf '%s\n' "{\"secret\":\"$redactor_fixture\"}" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if ! python3 -c 'import json, sys; value = json.load(sys.stdin); assert value["secret"] == "[REDACTED]"' <<<"$redactor_sensitive_json_output"; then
+		record_failure "trusted scrubber must preserve valid JSON while redacting sensitive keys"
+	fi
+	redactor_assignment_output="$(printf 'data=%s\n' "$redactor_fixture" | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if grep -Fq -- "$redactor_fixture" <<<"$redactor_assignment_output" ||
+		! grep -Fq -- 'data=[REDACTED]' <<<"$redactor_assignment_output"; then
+		record_failure "trusted scrubber must redact known tokens in assignments under non-sensitive keys"
+	fi
+	if grep -Eq -- '\(\?([=!]|<[=!])' "$REPO_ROOT/scripts/ci/redact_sensitive_log.py"; then
+		record_failure "trusted scrubber operational identifier patterns must avoid lookaround backtracking"
+	fi
+	redactor_boundary_output="$(printf '%s\n' 'mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret' | python3 "$REPO_ROOT/scripts/ci/redact_sensitive_log.py")"
+	if ! grep -Fq -- 'mail=[REDACTED_EMAIL]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'ip=[REDACTED_IP]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'phone=[REDACTED_PHONE]' <<<"$redactor_boundary_output" ||
+		! grep -Fq -- 'path=[REDACTED_PATH]' <<<"$redactor_boundary_output"; then
+		record_failure "trusted scrubber must preserve operational identifier redaction after boundary hardening"
+	fi
+	if ! python3 - "$REPO_ROOT/scripts/ci/redact_sensitive_log.py" <<'PY'
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+module_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("trusted_redactor", module_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+for sample in (
+    "Email: test" + "." * 3000 + "@example.com",
+    "IP: " + "1." * 3000 + "1",
+):
+    started = time.perf_counter()
+    module._redact_line(sample)
+    if time.perf_counter() - started >= 1.0:
+        raise SystemExit("redactor exceeded the one-second adversarial-input budget")
+PY
+	then
+		record_failure "trusted scrubber must not repeatedly rescan long non-assignment runs"
+	fi
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "neutral[[:space:]]+skip" "strix wrapper rejects provider neutral-skip output even when the gate exits zero"
+	assert_file_not_contains "$REPO_ROOT/.github/workflows/strix.yml" "Treating as a neutral skip" "strix wrapper must not convert provider outages into successful security evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
@@ -1105,11 +1184,9 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	fi
 	assert_file_not_contains "$workflow_file" '(.name // "") == "scan-pr-queue" and ((.workflow // "") == "PR Review Merge Scheduler" or (.workflow // "") == "Required PR Review Merge Scheduler")' "opencode scheduler cancellation classification does not depend on optional workflow metadata"
 	assert_file_contains "$workflow_file" 'grep -Fq -- "Strix Security Scan/strix:" "$rollup_file"' "opencode approval avoids duplicate supplemental Strix workflow-run blockers when statusCheckRollup already has the Strix check"
-	assert_file_contains "$workflow_file" 'current_head_manual_strix_success_status()' "opencode approval can identify same-head manual Strix success status evidence"
-	assert_file_contains "$workflow_file" 'manual_run_line="$(latest_current_head_manual_strix_run || true)"' "opencode approval falls back to same-head manual Strix check-run success when commit status publication is unavailable"
-	assert_file_contains "$workflow_file" 'filter_superseded_strix_failures()' "opencode approval filters only explicitly superseded stale Strix failures"
-	assert_file_contains "$workflow_file" '"- Strix Security Scan/"*|"- strix:"*' "opencode approval filters stale Strix workflow helper checks after newer manual evidence"
-	assert_file_contains "$workflow_file" 'Default-branch repository_dispatch Strix evidence passed' "opencode approval requires an explicit manual Strix evidence status description"
+	# Manual Strix evidence is owned by the Strix workflow and failed-check collector,
+	# not by the immutable independent reviewer. Focused assertions below bind those
+	# two boundaries to artifact, head, status-description, and supersession rules.
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
@@ -1299,13 +1376,20 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Create one OpenCode finding per Strix model vulnerability report" "failed-check evidence contract requires one finding per Strix model report"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "model name, title, severity, endpoint, and Code Locations/path:line evidence" "failed-check evidence collector names required Strix report fields"
 	assert_file_contains "$workflow_file" "If bounded failed GitHub Check evidence contains active failed checks, treat it as a blocker until diagnosed." "opencode review prompt forces active failed-check diagnosis"
-	assert_file_contains "$workflow_file" "A successful same-head default-branch repository_dispatch Strix run may supersede a stale failed PR statusCheckRollup Strix context only when failed-check evidence explicitly lists it under Superseded failed checks with the exact target URL" "opencode review prompt allows only explicit same-head manual Strix evidence to supersede stale rollup failures"
-	assert_file_contains "$workflow_file" "current_head_successful_strix_check_run" "opencode approval gate treats same-head successful Strix check runs as stale Strix failure superseders"
+	# Do not couple Strix post-merge evidence semantics to the read-only reviewer.
+	# The collector assertions immediately below require explicit structured binding,
+	# exact-head artifact download, and an enumerated superseded-failure section.
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "Superseded failed checks" "failed-check evidence lists stale failed contexts superseded by current-head manual Strix evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "manual_success_contexts" "failed-check evidence compares explicit manual success statuses before active failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "manual_success_check_runs" "failed-check evidence compares successful same-head Strix check runs before active failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "--workflow strix.yml" "failed-check evidence looks up same-head manual Strix success runs when status publication is unavailable"
-	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"Default-branch repository_dispatch Strix evidence passed"' "failed-check evidence records manual Strix success without requiring a commit status"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '"Default-branch repository_dispatch Strix structured evidence binding passed"' "failed-check evidence records structured manual Strix success without requiring a commit status"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "manual_strix_run_has_structured_binding" "failed-check evidence verifies a structured Strix artifact before superseding failures"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'gh run download "$run_id"' "failed-check evidence downloads the exact Strix artifact before accepting run-only success"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '.head_sha == $head_sha' "failed-check evidence binds downloaded Strix artifacts to the current head"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" '((.run_id // "") | tostring) == $run_id' "failed-check evidence binds the downloaded artifact to its workflow run"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'evidence-binding.json' "failed-check evidence requires the structured Strix evidence binding"
+	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" 'actual_report_sha256' "failed-check evidence verifies the structured report digest"
 	assert_file_contains "$REPO_ROOT/scripts/ci/collect_failed_check_evidence.sh" "No active failed GitHub Checks remained after superseded checks were classified" "failed-check evidence reports no active failures after stale contexts are superseded"
 	assert_file_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "Strix vulnerability report window([[:space:]]|$)" "failed-check fallback detects numbered Strix vulnerability report windows with a POSIX ERE boundary"
 	assert_file_not_contains "$REPO_ROOT/scripts/ci/emit_opencode_failed_check_fallback_findings.sh" "Strix vulnerability report window\\\\b" "failed-check fallback must not rely on non-portable grep -E word boundaries"
@@ -3297,6 +3381,18 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
+	emit_strix_model_tool_contract_error() {
+	local tool_name="$1"
+	cat <<CONTRACT_EOF
+Traceback (most recent call last):
+  File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/strix/core/execution.py", line 355, in _run_cycle
+    async for event in stream.stream_events():
+  File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/agents/run_internal/turn_resolution.py", line 1828, in process_model_response
+    raise ModelBehaviorError(error)
+agents.exceptions.ModelBehaviorError: Tool ${tool_name} not found in agent strix
+CONTRACT_EOF
+}
+
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
@@ -3385,6 +3481,35 @@ REPORT
 			exit 9
 			;;
 		esac
+		;;
+	strix-tool-contract-fallback-success|strix-tool-contract-execute-fallback-success|strix-tool-contract-exec-cmd-fallback-success|strix-tool-contract-agent-finish-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/contract-execute-primary)
+			emit_strix_model_tool_contract_error "execute"
+			exit 1
+			;;
+		vertex_ai/contract-exec-cmd-primary)
+			emit_strix_model_tool_contract_error "exec_cmd"
+			exit 1
+			;;
+		vertex_ai/contract-agent-finish-primary)
+			emit_strix_model_tool_contract_error "agent_finish"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after Strix tool-contract fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: Strix tool-contract fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 26
+			;;
+		esac
+		;;
+	strix-tool-contract-source-spoof)
+		echo "target source text: agents.exceptions.ModelBehaviorError: Tool exec_cmd not found in agent strix"
+		echo "target source text: strix/core/execution.py"
+		exit 1
 		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
@@ -5898,6 +6023,46 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/openai/o3"
+		;;
+	strix-tool-contract-execute-fallback-success)
+		run_gate_case "strix-tool-contract-execute-fallback-success" \
+			"vertex_ai/contract-execute-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-execute-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-exec-cmd-fallback-success)
+		run_gate_case "strix-tool-contract-exec-cmd-fallback-success" \
+			"vertex_ai/contract-exec-cmd-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-exec-cmd-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-agent-finish-fallback-success)
+		run_gate_case "strix-tool-contract-agent-finish-fallback-success" \
+			"vertex_ai/contract-agent-finish-primary" \
+			"vertex_ai/fallback-one" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/contract-agent-finish-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
+		;;
+	strix-tool-contract-source-spoof)
+		run_gate_case "strix-tool-contract-source-spoof" \
+			"vertex_ai/contract-spoof-primary" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"vertex_ai/contract-spoof-primary" \
+			"<unset>"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -9212,6 +9377,47 @@ run_gate_case "nonrecoverable" \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid"
+
+# Provider/model responses have used several tool names across Strix agent
+# versions. Each observed name must be retryable only with a real Python
+# traceback, so a healthy fallback can complete the scan.
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-execute-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-execute-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-exec-cmd-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-exec-cmd-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "strix-tool-contract-fallback-success" \
+	"vertex_ai/contract-agent-finish-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/contract-agent-finish-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+# Target output that merely quotes the exception and source path must remain
+# non-retryable and fail closed.
+run_gate_case "strix-tool-contract-source-spoof" \
+	"vertex_ai/contract-spoof-primary" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/contract-spoof-primary" \
+	"<unset>"
 
 run_gate_case "provider-prefix-required" \
 	"gemini-2.5-pro" \

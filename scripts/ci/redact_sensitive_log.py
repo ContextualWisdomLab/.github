@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Redact credentials from CI log text before it becomes review evidence."""
 
 from __future__ import annotations
@@ -16,8 +15,8 @@ SENSITIVE_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\."
-    r"[A-Za-z0-9_-]{3,}(?![A-Za-z0-9_-])"
+    r"(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\."
+    r"[A-Za-z0-9_-]{3,}($|[^A-Za-z0-9_-])"
 )
 BEARER_RE = re.compile(
     r"(?P<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)"
@@ -27,8 +26,25 @@ BEARER_RE = re.compile(
 PROVIDER_TOKEN_RES = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
+EMAIL_RE = re.compile(
+    r"(^|[^\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}($|[^\w.-])"
+)
+PHONE_RE = re.compile(
+    r"(^|[^\w])(?:\+\d[\d(). -]{7,}\d|\d{2,4}[-. ]\d{3,4}[-. ]\d{3,4})"
+    r"($|[^\w])"
+)
+IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+IPV4_RE = re.compile(
+    rf"(^|[^\d.])((?:{IPV4_OCTET}\.){{3}}{IPV4_OCTET})($|[^\d.])"
+)
+RUNNER_PATH_RE = re.compile(
+    r"(^|[^\w:])/(?:Users|home|runner|private/tmp|tmp)/[^\s`\"']+"
 )
 
 
@@ -41,6 +57,8 @@ def _redact_json(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_unstructured(value)
     return value
 
 
@@ -103,7 +121,11 @@ def _redact_assignments(text: str) -> str:
     while cursor < len(text):
         match = _consume_sensitive_assignment(text, cursor)
         if match is None:
-            cursor += 1
+            if text[cursor] in KEY_CHARS:
+                while cursor < len(text) and text[cursor] in KEY_CHARS:
+                    cursor += 1
+            else:
+                cursor += 1
             continue
         output.append(text[last_append:cursor])
         replacement, cursor = match
@@ -113,14 +135,44 @@ def _redact_assignments(text: str) -> str:
     return "".join(output)
 
 
-def _redact_unstructured(text: str) -> str:
-    """Redact credential-shaped values from non-JSON diagnostic text."""
-    cleaned = _redact_assignments(text)
+def _redact_unstructured(text: str, *, redact_assignments: bool = True) -> str:
+    """Redact credential-shaped and allowlisted operational identifiers."""
+    cleaned = _redact_assignments(text) if redact_assignments else text
     cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
-    cleaned = JWT_RE.sub(REDACTED, cleaned)
+    cleaned = JWT_RE.sub(
+        lambda match: f"{match.group(1)}{REDACTED}{match.group(2)}", cleaned
+    )
     for pattern in PROVIDER_TOKEN_RES:
         cleaned = pattern.sub(REDACTED, cleaned)
-    return cleaned
+    return _redact_operational_identifiers(cleaned)
+
+
+def _redact_operational_identifiers(text: str) -> str:
+    """Apply the minimum-disclosure allowlist to common operational PII."""
+    cleaned = EMAIL_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED_EMAIL]{match.group(2)}", text
+    )
+    cleaned = PHONE_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED_PHONE]{match.group(2)}", cleaned
+    )
+    cleaned = _redact_ipv4_addresses(cleaned)
+    return RUNNER_PATH_RE.sub(r"\1[REDACTED_PATH]", cleaned)
+
+
+def _redact_ipv4_addresses(text: str) -> str:
+    """Redact IPv4 values while keeping delimiters available to later matches."""
+    pieces: list[str] = []
+    cursor = 0
+    search_from = 0
+    while True:
+        match = IPV4_RE.search(text, search_from)
+        if match is None:
+            pieces.append(text[cursor:])
+            return "".join(pieces)
+        ip_start, ip_end = match.span(2)
+        pieces.extend((text[cursor:ip_start], "[REDACTED_IP]"))
+        cursor = ip_end
+        search_from = ip_end
 
 
 def _redact_line(line: str) -> str:

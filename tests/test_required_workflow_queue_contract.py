@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shlex
@@ -85,6 +86,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '--repo "$TARGET_REPOSITORY"' in inspect
     assert '--base-branch "$TARGET_DEFAULT_BRANCH"' in inspect
     assert 'args+=(--pr-number "$PULL_REQUEST_NUMBER")' in inspect
+    assert "POST_MERGE:" in workflow
+    assert "args+=(--post-merge)" in inspect
     assert (
         "github.event_name == 'repository_dispatch' && "
         "github.event.client_payload.target_repository != '' && "
@@ -1090,23 +1093,70 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert "skipping optional manual Strix run lookup" in workflow
     assert "Optional workflow %s is not installed" in failed_check_evidence
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
+    assert "STRIX_BINDING_VALIDATION_CACHE" in failed_check_evidence
+    assert 'timeout -- "${timeout_seconds}s" gh api' in failed_check_evidence
+    assert 'timeout -- "${timeout_seconds}s" gh run download' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
+def test_strix_provider_outage_without_findings_fails_closed() -> None:
+    """Require the trusted gate to propagate every incomplete result."""
     workflow = workflow_text("strix.yml")
 
-    assert "RateLimitError|Too many requests" in workflow
-    assert "exceeded your current quota" in workflow
-    assert "billing details" in workflow
-    assert "LLM warm-up failed" in workflow
-    assert "zero_vulnerabilities_signal" not in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
-    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
+    assert 'if [ "$strix_rc" -ne 0 ]; then' in workflow
+    assert 'exit "$strix_rc"' in workflow
+    assert "provider failures and missing reports remain fail-closed" in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        'grep -F -- "$STRIX_GATE_MARKER_PREFIX" "$strix_run_log"'
+        in workflow
     )
+    assert (
+        "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'"
+        in workflow
+    )
+    assert 'export STRIX_GATE_MARKER_PREFIX="CWL_STRIX_GATE_MARKER_${GITHUB_RUN_ID}:"' in workflow
+    assert "printed a fail-closed, incomplete-evidence, or neutral-skip marker but exited 0" in workflow
+    assert "Treating as a neutral skip" not in workflow
+    assert "backend_unavailable_signal" not in workflow
+    assert "reported_vulnerability_signal" not in workflow
+    assert "STRIX_FAIL_ON_PROVIDER_SIGNAL: \"1\"" in workflow
+    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
+
+
+def test_strix_workflow_changes_require_post_merge_structured_evidence() -> None:
+    """Do not treat base-workflow false green as proof for workflow PRs."""
+    strix_workflow = workflow_text("strix.yml")
+    failed_check_evidence = (
+        REPO_ROOT / "scripts/ci/collect_failed_check_evidence.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "pull_request_target evaluates this workflow from the trusted base" in strix_workflow
+    assert "Materializing a PR-head workflow above is data-only self-test" in strix_workflow
+    assert (
+        "Default-branch repository_dispatch Strix structured evidence binding passed"
+        in strix_workflow
+    )
+    assert "TARGET_REPOSITORY:" in strix_workflow
+    assert "MERGE_STATE:" in strix_workflow
+    assert "SUPPLIED_TARGET_BRANCH:" in strix_workflow
+    assert "SUPPLIED_MERGED_COMMIT_SHA:" in strix_workflow
+    assert "post-merge repository_dispatch Strix metadata" in strix_workflow
+    assert 'trusted_workspace_sha="$live_merge_commit_sha"' in strix_workflow
+    assert "github.event.client_payload.merge_state != 'merged'" in strix_workflow
+    assert 'run_id="$GITHUB_RUN_ID"' in strix_workflow
+    assert "artifact_name:$artifact_name" in strix_workflow
+    assert "repository:$repository" in strix_workflow
+    for forbidden_report_path in ('*"/../"*', '*"/./"*', './*', '*//*'):
+        assert forbidden_report_path in failed_check_evidence
+    assert "/actions/runs/${run_id}/artifacts?per_page=100" in failed_check_evidence
+    assert "if ! artifact_count=\"$(jq -r" in failed_check_evidence
+    assert '.repository == $repository' in failed_check_evidence
+    assert '.artifact_name == "strix-reports"' in failed_check_evidence
+    redaction_step = workflow_step(
+        workflow_text("strix.yml"),
+        "Redact Strix evidence before artifact publication",
+    )
+    assert 'read_bytes().decode("utf-8")' in redaction_step
+    assert 'cp -- "$evidence_file" "$redacted_file"' in redaction_step
 
 
 def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:

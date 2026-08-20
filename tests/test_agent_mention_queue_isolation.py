@@ -46,8 +46,7 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     assert not any(line.startswith("concurrency:") for line in header.splitlines())
     assert _concurrency_block(local_job) == (
         "    concurrency:\n"
-        "      group: review-agent-mention-router-local-${{ github.repository }}\n"
-        "      queue: max"
+        "      group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.comment.id }}"
     )
     assert _concurrency_block(sweep_job) == (
         "    concurrency:\n"
@@ -67,5 +66,6 @@ def test_interactive_queue_retains_pending_requests_without_cancellation() -> No
     )
     concurrency = _concurrency_block(local_job)
 
-    assert "queue: max" in concurrency
+    assert "github.event.comment.id" in concurrency
+    assert "queue: max" not in concurrency
     assert "cancel-in-progress: true" not in concurrency

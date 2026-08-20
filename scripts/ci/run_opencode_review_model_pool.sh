@@ -3,6 +3,57 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:=/dev/null}"
 
+signal_process_tree() {
+	local signum="$1"
+	local pid="$2"
+	local child pgid shell_pgid
+	for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+		signal_process_tree "$signum" "$child"
+	done
+	pgid="$(process_group_id_for_pid "$pid")"
+	shell_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+	if [ -n "$pgid" ] && [ "$pgid" != "$shell_pgid" ]; then
+		signal_process_group "$signum" "$pgid"
+	else
+		kill "-$signum" "$pid" 2>/dev/null || true
+	fi
+}
+
+process_group_id_for_pid() {
+	ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+signal_process_group() {
+	local signum="$1"
+	local pgid="$2"
+	local shell_pgid
+	shell_pgid="$(process_group_id_for_pid "$$")"
+	if [[ "$pgid" =~ ^[0-9]+$ ]] && [ "$pgid" != "$shell_pgid" ]; then
+		kill "-$signum" -- "-$pgid" 2>/dev/null || true
+	fi
+}
+
+capture_process_group_ids() {
+	local pid="$1"
+	local child pgid
+	pgid="$(process_group_id_for_pid "$pid")"
+	if [ -n "$pgid" ]; then
+		printf '%s\n' "$pgid"
+	fi
+	for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+		capture_process_group_ids "$child"
+	done
+}
+
+signal_captured_process_groups() {
+	local signum="$1"
+	local captured_groups="$2"
+	local pgid
+	while IFS= read -r pgid; do
+		[ -n "$pgid" ] || continue
+		signal_process_group "$signum" "$pgid"
+	done <<<"$captured_groups"
+}
 record_review_status() {
 	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
@@ -446,6 +497,59 @@ cap_model_run_timeout() {
 	fi
 }
 
+run_opencode_in_process_group() {
+	local run_timeout_seconds="$1"
+	local prompt_file="$2"
+	local agent="$3"
+	local model_candidate="$4"
+	local title="$5"
+
+	# Python is already required by the review runner.  os.setsid() is the
+	# portable macOS/Linux primitive available here; unlike timeout alone it
+	# gives every attempt a process group that cannot be the parent shell's.
+	python3 - "$run_timeout_seconds" "$prompt_file" "$agent" "$model_candidate" "$title" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+run_timeout_seconds, prompt_file, agent, model_candidate, title = sys.argv[1:]
+try:
+    os.setsid()
+except PermissionError as exc:
+    print(f"warning: could not create an OpenCode process session: {exc}", file=sys.stderr)
+for name in (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "OPENCODE_APP_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+):
+    os.environ.pop(name, None)
+prompt = Path(prompt_file).read_text(encoding="utf-8")
+os.execvpe(
+    "timeout",
+    [
+        "timeout",
+        "--kill-after=30s",
+        f"{run_timeout_seconds}s",
+        "opencode",
+        "run",
+        prompt,
+        "--pure",
+        "--agent",
+        agent,
+        "--model",
+        model_candidate,
+        "--format",
+        "json",
+        "--title",
+        title,
+    ],
+    os.environ,
+)
+PY
+}
+
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -456,7 +560,7 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_poll_seconds
+	local opencode_pid fatal_poll_seconds opencode_process_groups
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
@@ -465,15 +569,12 @@ run_one_model_attempt() {
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" \
-		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
-		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-		opencode run "$(cat "$prompt_file")" \
-		--pure \
-		--agent "$agent" \
-		--model "$model_candidate" \
-		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+	run_opencode_in_process_group \
+		"$run_timeout_seconds" \
+		"$prompt_file" \
+		"$agent" \
+		"$model_candidate" \
+		"PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and
@@ -482,14 +583,19 @@ run_one_model_attempt() {
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
 		if has_fatal_provider_error_event "$opencode_json_file"; then
+			opencode_process_groups="$(capture_process_group_ids "$opencode_pid")"
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-			kill "$opencode_pid" 2>/dev/null
+			signal_process_tree TERM "$opencode_pid"
 			for _ in $(seq 1 30); do
 				kill -0 "$opencode_pid" 2>/dev/null || break
 				sleep 1
 			done
-			kill -9 "$opencode_pid" 2>/dev/null
+			if [ -n "$opencode_process_groups" ]; then
+				signal_captured_process_groups KILL "$opencode_process_groups"
+			else
+				signal_process_tree KILL "$opencode_pid"
+			fi
 			break
 		fi
 		sleep "$fatal_poll_seconds"

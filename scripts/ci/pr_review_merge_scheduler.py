@@ -23,6 +23,9 @@ PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
   title
+  state
+  mergedAt
+  mergeCommit { oid }
   isDraft
   mergeable
   mergeStateStatus
@@ -128,6 +131,9 @@ FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "START
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+ISO_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+)
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
@@ -570,6 +576,26 @@ def validated_pr_dispatch_fields(pr: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def validated_post_merge_dispatch_fields(
+    pr: dict[str, Any],
+) -> tuple[str, str, str, str]:
+    """Return the immutable PR and merge identities required after merge."""
+    if str(pr.get("state") or "").upper() != "CLOSED":
+        raise ValueError("post-merge Strix dispatch requires a closed pull request")
+    merged_at = str(pr.get("mergedAt") or "")
+    if not ISO_TIMESTAMP_RE.fullmatch(merged_at):
+        raise ValueError("post-merge Strix dispatch requires a valid mergedAt timestamp")
+    merge_commit = pr.get("mergeCommitOid")
+    if not merge_commit:
+        merge_commit = (pr.get("mergeCommit") or {}).get("oid")
+    return (
+        validate_git_ref(pr["baseRefName"]),
+        validate_git_sha(pr["headRefOid"]),
+        merged_at,
+        validate_git_sha(merge_commit),
+    )
+
+
 def repository_dispatch_target(repo: str) -> str:
     """Return the default-branch repository that receives review dispatch events.
 
@@ -723,6 +749,9 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": number,
         "title": pr.get("title"),
+        "state": pr.get("state"),
+        "mergedAt": pr.get("merged_at"),
+        "mergeCommitOid": pr.get("merge_commit_sha"),
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
         "mergeStateStatus": rest_merge_state,
@@ -1900,6 +1929,7 @@ def active_review_run_refs(
     *,
     run_title: str,
     workflow_aliases: frozenset[str],
+    required_merge_state: str | None = None,
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Return repository-qualified current and stale review workflow runs."""
@@ -1940,8 +1970,15 @@ def active_review_run_refs(
                 None,
             )
             if run_data.get("event") == "repository_dispatch" and dispatch_title_prefix:
-                dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
+                dispatch_suffix = display_title.removeprefix(dispatch_title_prefix).lower()
+                dispatched_head, separator, dispatched_merge_state = dispatch_suffix.partition(":")
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
+                    continue
+                if required_merge_state is not None and (
+                    (separator and dispatched_merge_state != required_merge_state)
+                    or (not separator and required_merge_state != "open")
+                ):
+                    stale.append(run_ref)
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
@@ -2138,6 +2175,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         pr,
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
+        required_merge_state="open",
     )
     force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:
@@ -2167,9 +2205,69 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
                 "client_payload": {
                     "target_repository": target_repo,
                     "pr_number": int(pr["number"]),
+                    "merge_state": "open",
                     "pr_base_ref": base_ref,
                     "pr_base_sha": base_sha,
                     "pr_head_sha": head_sha,
+                },
+            }
+        ),
+    )
+    return "dispatched"
+
+
+def dispatch_post_merge_strix_evidence(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> str:
+    """Dispatch Strix against the merged target tree with immutable PR claims."""
+    target_branch, head_sha, merged_at, merged_commit = validated_post_merge_dispatch_fields(pr)
+    if dry_run:
+        return "dry_run"
+    require_github_actions_control_actor("inspect-active-post-merge-strix-evidence")
+    current_run_refs, stale_run_refs = active_review_run_refs(
+        repo,
+        workflow,
+        pr,
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+        required_merge_state="merged",
+    )
+    force_cancel_workflow_run_refs(stale_run_refs)
+    if current_run_refs:
+        print(
+            "Post-merge Strix dispatch skipped: active same-head workflow run(s) "
+            + ", ".join(
+                f"{run_repo}@{run_id}" for run_repo, run_id in current_run_refs
+            )
+        )
+        return "already_running"
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
+    run_github_dispatch(
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{dispatch_repo}/dispatches",
+            "--input",
+            "-",
+        ],
+        stdin=json.dumps(
+            {
+                "event_type": "strix-scan",
+                "client_payload": {
+                    "target_repository": target_repo,
+                    "pr_number": int(pr["number"]),
+                    "merge_state": "merged",
+                    "target_branch": target_branch,
+                    "pr_head_sha": head_sha,
+                    "merged_at": merged_at,
+                    "merged_commit_sha": merged_commit,
                 },
             }
         ),
@@ -3712,6 +3810,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument("--pr-number", type=int, default=0)
+    parser.add_argument(
+        "--post-merge",
+        action=argparse.BooleanOptionalAction,
+        default=env_flag_enabled("POST_MERGE"),
+        help="Dispatch one merged PR's target-tree Strix evidence and skip open-PR merge automation",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -3758,11 +3862,40 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--project-flow is required")
     if args.pr_number < 0:
         raise SystemExit("--pr-number must not be negative")
+    if args.post_merge and not args.pr_number:
+        raise SystemExit("--post-merge requires --pr-number")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if args.post_merge:
+        if len(prs) != 1:
+            raise SystemExit("--post-merge could not resolve exactly one pull request")
+        pr = prs[0]
+        try:
+            result = dispatch_post_merge_strix_evidence(
+                args.repo,
+                args.security_workflow,
+                pr,
+                dry_run=args.dry_run,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"Post-merge Strix dispatch failed closed: {exc}", file=sys.stderr)
+            return 1
+        action = "security_dispatch" if result in {"dispatched", "dry_run"} else "wait"
+        decision = Decision(
+            pr.get("number", args.pr_number),
+            action,
+            f"post-merge target-tree Strix evidence {result}",
+        )
+        print_summary(
+            [decision],
+            dry_run=args.dry_run,
+            base_branch=args.base_branch,
+            project_flow=args.project_flow,
+        )
+        return 0
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0

@@ -16,7 +16,7 @@ Neither defect is evidence that the requesting maintainer, model, repository all
 The permanent regression contracts were committed before their corresponding production changes.
 
 - `tests/test_agent_mention_dispatch_payload_limit.py` requires both dispatch hops to stay at or below ten top-level payload properties and requires the router to reject an oversized payload before GitHub does.
-- `tests/test_agent_mention_queue_isolation.py` requires the interactive route and scheduled sweep to use different job-level concurrency groups, with `queue: max` on the interactive route and no cancellation of in-progress interactive work.
+- `tests/test_agent_mention_queue_isolation.py` requires the interactive route and scheduled sweep to use different job-level concurrency groups, with one unique interactive group per source comment and no cancellation of in-progress interactive work.
 
 ## Decision
 
@@ -41,8 +41,7 @@ Concurrency is scoped to each job rather than the whole workflow:
 ```yaml
 route-local-agent-mention:
   concurrency:
-    group: review-agent-mention-router-local-${{ github.repository }}
-    queue: max
+    group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.comment.id }}
 
 sweep-organization-agent-mentions:
   concurrency:
@@ -50,7 +49,7 @@ sweep-organization-agent-mentions:
     cancel-in-progress: false
 ```
 
-GitHub documents that `queue: max` permits up to 100 pending jobs or workflow runs in one concurrency group and cannot be combined with `cancel-in-progress: true`. The interactive queue therefore retains bounded pending requests instead of replacing the previous pending request. Scheduled sweeps retain coalescing behavior in a separate group and cannot displace interactive work.
+GitHub Actions supports only one running and one pending item per concurrency group. The interactive group includes the source comment ID, so separate mentions do not replace one another; the scheduled sweep uses one repository-wide group and cannot displace an interactive route.
 
 Concurrency is not the idempotency authority. Duplicate forwarding remains governed by the complete canonical invocation key, exact-key downstream concurrency, and the immutable exact-name Actions artifact ledger.
 
@@ -81,7 +80,7 @@ Do not restore either defective boundary:
 
 - do not increase the first- or second-hop payload beyond GitHub's limit;
 - do not move local and scheduled work back into one workflow-level concurrency group;
-- do not replace `queue: max` with the default single-pending interactive queue unless another independently reviewed durable queue preserves every eligible request.
+- do not restore one workflow-level group for both issue comments and scheduled sweeps.
 
 A safe emergency degradation may suspend the scheduled sweep while retaining the isolated interactive route.
 

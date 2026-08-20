@@ -151,7 +151,9 @@ def test_untrusted_receipt_marker_cannot_suppress_invocation() -> None:
     [
         (("repository", "full_name"), "outside/example", "limited"),
         (("issue", "number"), 0, "number"),
+        (("issue", "number"), True, "number"),
         (("comment", "id"), 0, "comment id"),
+        (("comment", "id"), True, "comment id"),
         (("pull_request", "head", "sha"), "bad", "head SHA"),
         (("pull_request", "base", "ref"), "-bad", "base branch"),
         (("pull_request", "base", "sha"), "bad", "base SHA"),
@@ -181,6 +183,8 @@ def test_receipt_and_allowlist_helpers() -> None:
     assert module.receipt_marker(91) == "<!-- cwl-agent-mention-receipt:91 -->"
     with pytest.raises(ValueError, match="positive"):
         module.receipt_marker(0)
+    with pytest.raises(ValueError, match="positive"):
+        module.receipt_marker(True)
     comments = [
         receipt(91),
         {
@@ -229,6 +233,47 @@ def test_eligible_agents_and_payloads() -> None:
     assert claim["merge_mode"] == "disabled"
     assert claim["enable_auto_merge"] is False
     assert claim["update_branches"] is False
+
+
+def test_repository_dispatch_contract_validates_event_type_and_size() -> None:
+    """Generated dispatch bodies honor GitHub event and payload limits."""
+
+    module = load_module()
+    for event_type in ("", "x" * (module.MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH + 1)):
+        with pytest.raises(ValueError, match="event_type"):
+            module._validate_repository_dispatch_payload(
+                {"event_type": event_type, "client_payload": {}}
+            )
+    assert module._validate_repository_dispatch_payload(
+        {"event_type": "bounded", "client_payload": {}}
+    )["event_type"] == "bounded"
+
+    oversized = "x" * module.MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES
+    with pytest.raises(ValueError, match="under"):
+        module._validate_repository_dispatch_payload(
+            {"event_type": "bounded", "client_payload": {"value": oversized}}
+        )
+
+    request = module.parse_event(event("@cwl-noema-review @opencode-agent"))
+    assert request is not None
+    for payload in (module.noema_payload(request), module.opencode_payload(request)):
+        assert len(
+            json.dumps(
+                payload["client_payload"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ) < module.MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES
+
+
+def test_repository_dispatch_contract_rejects_non_json_payload_values() -> None:
+    """Dispatch validation fails closed when a producer supplies an unserializable value."""
+    module = load_module()
+
+    with pytest.raises(ValueError, match="JSON serializable"):
+        module._validate_repository_dispatch_payload(
+            {"event_type": "bounded", "client_payload": {"value": object()}}
+        )
 
 
 def test_dispatch_uses_central_events_and_acknowledges() -> None:
@@ -327,12 +372,17 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     client = module.GitHubClient("secret-token")
-    assert client.request(["repos/x/y"], input_payload={"a": 1}) == {"ok": True}
+    assert (
+        client.request(
+            ["repos/x/y"], input_payload={"label": "한", "a": 1}
+        )
+        == {"ok": True}
+    )
     command, kwargs = calls[0]
     assert command == ["gh", "api", "repos/x/y", "--input", "-"]
     assert "secret-token" not in command
     assert kwargs["env"]["GH_TOKEN"] == "secret-token"
-    assert kwargs["input"] == '{"a": 1}'
+    assert kwargs["input"] == '{"label":"한","a":1}'
     monkeypatch.setattr(
         module.subprocess,
         "run",

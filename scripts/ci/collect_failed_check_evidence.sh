@@ -376,6 +376,8 @@ workflow_run_contexts="$(mktemp)"
 active_failed_contexts="$(mktemp)"
 manual_success_contexts="$(mktemp)"
 manual_success_check_runs="$(mktemp)"
+manual_success_check_run_candidates="$(mktemp)"
+manual_success_run_candidates="$(mktemp)"
 superseded_failed_contexts="$(mktemp)"
 tmp_files=(
 	"$failed_contexts"
@@ -383,8 +385,11 @@ tmp_files=(
 	"$active_failed_contexts"
 	"$manual_success_contexts"
 	"$manual_success_check_runs"
+	"$manual_success_check_run_candidates"
+	"$manual_success_run_candidates"
 	"$superseded_failed_contexts"
 )
+declare -A STRIX_BINDING_VALIDATION_CACHE=()
 cleanup() {
 	rm -f "${tmp_files[@]}"
 }
@@ -408,6 +413,108 @@ target_workflow_available() {
 	fi
 
 	cat "$workflow_lookup_err" >&2
+	return 1
+}
+
+manual_strix_run_has_structured_binding_uncached() {
+	local run_id="$1"
+	local timeout_seconds="${STRIX_BINDING_LOOKUP_TIMEOUT_SECONDS:-10}"
+	local artifact_dir
+	local artifact_json
+	local artifact_count
+	local binding_file
+	local report_path
+	local report_file
+	local expected_report_sha256
+	local actual_report_sha256
+
+	if [ -z "$run_id" ] || ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		timeout_seconds=10
+	fi
+	artifact_dir="$(mktemp -d)"
+	if ! artifact_json="$(timeout -- "${timeout_seconds}s" gh api -X GET "repos/${GH_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	if ! artifact_count="$(jq -r '[.artifacts[]? | select((.name // "") == "strix-reports" and .expired == false)] | length' <<<"$artifact_json")"; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	if [ "$artifact_count" != "1" ]; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	if ! timeout -- "${timeout_seconds}s" gh run download "$run_id" \
+		--repo "$GH_REPOSITORY" \
+		--name strix-reports \
+		--dir "$artifact_dir" </dev/null >/dev/null 2>&1; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+
+	binding_file="$(find "$artifact_dir" -type f -name evidence-binding.json -print -quit)"
+	if [ -z "$binding_file" ] || ! jq -e --arg repository "$GH_REPOSITORY" --arg head_sha "$HEAD_SHA" --arg run_id "$run_id" '
+		.repository == $repository
+		and .artifact_name == "strix-reports"
+		and .head_sha == $head_sha
+		and ((.run_id // "") | tostring) == $run_id
+		and .scan_completed == true
+		and ((.report // "") | type == "string")
+	' "$binding_file" >/dev/null 2>&1; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+
+	report_path="$(jq -r '.report // empty' "$binding_file")"
+	case "$report_path" in
+		""|/*|../*|*/../*|*"/../"*|*"/./"*|./*|*//*)
+			rm -rf -- "$artifact_dir"
+			return 1
+			;;
+	esac
+	report_file="$(dirname -- "$binding_file")/$report_path"
+	if [ ! -s "$report_file" ]; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	expected_report_sha256="$(jq -r '.report_sha256 // empty' "$binding_file")"
+	if [ -z "$expected_report_sha256" ]; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+	if command -v sha256sum >/dev/null 2>&1; then
+		actual_report_sha256="$(sha256sum "$report_file" | awk '{print $1}')"
+	else
+		actual_report_sha256="$(shasum -a 256 "$report_file" | awk '{print $1}')"
+	fi
+	if [ "$actual_report_sha256" != "$expected_report_sha256" ]; then
+		rm -rf -- "$artifact_dir"
+		return 1
+	fi
+
+	rm -rf -- "$artifact_dir"
+	return 0
+}
+
+manual_strix_run_has_structured_binding() {
+    local run_id="$1"
+    local cached_result
+
+    if [ -z "$run_id" ] || ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ ${STRIX_BINDING_VALIDATION_CACHE[$run_id]+present} ]]; then
+        cached_result="${STRIX_BINDING_VALIDATION_CACHE[$run_id]}"
+        return "$cached_result"
+	fi
+	if manual_strix_run_has_structured_binding_uncached "$run_id"; then
+		STRIX_BINDING_VALIDATION_CACHE[$run_id]=0
+		return 0
+	fi
+	STRIX_BINDING_VALIDATION_CACHE[$run_id]=1
 	return 1
 }
 
@@ -598,12 +705,20 @@ gh api graphql \
 			| [
 				"strix",
 				(.detailsUrl // ""),
-				"Current-head successful Strix check run superseded stale failed Strix evidence."
+				"Current-head successful Strix check run superseded stale failed Strix evidence.",
+				((.checkSuite.workflowRun.databaseId // "") | tostring)
 			]
 		)
 		| .[]
 		| @tsv
-	' >"$manual_success_check_runs"
+	' >"$manual_success_check_run_candidates"
+
+while IFS=$'\t' read -r success_context success_url success_description success_run_id; do
+	if [ -z "$success_run_id" ] || ! manual_strix_run_has_structured_binding "$success_run_id"; then
+		continue
+	fi
+	printf '%s\t%s\t%s\n' "$success_context" "$success_url" "$success_description" >>"$manual_success_check_runs"
+done <"$manual_success_check_run_candidates"
 
 if target_workflow_available "strix.yml"; then
 	env HEAD_SHA="$HEAD_SHA" gh run list \
@@ -620,12 +735,22 @@ if target_workflow_available "strix.yml"; then
 			| select((.status // "") == "completed")
 			| select((.conclusion // "" | ascii_downcase) == "success")
 			| [
-				"strix",
-				(.url // ""),
-				"Default-branch repository_dispatch Strix evidence passed"
+				(.databaseId // "" | tostring),
+				(.url // "")
 			]
 			| @tsv
-		' >>"$manual_success_check_runs" || true
+		' >"$manual_success_run_candidates" || true
+
+	while IFS=$'\t' read -r success_run_id success_url; do
+		if [ -z "$success_run_id" ] || ! manual_strix_run_has_structured_binding "$success_run_id"; then
+			continue
+		fi
+		printf '%s\t%s\t%s\n' \
+			"strix" \
+			"$success_url" \
+			"Default-branch repository_dispatch Strix structured evidence binding passed" \
+			>>"$manual_success_check_runs"
+	done <"$manual_success_run_candidates"
 fi
 
 	env HEAD_SHA="$HEAD_SHA" gh run list \
@@ -674,7 +799,7 @@ if ! gh api -X GET "repos/${GH_REPOSITORY}/commits/${HEAD_SHA}/status" \
 		| map(last)
 		| map(
 			select((.state // "" | ascii_downcase) == "success")
-			| select((.description // "") | contains("Default-branch repository_dispatch Strix evidence passed"))
+			| select((.description // "") | contains("Default-branch repository_dispatch Strix structured evidence binding passed"))
 			| select((.target_url // "") | test("/actions/runs/[0-9]+"))
 			| [
 				(.__context_key // ""),

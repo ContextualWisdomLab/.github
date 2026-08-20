@@ -35,6 +35,10 @@ ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
+MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES = 10
+REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES
+MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH = 100
+MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,11 @@ class MentionRequest:
     actor: str
     agents: tuple[str, ...]
     pull_request_base_sha: str = ""
+
+
+def _serialize_json_payload(payload: object) -> str:
+    """Serialize API JSON once so size checks match the transmitted body."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 class GitHubClient:
@@ -77,7 +86,11 @@ class GitHubClient:
         try:
             completed = subprocess.run(
                 command,
-                input=None if input_payload is None else json.dumps(input_payload),
+                input=(
+                    None
+                    if input_payload is None
+                    else _serialize_json_payload(input_payload)
+                ),
                 text=True,
                 capture_output=True,
                 shell=False,
@@ -115,7 +128,7 @@ def exact_mentions(body: str) -> tuple[str, ...]:
 def receipt_marker(comment_id: int) -> str:
     """Return the hidden target-comment acknowledgement marker."""
 
-    if comment_id < 1:
+    if type(comment_id) is not int or comment_id < 1:
         raise ValueError("comment id must be positive")
     return f"<!-- cwl-agent-mention-receipt:{comment_id} -->"
 
@@ -174,9 +187,9 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError(
             "agent mentions are limited to ContextualWisdomLab repositories"
         )
-    if not isinstance(number, int) or number < 1:
+    if type(number) is not int or number < 1:
         raise ValueError("pull request number is missing or invalid")
-    if not isinstance(comment_id, int) or comment_id < 1:
+    if type(comment_id) is not int or comment_id < 1:
         raise ValueError("comment id is missing or invalid")
     if comment_id in processed_comment_ids(event.get("conversation_comments") or ()):
         return None
@@ -297,6 +310,44 @@ def agent_ledger_artifact_name(request: MentionRequest, agent: str) -> str:
     return f"{LEDGER_ARTIFACT_PREFIX}{agent_invocation_key(request, agent)}"
 
 
+def _validate_repository_dispatch_payload(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Reject repository-dispatch bodies GitHub will refuse at the API boundary."""
+
+    client_payload = payload.get("client_payload")
+    if not isinstance(client_payload, dict):
+        raise ValueError("repository-dispatch client_payload must be an object")
+    property_count = len(client_payload)
+    if property_count > MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES:
+        raise ValueError(
+            "repository-dispatch client_payload has "
+            f"{property_count} properties; GitHub allows at most "
+            f"{MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_PROPERTIES}"
+        )
+    try:
+        payload_bytes = len(
+            _serialize_json_payload(client_payload).encode("utf-8")
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("repository-dispatch client_payload must be JSON serializable") from exc
+    if payload_bytes >= MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES:
+        raise ValueError(
+            "repository-dispatch client_payload must be under "
+            f"{MAX_REPOSITORY_DISPATCH_CLIENT_PAYLOAD_BYTES} bytes"
+        )
+    event_type = payload.get("event_type")
+    if (
+        not isinstance(event_type, str)
+        or not event_type
+        or len(event_type) > MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH
+    ):
+        raise ValueError(
+            "repository-dispatch event_type must be a non-empty string of at most "
+            f"{MAX_REPOSITORY_DISPATCH_EVENT_TYPE_LENGTH} characters"
+        )
+    return payload
+
 def _artifact_records(
     value: Any,
     *,
@@ -390,16 +441,10 @@ def repository_dispatch_body(
     so mention routing cannot enqueue a review.
     """
 
-    if len(client_payload) > REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS:
-        raise ValueError(
-            "repository_dispatch client_payload has "
-            f"{len(client_payload)} keys; GitHub allows at most "
-            f"{REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS}"
-        )
-    return {
+    return _validate_repository_dispatch_payload({
         "event_type": event_type,
         "client_payload": client_payload,
-    }
+    })
 
 
 def noema_payload(request: MentionRequest) -> dict[str, Any]:
@@ -558,16 +603,24 @@ def dispatch_request(
         "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
-    target_client.request(
-        [
-            f"{target_api}/issues/{request.pull_request_number}/comments",
-            "-X",
-            "POST",
-        ],
-        input_payload={"body": acknowledgement},
-    )
-    if ledger_artifact_cache is not None:
-        ledger_artifact_cache[acknowledgement_cache_key] = True
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/{request.pull_request_number}/comments",
+                "-X",
+                "POST",
+            ],
+            input_payload={"body": acknowledgement},
+        )
+    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+        message = " ".join(str(exc).split()) or exc.__class__.__name__
+        print(
+            "::warning::Agent mention acknowledgement comment failed; "
+            f"durable dispatch state is preserved: {message[:1000]}"
+        )
+    else:
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 

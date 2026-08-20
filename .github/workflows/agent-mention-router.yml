@@ -25,8 +25,7 @@ jobs:
         || contains(github.event.comment.body, '@opencode-agent')
       )
     concurrency:
-      group: review-agent-mention-router-local-${{ github.repository }}
-      queue: max
+      group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.comment.id }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

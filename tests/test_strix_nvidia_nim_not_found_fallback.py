@@ -43,15 +43,12 @@ def _function_block(source: str, function_name: str) -> str:
     return match.group(0)
 
 
-def _classifies_as_nvidia_not_found(log_text: str) -> bool:
-    """Execute the production classifier against a bounded synthetic log."""
+def _classifies_with(function_name: str, log_text: str) -> bool:
+    """Execute one production Strix classifier against a bounded synthetic log."""
 
     gate_source = STRIX_GATE.read_text(encoding="utf-8")
-    function_source = _function_block(
-        gate_source,
-        "is_nvidia_nim_not_found_error",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-nvidia-404-") as temp_dir:
+    function_source = _function_block(gate_source, function_name)
+    with tempfile.TemporaryDirectory(prefix="strix-classifier-") as temp_dir:
         log_path = Path(temp_dir) / "strix.log"
         log_path.write_text(log_text, encoding="utf-8")
         script = "\n".join(
@@ -59,7 +56,7 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
                 "set -euo pipefail",
                 'STRIX_LOG="$1"',
                 function_source,
-                "is_nvidia_nim_not_found_error",
+                function_name,
             )
         )
         completed = subprocess.run(
@@ -73,50 +70,16 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     return completed.returncode == 0
 
 
-def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
-    """Extract one single-quoted POSIX ERE assigned in the Strix workflow."""
+def _classifies_as_nvidia_not_found(log_text: str) -> bool:
+    """Execute the production NVIDIA 404 classifier."""
 
-    match = re.search(
-        rf"(?m)^\s+{re.escape(variable_name)}='([^']+)'$",
-        workflow,
-    )
-    if match is None:
-        raise AssertionError(f"missing workflow signal: {variable_name}")
-    return match.group(1)
+    return _classifies_with("is_nvidia_nim_not_found_error", log_text)
 
 
-def _workflow_neutralizes(log_text: str) -> bool:
-    """Execute the outer workflow's backend-neutralization condition."""
+def _classifies_as_model_tool_contract(log_text: str) -> bool:
+    """Execute the production Strix tool-contract classifier."""
 
-    workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-    backend_pattern = _workflow_signal_pattern(
-        workflow,
-        "backend_unavailable_signal",
-    )
-    vulnerability_pattern = _workflow_signal_pattern(
-        workflow,
-        "reported_vulnerability_signal",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-workflow-404-") as temp_dir:
-        log_path = Path(temp_dir) / "strix.log"
-        log_path.write_text(log_text, encoding="utf-8")
-        backend = subprocess.run(
-            ["grep", "-Eiq", backend_pattern, str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        vulnerability = subprocess.run(
-            ["grep", "-Eiq", vulnerability_pattern, str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    if backend.returncode not in {0, 1}:
-        raise AssertionError(backend.stderr)
-    if vulnerability.returncode not in {0, 1}:
-        raise AssertionError(vulnerability.stderr)
-    return backend.returncode == 0 and vulnerability.returncode == 1
+    return _classifies_with("is_strix_model_tool_contract_error", log_text)
 
 
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
@@ -171,6 +134,41 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
+    def test_unsupported_tool_contract_enters_cross_model_fallback(self) -> None:
+        """Treat the Strix agent/tool mismatch as a model failure, not a finding."""
+
+        log = (
+            "Traceback (most recent call last):\n"
+            '  File "/site-packages/strix/core/execution.py", line 355, in _run_cycle\n'
+            '  File "/site-packages/agents/run_internal/turn_resolution.py", '
+            'line 1828, in process_model_response\n'
+            "agents.exceptions.ModelBehaviorError: Tool execute not found in agent strix\n"
+        )
+        self.assertTrue(_classifies_as_model_tool_contract(log))
+
+        gate_source = STRIX_GATE.read_text(encoding="utf-8")
+        infrastructure = _function_block(
+            gate_source,
+            "has_detected_infrastructure_error",
+        )
+        retryable = _function_block(gate_source, "is_model_retryable_error")
+        same_model_retry = _function_block(
+            gate_source,
+            "is_transient_same_model_retry_error",
+        )
+        self.assertIn("is_strix_model_tool_contract_error", infrastructure)
+        self.assertIn("is_strix_model_tool_contract_error", retryable)
+        self.assertNotIn("is_strix_model_tool_contract_error", same_model_retry)
+
+    def test_target_text_cannot_spoof_tool_contract_fallback(self) -> None:
+        """Require the Strix traceback marker beside the exact exception."""
+
+        log = (
+            "source literal: agents.exceptions.ModelBehaviorError: Tool execute "
+            "not found in agent strix\n"
+        )
+        self.assertFalse(_classifies_as_model_tool_contract(log))
+
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
         """Prefer a documented hosted NIM and another NIM before GitHub."""
 
@@ -199,62 +197,28 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
 
-    def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
-        """Reject provider-like target text in the outer neutralization gate."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "source literal: Nvidia_nimException Error code: 404\n"
-            )
-        )
-        self.assertTrue(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: Nvidia_nimException - "
-                "Error code: 404\nVulnerabilities 0\n"
-            )
-        )
-
-    def test_outer_workflow_rejects_cross_line_signal_assembly(self) -> None:
-        """Require exception, provider, and 404 evidence on one physical line."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: provider unavailable\n"
-                "Nvidia_nimException Error code: 404\n"
-            )
-        )
-
-    def test_outer_workflow_rejects_nvidia_404_without_litellm_context(self) -> None:
-        """Require LiteLLM NotFoundError context, not just NVIDIA + 404."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "Nvidia_nimException Error code: 404\nVulnerabilities 0\n"
-            )
-        )
-
-    def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
-        """Keep a real vulnerability signal blocking despite provider failure."""
-
-        self.assertFalse(
-            _workflow_neutralizes(
-                "litellm.exceptions.NotFoundError: Nvidia_nimException - "
-                "Error code: 404\nVulnerabilities 1\n"
-            )
-        )
-
-    def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
-        """Retain the static fail-closed vulnerability evidence contract."""
+    def test_workflow_propagates_provider_404_gate_failures(self) -> None:
+        """Do not let the outer workflow neutralize provider 404 evidence."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("Nvidia_nimException", workflow)
-        self.assertIn("Error code:[[:space:]]*404", workflow)
-        self.assertIn("reported_vulnerability_signal", workflow)
-        self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
+        self.assertIn('if [ "$strix_rc" -ne 0 ]; then', workflow)
+        self.assertIn('exit "$strix_rc"', workflow)
         self.assertIn(
-            '! grep -Eiq "$reported_vulnerability_signal"',
+            "provider failures and missing reports remain fail-closed",
             workflow,
         )
+        self.assertIn(
+            'grep -F -- "$STRIX_GATE_MARKER_PREFIX" "$strix_run_log"',
+            workflow,
+        )
+        self.assertIn(
+            "grep -Eiq 'failing closed|fail-closed|fail closed|incomplete evidence|incomplete-evidence|neutral[[:space:]]+skip'",
+            workflow,
+        )
+        self.assertIn("neutral[[:space:]]+skip", workflow)
+        self.assertNotIn("backend_unavailable_signal", workflow)
+        self.assertNotIn("reported_vulnerability_signal", workflow)
+        self.assertNotIn("Treating as a neutral skip", workflow)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,13 @@ def test_sensitive_log_redaction_handles_json_credentials_and_jwts() -> None:
     assert set(json.loads(cleaned)["nested"].values()) == {redactor.REDACTED}
 
 
+def test_sensitive_log_redaction_scrubs_non_sensitive_json_strings() -> None:
+    """Non-sensitive JSON strings still receive assignment and token redaction."""
+    cleaned = redactor.redact_text(json.dumps({"message": "token=fixture-value"}))
+
+    assert json.loads(cleaned)["message"] == f"token={redactor.REDACTED}"
+
+
 def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
     source = (
@@ -56,6 +63,39 @@ def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     assert "abc.def.ghi" not in cleaned
     assert "opaque_service_value_123456789" not in cleaned
     assert cleaned.count(redactor.REDACTED) >= 2
+
+
+def test_sensitive_log_redaction_preserves_jwt_boundaries_and_operational_markers() -> None:
+    """JWT delimiters and allowlisted identifiers remain structurally readable."""
+    operational = (
+        "mail=user@example.test ip=192.0.2.10 phone=010-1234-5678 path=/tmp/secret"
+    )
+    expected_operational = (
+        "mail=[REDACTED_EMAIL] ip=[REDACTED_IP] "
+        "phone=[REDACTED_PHONE] path=[REDACTED_PATH]"
+    )
+    assert redactor.redact_text("(header.payload.signature)") == (
+        f"({redactor.REDACTED})"
+    )
+    assert redactor._redact_operational_identifiers(operational) == (
+        expected_operational
+    )
+    cleaned = redactor.redact_text(operational)
+    assert cleaned == expected_operational
+
+    json_cleaned = redactor._redact_unstructured(
+        json.dumps({"message": operational}), redact_assignments=False
+    )
+    assert json.loads(json_cleaned)["message"] == expected_operational
+
+
+def test_sensitive_log_redaction_handles_adjacent_ipv4_addresses() -> None:
+    """A delimiter must remain available for the next address match."""
+    operational = "ips=192.0.2.10 198.51.100.2"
+
+    assert redactor._redact_operational_identifiers(operational) == (
+        "ips=[REDACTED_IP] [REDACTED_IP]"
+    )
 
 
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
