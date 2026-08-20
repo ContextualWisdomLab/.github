@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 CALLER = Path(".github/workflows/embedrelay-hourly-review-repair.yml")
+CLAUDE = Path("CLAUDE.md")
 DOCTORING = Path("docs/doctoring/embedrelay-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -93,6 +94,18 @@ def test_embedrelay_caller_preserves_oidc_and_explicit_secret_scope() -> None:
 def test_embedrelay_target_is_not_hard_coded_in_shared_scheduler() -> None:
     """Product identity remains in the thin caller rather than the engine."""
     assert "ContextualWisdomLab/EmbedRelay" not in _read(SCHEDULER)
+
+
+def test_agent_guidance_keeps_one_complete_product_caller_rule() -> None:
+    """The EmbedRelay edit must replace, not duplicate, the caller rule."""
+    guidance = _read(CLAUDE)
+
+    assert guidance.count("- **Product hourly callers** stay thin.") == 1
+    assert (
+        "- **Product hourly callers** stay thin. Do not hard-code EmbedRelay, naruon, or Keyverse\n"
+        "  into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`\n"
+        "  on the worker, never `COPILOT_GITHUB_TOKEN`."
+    ) in guidance
 
 
 def test_embedrelay_doctoring_records_embedding_activation_and_credentials() -> None:
