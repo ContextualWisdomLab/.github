@@ -1274,7 +1274,38 @@ def test_review_state_and_failed_checks():
             }
         )
     ) == "running"
+    assert sched.coverage_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
+    ) == "missing"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "SUCCESS"}]}
+            }
+        )
+    ) == "complete"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "FAILURE"}]}
+            }
+        )
+    ) == "failed"
     assert sched.coverage_evidence_state(make_pr()) == "missing"
+    human_coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head", login="human"),
+                    "body": "coverage evidence did not pass; coverage-evidence; required test/docstring evidence",
+                }
+            ]
+        }
+    )
+    assert not sched.current_head_coverage_change_request(human_coverage_request)
+    assert not sched.current_head_coverage_change_request(
+        make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    )
     ordinary_request = make_pr(
         reviews={
             "nodes": [
@@ -3124,6 +3155,33 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         },
     )
     dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(
+            (repo, workflow, pr["headRefOid"], dry_run)
+        )
+        or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: "review dispatch waits",
+    )
+    coverage_wait = inspect(coverage_request)
+    assert coverage_wait.action == "wait"
+    assert coverage_wait.reason == "review dispatch waits"
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    coverage_active = inspect(coverage_request)
+    assert coverage_active.action == "wait"
+    assert coverage_active.reason == (
+        "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active"
+    )
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
