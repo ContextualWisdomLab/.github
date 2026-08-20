@@ -33,6 +33,7 @@ def _load_services(catalog: dict[str, Any], catalog_path: Path) -> dict[str, dic
         raise CatalogValidationError("service_manifests must contain at least one manifest")
     services: dict[str, dict[str, Any]] = {}
     repositories: set[str] = set()
+    authority_owners: dict[str, str] = {}
     manifest_paths: set[str] = set()
     service_ids: set[str] = set()
     normalized_references: list[tuple[str, str]] = []
@@ -60,6 +61,14 @@ def _load_services(catalog: dict[str, Any], catalog_path: Path) -> dict[str, dic
         repository = str(service["repository"])
         if repository in repositories:
             raise CatalogValidationError(f"duplicate repository: {repository}")
+        for authority_domain in service["authority_domains"]:
+            previous_owner = authority_owners.get(authority_domain)
+            if previous_owner is not None:
+                raise CatalogValidationError(
+                    "duplicate authority domain: "
+                    f"{authority_domain} belongs to {previous_owner} and {repository}"
+                )
+            authority_owners[authority_domain] = repository
         services[actual_id] = service
         repositories.add(repository)
     for service_id, service in services.items():

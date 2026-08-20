@@ -8,7 +8,7 @@ The shared envelopes define transport but do not identify product responsibility
 
 ## Decision
 
-Publish one organization-owned, machine-readable catalogue using closed JSON Schema Draft 2020-12 contracts. Leaf repositories retain domain semantics, persistence, runtime adapters, and release evidence. The validator rejects ambiguous ownership, unknown services, self-edges, direct cross-repository SQL, credential copying, raw PII broadcast, unversioned references, inferred-lineage authority, build controls carrying business data, and maturity claims beyond either endpoint.
+Publish one organization-owned, machine-readable catalogue using closed JSON Schema Draft 2020-12 contracts. Leaf repositories retain domain semantics, persistence, runtime adapters, and release evidence. The validator rejects ambiguous ownership, unknown services, self-edges, direct cross-repository SQL, credential copying, raw PII broadcast, unversioned references, inferred-lineage authority, build controls carrying business data, and maturity claims beyond either endpoint. Reviewed fixtures additionally pin canonical repository identities, globally unique capability IDs, provider-facing contract direction, and source-backed consumer declarations for the security product family.
 
 Use package, independent-service, offline-scientific-worker, and build-operations-tool composition modes rather than forcing a universal HTTP topology.
 

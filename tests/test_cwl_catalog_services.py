@@ -6,7 +6,6 @@ import copy
 from pathlib import Path
 
 import pytest
-
 from catalogue_test_helpers import (
     load_catalog,
     load_service,
@@ -46,9 +45,88 @@ EXPECTED_REPOSITORIES = {
     "ContextualWisdomLab/pg-erd-cloud",
     "ContextualWisdomLab/EmbedRelay",
     "ContextualWisdomLab/appguardrail",
+    "ContextualWisdomLab/wardnet",
     "ContextualWisdomLab/life-os",
     "ContextualWisdomLab/bandscope",
 }
+
+
+def test_security_product_capabilities_keep_canonical_owners_and_direction() -> None:
+    """Security capability IDs and provider direction must not drift across products."""
+
+    catalog = load_catalog()
+    services = {
+        service["repository"]: service
+        for reference in catalog["service_manifests"]
+        if (service := load_service(reference["service_id"]))
+    }
+    expected = {
+        "ContextualWisdomLab/EgressWeave": {
+            "service_id": "egress_policy",
+            "authority_domains": {
+                "egress_decision",
+                "release_evidence",
+                "ssrf_dns_control",
+            },
+            "boundary_tokens": ("SSRF", "DNS-rebinding", "redirect", "SBOM"),
+            "consumers": set(),
+        },
+        "ContextualWisdomLab/appguardrail": {
+            "service_id": "sast_governance",
+            "authority_domains": {
+                "assurance_evidence",
+                "security_detector",
+                "security_finding",
+            },
+            "boundary_tokens": ("detector", "assurance"),
+            "consumers": set(),
+        },
+        "ContextualWisdomLab/wardnet": {
+            "service_id": "security_operations",
+            "authority_domains": {
+                "ai_soc_response",
+                "ids_event",
+                "siem_event",
+                "waf_control",
+            },
+            "boundary_tokens": ("WAF", "IDS", "AI SOC", "SIEM"),
+            "consumers": set(),
+        },
+        "ContextualWisdomLab/keyverse": {
+            "service_id": "identity_federation",
+            "authority_domains": {
+                "account_lifecycle",
+                "identity_credential",
+                "scim_lifecycle",
+            },
+            "boundary_tokens": ("SCIM", "account lifecycle"),
+            "consumers": {"ContextualWisdomLab/Orgmetra"},
+        },
+    }
+    for repository, contract in expected.items():
+        service = services[repository]
+        assert service["service_id"] == contract["service_id"]
+        assert set(service["authority_domains"]) == contract["authority_domains"]
+        assert set(service["consumer_repositories"]) == contract["consumers"]
+        assert all(
+            item["direction"] == "provider_to_consumer"
+            for item in service["contracts"]
+        )
+        assert all(
+            token.casefold() in service["product_boundary"].casefold()
+            for token in contract["boundary_tokens"]
+        )
+
+    capability_ids = [
+        capability_id
+        for service in services.values()
+        for capability_id in service["authority_domains"]
+    ]
+    assert len(capability_ids) == len(set(capability_ids))
+    repository_names = {repository.casefold() for repository in services}
+    assert "contextualwisdomlab/waf-ids-ai-soc" not in repository_names
+    assert "contextualwisdomlab/cwl-idp" not in repository_names
+    assert "contextualwisdomlab/vibesec" not in repository_names
 
 
 def test_initial_catalogue_covers_exact_high_leverage_repository_set(
@@ -226,4 +304,17 @@ def test_manifest_reference_identity_path_repository_and_consumer_uniqueness(
             write_service(
                 tmp_path / "consumer", "identity_federation", unknown_consumer
             )
+        )
+
+
+def test_capability_ids_are_unique_across_repository_owners(tmp_path: Path) -> None:
+    """One capability ID must never acquire two authoritative repositories."""
+
+    duplicate = load_service("sast_governance")
+    duplicate["authority_domains"][0] = load_service("egress_policy")[
+        "authority_domains"
+    ][0]
+    with pytest.raises(CatalogValidationError, match="duplicate authority domain"):
+        validator.validate_catalog(
+            write_service(tmp_path, "sast_governance", duplicate)
         )
