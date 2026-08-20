@@ -177,9 +177,9 @@ flowchart LR
 | #921 | chore(deps): bump google/osv-scanner-action/osv-scanner-action from a82132c0bd6c7261ffcb78e754c46c70ab57ad9a to f4cfcc01edc9c8b756a9b873b7a623ca674da51e | `12596fae331760b1b3184872d276d3d54f7b840a` | main | DIRTY | — |
 | #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `ed08a94ba3eaeb217b2b0e3cc4745483b18a162d` | main | BLOCKED | — |
 | #919 | chore(deps): bump step-security/harden-runner from 2.20.0 to 2.20.1 | `1c5a38eaa193dd3482b729ec7e9cd1a61bbe6e5f` | main | BLOCKED | — |
-| #918 | chore(security): align all CodeQL actions to v4.37.6 | `2e3029d2c6d80066c01d82930ea6aa2ada0ea319` | main | DIRTY | CHANGES_REQUESTED |
+| #918 | chore(security): align all CodeQL actions to v4.37.6 | `c143b495c94159125961a65ec484fa2c6918d360` | main | BLOCKED | — |
 | #904 | fix(opencode): include adversarial gate in fallback scope | `40565c9299d64c256caa63df1d9febff2092e516` | main | BLOCKED | CHANGES_REQUESTED |
-| #901 | security(deploy-pages): declare minimal secret contract | `1b6246af7405489ecc78f8413f678fa9348db2e4` | main | DIRTY | CHANGES_REQUESTED |
+| #901 | security(deploy-pages): declare minimal secret contract | `b0379e5961db85b92eee2263d2f8db1b59f05c2f` | main | BLOCKED | — |
 | #899 | fix(scheduler): fail after summarized action errors | `41e2e6bd236cdba988cb2cae23b4cb5b66783951` | main | BLOCKED | CHANGES_REQUESTED |
 | #897 | fix(security): fail closed on unavailable dependency review | `d52b13075f614ee0da8f61571f2c8ed02430ff34` | main | BLOCKED | CHANGES_REQUESTED |
 | #896 | docs: establish authoritative automation control-plane specifications | `784bc9ff36b12b3d476d9caf5daaea415a58c847` | main | DIRTY | CHANGES_REQUESTED |
