@@ -99,7 +99,7 @@ flowchart LR
 | #1166 | fix(ci): recognize replacement tests in existing files | `634303023cea09e8496b8abd10ec47d5ca76f732` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `941e4bdf7e11157c3f9b596bd6648e7491501054` | main | BLOCKED | — |
 | #1162 | fix: use review credentials for agent dispatch | `fad1ed4de66e090d31881348a7c3c3f6518aa177` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `da640014fbd11d01f33e7a3df1e4a1355f09200f` | main | BLOCKED | — |
+| #1163 | docs: establish live product and technical gap baseline | `3b0e0043c1433f9d7a0366740fad7f858603fae3` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `d1da60569c079f59b211a2495cbe0fdb6a7a1d02` | main | BLOCKED | — |
