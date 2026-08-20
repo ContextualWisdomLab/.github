@@ -101,7 +101,7 @@ flowchart LR
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `e2c003171e65c631ac8f12143e04f810fdad0576` | main | BLOCKED | — |
 | #1157 | fix(coverage): discover hash-pinned requirements lock files | `107c572ab1ea077333c1199e98c734957a305ff6` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `f19549cde7c8afbe4ab23f44a1814f770d741930` | main | BLOCKED | — |
+| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `558c437f2903009b3f810fdb52a9ed63cb1ccea2` | main | BLOCKED | — |
 | #1155 | Fix duplicate repository dispatch scheduler runs | `5ef1fc6bb4aa7b2abc8e393f4a1abc45b4425e33` | main | BLOCKED | — |
 | #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `48dcca4f98b41dc1f891c3addffec5f0949d14fd` | main | BLOCKED | — |
 | #1153 | fix(strix): fail closed on incomplete provider scans | `e21951d73fbe05a3b9dda871b18c7480f1fe3e41` | main | BLOCKED | — |
