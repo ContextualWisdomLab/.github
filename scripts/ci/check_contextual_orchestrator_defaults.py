@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,6 +142,21 @@ def inspect_repository(root: Path) -> list[Finding]:
     return findings
 
 
+def _write_json_output(path_value: str, rendered: str) -> None:
+    """Write evidence through a real parent and a no-follow output binding."""
+
+    requested = Path(path_value)
+    parent = requested.parent.resolve(strict=True)
+    target = parent / requested.name
+    if target.exists() and target.is_symlink():
+        raise ValueError("json output must not be a symbolic link")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(target, flags | no_follow, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        output.write(rendered + "\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Scan one repository, print bounded JSON, and return a policy status."""
 
@@ -163,7 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(rendered)
     if args.json_output:
-        Path(args.json_output).write_text(rendered + "\n", encoding="utf-8")
+        _write_json_output(args.json_output, rendered)
     return 1 if findings else 0
 
 

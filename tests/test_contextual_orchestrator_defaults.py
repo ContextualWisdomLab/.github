@@ -113,6 +113,20 @@ def test_main_writes_bounded_json_and_returns_status(tmp_path: Path, capsys) -> 
     assert policy.main([str(tmp_path)]) == 1
 
 
+def test_json_output_rejects_symbolic_link(tmp_path: Path) -> None:
+    """Evidence cannot overwrite a path that resolves through a symbolic link."""
+
+    target = tmp_path / "target.json"
+    target.write_text("keep\n", encoding="utf-8")
+    output = tmp_path / "evidence.json"
+    output.symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        policy._write_json_output(str(output), "{}")
+
+    assert target.read_text(encoding="utf-8") == "keep\n"
+
+
 def test_source_read_errors_are_not_suppressed(tmp_path: Path) -> None:
     """Invalid source bytes fail closed rather than being silently skipped."""
 
