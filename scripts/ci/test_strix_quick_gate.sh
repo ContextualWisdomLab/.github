@@ -478,9 +478,12 @@ assert_strix_llm_file_read_is_literal_data() {
 }
 
 assert_strix_child_target_uses_constant_argument() {
-	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]' "strix gate passes a constant target argument to the child process"
-	assert_file_contains "$GATE_SCRIPT" 'cwd=str(target_cwd)' "strix gate runs the child process from the canonical target directory"
-	assert_file_not_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", target_path, "--scan-mode", scan_mode]' "strix gate must not forward raw target paths as child arguments"
+	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'cwd=str(scan_working_dir)' "strix gate runs the child process outside the scan target"
+	assert_file_contains "$GATE_SCRIPT" 'make_pull_request_scope_dir()' "strix gate creates PR scopes under its private runtime directory"
+	assert_file_contains "$GATE_SCRIPT" 'scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"' "strix gate keeps PR scopes inside the private runtime directory"
+	assert_file_not_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]' "strix gate must not rely on the child cwd as its scan target"
+	assert_file_not_contains "$GATE_SCRIPT" 'cwd=str(target_cwd)' "strix gate must not run the child process inside the scan target"
 }
 
 assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
@@ -3302,6 +3305,18 @@ success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-open
 		echo "scan ok"
 		exit 0
 		;;
+	scan-working-directory-isolated)
+		if [ "$PWD" = "$target_path" ] || [[ "$PWD" == "$target_path"/* ]]; then
+			echo "Error: Strix process inherited the untrusted scan target as cwd" >&2
+			exit 81
+		fi
+		if [ ! -f "$target_path/backend/app/pg_introspect/dsn_guard.py" ]; then
+			echo "Error: PostgreSQL DSN guard context missing from PR scope" >&2
+			exit 82
+		fi
+		echo "scan ok with isolated Strix working directory"
+		exit 0
+		;;
 	success-with-critical-report)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-success/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
@@ -5442,6 +5457,10 @@ EOS
 		for large_scope_index in $(seq 1 38); do
 			printf 'file %s\n' "$large_scope_index" >"$repo_root_dir/backend/large-scope/file-$large_scope_index.py"
 		done
+	elif [ "$scenario" = "scan-working-directory-isolated" ]; then
+		mkdir -p "$repo_root_dir/backend/app/pg_introspect"
+		printf '%s\n' 'HEAD_INTROSPECT_SHOULD_BE_SCANNED' >"$repo_root_dir/backend/app/pg_introspect/introspect.py"
+		printf '%s\n' 'TRUSTED_DSN_GUARD_CONTEXT_SHOULD_BE_SCANNED' >"$repo_root_dir/backend/app/pg_introspect/dsn_guard.py"
 	fi
 
 	local scenario_base_sha=""
@@ -6369,6 +6388,28 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
+		;;
+	scan-working-directory-isolated)
+		run_gate_case "scan-working-directory-isolated" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"0" \
+			"scan ok with isolated Strix working directory" \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"backend/app/pg_introspect/introspect.py"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -10823,6 +10864,27 @@ run_gate_case "pr-changed-scope-bounded" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "scan-working-directory-isolated" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with isolated Strix working directory" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"backend/app/pg_introspect/introspect.py"
 
 run_gate_case "pr-python-scope-context" \
 	"openai/gpt-4o-mini" \
