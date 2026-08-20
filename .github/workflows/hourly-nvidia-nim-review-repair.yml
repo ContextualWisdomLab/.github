@@ -105,11 +105,8 @@ on:
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
-<<<<<<< HEAD
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
-=======
       - docs/doctoring/embedrelay-hourly-review-caller.md
->>>>>>> 6a9fa889 (feat(automation): run EmbedRelay hourly NVIDIA NIM review repair)
 
 permissions:
   contents: read
