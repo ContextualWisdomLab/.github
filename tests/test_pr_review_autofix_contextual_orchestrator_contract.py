@@ -240,6 +240,8 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "Git Project. (2026). *git-ls-files*" in doctoring
     assert "Git Project. (2026). *githooks*" in doctoring
     assert "OpenCode. (n.d.). *Permissions*" in doctoring
+    assert "At gateway startup, its automatic model-discovery process" in doctoring
+    assert "--auto-discover-model-agents" not in doctoring
     assert "ignored-path inventory" in changelog
     assert "model-mutable Git metadata" in changelog
 
