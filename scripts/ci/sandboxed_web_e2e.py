@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -123,9 +124,22 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
-    parsed = urllib.parse.urlparse(url)
-    if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
-        raise ValueError(f"SSRF prevention: readiness URL host must be localhost, 127.0.0.1, or ::1, got: {parsed.hostname}")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Readiness URL is malformed: {url}") from exc
+    normalized_hostname = (hostname or "").rstrip(".").lower()
+    try:
+        loopback_host = ipaddress.ip_address(normalized_hostname).is_loopback
+    except ValueError:
+        loopback_host = False
+    if normalized_hostname not in {"localhost", "localhost.localdomain"} and not loopback_host:
+        raise ValueError(
+            "Readiness URL must target localhost or a loopback IP address, "
+            f"got: {url}"
+        )
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
