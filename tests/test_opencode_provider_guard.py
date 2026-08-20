@@ -15,6 +15,7 @@ GUARD = ROOT / "scripts" / "ci" / "opencode_provider_guard.sh"
 ALL_CREDENTIALS = {
     "GH_TOKEN": "gh-secret",
     "GITHUB_TOKEN": "github-secret",
+    "COPILOT_GITHUB_TOKEN": "copilot-secret",
     "OPENCODE_APP_TOKEN": "app-secret",
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "oidc-secret",
     "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc.invalid",
@@ -32,6 +33,7 @@ ALL_CREDENTIALS = {
 COMMON_SENSITIVE_NAMES = {
     "GH_TOKEN",
     "GITHUB_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
     "OPENCODE_APP_TOKEN",
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
     "ACTIONS_ID_TOKEN_REQUEST_URL",

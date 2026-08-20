@@ -22,6 +22,7 @@ from typing import NoReturn
 POLICY_PATH = ".github/opencode-private-free-models.json"
 MAX_POLICY_BYTES = 4096
 COMMIT_SHA_PATTERN = re.compile(r"\A[0-9a-fA-F]{40}\Z")
+OBJECT_SHA_PATTERN = re.compile(r"\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
 EXPECTED_POLICY: dict[str, object] = {
     "schema_version": 1,
     "allow_private_free_models": True,
@@ -175,7 +176,7 @@ def policy_blob_entry(repo_root: Path, base_sha: str) -> GitBlobEntry:
         raise PolicyEvaluationError("Git returned a different policy path")
     if entry.mode != "100644" or entry.object_type != "blob":
         raise PolicyDenied("trusted base policy must be one regular non-executable file")
-    if not COMMIT_SHA_PATTERN.fullmatch(entry.object_sha):
+    if not OBJECT_SHA_PATTERN.fullmatch(entry.object_sha):
         raise PolicyEvaluationError("Git returned an invalid policy blob SHA")
     return entry
 

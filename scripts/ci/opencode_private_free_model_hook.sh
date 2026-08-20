@@ -84,7 +84,7 @@ source_repository_is_public_without_credentials() {
   # public. Any timeout, transport failure, private auth requirement, or malformed
   # remote is deliberately indistinguishable here and fails closed.
   timeout --kill-after=5s 15s \
-    env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+    env -u GH_TOKEN -u GITHUB_TOKEN -u COPILOT_GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
       -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
       -u ACTIONS_RUNTIME_TOKEN -u STRIX_GITHUB_MODELS_TOKEN \
       -u OPENCODE_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY \

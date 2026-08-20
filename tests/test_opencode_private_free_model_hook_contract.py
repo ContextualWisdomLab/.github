@@ -36,6 +36,7 @@ def test_live_runner_sources_private_free_model_hook() -> None:
     assert "apply_private_free_model_policy" in runner
     assert "maybe_enable_private_free_models" in hook
     assert "install_provider_guard" in hook
+    assert "-u COPILOT_GITHUB_TOKEN" in hook
     assert POLICY.is_file()
     assert GUARD.is_file()
     assert "run_opencode_review_model_pool_impl.sh" not in runner

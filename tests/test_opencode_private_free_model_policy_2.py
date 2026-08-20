@@ -191,6 +191,23 @@ def test_policy_blob_entry_rejects_wrong_returned_path(monkeypatch: pytest.Monke
         POLICY_MODULE.policy_blob_entry(tmp_path, "0" * 40)
 
 
+def test_policy_blob_entry_accepts_sha256_object_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Git object-format migration does not reject a valid 64-character blob ID."""
+    object_sha = b"a" * 64
+    record = b"100644 blob " + object_sha + b"\t.github/opencode-private-free-models.json\x00"
+    monkeypatch.setattr(
+        POLICY_MODULE,
+        "run_git",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, record, b""),
+    )
+
+    entry = POLICY_MODULE.policy_blob_entry(tmp_path, "0" * 40)
+
+    assert entry.object_sha == object_sha.decode("ascii")
+
+
 def test_run_git_wraps_process_start_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """OS-level Git launch failures become bounded evaluation errors."""
     def fail_run(*_args: object, **_kwargs: object) -> object:
@@ -222,5 +239,4 @@ def test_non_git_directory_fails_closed(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "not a Git repository" in result.stderr
-
 
