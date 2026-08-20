@@ -14,7 +14,13 @@ KEY_CHARS = frozenset(
 )
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
+    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|"
+    r"t[\s\\]*o[\s\\]*k[\s\\]*e[\s\\]*n)",
+    re.IGNORECASE,
+)
+NON_SENSITIVE_KEY_RE = re.compile(
+    r"^(?:public|visible|safe|nonsecret)_token$|"
+    r"^token_(?:count|name|type|limit|length|ttl|expires?)$",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -34,11 +40,19 @@ PROVIDER_TOKEN_RES = (
 )
 
 
+def _is_sensitive_key(key: str) -> bool:
+    """Return whether a key names a credential rather than descriptive data."""
+    normalized = re.sub(r"[\s\\]+", "", key)
+    if NON_SENSITIVE_KEY_RE.fullmatch(normalized):
+        return False
+    return SENSITIVE_KEY_RE.search(normalized) is not None
+
+
 def _redact_json(value: Any) -> Any:
     """Recursively replace values whose JSON keys identify credentials."""
     if isinstance(value, dict):
         return {
-            key: REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
+            key: REDACTED if _is_sensitive_key(str(key)) else _redact_json(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -53,17 +67,25 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
     if cursor < len(text) and text[cursor] in "\"'":
         key_quote = text[cursor]
         cursor += 1
-    key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
         return None
+    key_chars: list[str] = []
     while cursor < len(text) and text[cursor] in KEY_CHARS:
+        key_chars.append(text[cursor])
         cursor += 1
-    key = text[key_start:cursor]
+        separator_start = cursor
+        while cursor < len(text) and text[cursor] in "\\ \t\r\n":
+            cursor += 1
+        if cursor < len(text) and text[cursor] in KEY_CHARS:
+            continue
+        cursor = max(separator_start, cursor)
+        break
+    key = "".join(key_chars)
     if key_quote:
         if cursor >= len(text) or text[cursor] != key_quote:
             return None
         cursor += 1
-    if not SENSITIVE_KEY_RE.search(key):
+    if not _is_sensitive_key(key):
         return None
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
@@ -157,24 +179,36 @@ def _redact_unstructured(text: str) -> str:
     return cleaned
 
 
-def _redact_line(line: str) -> str:
-    """Redact one log line, preferring recursive JSON handling when valid."""
-    try:
-        value = json.loads(line)
-    except json.JSONDecodeError:
-        return _redact_unstructured(line)
-    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
-
-
 def redact_text(text: str) -> str:
-    """Return redacted log text while preserving line boundaries."""
+    """Return redacted log text while preserving JSON and line boundaries."""
     if not text:
         return text
     output: list[str] = []
+    unstructured_lines: list[str] = []
+
+    def flush_unstructured() -> None:
+        """Redact adjacent non-JSON lines together so values may span lines."""
+        if unstructured_lines:
+            output.append(_redact_unstructured("".join(unstructured_lines)))
+            unstructured_lines.clear()
+
     for raw_line in text.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
         ending = raw_line[len(line) :]
-        output.append(_redact_line(line) + ending)
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            unstructured_lines.append(raw_line)
+        else:
+            if not isinstance(value, (dict, list)):
+                unstructured_lines.append(raw_line)
+                continue
+            flush_unstructured()
+            output.append(
+                json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+            )
+            output[-1] += ending
+    flush_unstructured()
     return "".join(output)
 
 
