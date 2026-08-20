@@ -1107,8 +1107,8 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
     assert 'exit "$strix_rc"' in workflow
     assert "Treating as a neutral skip" not in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
+    assert "authoritative vulnerability analysis" in workflow
+    assert "incomplete scan into passing security evidence" in workflow
     assert (
         '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
     )
