@@ -98,7 +98,7 @@ flowchart LR
 | #1169 | fix(security): keep baseline-only Strix outages non-blocking | `24893cee8fbb33791fe77629efa35ce2d8fb7076` | main | BLOCKED | — |
 | #1168 | feat: route autofix through contextual orchestrator | `e30ce15fd2e53c43b24c6a782a306e82209d2b0d` | main | BLOCKED | — |
 | #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
-| #1166 | fix(ci): recognize replacement tests in existing files | `634303023cea09e8496b8abd10ec47d5ca76f732` | main | BLOCKED | — |
+| #1166 | fix(ci): recognize replacement tests in existing files | `9e6063dc0d7298e394de87fc8f28aa3e0a6dced8` | main | BLOCKED | — |
 | #1165 | fix(automation): yield completed mention repositories fairly | `941e4bdf7e11157c3f9b596bd6648e7491501054` | main | BLOCKED | — |
 | #1162 | fix: use review credentials for agent dispatch | `fad1ed4de66e090d31881348a7c3c3f6518aa177` | main | BLOCKED | — |
 | #1163 | docs: establish live product and technical gap baseline | `e0c96d567a0ecf67340b64f6fdccb7567a4f9769` | main | BLOCKED | — |
