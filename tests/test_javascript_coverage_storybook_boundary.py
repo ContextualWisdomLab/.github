@@ -18,6 +18,7 @@ from scripts.ci import javascript_coverage_gate as gate
     ],
 )
 def test_storybook_development_evidence_is_not_product_runtime(path: str) -> None:
+    """Storybook configuration and stories do not count as shipped runtime."""
     assert not gate.is_runtime_source(path)
 
 
@@ -32,4 +33,5 @@ def test_storybook_development_evidence_is_not_product_runtime(path: str) -> Non
     ],
 )
 def test_nearby_and_near_miss_product_modules_remain_governed(path: str) -> None:
+    """Story-adjacent product modules remain subject to runtime coverage."""
     assert gate.is_runtime_source(path)
