@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-20 - Explicit Shell=False and Test Mocks
+**Vulnerability:** Command Injection / Incomplete Test Validation
+**Learning:** Adding explicit `shell=False` to `subprocess.Popen` and `subprocess.run` satisfies Bandit (`B603`) but can break unit tests that explicitly assert the kwarg was not passed (`assert "shell" not in kwargs`).
+**Prevention:** When enforcing `shell=False`, always update the corresponding test mocks to check `kwargs.get("shell") is False` rather than asserting the key's absence.
