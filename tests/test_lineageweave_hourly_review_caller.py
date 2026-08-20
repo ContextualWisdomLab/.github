@@ -83,9 +83,11 @@ def test_lineageweave_doctoring_preserves_operational_boundaries() -> None:
         "root-cause analysis",
         "remediation feasibility",
         "protected-main operational acceptance",
+        "`queue: max` is valid",
         "APA 7th references",
     ):
         assert phrase in doctoring
+    assert "unsupported concurrency key" not in doctoring
 
 
 def test_incident_doctoring_tracks_current_buyer_surface_stack() -> None:
