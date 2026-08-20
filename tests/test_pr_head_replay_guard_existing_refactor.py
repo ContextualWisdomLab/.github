@@ -19,9 +19,15 @@ def test_existing_test_file_can_supply_replacement_cases(monkeypatch, tmp_path):
             "8\t1\ttests/test_replacement.py",
         ]
     )
-    outputs = iter([name_status, numstat])
-    monkeypatch.setattr(guard, "git_output", lambda _root, _args: next(outputs))
 
+    def fake_git_output(_root, args):
+        if args[:2] == ["diff", "--name-status"]:
+            return name_status
+        if args[:2] == ["diff", "--numstat"]:
+            return numstat
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(guard, "git_output", fake_git_output)
     counts = {
         ("a", "tests/test_old.py"): 2,
         ("b", "tests/test_old.py"): 1,
@@ -34,7 +40,8 @@ def test_existing_test_file_can_supply_replacement_cases(monkeypatch, tmp_path):
         lambda _root, revision, path: counts[(revision, path)],
     )
 
-    regressed, added_files, added_cases = guard.test_file_changes(tmp_path, "a", "b")
+    regressed, added_files = guard.test_file_changes(tmp_path, "a", "b")
+    added_cases = guard.added_existing_test_cases(tmp_path, "a", "b")
 
     assert regressed == ("tests/test_old.py",)
     assert added_files == 0
