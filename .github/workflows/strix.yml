@@ -843,11 +843,11 @@ jobs:
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for
           # LLM-backend-unavailable outcomes (GitHub Models "Too many requests"
-          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached
-          # token-cap, connection/warm-up failures, and scanner ModelBehaviorError
-          # flakes) that could not complete a scan. A backend outage is CI
-          # infrastructure noise, not a security finding, so it must not fail
-          # the required check and block merges.
+          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached,
+          # connection/warm-up failures, and scanner ModelBehaviorError) that
+          # could not complete a scan. Provider failure is typed infrastructure
+          # evidence, but remains non-passing because no authoritative complete
+          # vulnerability result exists.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e
@@ -874,14 +874,13 @@ jobs:
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
           reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
 
-          # Neutral skip only when ALL hold: a backend-unavailability signal is
-          # present and no vulnerability was reported anywhere. This preserves
-          # real security gating while keeping uncontrollable provider outages
-          # from blocking current-head merge progress.
+          # Classify provider/backend exhaustion only when no vulnerability
+          # finding was emitted. Classification improves diagnosis; it never
+          # converts an incomplete scan into passing security evidence.
           if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
-            echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
-            exit 0
+            echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
+            exit "$strix_rc"
           fi
 
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
