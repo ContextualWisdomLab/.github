@@ -35,6 +35,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Documented GitHubClient initialization so the attempt-scoped artifact quality workflow reaches the repository-wide 100% docstring contract on every current head.
 - Bound OpenCode coverage source evidence to a validated immutable artifact ID and producer-attested workflow attempt, retained one-day source evidence, and made selective reruns fail closed before download on missing, malformed, or prior-attempt identity with full-rerun or fresh-dispatch guidance.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
