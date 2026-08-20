@@ -1,3 +1,5 @@
+"""Verify that the hourly coordinator keeps cross-repository credentials scoped."""
+
 from pathlib import Path
 
 
