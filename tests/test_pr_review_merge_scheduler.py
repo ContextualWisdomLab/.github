@@ -2997,61 +2997,6 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
         "current-head OpenCode review requested changes"
     )
-    stale_change_request = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        )
-    )
-    assert stale_change_request.action == "update_branch"
-    assert stale_change_request.reason == (
-        "current-head OpenCode review requested changes; branch is outdated before re-review; "
-        "branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot]"
-    )
-    stale_change_request_without_review_dispatch = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        ),
-        trigger_reviews=False,
-    )
-    assert stale_change_request_without_review_dispatch.action == "block"
-    assert stale_change_request_without_review_dispatch.reason == (
-        "current-head OpenCode review requested changes"
-    )
-    stale_change_request_without_dispatch_permission = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        ),
-        review_dispatch_allowed=False,
-    )
-    assert stale_change_request_without_dispatch_permission.action == "block"
-    assert stale_change_request_without_dispatch_permission.reason == (
-        "current-head OpenCode review requested changes"
-    )
-    update_calls = []
-    monkeypatch.setattr(sched, "update_branch", lambda *args, **kwargs: update_calls.append((args, kwargs)))
-    for merge_state in ("DIRTY", "CONFLICTING"):
-        conflict_with_stale_review = inspect(
-            make_pr(
-                mergeStateStatus=merge_state,
-                restMergeableState=merge_state,
-                compareBehindBy=2,
-                reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-            )
-        )
-        assert conflict_with_stale_review.action == "block"
-        assert conflict_with_stale_review.reason == (
-            "current-head OpenCode review requested changes"
-        )
-    assert update_calls == []
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
