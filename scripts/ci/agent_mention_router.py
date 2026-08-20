@@ -573,8 +573,9 @@ def dispatch_request(
             "::warning::Agent mention acknowledgement comment failed; "
             f"durable dispatch state is preserved: {message[:1000]}"
         )
-    if ledger_artifact_cache is not None:
-        ledger_artifact_cache[acknowledgement_cache_key] = True
+    else:
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 

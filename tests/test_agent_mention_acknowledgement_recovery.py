@@ -142,14 +142,17 @@ def test_acknowledgement_comment_failure_does_not_hide_dispatch(capsys) -> None:
     module = load_module()
     central = FakeClient()
     target = FakeClient(fail_comment=True)
+    cache = {}
 
     assert module.dispatch_request(
         request(module),
         target_client=target,
         dispatch_client=central,
         opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
+        ledger_artifact_cache=cache,
     ) == ("@opencode-agent",)
 
     assert len(dispatch_mutations(central)) == 1
     assert len(acknowledgement_comments(target)) == 1
+    assert not any(key.startswith("acknowledgement:") for key in cache)
     assert "durable dispatch state is preserved" in capsys.readouterr().out
