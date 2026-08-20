@@ -25,6 +25,7 @@ VERSION_LINE_RE = re.compile(r"(?m)^    version:[ \t]*['\"]?([^'\"\s]+)['\"]?[ \
 TARBALL_RE = re.compile(r"(?:^|[, {])[ \t]*tarball:[ \t]*([^, }]+)")
 INTEGRITY_RE = re.compile(r"(?:^|[, {])[ \t]*integrity:[ \t]*(sha512-[A-Za-z0-9+/=]+)")
 AFFECTED_RANGE_RE = re.compile(r"^[ \t]*<[ \t]*(\d+\.\d+\.\d+)[ \t]*$")
+SHEETJS_EXCEPTION_VERSION = "0.20.3"
 SHEETJS_URL_RE = re.compile(
     r"^/xlsx-(?P<version>\d+\.\d+\.\d+)/xlsx-(?P=version)\.tgz$"
 )
@@ -245,7 +246,44 @@ def reconcile_payload(
             if source.package_name == package_name
             and (source.version == package_version or not source.version)
         ]
-        if not candidates:
+        if not candidates and package_name != "xlsx":
+            continue
+        if len(candidates) != 1:
+            source = candidates[0] if candidates else DirectSource(
+                package_name=package_name,
+                version=package_version,
+                source_url="",
+                integrity="",
+                valid=False,
+                reason="no unique direct-source provenance matches package and version"
+                if not candidates
+                else "multiple direct-source records match package and version",
+            )
+            reason = (
+                "no unique direct-source provenance matches package and version"
+                if not candidates
+                else "multiple direct-source records match package and version"
+            )
+            retained = []
+            for vulnerability in vulnerabilities:
+                if not isinstance(vulnerability, dict):
+                    raise ValueError("OSV vulnerability entries must be objects")
+                retained.append(vulnerability)
+                audit.append(
+                    audit_entry(
+                        label=label,
+                        source=source,
+                        package_name=package_name,
+                        package_version=package_version,
+                        vulnerability=vulnerability,
+                        affected_range=authoritative_affected_range(
+                            vulnerability, package_name
+                        ),
+                        status="SCANNER_METADATA_CONFLICT",
+                        reason=reason,
+                    )
+                )
+            package["vulnerabilities"] = retained
             continue
         source = candidates[0]
         retained: list[dict[str, Any]] = []
@@ -285,6 +323,30 @@ def reconcile_payload(
                         affected_range=affected_range,
                         status="SCANNER_METADATA_CONFLICT",
                         reason="advisory lacks one machine-checkable exclusive affected upper bound",
+                    )
+                )
+                continue
+            if package_version != SHEETJS_EXCEPTION_VERSION:
+                retained.append(vulnerability)
+                if version_key < upper_key:
+                    status = "AFFECTED"
+                    reason = "exact direct-source version remains inside the affected range"
+                else:
+                    status = "SCANNER_METADATA_CONFLICT"
+                    reason = (
+                        "direct-source reconciliation is limited to immutable "
+                        "SheetJS xlsx@0.20.3"
+                    )
+                audit.append(
+                    audit_entry(
+                        label=label,
+                        source=source,
+                        package_name=package_name,
+                        package_version=package_version,
+                        vulnerability=vulnerability,
+                        affected_range=affected_range,
+                        status=status,
+                        reason=reason,
                     )
                 )
                 continue

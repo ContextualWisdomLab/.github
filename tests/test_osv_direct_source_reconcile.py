@@ -187,7 +187,17 @@ class DirectSourceReconcileTests(unittest.TestCase):
         payload = results("0.18.5", [vulnerability("GHSA-registry", "< 0.19.3")])
         reconciled, audit = self.run_case(payload, registry_lock("0.18.5"))
         self.assertEqual(remaining_ids(reconciled), ["GHSA-registry"])
+        self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+
+        payload["results"][0]["packages"][0]["package"]["name"] = "other"
+        reconciled, audit = OSV.reconcile_payload(
+            payload, registry_lock("0.18.5"), label="other"
+        )
         self.assertEqual(audit, [])
+        self.assertEqual(
+            reconciled["results"][0]["packages"][0]["vulnerabilities"],
+            [vulnerability("GHSA-registry", "< 0.19.3")],
+        )
 
     def test_unverifiable_direct_provenance_fails_closed(self) -> None:
         for lock_text in (
@@ -206,6 +216,46 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 reconciled, audit = self.run_case(payload, lock_text)
                 self.assertEqual(remaining_ids(reconciled), ["GHSA-unknown-source"])
                 self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+
+    def test_only_exact_sheetjs_exception_version_can_reconcile(self) -> None:
+        for version in ("0.20.2", "0.20.4", "1.0.0"):
+            with self.subTest(version=version):
+                payload = results(
+                    version, [vulnerability("GHSA-version-control", "< 0.20.2")]
+                )
+                reconciled, audit = self.run_case(
+                    payload, direct_lock(version)
+                )
+                self.assertEqual(
+                    remaining_ids(reconciled), ["GHSA-version-control"]
+                )
+                self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+
+    def test_conflicting_duplicate_direct_sources_fail_closed(self) -> None:
+        payload = results(
+            "0.20.3", [vulnerability("GHSA-duplicate-source", "< 0.20.2")]
+        )
+        lock_text = direct_lock("0.20.3") + direct_lock(
+            "0.20.3", host="example.invalid"
+        )
+        reconciled, audit = self.run_case(payload, lock_text)
+        self.assertEqual(remaining_ids(reconciled), ["GHSA-duplicate-source"])
+        self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+        self.assertIn("multiple direct-source", audit[0]["reason"])
+
+        payload["results"][0]["packages"][0]["vulnerabilities"] = ["bad"]
+        with self.assertRaises(ValueError):
+            OSV.reconcile_payload(payload, lock_text, label="bad")
+
+    def test_exact_exception_version_inside_range_remains_affected(self) -> None:
+        payload = results(
+            "0.20.3", [vulnerability("GHSA-affected-exception", "< 0.20.4")]
+        )
+        reconciled, audit = self.run_case(payload, direct_lock("0.20.3"))
+        self.assertEqual(
+            remaining_ids(reconciled), ["GHSA-affected-exception"]
+        )
+        self.assertEqual(audit[0]["status"], "AFFECTED")
 
     def test_low_level_semver_integrity_and_source_validation_boundaries(self) -> None:
         self.assertEqual(OSV.parse_semver("0.20.3"), (0, 20, 3))
@@ -335,7 +385,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
             label="registry",
         )
         self.assertEqual(remaining_ids(untouched), ["GHSA-registry"])
-        self.assertEqual(audit, [])
+        self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
 
     def test_io_and_existing_audit_boundaries_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -400,6 +450,10 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertLess(reconcile_step, require_output)
         self.assertLess(require_output, reporter)
         self.assertIn("github.workflow_sha", workflow)
+        self.assertNotIn(
+            "github.repository == 'ContextualWisdomLab/.github' && github.event.pull_request.head.sha",
+            workflow,
+        )
         self.assertIn("osv_direct_source_reconcile.py", workflow)
         self.assertIn("osv-provenance-audit.json", workflow)
 
