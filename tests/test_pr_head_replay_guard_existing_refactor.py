@@ -21,6 +21,7 @@ def test_existing_test_file_can_supply_replacement_cases(monkeypatch, tmp_path):
     )
 
     def fake_git_output(_root, args):
+        """Return the two diff views used by the replacement counter."""
         if args[:2] == ["diff", "--name-status"]:
             return name_status
         if args[:2] == ["diff", "--numstat"]:
