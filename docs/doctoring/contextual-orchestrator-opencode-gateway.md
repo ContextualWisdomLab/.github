@@ -1,7 +1,7 @@
 # Contextual Orchestrator OpenCode gateway
 
 The trusted OpenCode review job starts `contextual-orchestrator` from the
-pinned commit `04761e412083e02ef6ccc0a888ceec4c0be71553`. The sidecar binds only
+pinned commit `0071751782ae535721e71785c3037989d2d27b77`. The sidecar binds only
 to `127.0.0.1:18080`, registers any available provider keys in its process-local
 KV bootstrap, discovers models across Bytez, both NVIDIA NIM credentials,
 OpenRouter, and OpenAI, then serves the existing OpenAI-compatible review
