@@ -85,13 +85,17 @@ def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     return match.group(1)
 
 
-def _workflow_neutralizes(log_text: str) -> bool:
-    """Execute the outer workflow's backend-neutralization condition."""
+def _workflow_neutralizes(
+    log_text: str,
+    *,
+    signal_name: str = "backend_unavailable_signal",
+) -> bool:
+    """Execute the outer workflow's infrastructure-neutralization condition."""
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-    backend_pattern = _workflow_signal_pattern(
+    infrastructure_pattern = _workflow_signal_pattern(
         workflow,
-        "backend_unavailable_signal",
+        signal_name,
     )
     vulnerability_pattern = _workflow_signal_pattern(
         workflow,
@@ -101,7 +105,7 @@ def _workflow_neutralizes(log_text: str) -> bool:
         log_path = Path(temp_dir) / "strix.log"
         log_path.write_text(log_text, encoding="utf-8")
         backend = subprocess.run(
-            ["grep", "-Eiq", backend_pattern, str(log_path)],
+            ["grep", "-Eiq", infrastructure_pattern, str(log_path)],
             check=False,
             capture_output=True,
             text=True,
@@ -243,6 +247,29 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_outer_workflow_neutralizes_missing_caido_guest_runtime(self) -> None:
+        """Treat an unavailable local Caido proxy as inconclusive infrastructure."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n",
+                signal_name="security_runtime_unavailable_signal",
+            )
+        )
+
+    def test_outer_workflow_keeps_caido_runtime_failure_with_finding_blocking(self) -> None:
+        """A runtime failure never downgrades an emitted vulnerability report."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 1\n",
+                signal_name="security_runtime_unavailable_signal",
+            )
+        )
+
     def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
@@ -250,6 +277,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("Nvidia_nimException", workflow)
         self.assertIn("Error code:[[:space:]]*404", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
+        self.assertIn("security_runtime_unavailable_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
         self.assertIn(
             '! grep -Eiq "$reported_vulnerability_signal"',
