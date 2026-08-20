@@ -12,23 +12,12 @@ on:
       - docs/doctoring/lineageweave-hourly-review-caller.md
       - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
       - requirements-opencode-review-ci-hashes.txt
-  push:
-    paths:
-      - .github/workflows/lineageweave-hourly-review-repair.yml
-      - .github/workflows/lineageweave-hourly-review-repair-quality.yml
-      - scripts/ci/pr_review_fix_stack_scheduler.py
-      - tests/test_pr_review_fix_stack_scheduler.py
-      - tests/test_pr_review_fix_scheduler.py
-      - tests/test_lineageweave_hourly_review_caller.py
-      - docs/doctoring/lineageweave-hourly-review-caller.md
-      - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
-      - requirements-opencode-review-ci-hashes.txt
 
 permissions:
   contents: read
 
 concurrency:
-  group: lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,7 +33,7 @@ jobs:
       - name: Checkout exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
@@ -73,10 +62,5 @@ jobs:
             tests/test_lineageweave_hourly_review_caller.py \
             tests/test_pr_review_fix_stack_scheduler.py
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
-          BEFORE_SHA="${{ github.event.before }}"
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            git diff --check "$BASE_SHA...$HEAD_SHA"
-          else
-            git diff --check "$BEFORE_SHA...$HEAD_SHA"
-          fi
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          git diff --check "$BASE_SHA...$HEAD_SHA"

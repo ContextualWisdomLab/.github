@@ -159,7 +159,9 @@ Machine-checkable contracts require:
 - absence of model, Copilot, merge, release, and target-setting authority;
 - production statement and branch coverage 100% for the stack driver;
 - public API docstring coverage 100%; and
-- a focused path-filtered quality workflow for caller, driver, tests, and doctoring.
+- a focused pull-request-only quality workflow for caller, driver, tests, and
+  doctoring. A redundant branch-push trigger must not leave a cancelled
+  duplicate check on the same exact head.
 
 Rollback removes only this caller, its focused quality workflow, the product-neutral
 stack driver if no other caller consumes it, its tests, and its doctoring records.

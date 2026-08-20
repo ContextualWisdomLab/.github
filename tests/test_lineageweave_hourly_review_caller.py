@@ -139,8 +139,9 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     )
 
     assert "\npermissions:\n  contents: read\n" in quality
+    assert "\n  push:" not in quality
     assert "cancel-in-progress: true" in quality
-    assert "lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}" in quality
+    assert "lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}" in quality
     assert "persist-credentials: false" in quality
     assert "fetch-depth: 0" in quality
     assert "--require-hashes" in quality
@@ -151,9 +152,8 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     assert "python -m compileall -q \\" in quality
     assert "git diff --check" in quality
     assert 'git diff --check "$BASE_SHA...$HEAD_SHA"' in quality
-    assert 'git diff --check "$BEFORE_SHA...$HEAD_SHA"' in quality
     for path in owned_paths:
-        assert quality.count(f"      - {path}") == 2
+        assert quality.count(f"      - {path}") == 1
     for forbidden in (
         "actions: write",
         "contents: write",
