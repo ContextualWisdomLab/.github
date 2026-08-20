@@ -23,7 +23,9 @@ policy and the fail-closed check that leaf repositories can cite.
    et al., 2009). DNS-rebinding helper suffixes, RFC 6761 `.test` /
    `.invalid` names, and hosts that embed a dotted IPv4 address or a 32-bit
    numeric alias (for example `169.254.169.254.attacker.example` or
-   `169-254-169-254.attacker.example`) are never allowlist members.
+   `169-254-169-254.attacker.example`) are never allowlist members. ASCII IDNA
+   `xn--` labels are also rejected because their decoded Unicode name can hide
+   the endpoint represented by the visible allowlist value.
 3. Require explicit private-network trust. Implicit RFC1918, metadata-service,
    multicast `.local` (Cheshire & Krochmal, 2013b), Kubernetes `.svc`
    names (The Kubernetes Authors, n.d.), or special-use internal suffixes
@@ -64,7 +66,8 @@ the schema keys match production constants, and each fail-closed control has a
 unique rejection. `tests/test_object_storage_contract_hardening.py` proves
 nested schema objects stay closed, NaN/Infinity are rejected, exact-host
 allowlists exclude localhost, metadata, cluster-local names, IPv4 and IPv6
-literals, decimal or hexadecimal IP aliases, Unicode, case aliases, and
+literals, decimal or hexadecimal IP aliases, Unicode and punycode IDNA labels,
+case aliases, and
 multicast `.local` names, a denied private-network policy rejects
 single-label, Kubernetes `.svc`, and special-use internal hosts, custom
 endpoints reject ports above 65535, schema value constraints match the

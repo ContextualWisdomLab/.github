@@ -228,9 +228,9 @@ def is_exact_dns_host(host: str) -> bool:
     """Return whether *host* is one exact lowercase DNS name.
 
     Localhost, link-local metadata names, IP literals, decimal or hexadecimal
-    IP aliases, embedded or hyphenated IPv4 sequences, Unicode, case aliases, RFC 6761
-    ``.test`` / ``.invalid``, and DNS-rebinding helper suffixes are not exact
-    allowlist members.
+    IP aliases, embedded or hyphenated IPv4 sequences, Unicode or punycode labels,
+    case aliases, RFC 6761 ``.test`` / ``.invalid``, and DNS-rebinding helper
+    suffixes are not exact allowlist members.
     """
     if not isinstance(host, str) or not host or len(host) > MAX_DNS_HOST_LENGTH:
         return False
@@ -249,6 +249,11 @@ def is_exact_dns_host(host: str) -> bool:
     labels = host.split(".")
     for label in labels:
         if not label or len(label) > 63:
+            return False
+        # IDNA labels can decode to an endpoint different from the visible ASCII
+        # spelling; exact allowlists therefore accept neither implicit conversion
+        # nor opaque ``xn--`` labels.
+        if label.startswith("xn--"):
             return False
         if label.startswith("-") or label.endswith("-"):
             return False

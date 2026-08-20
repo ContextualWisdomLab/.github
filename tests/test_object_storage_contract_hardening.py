@@ -77,12 +77,13 @@ def test_loader_rejects_non_finite_json_constants() -> None:
         "metadata.goog",
         "OBJECTS.EXAMPLE.COM",
         "objécts.example.com",
+        "xn--127-0-0-1-9za.example.com",
     ],
 )
 def test_exact_dns_hosts_reject_local_metadata_literal_and_noncanonical_names(
     host: str,
 ) -> None:
-    """An exact allowlist must not admit metadata, IP, Unicode, or case aliases."""
+    """An exact allowlist must not admit metadata, IP, IDNA, or case aliases."""
     assert validator.is_exact_dns_host(host) is False
 
 
