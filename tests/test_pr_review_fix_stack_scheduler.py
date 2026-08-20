@@ -446,6 +446,16 @@ def test_stack_handles_inspection_failure_and_empty_queue(
     assert payload["inspected"] == 0
 
 
+def test_stack_handles_external_os_error(monkeypatch, capsys) -> None:
+    """An external GitHub transport error fails closed with a visible reason."""
+
+    monkeypatch.setattr(stack, "fetch_pr", lambda _repo, _number: (_ for _ in ()).throw(OSError("network down")))
+    assert stack.process_stack(arguments((258,))) == 1
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["decisions"][0]["action"] == "error"
+    assert payload["decisions"][0]["reasons"] == ["network down"]
+
+
 @pytest.mark.parametrize(
     "decision",
     [

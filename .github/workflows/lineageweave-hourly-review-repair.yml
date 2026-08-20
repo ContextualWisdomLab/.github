@@ -70,6 +70,7 @@ jobs:
 
       - name: Exchange OpenCode app token for scheduler mutations
         id: scheduler_app_token
+        if: ${{ inputs.dry_run != true }}
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -152,8 +153,8 @@ jobs:
 
       - name: Dispatch one dependency-safe review repair
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
-          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
+          GH_TOKEN: ${{ inputs.dry_run == true && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ inputs.dry_run == true || secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
         run: |
           set -euo pipefail
           if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then

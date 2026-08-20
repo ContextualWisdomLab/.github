@@ -179,7 +179,7 @@ def process_stack(args: argparse.Namespace) -> int:
         if previous is not None and previous_number is not None:
             try:
                 refreshed_parent = _single_pull_request(args.repo, previous_number)
-            except RuntimeError as exc:
+            except (RuntimeError, OSError, ValueError) as exc:
                 action, reasons = "error", (str(exc),)
             else:
                 if refreshed_parent["headRefOid"].lower() != previous["headRefOid"].lower():
@@ -193,7 +193,7 @@ def process_stack(args: argparse.Namespace) -> int:
         if not action:
             try:
                 pr = _single_pull_request(args.repo, number)
-            except RuntimeError as exc:
+            except (RuntimeError, OSError, ValueError) as exc:
                 action, reasons = "error", (str(exc),)
         if not action:
             expected_name = (
@@ -225,7 +225,7 @@ def process_stack(args: argparse.Namespace) -> int:
                     action, reasons = _normalize_decision(
                         inspect_pr(args.repo, pr, local_args)
                     )
-                except (RuntimeError, ValueError) as exc:
+                except (RuntimeError, OSError, ValueError) as exc:
                     action, reasons = "error", (str(exc),)
 
         inspected += 1

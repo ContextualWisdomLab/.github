@@ -7,24 +7,28 @@ on:
       - .github/workflows/lineageweave-hourly-review-repair-quality.yml
       - scripts/ci/pr_review_fix_stack_scheduler.py
       - tests/test_pr_review_fix_stack_scheduler.py
+      - tests/test_pr_review_fix_scheduler.py
       - tests/test_lineageweave_hourly_review_caller.py
       - docs/doctoring/lineageweave-hourly-review-caller.md
       - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
+      - requirements-opencode-review-ci-hashes.txt
   push:
     paths:
       - .github/workflows/lineageweave-hourly-review-repair.yml
       - .github/workflows/lineageweave-hourly-review-repair-quality.yml
       - scripts/ci/pr_review_fix_stack_scheduler.py
       - tests/test_pr_review_fix_stack_scheduler.py
+      - tests/test_pr_review_fix_scheduler.py
       - tests/test_lineageweave_hourly_review_caller.py
       - docs/doctoring/lineageweave-hourly-review-caller.md
       - docs/doctoring/lineageweave-buyer-surface-opencode-incident.md
+      - requirements-opencode-review-ci-hashes.txt
 
 permissions:
   contents: read
 
 concurrency:
-  group: lineageweave-hourly-review-repair-quality-${{ github.event.pull_request.number || github.ref }}
+  group: lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +45,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -67,4 +72,11 @@ jobs:
             scripts/ci/pr_review_fix_stack_scheduler.py \
             tests/test_lineageweave_hourly_review_caller.py \
             tests/test_pr_review_fix_stack_scheduler.py
-          git diff --check
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          BEFORE_SHA="${{ github.event.before }}"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git diff --check "$BASE_SHA...$HEAD_SHA"
+          else
+            git diff --check "$BEFORE_SHA...$HEAD_SHA"
+          fi

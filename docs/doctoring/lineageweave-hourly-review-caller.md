@@ -16,7 +16,7 @@ when exact-head OpenCode feedback, a failed-check root-cause review, or an
 approved/unreviewed merge-conflict repair is actionable. It never treats a
 missing initial review as repair evidence.
 
-The caller runs at minute 4 of every hour and also exposes `workflow_dispatch`
+The caller runs at minute 4 UTC of every hour and also exposes `workflow_dispatch`
 for an operator-controlled acceptance run. It does not contain product edit
 logic, LLM credentials, approval authority, merge authority, or release
 authority. LineageWeave remains independently deployable; privileged automation
@@ -114,6 +114,9 @@ established user token is absent. It accepts only `PR_REVIEW_MERGE_TOKEN`,
 never uses `secrets: inherit`, receives `NVIDIA_NIM_API_KEY`, or introduces
 `COPILOT_GITHUB_TOKEN`.
 
+A manual `dry_run` uses the read-only `github.token`, skips app-token exchange,
+and never materializes or validates a mutation credential.
+
 Model execution remains inside the separately reviewed central worker. Before
 protected-main activation, `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain
 the exact `ContextualWisdomLab/LineageWeave` repository. A missing or mismatched
@@ -178,7 +181,7 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-t
 
 GitHub, Inc. (n.d.-b). *Reuse workflows*. GitHub Docs. Retrieved August 20,
 2026, from
-https://docs.github.com/en/actions/how-tos/sharing-automations/reuse-workflows
+https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
 
 GitHub, Inc. (n.d.-c). *OpenID Connect reference*. GitHub Docs. Retrieved
 August 20, 2026, from

@@ -1,16 +1,16 @@
 """Contract tests for LineageWeave's bounded hourly review-repair caller."""
 
+import re
 from pathlib import Path
 
 
-CALLER = Path(".github/workflows/lineageweave-hourly-review-repair.yml")
-QUALITY_WORKFLOW = Path(
-    ".github/workflows/lineageweave-hourly-review-repair-quality.yml"
-)
-STACK_DRIVER = Path("scripts/ci/pr_review_fix_stack_scheduler.py")
-DOCTORING = Path("docs/doctoring/lineageweave-hourly-review-caller.md")
-INCIDENT = Path("docs/doctoring/lineageweave-buyer-surface-opencode-incident.md")
-ONE_SHOT = Path(".github/workflows/one-shot-repair-lineageweave-stack.yml")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CALLER = REPO_ROOT / ".github/workflows/lineageweave-hourly-review-repair.yml"
+QUALITY_WORKFLOW = REPO_ROOT / ".github/workflows/lineageweave-hourly-review-repair-quality.yml"
+STACK_DRIVER = REPO_ROOT / "scripts/ci/pr_review_fix_stack_scheduler.py"
+DOCTORING = REPO_ROOT / "docs/doctoring/lineageweave-hourly-review-caller.md"
+INCIDENT = REPO_ROOT / "docs/doctoring/lineageweave-buyer-surface-opencode-incident.md"
+ONE_SHOT = REPO_ROOT / ".github/workflows/one-shot-repair-lineageweave-stack.yml"
 
 
 def _read(path: Path) -> str:
@@ -50,6 +50,9 @@ def test_lineageweave_caller_is_protected_main_only_and_least_privilege() -> Non
     assert "PR_REVIEW_MERGE_TOKEN" in caller
     assert "OPENCODE_APPROVE_TOKEN" in caller
     assert "persist-credentials: false" in caller
+    assert "if: ${{ inputs.dry_run != true }}" in caller
+    assert "github.token" in caller
+    assert "MUTATION_CREDENTIAL_AVAILABLE: ${{ inputs.dry_run == true ||" in caller
     assert "--connect-timeout 10" in caller
     assert "--max-time 30" in caller
     assert "secrets: inherit" not in caller
@@ -71,7 +74,7 @@ def test_stack_driver_is_product_neutral_and_one_shot_is_absent() -> None:
     driver = _read(STACK_DRIVER)
     assert "ContextualWisdomLab/LineageWeave" not in driver
     for number in ("258", "260", "261", "262", "263", "264"):
-        assert number not in driver
+        assert re.search(rf"(?<![0-9]){number}(?![0-9])", driver) is None
     assert "expected parent head" in driver
     assert "max_dispatches != 1" in driver
     assert not ONE_SHOT.exists()
@@ -128,14 +131,18 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
         ".github/workflows/lineageweave-hourly-review-repair-quality.yml",
         "scripts/ci/pr_review_fix_stack_scheduler.py",
         "tests/test_pr_review_fix_stack_scheduler.py",
+        "tests/test_pr_review_fix_scheduler.py",
         "tests/test_lineageweave_hourly_review_caller.py",
         "docs/doctoring/lineageweave-hourly-review-caller.md",
         "docs/doctoring/lineageweave-buyer-surface-opencode-incident.md",
+        "requirements-opencode-review-ci-hashes.txt",
     )
 
     assert "\npermissions:\n  contents: read\n" in quality
     assert "cancel-in-progress: true" in quality
+    assert "lineageweave-hourly-review-quality-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}" in quality
     assert "persist-credentials: false" in quality
+    assert "fetch-depth: 0" in quality
     assert "--require-hashes" in quality
     assert "tests/test_pr_review_fix_stack_scheduler.py" in quality
     assert "tests/test_pr_review_fix_scheduler.py" in quality
@@ -143,6 +150,8 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     assert "interrogate -vv --fail-under 100" in quality
     assert "python -m compileall -q \\" in quality
     assert "git diff --check" in quality
+    assert 'git diff --check "$BASE_SHA...$HEAD_SHA"' in quality
+    assert 'git diff --check "$BEFORE_SHA...$HEAD_SHA"' in quality
     for path in owned_paths:
         assert quality.count(f"      - {path}") == 2
     for forbidden in (
