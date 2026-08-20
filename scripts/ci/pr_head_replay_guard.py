@@ -113,8 +113,22 @@ class ReplayEvidence:
 
 def git_output(repo_root: Path, args: Sequence[str]) -> str:
     """Run a read-only git command and return stripped standard output."""
+    command_args = list(args)
+    if command_args and command_args[0] == "diff":
+        # A repository-local diff.ignoreSubmodules=all setting must not hide
+        # attacker-controlled gitlink changes from replay evidence.
+        command_args = [
+            "diff",
+            "--ignore-submodules=none",
+            *(
+                argument
+                for argument in command_args[1:]
+                if argument != "--ignore-submodules"
+                and not argument.startswith("--ignore-submodules=")
+            ),
+        ]
     completed = subprocess.run(
-        ["git", "-C", str(repo_root), *args],
+        ["git", "-C", str(repo_root), *command_args],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -122,7 +136,7 @@ def git_output(repo_root: Path, args: Sequence[str]) -> str:
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "git command failed"
-        raise RuntimeError(f"git {args[0]} failed: {detail[:500]}")
+        raise RuntimeError(f"git {command_args[0]} failed: {detail[:500]}")
     return completed.stdout.strip()
 
 

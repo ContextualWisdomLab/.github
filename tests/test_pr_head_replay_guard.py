@@ -154,6 +154,37 @@ def test_diff_statistics_skips_non_numeric_numstat(monkeypatch, tmp_path):
     assert guard.diff_statistics(tmp_path, "a", "b") == (2, 3, 4)
 
 
+def test_diff_evidence_overrides_repository_submodule_ignore_setting(tmp_path):
+    """Replay evidence includes changed gitlinks despite a hostile local config."""
+    submodule = tmp_path / "submodule"
+    submodule.mkdir()
+    git(submodule, "init", "-b", "main")
+    git(submodule, "config", "user.name", "Test")
+    git(submodule, "config", "user.email", "test@example.com")
+    write(submodule, "payload.txt", "first\n")
+    first_submodule_commit = commit(submodule, "submodule first")
+    write(submodule, "payload.txt", "second\n")
+    second_submodule_commit = commit(submodule, "submodule second")
+    git(submodule, "checkout", first_submodule_commit)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(submodule), "vendor/fixture")
+    git(repo, "commit", "-m", "add submodule")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo / "vendor/fixture", "checkout", second_submodule_commit)
+    git(repo, "add", "vendor/fixture")
+    git(repo, "commit", "-m", "advance submodule")
+    head = git(repo, "rev-parse", "HEAD")
+    git(repo, "config", "diff.ignoreSubmodules", "all")
+
+    assert first_submodule_commit != second_submodule_commit
+    assert guard.git_output(repo, ["diff", "--name-only", base, head]) == "vendor/fixture"
+
+
 def fixture_repo_with_base_tests(tmp_path: Path) -> tuple[Path, str, str]:
     """Create a merged PR whose base merge brought a wrapper and its regression test."""
     repo = tmp_path / "repo"
