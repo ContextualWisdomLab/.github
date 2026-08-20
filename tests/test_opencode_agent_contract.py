@@ -1,3 +1,5 @@
+"""Executable contracts for the trusted OpenCode review configuration."""
+
 import json
 import os
 import re
@@ -343,6 +345,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         assert f'"{model_name}": {{' in workflow
 
     def is_reasoning_capable(model_name: str) -> bool:
+        """Return whether a model supports the high-effort reasoning contract."""
         return (
             model_name.startswith("gpt-5")
             or model_name.startswith("openai/gpt-5")
@@ -1855,6 +1858,7 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
 
     def timeout_minutes(pattern: str) -> int:
+        """Extract a required workflow timeout and fail if it is absent."""
         match = re.search(pattern, workflow, re.MULTILINE)
         assert match, f"missing timeout contract: {pattern}"
         return int(match.group(1))
