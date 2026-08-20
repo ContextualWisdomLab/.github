@@ -191,6 +191,16 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert "executable" not in run_calls[0][1]
 
 
+def test_subprocess_security_suppressions_cover_both_call_sites():
+    """Trusted argv-based subprocess calls document both security linters."""
+    source = Path(sandboxed_web_e2e.__file__).read_text(encoding="utf-8")
+    call_lines = [
+        line for line in source.splitlines() if "subprocess.Popen(" in line or "subprocess.run(" in line
+    ]
+    assert len(call_lines) == 2
+    assert all("# noqa: S603" in line and "# nosec B603" in line for line in call_lines)
+
+
 def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     """Readiness polling accepts HTTP responses after transient URL errors."""
 
