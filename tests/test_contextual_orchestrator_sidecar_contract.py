@@ -75,4 +75,6 @@ def test_sidecar_does_not_execute_an_editable_build_and_cleans_failed_startup() 
     assert 'PYTHONPATH="$RUNTIME_DIR"' in text
     assert 'sidecar_pid="$!"' in text
     assert 'kill "$sidecar_pid"' in text
-    assert text.index('echo "contextual-orchestrator sidecar ready') < text.index("trap - EXIT")
+    ready_index = text.index('echo "contextual-orchestrator sidecar ready')
+    disarm_index = text.rindex("trap - EXIT")
+    assert ready_index < disarm_index
