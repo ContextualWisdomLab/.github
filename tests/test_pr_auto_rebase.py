@@ -2,6 +2,7 @@ import json
 import runpy
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -786,3 +787,17 @@ def test_write_actions_summary_noop_without_path(monkeypatch):
     """No step summary file means no summary write."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     rebase.write_actions_summary([], counts={}, dry_run=True, base_branch="main")
+
+
+def test_strix_gate_uses_medium_threshold_and_neutral_scope_signal():
+    """Low/INFO reports do not block, while medium-or-higher findings do."""
+    strix = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
+
+    assert (
+        "reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
+        "(critical|high|medium)([^A-Za-z0-9_]|$)'"
+        in strix
+    )
+    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]" not in strix
+    assert "non_assessable_scope_signal='No Assessable Application Code Found in Scope'" in strix
+    assert "produced no medium-or-higher vulnerability evidence" in strix
