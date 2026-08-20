@@ -105,6 +105,7 @@ def test_bounded_reader_rejects_missing_directory_symlink_large_and_oserror(
     assert gate._read_bounded_regular(symlink, 10) is None
     assert gate._read_bounded_regular(large, 3) is None
     assert gate._read_bounded_regular(target, 10) == b"ok"
+    assert gate._read_bounded_regular(target, -1) is None
 
     monkeypatch.setattr(
         os,
@@ -112,6 +113,24 @@ def test_bounded_reader_rejects_missing_directory_symlink_large_and_oserror(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
     )
     assert gate._read_bounded_regular(target, 10) is None
+
+
+def test_bounded_reader_rejects_a_read_that_exceeds_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read that exceeds the declared byte budget fails closed."""
+    target = write(tmp_path / "target", "ok")
+    original_read = os.read
+
+    def oversized_read(file_descriptor: int, count: int) -> bytes:
+        """Return one oversized chunk, then preserve normal descriptor reads."""
+        if count > 0:
+            monkeypatch.setattr(os, "read", original_read)
+            return b"x" * (count + 1)
+        return original_read(file_descriptor, count)
+
+    monkeypatch.setattr(os, "read", oversized_read)
+    assert gate._read_bounded_regular(target, 2) is None
 
 
 def test_read_text_rejects_non_utf8(tmp_path: Path) -> None:
