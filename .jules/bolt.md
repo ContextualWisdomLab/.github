@@ -43,6 +43,11 @@
 ## 2026-07-09 - Avoid N+1 API blocking in SBOM aggregator
 **Learning:** The `collect_inventories` function in `scripts/ci/sbom_inventory_aggregator.py` was fetching SBOMs from the GitHub dependency graph synchronously for every repository in the organization. For large organizations (up to 500 repos), this N+1 network/CLI bottleneck significantly stalled the aggregation workflow.
 **Action:** Use `concurrent.futures.ThreadPoolExecutor` to fetch SBOMs concurrently when multiple repositories are provided, bounded by a `max_workers` limit (e.g., 10) to avoid overwhelming the CLI/API, while preserving the fast serial path for single-item inputs.
+
 ## 2026-08-15 - Python Embedded Regex Compilation
-**Learning:** Found a missing codebase-specific Python embedded regex compilation pattern in `scripts/ci/collect_failed_check_evidence.sh` where `re.search` was called inside loop constructs (`first` matching package names, installed versions, and fixed versions) passing strings rather than compiled objects. This inline string compilation in a frequently called function inside a loop parses large CI check logs redundantly.
-**Action:** Extract inline regular expression patterns to module-level list variables `PACKAGE_PATTERNS`, `INSTALLED_PATTERNS`, and `FIXED_PATTERNS` compiled with `re.compile(..., re.I)` to bypass the internal regex cache lookups and improve text processing speed in embedded Python CI scripts.
+**Learning:** Embedded Python in `scripts/ci/collect_failed_check_evidence.sh` repeatedly searched package, installed-version, and fixed-version patterns while processing CI alerts.
+**Action:** Compile those patterns once at script initialization and call `pattern.search()` inside the loop so repeated evidence parsing reuses immutable regex objects.
+
+## 2026-08-09 - [대용량 로그 스캔 시 정규표현식 실행 전 O(N) 서브스트링 검증 선행]
+**Learning:** `classify_testthat_failure`에서 테스트 실패 내역이 없는 2MB 로그 파일을 대상으로 정규표현식을 실행하면 약 20ms가 소요되지만, 단순 문자열 검색은 약 1ms만 소요됩니다. 문자열 존재 여부가 정규표현식 매칭의 전제 조건일 때, 콜드 패스(Cold Path)에서 순서 최적화는 매우 큰 성능 차이를 만듭니다.
+**Action:** 대용량 텍스트 입력(CI 로그 등)에서 복잡한 정규표현식을 파싱하기 전에 항상 빠른 O(N) 문자열 존재 여부 확인을 먼저 수행하십시오.

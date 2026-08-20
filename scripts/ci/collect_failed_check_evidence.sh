@@ -260,7 +260,7 @@ PACKAGE_PATTERNS = [
     re.compile(r"Package:\s*([A-Za-z0-9._/+-]+)", re.I),
     re.compile(r"['\"`]([A-Za-z0-9._/+-]+)@[0-9]", re.I),
     re.compile(r"Package\s+['\"]([A-Za-z0-9._/+-]+?)(?:@[^'\"]*)?['\"]", re.I),
-    re.compile(r"for (?:the )?package[:\s]+['\"`]?([A-Za-z0-9._/+-]+)['\"`]?", re.I),
+    re.compile(r"for (?:the )?package[:\s]+['\"`]?([A-Za-z0-9._/+-]+)", re.I),
 ]
 
 INSTALLED_PATTERNS = [
@@ -274,6 +274,7 @@ FIXED_PATTERNS = [
     re.compile(r"[Ff]ixed in[:\s]+([0-9][A-Za-z0-9._+-]*)", re.I),
     re.compile(r"[Pp]atched in[:\s]+([0-9][A-Za-z0-9._+-]*)", re.I),
 ]
+
 
 def first(patterns, text):
     for pattern in patterns:
