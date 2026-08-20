@@ -175,7 +175,7 @@ flowchart LR
 | #930 | fix(noema): fail closed on unsafe model endpoints | `43940c128bbe00b721cf8589039df04d15769576` | main | BLOCKED | CHANGES_REQUESTED |
 | #928 | fix(opencode): bind coverage artifacts to workflow attempts | `3d622bd552bb91370452a1886936e040eae458d6` | main | BLOCKED | — |
 | #921 | chore(deps): bump google/osv-scanner-action/osv-scanner-action from a82132c0bd6c7261ffcb78e754c46c70ab57ad9a to f4cfcc01edc9c8b756a9b873b7a623ca674da51e | `12596fae331760b1b3184872d276d3d54f7b840a` | main | DIRTY | — |
-| #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `3ed996caed8a69eaf40021343859bba0729e9da5` | main | DIRTY | CHANGES_REQUESTED |
+| #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `ed08a94ba3eaeb217b2b0e3cc4745483b18a162d` | main | BLOCKED | — |
 | #919 | chore(deps): bump step-security/harden-runner from 2.20.0 to 2.20.1 | `1c5a38eaa193dd3482b729ec7e9cd1a61bbe6e5f` | main | BLOCKED | — |
 | #918 | chore(security): align all CodeQL actions to v4.37.6 | `2e3029d2c6d80066c01d82930ea6aa2ada0ea319` | main | DIRTY | CHANGES_REQUESTED |
 | #904 | fix(opencode): include adversarial gate in fallback scope | `40565c9299d64c256caa63df1d9febff2092e516` | main | BLOCKED | CHANGES_REQUESTED |
