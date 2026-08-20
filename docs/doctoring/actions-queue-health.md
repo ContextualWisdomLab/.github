@@ -24,14 +24,19 @@ to inspect a concrete runner assignment.
 List endpoints use GitHub CLI pagination with at most 20 pages. Pull-request
 and job lists use pages of 100 records; workflow-run lists use pages of 50 so a
 large Actions queue does not require one oversized response. An incomplete,
-malformed, or larger response fails closed instead of silently claiming that
-the visible page is the whole queue.
+malformed, or larger response is recorded as repository-scoped incomplete
+evidence and the collector continues with the remaining allowlisted
+repositories; it never silently claims that the visible page is the whole
+queue. The JSON and HTML reports expose each collection error explicitly.
 
 Every external `gh api` read has a 30-second subprocess timeout, and the
 collector job has a 30-minute execution ceiling. A timeout is typed as
-incomplete queue evidence rather than success. Offline snapshots also reject
-duplicate repository entries before counting runs so repeated input cannot
-inflate the reported queue.
+incomplete queue evidence rather than success. A pull-request response missing
+head or base identity gets one typed retry after a one-second delay; a second
+incomplete response remains an explicit repository error. Repository names
+reject `.` and `..` path segments. Offline snapshots also reject duplicate
+repository entries before counting runs so repeated input cannot inflate the
+reported queue.
 
 The default queue-age SLO is 900 seconds. A current-head job that remains
 unassigned beyond that limit produces a warning and an explicit manual action

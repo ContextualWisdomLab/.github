@@ -138,7 +138,7 @@ def test_parse_timestamp_normalises_z_and_offsets() -> None:
     assert queue_health.parse_timestamp("2026-08-19T21:00:00+09:00") == NOW
 
 
-@pytest.mark.parametrize("value", ["owner", "owner/repo/extra", 1])
+@pytest.mark.parametrize("value", ["owner", "owner/repo/extra", "../..", "./repo", "owner/.", 1])
 def test_repository_name_rejects_non_repository_identifiers(value: object) -> None:
     with pytest.raises(queue_health.QueueHealthError):
         queue_health._repository_name(value)
@@ -296,7 +296,7 @@ def test_normalise_pull_request_preserves_exact_head_identity() -> None:
     for invalid in ({"number": True}, {"number": 0}, {"number": "1"}, "bad"):
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._normalise_pull_request(invalid)  # type: ignore[arg-type]
-    with pytest.raises(queue_health.QueueHealthError, match="head and base"):
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="head and base"):
         queue_health._normalise_pull_request({"number": 1, "head": {}, "base": "bad"})
     with pytest.raises(queue_health.QueueHealthError, match="positive integer"):
         queue_health._normalise_pull_request({"number": 0, "head": {}, "base": {}})
@@ -346,7 +346,9 @@ def test_normalise_run_validates_links_jobs_and_fallback_names() -> None:
             queue_health._normalise_run("owner/repo", invalid_run, invalid_jobs)  # type: ignore[arg-type]
 
 
-def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> None:
+def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     queued_current = workflow_run(10, pull_requests=[{"number": 1, "head": {"sha": "head"}}])
     current = workflow_run(
         12,
@@ -388,8 +390,9 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
-    with pytest.raises(queue_health.QueueHealthError):
-        queue_health.collect_snapshot(["owner/repo"], runner=bad_metadata_runner)
+    bad_snapshot = queue_health.collect_snapshot(["owner/repo"], runner=bad_metadata_runner)
+    assert bad_snapshot["repositories"] == []
+    assert bad_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
     invalid_run_responses = dict(responses)
     invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=50"] = [{"id": 0}]
@@ -400,12 +403,15 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
-    with pytest.raises(queue_health.QueueHealthError):
-        queue_health.collect_snapshot(["owner/repo"], runner=invalid_run_runner)
+    invalid_run_snapshot = queue_health.collect_snapshot(["owner/repo"], runner=invalid_run_runner)
+    assert invalid_run_snapshot["repositories"] == []
+    assert invalid_run_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
     bad_pull = pull_request()
     bad_pull["base"] = "temporarily incomplete"
     retry_calls = 0
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(queue_health.time, "sleep", sleep_calls.append)
 
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         nonlocal retry_calls
@@ -419,6 +425,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
 
     queue_health.collect_snapshot(["owner/repo"], runner=retry_runner)
     assert retry_calls == 2
+    assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
 
     def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         payload = [bad_pull] if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100" else responses[args[-1]]
@@ -426,8 +433,11 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
-    with pytest.raises(queue_health.QueueHealthError, match="owner/repo"):
-        queue_health.collect_snapshot(["owner/repo"], runner=persistent_bad_runner)
+    persistent_bad_snapshot = queue_health.collect_snapshot(
+        ["owner/repo"], runner=persistent_bad_runner
+    )
+    assert persistent_bad_snapshot["repositories"] == []
+    assert persistent_bad_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
     bad_number = pull_request(number=0)
 
@@ -441,8 +451,61 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order() -> Non
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
-    with pytest.raises(queue_health.QueueHealthError, match="owner/repo"):
-        queue_health.collect_snapshot(["owner/repo"], runner=invalid_pull_runner)
+    invalid_pull_snapshot = queue_health.collect_snapshot(
+        ["owner/repo"], runner=invalid_pull_runner
+    )
+    assert invalid_pull_snapshot["repositories"] == []
+    assert invalid_pull_snapshot["collection_errors"][0]["repository"] == "owner/repo"
+
+
+def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evidence() -> None:
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        path = args[-1]
+        if path == "repos/bad/repo":
+            return CompletedProcess(args, 1, "", "rate limit")
+        if path == "repos/good/repo":
+            payload: object = {"default_branch": "main"}
+        elif path == "repos/good/repo/pulls?state=open&per_page=100":
+            payload = []
+        elif "/actions/runs?status=" in path:
+            payload = []
+        else:  # pragma: no cover - a new endpoint must be explicitly governed
+            raise AssertionError(f"unexpected endpoint: {path}")
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    snapshot = queue_health.collect_snapshot(
+        ["bad/repo", "good/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert [item["full_name"] for item in snapshot["repositories"]] == ["good/repo"]
+    assert snapshot["collection_errors"] == [
+        {"repository": "bad/repo", "error": "GitHub API read failed for repos/bad/repo: rate limit"}
+    ]
+
+    report = queue_health.build_report(snapshot, now=NOW)
+    assert report["summary"]["collection_error_count"] == 1
+    assert report["collection_errors"] == snapshot["collection_errors"]
+    assert "bad/repo" in queue_health.render_html(report)
+
+
+@pytest.mark.parametrize(
+    "collection_errors",
+    [
+        "bad",
+        [None],
+        [{"repository": "../..", "error": "bad"}],
+        [{"repository": "owner/repo", "error": 1}],
+    ],
+)
+def test_build_report_rejects_malformed_collection_errors(collection_errors: object) -> None:
+    snapshot = report_snapshot()
+    snapshot["collection_errors"] = collection_errors
+    with pytest.raises(queue_health.QueueHealthError):
+        queue_health.build_report(snapshot, now=NOW)
+
+    snapshot["collection_errors"] = None
+    assert queue_health.build_report(snapshot, now=NOW)["summary"]["collection_error_count"] == 0
 
 
 def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:

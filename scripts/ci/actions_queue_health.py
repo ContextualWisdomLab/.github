@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Any, Callable, Sequence, TextIO
 
 
@@ -29,12 +30,17 @@ MAX_API_PAGE_SIZE = 100
 WORKFLOW_RUN_PAGE_SIZE = 50
 MAX_API_PAGES = 20
 GITHUB_API_TIMEOUT_SECONDS = 30
+PULL_REQUEST_RETRY_DELAY_SECONDS = 1
 PAGINATED_PAGES_KEY = "_queue_health_pages"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 class QueueHealthError(ValueError):
     """Raised when a queue-health input or trusted read is invalid."""
+
+
+class IncompletePullRequestIdentity(QueueHealthError):
+    """Raised when a pull-request read omits exact head or base identity."""
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -53,6 +59,8 @@ def parse_timestamp(value: str) -> datetime:
 def _repository_name(value: Any) -> str:
     """Validate and return one owner/repository identifier."""
     if not isinstance(value, str) or not REPOSITORY_PATTERN.fullmatch(value):
+        raise QueueHealthError(f"invalid repository identifier: {value!r}")
+    if any(segment in {".", ".."} for segment in value.split("/")):
         raise QueueHealthError(f"invalid repository identifier: {value!r}")
     return value
 
@@ -150,7 +158,7 @@ def _normalise_pull_request(pull_request: dict[str, Any]) -> dict[str, Any]:
     head = pull_request.get("head")
     base = pull_request.get("base")
     if not isinstance(head, dict) or not isinstance(base, dict):
-        raise QueueHealthError("pull request head and base must be objects")
+        raise IncompletePullRequestIdentity("pull request head and base must be objects")
     if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
         raise QueueHealthError("pull request number must be a positive integer")
     return {
@@ -239,67 +247,76 @@ def collect_snapshot(
     if len(validated) != len(repositories):
         raise QueueHealthError("collection repository list contains duplicates")
     collected_repositories: list[dict[str, Any]] = []
+    collection_errors: list[dict[str, str]] = []
     for repository in validated:
-        metadata = github_json(f"repos/{repository}", runner=runner)
-        if not isinstance(metadata, dict):
-            raise QueueHealthError(f"repository metadata for {repository} is not an object")
-        pulls_endpoint = f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
-        pull_requests = _list_payload(
-            github_json(pulls_endpoint, paginate=True, runner=runner),
-            "pulls",
-        )
         try:
+            metadata = github_json(f"repos/{repository}", runner=runner)
+            if not isinstance(metadata, dict):
+                raise QueueHealthError(f"repository metadata for {repository} is not an object")
+            pulls_endpoint = f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
+            pull_requests = _list_payload(
+                github_json(pulls_endpoint, paginate=True, runner=runner),
+                "pulls",
+            )
             normalized_pull_requests = sorted(
                 (_normalise_pull_request(item) for item in pull_requests),
                 key=lambda item: item["number"],
             )
-        except QueueHealthError as exc:
-            if str(exc) != "pull request head and base must be objects":
-                raise QueueHealthError(
-                    f"pull-request identity validation failed for {repository}: {exc}"
-                ) from exc
-            retry_pull_requests = _list_payload(
-                github_json(pulls_endpoint, paginate=True, runner=runner),
-                "pulls",
-            )
+        except IncompletePullRequestIdentity:
+            time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
             try:
+                retry_pull_requests = _list_payload(
+                    github_json(pulls_endpoint, paginate=True, runner=runner),
+                    "pulls",
+                )
                 normalized_pull_requests = sorted(
                     (_normalise_pull_request(item) for item in retry_pull_requests),
                     key=lambda item: item["number"],
                 )
             except QueueHealthError as retry_exc:
-                raise QueueHealthError(
-                    f"pull-request identity validation failed for {repository}: {retry_exc}"
-                ) from retry_exc
+                collection_errors.append(
+                    {
+                        "repository": repository,
+                        "error": f"pull-request identity validation failed: {retry_exc}",
+                    }
+                )
+                continue
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
         pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
         runs_by_id: dict[int, dict[str, Any]] = {}
-        for status in ("in_progress", "queued"):
-            runs = _list_payload(
-                github_json(
-                    f"repos/{repository}/actions/runs?status={status}&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                    paginate=True,
-                    runner=runner,
-                ),
-                "workflow_runs",
-            )
-            for run in runs:
-                run_id = run.get("id")
-                if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
-                    raise QueueHealthError("workflow run id must be a positive integer")
-                if run_id in runs_by_id:
-                    continue
-                candidate = _normalise_run(repository, run, [])
-                identity, _ = _run_identity(candidate, pull_requests_by_number)
-                if identity != "current_head" or candidate["status"] == "QUEUED":
-                    runs_by_id[run_id] = candidate
-                    continue
-                jobs_payload = github_json(
-                    f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
-                    paginate=True,
-                    runner=runner,
+        try:
+            for status in ("in_progress", "queued"):
+                runs = _list_payload(
+                    github_json(
+                        f"repos/{repository}/actions/runs?status={status}&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                        paginate=True,
+                        runner=runner,
+                    ),
+                    "workflow_runs",
                 )
-                jobs = _list_payload(jobs_payload, "jobs")
-                runs_by_id[run_id] = _normalise_run(repository, run, jobs)
+                for run in runs:
+                    run_id = run.get("id")
+                    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                        raise QueueHealthError("workflow run id must be a positive integer")
+                    if run_id in runs_by_id:
+                        continue
+                    candidate = _normalise_run(repository, run, [])
+                    identity, _ = _run_identity(candidate, pull_requests_by_number)
+                    if identity != "current_head" or candidate["status"] == "QUEUED":
+                        runs_by_id[run_id] = candidate
+                        continue
+                    jobs_payload = github_json(
+                        f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
+                        paginate=True,
+                        runner=runner,
+                    )
+                    jobs = _list_payload(jobs_payload, "jobs")
+                    runs_by_id[run_id] = _normalise_run(repository, run, jobs)
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
         collected_repositories.append(
             {
                 "full_name": repository,
@@ -310,7 +327,11 @@ def collect_snapshot(
         )
     timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     parse_timestamp(timestamp)
-    return {"generated_at": timestamp, "repositories": collected_repositories}
+    return {
+        "generated_at": timestamp,
+        "repositories": collected_repositories,
+        "collection_errors": collection_errors,
+    }
 
 
 def load_snapshot(path: Path) -> dict[str, Any]:
@@ -371,6 +392,20 @@ def build_report(
     repositories = snapshot.get("repositories")
     if not isinstance(repositories, list):
         raise QueueHealthError("queue-health snapshot repositories must be an array")
+    raw_collection_errors = snapshot.get("collection_errors", [])
+    if raw_collection_errors is None:
+        raw_collection_errors = []
+    if not isinstance(raw_collection_errors, list):
+        raise QueueHealthError("queue-health collection_errors must be an array")
+    collection_errors: list[dict[str, str]] = []
+    for item in raw_collection_errors:
+        if not isinstance(item, dict):
+            raise QueueHealthError("queue-health collection error must be an object")
+        repository_name = _repository_name(item.get("repository"))
+        error = item.get("error")
+        if not isinstance(error, str) or not error:
+            raise QueueHealthError("queue-health collection error must contain text")
+        collection_errors.append({"repository": repository_name, "error": error})
 
     rows: list[dict[str, Any]] = []
     seen_repositories: set[str] = set()
@@ -492,6 +527,7 @@ def build_report(
         "unlinked_job_count": sum(row["identity_state"] == "unlinked" for row in rows),
         "duplicate_pending_lane_count": len(duplicate_lanes),
         "terminal_job_count": sum(row["execution_state"] == "terminal" for row in rows),
+        "collection_error_count": len(collection_errors),
         "external_actions": external_actions,
     }
     return {
@@ -500,6 +536,7 @@ def build_report(
         "evaluated_at": report_now.isoformat().replace("+00:00", "Z"),
         "queue_age_slo_seconds": queue_age_slo_seconds,
         "repositories": sorted(_repository_name(repository["full_name"]) for repository in repositories),
+        "collection_errors": collection_errors,
         "summary": summary,
         "duplicate_pending_lanes": duplicate_lanes,
         "runs": rows,
@@ -535,6 +572,21 @@ def render_html(report: dict[str, Any]) -> str:
             + "</tr>"
         )
     body = "".join(table_rows) or '<tr><th scope="row" colspan="9">No queued or in-progress jobs observed.</th></tr>'
+    collection_error_section = ""
+    if report.get("collection_errors"):
+        collection_error_section = (
+            "<section aria-labelledby=\"collection-errors\"><h2 id=\"collection-errors\">"
+            "Incomplete collection evidence</h2><ul>"
+            + "".join(
+                "<li>"
+                + html.escape(str(item["repository"]))
+                + ": "
+                + html.escape(str(item["error"]))
+                + "</li>"
+                for item in report["collection_errors"]
+            )
+            + "</ul></section>"
+        )
     return (
         "<!doctype html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
@@ -544,7 +596,8 @@ def render_html(report: dict[str, Any]) -> str:
         "th{background:#eee}</style></head><body>"
         '<main aria-live="polite">'
         "<h1>GitHub Actions queue health</h1>"
-        f"<p>Evaluated at <time>{html.escape(report['evaluated_at'])}</time>; queue-age SLO: {report['queue_age_slo_seconds']} seconds.</p>"
+        + collection_error_section
+        + f"<p>Evaluated at <time>{html.escape(report['evaluated_at'])}</time>; queue-age SLO: {report['queue_age_slo_seconds']} seconds.</p>"
         f"<p>Observed jobs: {summary['observed_job_count']}; current-head pending: {summary['current_head_pending_count']}; SLO breaches: {summary['unassigned_slo_breached_count']}.</p>"
         '<table><caption>Run and job evidence; queued evidence is not a passing check.</caption>'
         "<thead><tr>"
