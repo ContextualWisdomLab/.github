@@ -247,6 +247,41 @@ jobs:
           python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
             "${context_args[@]}"
 
+      - name: Resolve live NVIDIA NIM autofix models
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          # Ordered preference pools. NVIDIA retires hosted models on published
+          # end-of-life dates and then answers HTTP 410 Gone, so the worker
+          # resolves the first pool entry the provider still serves instead of
+          # hard-coding one id that a lifecycle event can retire.
+          AUTOFIX_MODEL_CANDIDATES: >-
+            ${{ vars.NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES ||
+            'nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia/nemotron-3-super-120b-a12b
+            nvidia/llama-3.1-nemotron-ultra-253b-v1 meta/llama-3.3-70b-instruct' }}
+          AUTOFIX_SMALL_MODEL_CANDIDATES: >-
+            ${{ vars.NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES ||
+            'nvidia/nemotron-3-nano-30b-a3b nvidia/llama-3.1-nemotron-nano-8b-v1
+            meta/llama-3.1-8b-instruct' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+            exit 1
+          fi
+          resolver="$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/select_nvidia_nim_model.py"
+          autofix_model_id="$(
+            python3 "$resolver" --role primary --candidates "$AUTOFIX_MODEL_CANDIDATES"
+          )"
+          autofix_small_model_id="$(
+            python3 "$resolver" --role small --candidates "$AUTOFIX_SMALL_MODEL_CANDIDATES"
+          )"
+          echo "Resolved autofix model: ${autofix_model_id}"
+          echo "Resolved autofix small model: ${autofix_small_model_id}"
+          {
+            printf 'AUTOFIX_MODEL_ID=%s\n' "$autofix_model_id"
+            printf 'AUTOFIX_SMALL_MODEL_ID=%s\n' "$autofix_small_model_id"
+          } >>"$GITHUB_ENV"
+
       - name: Prepare isolated OpenCode autofix workspace
         env:
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
@@ -277,10 +312,13 @@ jobs:
           Do not execute shell commands. Do not invent broad features or claim external approval/check latency is fixed.
           Queued reviews or checks remain merge blockers, but their latency is not a reason to invent a code change or stop the broader scheduler from processing other eligible work.
           EOF
-          jq -n --arg workspace "$TARGET_WORKSPACE" '{
+          jq -n \
+            --arg workspace "$TARGET_WORKSPACE" \
+            --arg model_id "$AUTOFIX_MODEL_ID" \
+            --arg small_model_id "$AUTOFIX_SMALL_MODEL_ID" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
-            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
+            "model": "nvidia-nim/\($model_id)",
+            "small_model": "nvidia-nim/\($small_model_id)",
             "enabled_providers": ["nvidia-nim"],
             "permission": {
               "edit": {
@@ -306,7 +344,7 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
-                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "model": "nvidia-nim/\($model_id)",
                 "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
@@ -341,8 +379,8 @@ jobs:
                   "apiKey": "{env:NVIDIA_API_KEY}"
                 },
                 "models": {
-                  "mistralai/mistral-small-4-119b-2603": {
-                    "name": "Mistral Small 4 119B 2603",
+                  ($model_id): {
+                    "name": $model_id,
                     "tool_call": true,
                     "reasoning": true,
                     "options": {
@@ -353,8 +391,8 @@ jobs:
                       "output": 4096
                     }
                   },
-                  "nvidia/nemotron-3-nano-30b-a3b": {
-                    "name": "Nemotron 3 Nano 30B A3B",
+                  ($small_model_id): {
+                    "name": $small_model_id,
                     "tool_call": true,
                     "reasoning": true,
                     "limit": {
@@ -371,7 +409,7 @@ jobs:
         if: env.RESOLVE_CONFLICT != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -546,7 +584,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"

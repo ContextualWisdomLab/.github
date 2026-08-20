@@ -67,14 +67,37 @@ OpenAI-compatible adapter and NVIDIA hosted endpoint:
 https://integrate.api.nvidia.com/v1
 ```
 
-The primary repair model is `mistralai/mistral-small-4-119b-2603`. The
-`ci-autofix` agent and its model configuration both request high reasoning
+The primary repair model is resolved at run time, not hard-coded. NVIDIA retires
+hosted models on published end-of-life dates and then answers every request with
+HTTP 410 `Gone`, which turns a normal provider lifecycle event into a total
+outage of the repair loop. The `Resolve live NVIDIA NIM autofix models` step
+therefore runs `scripts/ci/select_nvidia_nim_model.py`, which reads the provider
+catalog (`GET /v1/models`) and selects the first entry of an ordered preference
+pool that the provider still serves:
+
+| Role | Pool variable | Default order |
+| --- | --- | --- |
+| primary | `NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES` | `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `nvidia/nemotron-3-super-120b-a12b`, `nvidia/llama-3.1-nemotron-ultra-253b-v1`, `meta/llama-3.3-70b-instruct` |
+| small | `NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES` | `nvidia/nemotron-3-nano-30b-a3b`, `nvidia/llama-3.1-nemotron-nano-8b-v1`, `meta/llama-3.1-8b-instruct` |
+
+To change the preference order, set the matching Actions variable on this
+repository; no workflow edit is required. Resolution is fail-closed: an
+unreachable or unparsable catalog, and a pool whose every entry is retired, both
+stop the run with an actionable annotation instead of silently substituting an
+arbitrary model. The resolved ids are exported once as `AUTOFIX_MODEL_ID` and
+`AUTOFIX_SMALL_MODEL_ID` and are the only model identifiers the generated
+OpenCode configuration and both `opencode run` invocations use, so the writer
+agent and its provider entry cannot drift apart.
+
+The `ci-autofix` agent and its model configuration both request high reasoning
 through OpenCode's provider-option contract (`reasoningEffort: "high"`). NVIDIA's
-Mistral Small 4 NIM API documents the corresponding request behavior as
+NIM LLM API documents the corresponding request behavior as
 `reasoning_effort: "high"`, which enables the model's reasoning mode. The small
-model used for bounded helper work remains `nvidia/nemotron-3-nano-30b-a3b` and
-is not a fallback provider. GitHub Models configuration, identifiers, base URLs,
-and model-auth fallbacks are absent from the scheduled autofix execution path.
+model is used for bounded helper work only and is not a fallback provider.
+GitHub Models configuration, identifiers, base URLs, and model-auth fallbacks are
+absent from the scheduled autofix execution path. Model resolution shares the
+same `NVIDIA_NIM_API_KEY` credential as the two OpenCode runs, and no other step
+receives it.
 
 The high-reasoning setting is deliberate for write-capable review repair. This
 workflow optimizes correctness, evidence quality, and controllability rather than
@@ -90,10 +113,10 @@ The organization secret is bound as:
 NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
 ```
 
-It is present only on the two steps that execute OpenCode: ordinary
-review-feedback repair and merge-conflict repair. Metadata collection,
-checkout, context preparation, validation, commit, and push do not receive the
-NVIDIA credential. A missing key is a fatal configuration error rather than a
+It is present only on the three steps that need a provider credential: live
+model resolution, ordinary review-feedback repair, and merge-conflict repair.
+Metadata collection, checkout, context preparation, validation, commit, and push
+do not receive the NVIDIA credential. A missing key is a fatal configuration error rather than a
 signal to choose another provider.
 
 The ordinary model execution step does not bind a GitHub write token. Its later
@@ -345,9 +368,12 @@ GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 7,
 NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
 7, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
 
-NVIDIA Corporation. (2026). *Query the Mistral-Small-4-119B-2603 API*. NVIDIA
-NIM for Vision Language Models. Retrieved August 8, 2026, from
-https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/mistral-small-4-119b-2603/api.html
+NVIDIA Corporation. (n.d.-d). *NVIDIA NIM for large language models:
+OpenAI-compatible API reference*. Retrieved August 20, 2026, from
+https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html
+
+OpenAI. (2025). *API reference: List models*. Retrieved August 20, 2026, from
+https://platform.openai.com/docs/api-reference/models/list
 
 NVIDIA Corporation. (n.d.-c). *NVIDIA / nemotron-3-nano-30b-a3b*. NVIDIA API
 Catalog. Retrieved August 7, 2026, from

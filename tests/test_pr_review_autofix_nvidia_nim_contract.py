@@ -40,21 +40,23 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
     """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     required_fragments = (
-        '"model": "nvidia-nim/mistralai/mistral-small-4-119b-2603"',
-        '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
+        '"model": "nvidia-nim/\\($model_id)"',
+        '"small_model": "nvidia-nim/\\($small_model_id)"',
         '"enabled_providers": ["nvidia-nim"]',
         '"nvidia-nim": {',
-        '"mistralai/mistral-small-4-119b-2603": {',
+        '($model_id): {',
+        '($small_model_id): {',
         '"reasoningEffort": "high"',
         '"npm": "@ai-sdk/openai-compatible"',
         '"baseURL": "https://integrate.api.nvidia.com/v1"',
         '"apiKey": "{env:NVIDIA_API_KEY}"',
         'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603',
+        'MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}',
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
     forbidden_fragments = (
+        'mistralai/mistral-small-4-119b-2603',
         'mistralai/mistral-nemotron',
         'STRIX_GITHUB_MODELS_TOKEN:',
         'MODEL: github-models/',
@@ -99,20 +101,54 @@ def test_opencode_agent_denies_non_file_interactions() -> None:
         assert workflow.count(f'"{permission_name}": "deny"') == 2
 
 
-def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
-    """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
+def test_nvidia_nim_secret_is_scoped_to_model_credential_steps() -> None:
+    """Confine the NVIDIA credential to model resolution and the two OpenCode runs.
+
+    Model resolution needs the same credential because it asks the provider which
+    models are still served, so the allowed set is exactly three steps.
+    """
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+    resolve_start = workflow.index("      - name: Resolve live NVIDIA NIM autofix models")
+    resolve_end = workflow.index(
+        "      - name: Prepare isolated OpenCode autofix workspace", resolve_start
+    )
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(binding) == 2
+    assert workflow.count(binding) == 3
+    assert binding in workflow[resolve_start:resolve_end]
     assert binding in workflow[ordinary_start:ordinary_end]
     assert binding in workflow[conflict_start:]
-    assert binding not in workflow[:ordinary_start]
+    assert binding not in workflow[:resolve_start]
+    assert binding not in workflow[resolve_end:ordinary_start]
     assert binding not in workflow[ordinary_end:conflict_start]
+
+
+def test_model_ids_are_resolved_from_an_ordered_live_candidate_pool() -> None:
+    """Require run-time model resolution so a retired model cannot stop repairs.
+
+    NVIDIA answers HTTP 410 Gone for a model past its end-of-life date, so the
+    worker resolves the first candidate the provider still serves and exports it
+    to the OpenCode configuration and both model invocations.
+    """
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    resolve_start = workflow.index("      - name: Resolve live NVIDIA NIM autofix models")
+    resolve_end = workflow.index(
+        "      - name: Prepare isolated OpenCode autofix workspace", resolve_start
+    )
+    resolve = workflow[resolve_start:resolve_end]
+
+    assert 'scripts/ci/select_nvidia_nim_model.py' in resolve
+    assert "--role primary" in resolve
+    assert "--role small" in resolve
+    assert "vars.NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES" in resolve
+    assert "vars.NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES" in resolve
+    assert "AUTOFIX_MODEL_ID=%s" in resolve
+    assert "AUTOFIX_SMALL_MODEL_ID=%s" in resolve
+    assert resolve_end < workflow.index('--arg model_id "$AUTOFIX_MODEL_ID"')
 
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
@@ -146,12 +182,17 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
         "            exit 1\n"
         "          fi"
     )
+    resolve_start = workflow.index("      - name: Resolve live NVIDIA NIM autofix models")
+    resolve_end = workflow.index(
+        "      - name: Prepare isolated OpenCode autofix workspace", resolve_start
+    )
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(guard) == 2
+    assert workflow.count(guard) == 3
+    assert guard in workflow[resolve_start:resolve_end]
     assert guard in workflow[ordinary_start:ordinary_end]
     assert guard in workflow[conflict_start:]
 

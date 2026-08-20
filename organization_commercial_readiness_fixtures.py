@@ -90,6 +90,7 @@ class FakeClient:
         repositories: list[dict[str, Any]],
         snapshots: dict[str, list[RepositorySnapshot | Exception]],
     ) -> None:
+        """Record the repositories and per-repository snapshot scripts to replay."""
         self.repositories = repositories
         self.snapshots = snapshots
         self.dispatched_repairs: list[tuple[str, str]] = []

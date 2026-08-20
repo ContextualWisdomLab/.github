@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
-_TARGET_MODEL = "nvidia-nim/mistralai/mistral-small-4-119b-2603"
+_TARGET_MODEL = "nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}"
+_RETIRED_MODEL = "mistralai/mistral-small-4-119b-2603"
 
 
 def _workflow_text() -> str:
@@ -30,14 +31,20 @@ def _step_header(workflow: str, step_name: str) -> str:
     return step[:run_start]
 
 
-def test_writer_uses_supported_nvidia_mistral_small_with_high_reasoning() -> None:
-    """Pin the write-capable model and its deliberate high-reasoning budget."""
+def test_writer_resolves_a_live_model_with_high_reasoning() -> None:
+    """Pin the resolved-model indirection and its deliberate high-reasoning budget.
+
+    The write-capable model id is resolved at run time from an ordered candidate
+    pool, because a hard-coded id becomes an HTTP 410 outage on the provider's
+    published end-of-life date.
+    """
     workflow = _workflow_text()
 
-    assert f'"model": "{_TARGET_MODEL}"' in workflow
-    assert '"mistralai/mistral-small-4-119b-2603": {' in workflow
+    assert '"model": "nvidia-nim/\\($model_id)"' in workflow
+    assert "($model_id): {" in workflow
     assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
     assert '"reasoningEffort": "high"' in workflow
+    assert _RETIRED_MODEL not in workflow
     assert "nvidia-nim/mistralai/mistral-nemotron" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
