@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -20,6 +21,18 @@ MEDIUM_TOKEN_BODY = "b" * 20
 LONG_TOKEN_BODY = "c" * 38
 FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("d" * 17)
 SHORT_FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("e" * 7)
+
+
+@pytest.fixture(autouse=True)
+def workflow_starting_mutation_credential(monkeypatch):
+    """Default every scheduler test to a credential that can start workflow runs.
+
+    The scheduler withholds head mutations when the mutation credential is the
+    workflow ``GITHUB_TOKEN``, because GitHub never starts a workflow run for
+    such an event, so tests that exercise head mutations must declare a
+    workflow-starting credential exactly like the scheduler workflow does.
+    """
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
 
 
 def fake_github_token(prefix, body):
@@ -1763,6 +1776,50 @@ def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
     assert calls[-1][0][-2:] == ["--input", "-"]
 
 
+def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
+    """A GITHUB_TOKEN head mutation would deadlock the PR, so it must be refused.
+
+    GitHub starts no workflow run for an event created with the workflow
+    ``GITHUB_TOKEN``, so the moved head could never collect the required
+    current-head checks and the PR would stay BLOCKED forever.
+    """
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "run",
+        lambda *args, **kwargs: pytest.fail("no GitHub mutation may run with the workflow GITHUB_TOKEN"),
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40, headRefName="feature")
+
+    assert not sched.head_mutation_credential_starts_workflows()
+    with pytest.raises(RuntimeError, match="never start new workflow runs"):
+        sched.update_branch("owner/repo", pr, dry_run=False)
+    with pytest.raises(RuntimeError, match="never start new workflow runs"):
+        sched.restamp_pr_head_for_last_push_approval("owner/repo", pr, dry_run=False)
+
+
+def test_declared_mutation_token_source_restores_the_previous_environment(monkeypatch):
+    """The declaration helper restores both a set and an unset prior value."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "opencode-app")
+    with sched.declared_mutation_token_source("github-token"):
+        assert sched.mutation_token_source() == "github-token"
+    assert sched.mutation_token_source() == "opencode-app"
+
+    monkeypatch.delenv("SCHEDULER_MUTATION_TOKEN_SOURCE", raising=False)
+    with sched.declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
+        assert sched.mutation_token_source() == "PR_REVIEW_MERGE_TOKEN"
+    assert "SCHEDULER_MUTATION_TOKEN_SOURCE" not in os.environ
+
+
+def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
+    """Configured scheduler credentials do start workflow runs on the new head."""
+    for source in ("PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"):
+        monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", source)
+        assert sched.head_mutation_credential_starts_workflows()
+        sched.require_workflow_starting_mutation_credential("update-branch")
+
+
 def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
     head_sha = "a" * 40
 
@@ -2713,6 +2770,7 @@ def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys)
 
 
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
     summary_path = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
     conflict_reason = sched.merge_conflict_guidance(
@@ -3008,7 +3066,7 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert stale_change_request.action == "update_branch"
     assert stale_change_request.reason == (
         "current-head OpenCode review requested changes; branch is outdated before re-review; "
-        "branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot]"
+        "branch update requested with PR_REVIEW_MERGE_TOKEN inside GitHub Actions as configured workflow credential"
     )
     stale_change_request_without_review_dispatch = inspect(
         make_pr(
@@ -3139,6 +3197,13 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     limited_restamp = inspect(restamp_candidate, branch_update_allowed=False, branch_update_limit=0)
     assert limited_restamp.action == "wait"
     assert "branch update limit reached" in limited_restamp.reason
+    with monkeypatch.context() as github_token_context:
+        github_token_context.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+        withheld_restamp = inspect(restamp_candidate)
+        assert withheld_restamp.action == "wait"
+        assert "never start new workflow runs" in withheld_restamp.reason
+        withheld_guidance = sched.decision_guidance(withheld_restamp)
+        assert withheld_guidance["type"] == "head_mutation_credential_upgrade"
 
     already_restamped = last_push_restamp_candidate(
         commits={
@@ -3189,8 +3254,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
     decision = inspect(behind)
     assert decision.action == "update_branch"
-    assert "workflow GITHUB_TOKEN" in decision.reason
-    assert "github-actions[bot]" in decision.reason
+    assert "PR_REVIEW_MERGE_TOKEN" in decision.reason
+    assert "configured workflow credential" in decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
     blocked_behind = make_pr(
@@ -3289,9 +3354,15 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     )
     rest_behind_decision = inspect(rest_behind)
     assert rest_behind_decision.action == "update_branch"
-    assert "github-actions[bot]" in rest_behind_decision.reason
+    assert "configured workflow credential" in rest_behind_decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
+    with monkeypatch.context() as github_token_context:
+        github_token_context.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+        withheld_decision = inspect(rest_behind)
+    assert withheld_decision.action == "wait"
+    assert "never start new workflow runs" in withheld_decision.reason
+    assert called == []
     blocked_failed_behind_auto = make_pr(
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",
