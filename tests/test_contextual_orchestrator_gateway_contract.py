@@ -1,11 +1,28 @@
 """Contract tests for the contextual-orchestrator OpenCode sidecar."""
 
+import json
 from pathlib import Path
+
+from scripts.ci.assert_opencode_reasoning_effort import (
+    strip_jsonc_comments,
+    validate_candidate,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
+OPENCODE_CONFIG = ROOT / "opencode.jsonc"
 GATEWAY_COMMIT = "0071751782ae535721e71785c3037989d2d27b77"
+GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
+
+
+def load_generated_review_config() -> dict:
+    """Extract the exact JSON object emitted into the isolated review workdir."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    config_body = workflow.split("          jq -n '{", 1)[1].split(
+        "          }' >\"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc\"", 1
+    )[0]
+    return json.loads("{" + config_body + "          }")
 
 
 def test_isolated_opencode_review_uses_pinned_contextual_gateway():
@@ -88,3 +105,19 @@ def test_private_repository_never_starts_or_selects_contextual_gateway():
         in model_step
     )
     assert 'if [ "$REPOSITORY_IS_PRIVATE" = "false" ]; then' in model_step
+
+
+def test_contextual_gateway_is_a_high_effort_top_level_review_provider():
+    """The enabled gateway must survive the pool's strict reasoning preflight."""
+    static_config = json.loads(
+        strip_jsonc_comments(OPENCODE_CONFIG.read_text(encoding="utf-8"))
+    )
+    generated_config = load_generated_review_config()
+
+    for config in (static_config, generated_config):
+        assert GATEWAY_CANDIDATE in {
+            f"{provider}/{model}"
+            for provider, provider_config in config["provider"].items()
+            for model in provider_config.get("models", {})
+        }
+        assert validate_candidate(config, GATEWAY_CANDIDATE) == []

@@ -392,6 +392,14 @@
           "name": "Contextual Orchestrator (auto-routed)",
           "tool_call": true,
           "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            }
+          },
           "limit": {
             "context": 200000,
             "output": 32768
