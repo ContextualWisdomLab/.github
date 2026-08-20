@@ -95,7 +95,7 @@ flowchart LR
 
 | PR | title | head SHA | base | merge state | review decision |
 |---|---|---|---|---|---|
-| #1162 | fix: use review credentials for agent dispatch | `c64e0e8cbacb93f5a0d7f162b30bcc4715912897` | main | BLOCKED | — |
+| #1162 | fix: use review credentials for agent dispatch | `a885441bb4d9b09dabf7d3bf4c39eee1bd0dc4cc` | main | BLOCKED | — |
 | #1163 | docs: establish live product and technical gap baseline | `2b5d574547c38e1263249d63013d6cefe397db33` | main | BLOCKED | — |
 | #1161 | fix: make hourly coordinator credential absence auditable | `42929f348f8f88ac8d93db6acff233d1748a4803` | main | BLOCKED | — |
 | #1159 | fix(coverage): classify Storybook development evidence | `a41903339f1df37bd1b7a7e8b969121c3598f5dc` | main | BLOCKED | — |
@@ -171,9 +171,9 @@ flowchart LR
 | #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
 | #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
 | #932 | fix(sbom): preserve Markdown report integrity | `9df515e07b60b66014bbe96fe83ed70718837b10` | main | BEHIND | CHANGES_REQUESTED |
-| #931 | fix(security): contain sandbox paths and output | `19fa59f9828f4407b43902adc7795e8b8039cb8a` | main | DIRTY | CHANGES_REQUESTED |
+| #931 | fix(security): contain sandbox paths and output | `c2f28e0a85f03b38739eac7cc827e280a4db1dab` | main | BLOCKED | — |
 | #930 | fix(noema): fail closed on unsafe model endpoints | `43940c128bbe00b721cf8589039df04d15769576` | main | BLOCKED | CHANGES_REQUESTED |
-| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `d0e59199c887980224841b11872837b52ec464ac` | main | DIRTY | CHANGES_REQUESTED |
+| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `3d622bd552bb91370452a1886936e040eae458d6` | main | BLOCKED | — |
 | #921 | chore(deps): bump google/osv-scanner-action/osv-scanner-action from a82132c0bd6c7261ffcb78e754c46c70ab57ad9a to f4cfcc01edc9c8b756a9b873b7a623ca674da51e | `12596fae331760b1b3184872d276d3d54f7b840a` | main | DIRTY | — |
 | #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `3ed996caed8a69eaf40021343859bba0729e9da5` | main | DIRTY | CHANGES_REQUESTED |
 | #919 | chore(deps): bump step-security/harden-runner from 2.20.0 to 2.20.1 | `1c5a38eaa193dd3482b729ec7e9cd1a61bbe6e5f` | main | BLOCKED | — |
