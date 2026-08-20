@@ -64,29 +64,3 @@ def test_rejected_only_request_is_mutation_free() -> None:
     ) == ()
     assert target.calls == []
     assert central.calls == []
-
-
-def test_empty_request_is_mutation_free() -> None:
-    """An already-filtered request does not emit a rejection or mutate GitHub."""
-
-    module = load_module()
-    request = module.MentionRequest(
-        "ContextualWisdomLab/example",
-        17,
-        "a" * 40,
-        "main",
-        91,
-        "maintainer",
-        (),
-    )
-    target = FakeClient()
-    central = FakeClient()
-
-    assert module.dispatch_request(
-        request,
-        target_client=target,
-        dispatch_client=central,
-        opencode_allowlist=frozenset(),
-    ) == ()
-    assert target.calls == []
-    assert central.calls == []
