@@ -12,6 +12,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "osv_direct_source_reconcile.py"
+SECURITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "security-scan.yml"
 OFFICIAL_URL = "https://cdn.sheetjs.com/xlsx-{version}/xlsx-{version}.tgz"
 INTEGRITY = "sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA=="
 
@@ -183,6 +184,24 @@ class DirectSourceReconcileTests(unittest.TestCase):
         reconciled, audit = self.run_case(payload, direct_lock("0.20.3"))
         self.assertEqual(remaining_ids(reconciled), ["GHSA-unknown-range"])
         self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+
+    def test_reusable_security_scan_reconciles_before_reporter_verdict(self) -> None:
+        workflow = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+        preserve = workflow.index("Preserve base direct-source provenance")
+        head_scan = workflow.index("Scan head with OSV")
+        policy = workflow.index("Checkout exact central provenance policy")
+        reconcile_step = workflow.index("Reconcile immutable direct-source provenance")
+        require_output = workflow.index("Require OSV scan output")
+        reporter = workflow.index("Report PR-introduced OSV findings")
+
+        self.assertLess(preserve, head_scan)
+        self.assertLess(head_scan, policy)
+        self.assertLess(policy, reconcile_step)
+        self.assertLess(reconcile_step, require_output)
+        self.assertLess(require_output, reporter)
+        self.assertIn("github.workflow_sha", workflow)
+        self.assertIn("osv_direct_source_reconcile.py", workflow)
+        self.assertIn("osv-provenance-audit.json", workflow)
 
 
 if __name__ == "__main__":
