@@ -28,7 +28,7 @@ def ruleset_payload() -> dict:
                 "include": ["~ALL"],
                 "exclude": ["noema", "IRT-bibliography-set", ".github"],
             },
-            "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
+            "ref_name": {"include": ["~ALL"], "exclude": []},
         },
         "rules": [
             {
@@ -92,6 +92,15 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
+
+
+def test_default_branch_only_scope_rejects_stacked_pull_requests() -> None:
+    payload = ruleset_payload()
+    payload["conditions"]["ref_name"]["include"] = ["~DEFAULT_BRANCH"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset does not target stacked and default-branch PRs"
+    ]
 
 
 def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
@@ -204,7 +213,7 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset enforcement is not active",
         "central ruleset does not include all repositories",
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
-        "central ruleset does not target every default branch",
+        "central ruleset does not target stacked and default-branch PRs",
         "expected one workflows rule, found 0",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",

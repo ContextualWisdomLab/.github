@@ -112,8 +112,8 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
 
     ref_names = conditions.get("ref_name")
     ref_names = ref_names if isinstance(ref_names, dict) else {}
-    if "~DEFAULT_BRANCH" not in (ref_names.get("include") or []):
-        errors.append("central ruleset does not target every default branch")
+    if "~ALL" not in (ref_names.get("include") or []):
+        errors.append("central ruleset does not target stacked and default-branch PRs")
 
     workflow_rules = _typed_rules(payload, "workflows")
     if len(workflow_rules) != 1:

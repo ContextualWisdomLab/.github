@@ -9,7 +9,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Ruleset: `CWL Central required workflows`
 - Ruleset ID: `18156473`
 - Enforcement: `active`
-- Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
+- Target: branch rules on every repository branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~ALL"]`), including stacked pull-request base branches
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:
@@ -30,6 +30,17 @@ reports another ref, treat that as operations drift and restore ruleset
 `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+
+### Stacked pull-request coverage
+
+On 2026-08-20, live PRs #158 and #159 in `ContextualWisdomLab/TEPP` targeted
+`feat/lineageweave-live-consumer-contract` rather than `main`. They had product
+checks but no centrally materialized OpenCode or Noema workflow runs because
+the ruleset was scoped to `~DEFAULT_BRANCH`. Ruleset `18156473` now uses
+`ref_name.include=["~ALL"]`; the existing scheduler already enumerates open
+PRs across base branches and dispatches exact-head review-only work for
+stacked PRs. The audit script and regression test enforce this scope so a
+future ruleset rollback fails closed.
 
 ## OpenCode required workflow posture
 
