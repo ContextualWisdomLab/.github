@@ -4,8 +4,8 @@
 
 `ContextualWisdomLab/.github` owns the reusable scheduler and bounded writer
 boundary. This caller targets `ContextualWisdomLab/Orgmetra`; Orgmetra owns
-only this thin caller, which targets the protected
-protected develop (`develop`) branch at minute 58 of every hour, inspects at most 50 open pull
+only this thin caller, which targets the protected develop (`develop`) branch at
+minute 58 of every hour, inspects at most 50 open pull
 requests, and dispatches at most one exact-head repair.
 
 The caller preserves Orgmetra as a standalone HRIS/HCM product. It does not

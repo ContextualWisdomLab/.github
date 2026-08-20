@@ -83,6 +83,7 @@ def test_orgmetra_doctoring_records_runtime_and_governance_bounds() -> None:
         "APA 7th references",
     ):
         assert phrase in doctoring
+    assert "protected\nprotected" not in doctoring
 
 
 def test_focused_quality_workflow_tracks_orgmetra_contracts() -> None:
