@@ -37,9 +37,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Tightened the central ruleset auditor to require the exact `ref_name` shape
-  (`include=["~ALL"]`, `exclude=[]`) and aligned operator documentation with
-  the three repository exclusions.
+- Tightened the central ruleset auditor to require exact default-branch scope
+  (`include=["~DEFAULT_BRANCH"]`, `exclude=[]`) and non-blocking create
+  transitions, rejecting `~ALL` and every extra proposal-ref target after live
+  409/422 canaries proved the broader combined ruleset deadlocked normal branch
+  creation and updates.
 - Keep local agent-mention Actions access read-only, use the established reviewer tokens for sibling-repository acknowledgements, and remove the replacing concurrency group together with the unsupported `concurrency.queue` key, so every eligible exact-head mention can enqueue while scheduled sweeps remain independently single-flight.
 - Refused PR Review Merge Scheduler head mutations, `update-branch` and the last-push approval head restamp, whenever the resolved mutation credential is the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. The scheduler now waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.

@@ -9,7 +9,8 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Ruleset: `CWL Central required workflows`
 - Ruleset ID: `18156473`
 - Enforcement: `active`
-- Target: branch rules on every non-excluded repository branch (`repository_name.include=["~ALL"]`, `repository_name.exclude=[".github", "IRT-bibliography-set", "noema"]`, `ref_name.include=["~ALL"]`, `ref_name.exclude=[]`), including stacked pull-request base branches
+- Target: the default branch of every non-excluded repository (`repository_name.include=["~ALL"]`, `repository_name.exclude=[".github", "IRT-bibliography-set", "noema"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, `ref_name.exclude=[]`)
+- Create transition: required workflows use `do_not_enforce_on_create=true`; proposal branches do not match this strict ruleset, and a new repository can establish its first default-branch commit before subsequent changes are governed
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:
@@ -33,16 +34,18 @@ This keeps Strix security evidence, OpenCode and independent Noema review eviden
 
 ### Stacked pull-request coverage
 
-On 2026-08-20, live PRs #158 and #159 in `ContextualWisdomLab/TEPP` targeted
-`feat/lineageweave-live-consumer-contract` rather than `main`. They had product
-checks but no centrally materialized OpenCode or Noema workflow runs because
-the ruleset was scoped to `~DEFAULT_BRANCH`. Ruleset `18156473` now uses
-`ref_name.include=["~ALL"]`; the existing scheduler already enumerates open
-PRs across base branches and dispatches exact-head review-only work for
-stacked PRs. The audit script and regression test enforce this scope so a
-future ruleset rollback fails closed. The live repair also restored the
-checked-in two-approval contract; workflow source, repository exclusions, and
-stale-review/thread-resolution/last-push protections were preserved.
+On 2026-08-20, live PRs #158 and #159 in `ContextualWisdomLab/TEPP` showed that
+stacked PRs need centrally materialized OpenCode and Noema review evidence.
+Expanding the combined required-workflow and pull-request ruleset to `~ALL`
+was later falsified by independent 409/422 canaries: proposal branches could
+not be created or updated because GitHub required a PR and required-workflow
+evidence before the proposal ref could exist. Ruleset `18156473` therefore
+stays exact-default-branch. The central scheduler enumerates non-default-base
+PRs and dispatches exact-head review-only work; merge and branch mutation stay
+disabled for that stacked phase. The final integration PR to the default
+branch remains subject to the full required-workflow, two-approval,
+stale-review, thread-resolution, last-push, deletion, and non-fast-forward
+contract.
 
 ## OpenCode required workflow posture
 

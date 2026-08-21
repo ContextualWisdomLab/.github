@@ -48,7 +48,7 @@ that means:
 | Mode | What happens |
 | --- | --- |
 | **따로 (this repo alone)** | Clone, test, and operate `.github` as the org profile and workflow source. Local quality gates, Cloudflare dry-run, and this repository's own PRs do not depend on naruon or any sibling product checkout. |
-| **또 같이 (siblings call it)** | A sibling enables the org required-workflow ruleset (already `repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and `noema` excluded, plus `ref_name.include=["~ALL"]`). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` in every non-excluded sibling repository branch, including stacked PR base branches. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
+| **또 같이 (siblings call it)** | A sibling inherits the org required-workflow ruleset (`repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and `noema` excluded; `ref_name.include=["~DEFAULT_BRANCH"]`). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` at the default-branch integration boundary. The scheduler provides review-only evidence for stacked PRs without governing proposal refs into a create/update deadlock. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
 
 Do not copy Strix, OpenCode, Noema, or scheduler workflow files into a
 sibling to "satisfy CI." Thick downstream sync PRs are an anti-pattern
@@ -65,11 +65,11 @@ The last checked-in ruleset ledger is
 
 Checked-in operator facts:
 
-- Ruleset `18156473` is **active**. It targets every non-excluded repository
-  branch (`repository_name.include=["~ALL"]`, exclusions `.github`,
-  `IRT-bibliography-set`, and `noema`, and `ref_name.include=["~ALL"]`),
-  including stacked pull-request base branches, and sources workflows from
-  this repository at `refs/heads/main`.
+- Ruleset `18156473` is **active**. It targets the default branch of every
+  non-excluded repository (`repository_name.include=["~ALL"]`, exclusions
+  `.github`, `IRT-bibliography-set`, and `noema`, and
+  `ref_name.include=["~DEFAULT_BRANCH"]`), permits the create transition, and
+  sources workflows from this repository at `refs/heads/main`.
 - Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
   `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
   `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.

@@ -8,22 +8,28 @@
 ## Decision
 
 The organization ruleset `CWL Central required workflows` (`18156473`) applies
-to every branch reference (`ref_name.include=["~ALL"]`) in inherited
-repositories. Central OpenCode, Noema, security, and scheduler workflows stay
-owned by `ContextualWisdomLab/.github` at `refs/heads/main`.
+exactly to each inherited repository's default branch
+(`ref_name.include=["~DEFAULT_BRANCH"]`, `ref_name.exclude=[]`). Its workflows
+use `do_not_enforce_on_create=true`. Central OpenCode, Noema, security, and
+scheduler workflows stay owned by `ContextualWisdomLab/.github` at
+`refs/heads/main`.
 
 ## Context
 
-Stacked PRs target another feature branch, so a default-branch-only ruleset did
-not materialize the central required workflow entrypoints. This left buyer-
-visible changes with local checks but without the same independent review and
-security evidence used for main-targeting PRs.
+Stacked PRs target another feature branch, so the default-branch ruleset does
+not materialize required-workflow entrypoints for that intermediate PR. The
+central scheduler supplies exact-head review-only evidence for the stacked
+phase. Applying the combined workflow, pull-request, deletion, and
+non-fast-forward rules to every ref was rejected after live 409/422 canaries
+proved that it made normal proposal-branch creation and updates impossible.
 
 ## Consequences
 
-- Every stacked PR receives the same current-head governance entrypoints.
-- The scheduler may dispatch review-only work for non-default base branches;
-  merge automation remains guarded by the PR's actual policy and checks.
+- Every stacked PR receives current-head central review-only dispatch.
+- The scheduler does not update or merge non-default-base PRs; the final
+  default-branch integration PR receives the full required-workflow gate.
+- Proposal refs can be created and updated without a circular requirement for
+  checks that cannot exist before the ref exists.
 - Branch-scope drift is detected by
   `scripts/ci/audit_central_required_workflows.py` and its regression tests.
 - No workflow is copied into a product repository, preserving the MSA control

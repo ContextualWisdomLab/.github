@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any, TextIO
-
 
 RULESET_ID = 18156473
 RULESET_NAME = "CWL Central required workflows"
@@ -112,18 +111,25 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
 
     ref_names = conditions.get("ref_name")
     ref_names = ref_names if isinstance(ref_names, dict) else {}
-    if ref_names.get("include") != ["~ALL"] or ref_names.get("exclude") != []:
-        errors.append("central ruleset does not target stacked and default-branch PRs")
+    if (
+        ref_names.get("include") != ["~DEFAULT_BRANCH"]
+        or ref_names.get("exclude") != []
+    ):
+        errors.append("central ruleset ref scope must be exactly the default branch")
 
     workflow_rules = _typed_rules(payload, "workflows")
+    workflow_parameters: dict[str, Any] = {}
     if len(workflow_rules) != 1:
         errors.append(f"expected one workflows rule, found {len(workflow_rules)}")
         workflows: list[Any] = []
     else:
         parameters = workflow_rules[0].get("parameters")
-        parameters = parameters if isinstance(parameters, dict) else {}
-        workflows = parameters.get("workflows")
+        workflow_parameters = parameters if isinstance(parameters, dict) else {}
+        workflows = workflow_parameters.get("workflows")
         workflows = workflows if isinstance(workflows, list) else []
+
+    if workflow_parameters.get("do_not_enforce_on_create") is not True:
+        errors.append("central required workflows block the branch create transition")
 
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}
     for workflow in workflows:

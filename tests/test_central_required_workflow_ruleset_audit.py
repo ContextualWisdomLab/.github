@@ -1,10 +1,9 @@
+import json
 from copy import deepcopy
 from io import StringIO
-import json
 from pathlib import Path
 
 from scripts.ci import audit_central_required_workflows as audit
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 def ruleset_payload() -> dict:
@@ -28,13 +27,13 @@ def ruleset_payload() -> dict:
                 "include": ["~ALL"],
                 "exclude": ["noema", "IRT-bibliography-set", ".github"],
             },
-            "ref_name": {"include": ["~ALL"], "exclude": []},
+            "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
         },
         "rules": [
             {
                 "type": "workflows",
                 "parameters": {
-                    "do_not_enforce_on_create": False,
+                    "do_not_enforce_on_create": True,
                     "workflows": [
                         {
                             "repository_id": 1274066402,
@@ -94,23 +93,28 @@ def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
 
-def test_default_branch_only_scope_rejects_stacked_pull_requests() -> None:
-    payload = ruleset_payload()
-    payload["conditions"]["ref_name"]["include"] = ["~DEFAULT_BRANCH"]
+def test_ref_scope_rejects_all_branch_and_extra_proposal_branch_targets() -> None:
+    for include in (
+        ["~ALL"],
+        ["~DEFAULT_BRANCH", "~ALL"],
+        ["~DEFAULT_BRANCH", "refs/heads/feature/*"],
+    ):
+        payload = ruleset_payload()
+        payload["conditions"]["ref_name"]["include"] = include
 
-    assert audit.audit_ruleset(payload) == [
-        "central ruleset does not target stacked and default-branch PRs"
-    ]
+        assert audit.audit_ruleset(payload) == [
+            "central ruleset ref scope must be exactly the default branch"
+        ]
 
 
 def test_ref_scope_rejects_branch_exclusions() -> None:
-    """All branch refs must be included without exclusions."""
+    """The strict default-branch ruleset must not hide excluded refs."""
 
     payload = ruleset_payload()
     payload["conditions"]["ref_name"]["exclude"] = ["refs/heads/release/*"]
 
     assert audit.audit_ruleset(payload) == [
-        "central ruleset does not target stacked and default-branch PRs"
+        "central ruleset ref scope must be exactly the default branch"
     ]
 
 
@@ -120,7 +124,17 @@ def test_ref_scope_rejects_string_include() -> None:
     payload["conditions"]["ref_name"]["include"] = "~ALL"
 
     assert audit.audit_ruleset(payload) == [
-        "central ruleset does not target stacked and default-branch PRs"
+        "central ruleset ref scope must be exactly the default branch"
+    ]
+
+
+def test_workflows_must_not_block_branch_create_transition() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["do_not_enforce_on_create"] = False
+
+    assert audit.audit_ruleset(payload) == [
+        "central required workflows block the branch create transition"
     ]
 
 
@@ -234,8 +248,9 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset enforcement is not active",
         "central ruleset does not include all repositories",
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
-        "central ruleset does not target stacked and default-branch PRs",
+        "central ruleset ref scope must be exactly the default branch",
         "expected one workflows rule, found 0",
+        "central required workflows block the branch create transition",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
