@@ -348,6 +348,14 @@ def test_rust_api_symbols_skip_missing_and_symlink_sources(tmp_path: Path) -> No
     )
 
 
+def test_rust_api_symbols_replace_invalid_utf8(tmp_path: Path) -> None:
+    """A malformed Rust text blob cannot abort review-surface publication."""
+    source = tmp_path / "lib.rs"
+    source.write_bytes(b"pub struct BrokenEncoding {\xff\n}\n")
+
+    assert surfaces.rust_api_symbols(tmp_path, ["lib.rs"]) == ["BrokenEncoding"]
+
+
 def test_crates_root_and_grouped_python_surfaces() -> None:
     """A bare crates/ path and repeated src/ files keep specific labels."""
     assert surfaces.classify_changed_path("crates")["kind"] == "rust-crate"
