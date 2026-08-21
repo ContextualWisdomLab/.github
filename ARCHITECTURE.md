@@ -39,6 +39,14 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## Control-plane SLI receipts
+
+`scripts/ci/control_plane_sli_receipt.py` turns a local finite evidence
+document into one `cwl.control-plane-sli/v1` receipt. The collector does
+not query GitHub or acquire mutation authority. Named wait reasons and
+acceptance debt are operator evidence only. Follow-through cannot exceed
+intermediate events, and exhausted retries require at least one attempt.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -147,5 +155,7 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
