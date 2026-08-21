@@ -2532,6 +2532,34 @@ def test_central_run_filter_ignores_same_repository_required_workflow_placeholde
     ) == ([], [])
 
 
+def test_legacy_same_repository_filter_ignores_required_workflow_placeholder(
+    monkeypatch,
+):
+    """A required-workflow placeholder must not suppress the real dispatch."""
+    head_sha = "a" * 40
+    placeholder = {
+        "id": 9404,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "pull_requests": [{"number": 1}],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [placeholder],
+    )
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+
+
 def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
     runs = [
         {
