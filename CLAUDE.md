@@ -71,6 +71,8 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
   diagram for review, hourly NVIDIA NIM repair, and merge trust boundaries.
   Wardnet's AI-SOC caller is `wardnet-hourly-review-repair.yml` (minute 7, `main`).
+  diagram for review, hourly NVIDIA NIM repair, exact-artifact SBOM attestation,
+  and merge trust boundaries.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
