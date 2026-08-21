@@ -15,6 +15,7 @@ on:
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/newsdom-api-hourly-review-repair.yml
       - .github/workflows/nonnest2-hourly-review-repair.yml
+      - .github/workflows/orgmetra-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
       - AGENTS.md
@@ -28,6 +29,7 @@ on:
       - tests/test_governance_risk_compliance_hourly_review_caller.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_nonnest2_hourly_review_caller.py
+      - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
       - tests/test_newsdom_api_hourly_review_caller.py
@@ -53,6 +55,7 @@ on:
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
+      - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
       - docs/doctoring/newsdom-api-hourly-review-caller.md
@@ -70,6 +73,7 @@ on:
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - .github/workflows/newsdom-api-hourly-review-repair.yml
       - .github/workflows/nonnest2-hourly-review-repair.yml
+      - .github/workflows/orgmetra-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
       - AGENTS.md
@@ -83,6 +87,7 @@ on:
       - tests/test_governance_risk_compliance_hourly_review_caller.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_nonnest2_hourly_review_caller.py
+      - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
       - tests/test_newsdom_api_hourly_review_caller.py
@@ -108,6 +113,7 @@ on:
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
       - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
+      - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
       - docs/doctoring/newsdom-api-hourly-review-caller.md
@@ -165,6 +171,7 @@ jobs:
             tests/test_governance_risk_compliance_hourly_review_caller.py \
             tests/test_hourly_scheduler_runtime_budget.py \
             tests/test_nonnest2_hourly_review_caller.py \
+            tests/test_orgmetra_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
             tests/test_quarantine_sandbox_hourly_review_caller.py \
             tests/test_newsdom_api_hourly_review_caller.py \
