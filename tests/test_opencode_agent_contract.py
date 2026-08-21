@@ -523,10 +523,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
     assert "AUTHORIZATION: bearer ${GH_TOKEN}" not in step
     assert "AUTHORIZATION: bearer" not in step
-    assert (
-        'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"'
-        in step
-    )
+    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' in step
+    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' in step
+    assert 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' in step
+    assert 'fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"' in step
     assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert "Coverage merge tree could not be materialized" in step

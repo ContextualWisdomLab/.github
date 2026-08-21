@@ -333,8 +333,40 @@ jobs:
           git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
           if ! git -C "$fetch_dir" \
             -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"; then
-            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base/head SHAs ${PR_BASE_SHA}/${PR_HEAD_SHA}; check token permissions, target repository access, and SHA visibility."
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"; then
+            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base SHA ${PR_BASE_SHA}; check token permissions, target repository access, and SHA visibility."
+            exit 1
+          fi
+          head_fetch_succeeded=0
+          if git -C "$fetch_dir" \
+            -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"; then
+            head_fetch_succeeded=1
+          else
+            echo "Direct head-SHA coverage fetch was unavailable; resolving the exact head through the target pull request ref."
+          fi
+          if [ "$head_fetch_succeeded" -ne 1 ]; then
+            for pr_head_fetch_attempt in 1 2 3 4 5 6; do
+              if git -C "$fetch_dir" \
+                -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
+                fetch --no-tags --prune --no-recurse-submodules origin \
+                "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head"; then
+                fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"
+                if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
+                  git -C "$fetch_dir" fetch --no-tags --prune --no-recurse-submodules origin "$fetched_head_sha"
+                  head_fetch_succeeded=1
+                  break
+                fi
+                echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay."
+              fi
+              if [ "$pr_head_fetch_attempt" -lt 6 ]; then
+                sleep 10
+              fi
+            done
+          fi
+          if [ "$head_fetch_succeeded" -ne 1 ] ||
+            ! git -C "$fetch_dir" cat-file -e "${PR_HEAD_SHA}^{commit}"; then
+            echo "::error::Coverage fetch could not resolve exact head SHA ${PR_HEAD_SHA} from ${TARGET_REPOSITORY} or refs/pull/${PR_NUMBER}/head; check token permissions, target repository access, PR state, and SHA propagation."
             exit 1
           fi
           git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"

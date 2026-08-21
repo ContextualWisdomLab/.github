@@ -924,7 +924,10 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	if [[ "$coverage_merge_tree_step" != *'GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}'* ]]; then
 		record_failure "opencode coverage merge-tree fetch must use the coverage App token and central fallback credentials before github.token for target repository reads"
 	fi
-	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' "coverage evidence fetches exact base and head commits as data"
+	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' "coverage evidence fetches the exact base commit as data"
+	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' "coverage evidence fetches the exact head commit when directly reachable"
+	assert_file_contains "$workflow_file" 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' "coverage evidence falls back to the exact pull request ref for fork heads"
+	assert_file_contains "$workflow_file" 'fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"' "coverage evidence verifies the pull request ref resolves to the dispatched head SHA"
 	assert_file_contains "$workflow_file" 'merge --no-ff --no-edit "$PR_HEAD_SHA"' "coverage evidence materializes the current pull request merge tree without action checkout"
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
 	assert_file_contains "$workflow_file" "--require-hashes" "coverage tooling installs from a hash-pinned lock"
