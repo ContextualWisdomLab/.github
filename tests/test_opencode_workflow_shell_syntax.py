@@ -270,17 +270,13 @@ esac
         env=cross_repo_env,
     )
 
-    assert cross_repo.returncode == 0, cross_repo.stderr
-    assert output.read_text(encoding="utf-8").splitlines() == [
-        "repository=ContextualWisdomLab/naruon",
-        "base_branch=develop",
-        "default_branch=main",
-        "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
-    ]
+    assert cross_repo.returncode == 1
+    assert "cross-repository" in cross_repo.stdout
+    assert not output.exists()
 
 
-def test_opencode_dispatch_validation_accepts_external_head_as_review_data(tmp_path):
-    """The central metadata gate accepts a fork while preserving exact identity."""
+def test_opencode_dispatch_validation_rejects_external_head(tmp_path):
+    """The privileged central metadata gate rejects a fork before review tooling."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -349,13 +345,6 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         env=env,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert output.read_text(encoding="utf-8").splitlines() == [
-        "target_repository=ContextualWisdomLab/naruon",
-        "pr_number=1179",
-        "base_ref=develop",
-        f"base_sha={'1' * 40}",
-        "head_ref=feature/fork-review",
-        f"head_sha={'2' * 40}",
-        "is_private=false",
-    ]
+    assert result.returncode == 1
+    assert "cross-repository" in result.stdout
+    assert not output.exists()

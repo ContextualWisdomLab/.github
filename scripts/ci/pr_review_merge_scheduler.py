@@ -2440,6 +2440,12 @@ def inspect_draft_pr_for_review(
             "wait",
             "draft PR; OpenCode review is already in progress",
         )
+    if opencode_state == "complete":
+        return Decision(
+            number,
+            "skip",
+            "draft PR; OpenCode review already completed without a current-head verdict",
+        )
     if not review_dispatch_allowed:
         return Decision(number, "wait", "draft PR; review dispatch limit reached")
 

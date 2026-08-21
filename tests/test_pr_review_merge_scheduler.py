@@ -3209,6 +3209,21 @@ def test_draft_pr_review_wait_states_are_read_only(monkeypatch):
     assert limited.action == "wait"
     assert limited.reason == "draft PR; review dispatch limit reached"
 
+    completed = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [strix_check(), opencode_check(status="COMPLETED")]
+                }
+            },
+        )
+    )
+    assert completed.action == "skip"
+    assert completed.reason == (
+        "draft PR; OpenCode review already completed without a current-head verdict"
+    )
+
     strix_running = inspect(
         make_pr(
             isDraft=True,

@@ -289,14 +289,14 @@ jobs:
           if [ "$live_number" != "$TARGET_PR_NUMBER" ] ||
             [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ] ||
-            ! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            [ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ] ||
             [ -z "$live_base_branch" ] ||
             [ -z "$live_default_branch" ] ||
             ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            printf '::error::Targeted scheduler dispatch rejected closed, malformed, or target-base-mismatched live metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s default_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${live_default_branch:-<missing>}" "${live_head_sha:-<missing>}"
+            printf '::error::Targeted scheduler dispatch rejected closed, cross-repository, malformed, or target-base-mismatched live metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s default_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${live_default_branch:-<missing>}" "${live_head_sha:-<missing>}"
             exit 1
           fi
-          printf 'Validated targeted scheduler review dispatch for %s#%s (head=%s; this dispatch is review-only for external heads).\n' \
+          printf 'Validated same-repository targeted scheduler dispatch for %s#%s (head=%s).\n' \
             "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "$live_head_repository"
           if [ -n "$TARGET_BASE_BRANCH_INPUT" ] &&
             [ "$TARGET_BASE_BRANCH_INPUT" != "$live_base_branch" ]; then

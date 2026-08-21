@@ -116,8 +116,8 @@ def test_scheduler_deduplicates_metadata_free_workflow_run_scans() -> None:
     assert 'sort_by(.created_at, .id)' in queue_hygiene
 
 
-def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:
-    """Central single-PR dispatch must validate live metadata before cross-repo use."""
+def test_targeted_scheduler_dispatch_is_allowlisted_and_same_repo_scoped() -> None:
+    """Central single-PR dispatch must validate live metadata before privileged use."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     validation = workflow_step(workflow, "Validate targeted repository dispatch")
     inspect = workflow_step(workflow, "Inspect PR review and merge queue")
@@ -134,8 +134,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
     assert '[ "$live_state" != "open" ]' in validation
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
-    assert '! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in validation
-    assert "this dispatch is review-only for external heads" in validation
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert "this dispatch is review-only for external heads" not in validation
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
     assert 'gh api "repos/${TARGET_REPOSITORY_INPUT}"' in validation
     assert "live_default_branch=" in validation
@@ -161,8 +161,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     ) in workflow
 
 
-def test_fork_heads_reach_read_only_opencode_review_dispatch() -> None:
-    """External heads are reviewable but never become trusted merge inputs."""
+def test_fork_heads_are_rejected_by_privileged_review_paths() -> None:
+    """External heads cannot reach the privileged review or merge paths."""
     workflow = workflow_text("opencode-review-dispatch.yml")
     metadata = workflow_step(
         workflow, "Bind workflow inputs to live organization pull request metadata"
@@ -172,9 +172,10 @@ def test_fork_heads_reach_read_only_opencode_review_dispatch() -> None:
         encoding="utf-8"
     )
 
-    assert '! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in metadata
-    assert '! [[ "$head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in privileged
-    assert "this path is review-only for external heads" in privileged
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' in metadata
+    assert '[ "$head_repository" != "$GH_REPOSITORY" ]' in privileged
+    assert "cross-repository heads are not eligible for this privileged path" in privileged
+    assert "this path is review-only for external heads" not in privileged
     assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in scheduler
 
 
