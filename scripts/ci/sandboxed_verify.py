@@ -69,6 +69,10 @@ class RepositoryPathBoundaryError(ValueError):
     """Report a copied repository link that escapes its sandbox boundary."""
 
 
+class RepositoryRootError(ValueError):
+    """Report that the requested repository root cannot be copied."""
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the sandboxed verification wrapper."""
     parser = argparse.ArgumentParser(
@@ -195,7 +199,7 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
-        raise ValueError(f"repo root is not a directory: {source}")
+        raise RepositoryRootError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
     ignore = shutil.ignore_patterns(*(DEFAULT_IGNORE + tuple(extra_ignores)))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
@@ -278,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         try:
             copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
-        except ValueError:
+        except RepositoryPathBoundaryError:
             path_boundary_rejected = True
             copied_repo = Path("(not-created)")
             print(
@@ -286,6 +290,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = PATH_BOUNDARY_EXIT_CODE
+            return exit_code
+        except RepositoryRootError:
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-verify: repository root is not a directory",
+                file=sys.stderr,
+            )
+            exit_code = 1
             return exit_code
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
@@ -320,6 +332,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_limit_unsupported = True
             print(
                 "sandboxed-verify: bounded child output is unavailable on this platform",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+        except RuntimeError:
+            print(
+                "sandboxed-verify: bounded output capture failed",
                 file=sys.stderr,
             )
             exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE

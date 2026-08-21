@@ -126,6 +126,34 @@ def test_timeout_retains_precedence_and_bounded_partial_output(
     assert payload["output_limited"] is False
 
 
+def test_stuck_capture_returns_bounded_failure_without_traceback(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """A stuck reader becomes stable resource evidence instead of a traceback."""
+    repository = _repository(tmp_path)
+    monkeypatch.setattr(
+        sandboxed_verify,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("host descriptor detail")
+        ),
+    )
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(repository), "--", "verify"]
+    )
+    captured = capsys.readouterr()
+    payload = _result_payload(captured.out)
+
+    assert exit_code == bounded.OUTPUT_LIMIT_EXIT_CODE
+    assert payload["output_limited"] is False
+    assert "bounded output capture failed" in captured.err
+    assert "host descriptor detail" not in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_unsupported_resource_limit_fails_closed(
     monkeypatch,
     tmp_path: Path,

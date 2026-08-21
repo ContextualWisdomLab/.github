@@ -11,6 +11,7 @@ from typing import cast
 import pytest
 
 from scripts.ci import bounded_subprocess as bounded
+from scripts.ci import sandboxed_verify
 from scripts.ci import sandboxed_web_e2e
 
 
@@ -373,16 +374,34 @@ def test_capture_finalization_failure_maps_to_resource_exit(
 
     repository = tmp_path / "repository"
     repository.mkdir()
+    captures = []
+
+    class Capture:
+        """Record the cleanup retry after service termination fails."""
+
+        output_limited = False
+
+        def __init__(self) -> None:
+            self.join_calls = 0
+
+        def join(self, timeout=None) -> None:
+            """Record the bounded retry timeout."""
+
+            del timeout
+            self.join_calls += 1
 
     def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
         """Return completed service doubles."""
 
         del command, cwd, env
+        capture = Capture()
+        captures.append(capture)
         return sandboxed_web_e2e.Service(
             label=label,
             command=label,
             process=cast(subprocess.Popen[bytes], _DoneProcess()),
             log_path=logs_dir / f"{label}.log",
+            capture=capture,
             log_limit_bytes=log_limit_bytes,
         )
 
@@ -431,6 +450,122 @@ def test_capture_finalization_failure_maps_to_resource_exit(
     assert _result(captured.out)["output_limit_unsupported"] is False
     assert _result(captured.out)["service_capture_failed"] is True
     assert len(forced) == 2
+    assert [capture.join_calls for capture in captures] == [1, 1]
+
+
+def test_main_classifies_web_symlink_boundary_without_host_target(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Web E2E rejects a copied symlink without disclosing its host target."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    sensitive_target = tmp_path / "runner-secret.txt"
+    sensitive_target.write_text("host-only", encoding="utf-8")
+    (repository / "escape").symlink_to(sensitive_target)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repository),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+    result = _result(captured.out)
+
+    assert exit_code == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert result["path_boundary_rejected"] is True
+    assert result["cwd"] == "(not-created)"
+    assert "repository path boundary rejected" in captured.err
+    assert str(sensitive_target) not in captured.err
+    assert str(repository) not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_main_reports_web_invalid_root_without_boundary_evidence(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Web E2E distinguishes an absent repository root from a path escape."""
+    missing = tmp_path / "missing-repository"
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(missing),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+    result = _result(captured.out)
+
+    assert exit_code == 1
+    assert result["path_boundary_rejected"] is False
+    assert result["cwd"] == "(not-created)"
+    assert "repository root is not a directory" in captured.err
+    assert str(missing) not in captured.err
+
+
+def test_main_maps_command_capture_failure_to_bounded_resource_evidence(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """A command-side stuck reader is reported without leaking its exception."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
+        """Return completed services so the E2E command path is reached."""
+
+        del cwd, env
+        return sandboxed_web_e2e.Service(
+            label=label,
+            command=command,
+            process=cast(subprocess.Popen[bytes], _DoneProcess()),
+            log_path=logs_dir / f"{label}.log",
+            log_limit_bytes=log_limit_bytes,
+        )
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda *args: True)
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "run_shell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("host descriptor detail")
+        ),
+    )
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repository),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == bounded.OUTPUT_LIMIT_EXIT_CODE
+    assert "bounded output capture failed" in captured.err
+    assert "host descriptor detail" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_timeout_precedence_survives_cleanup_and_late_service_limit(

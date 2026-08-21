@@ -80,6 +80,29 @@ def test_copy_workspace_rejects_missing_repo_root(tmp_path):
         sandboxed_verify.copy_workspace(tmp_path / "missing", tmp_path / "sandbox", [])
 
 
+def test_main_reports_invalid_repo_root_without_boundary_evidence(tmp_path, capsys):
+    """An invalid root is a generic input failure, not a symlink rejection."""
+    missing = tmp_path / "host-secret-root"
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(missing), "--", "verify"]
+    )
+    captured = capsys.readouterr()
+    result_line = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+
+    assert exit_code == 1
+    assert payload["exit_code"] == 1
+    assert payload["path_boundary_rejected"] is False
+    assert "repository root is not a directory" in captured.err
+    assert str(missing) not in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_timeout_output_text_normalizes_subprocess_payloads():
     """Timeout output normalization handles subprocess bytes and missing streams."""
     assert sandboxed_verify.timeout_output_text(None) == ""

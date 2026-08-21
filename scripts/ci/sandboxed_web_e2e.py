@@ -280,6 +280,7 @@ def emit_result(
     output_limited: bool,
     output_limit_unsupported: bool,
     service_capture_failed: bool,
+    path_boundary_rejected: bool = False,
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
@@ -297,6 +298,7 @@ def emit_result(
         "output_limit_bytes": args.output_limit_bytes,
         "output_limited": output_limited,
         "output_limit_unsupported": output_limit_unsupported,
+        "path_boundary_rejected": path_boundary_rejected,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
         "service_capture_failed": service_capture_failed,
@@ -326,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_limit_unsupported = False
     service_capture_failed = False
     service_limit_reported = False
+    path_boundary_rejected = False
     start = time.monotonic()
     try:
         try:
@@ -410,6 +413,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+        except sandboxed_verify.RepositoryPathBoundaryError:
+            path_boundary_rejected = True
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-web-e2e: repository path boundary rejected",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+        except sandboxed_verify.RepositoryRootError:
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-web-e2e: repository root is not a directory",
+                file=sys.stderr,
+            )
+            exit_code = 1
+        except RuntimeError:
+            print(
+                "sandboxed-web-e2e: bounded output capture failed",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
     finally:
         for service in reversed(services):
             try:
@@ -421,6 +445,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     wait = getattr(service.process, "wait", None)
                     if wait is not None:
                         wait(timeout=10)
+                if service.capture is not None:
+                    with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+                        service.capture.join(timeout=10)
                 service_capture_failed = True
                 if exit_code == 0:
                     exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
@@ -454,6 +481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_limited=output_limited,
             output_limit_unsupported=output_limit_unsupported,
             service_capture_failed=service_capture_failed,
+            path_boundary_rejected=path_boundary_rejected,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
