@@ -34,12 +34,12 @@ def test_flat_materializable_lock_requires_a_standalone_exact_closure(
 
 
 @pytest.mark.parametrize("directive", ["-r", "--requirement"])
-def test_flat_publication_excludes_relative_include_referrers(
+def test_materialization_preserves_relative_include_referrers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     directive: str,
 ) -> None:
-    """A generated flat name cannot preserve a source-relative include edge."""
+    """A bounded source-relative include is retained for graph-aware materialization."""
     tree = (
         b"100644 blob "
         + (b"0" * 40)
@@ -62,7 +62,8 @@ def test_flat_publication_excludes_relative_include_referrers(
     monkeypatch.setattr(materializer, "_git", fake_git)
 
     assert materializer.base_hash_locks(tmp_path, "a" * 40) == [
-        ("requirements-other.txt", target_lock)
+        ("requirements-other.txt", target_lock),
+        ("requirements.txt", f"{directive} requirements-other.txt\n".encode()),
     ]
 
 
@@ -70,7 +71,7 @@ def test_flat_publication_discovers_standalone_requirements_directory_locks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Path-aware discovery keeps complete direct requirements-directory locks."""
+    """Path-aware discovery keeps standalone and bounded include locks."""
     tree = (
         b"100644 blob "
         + (b"0" * 40)
@@ -101,6 +102,7 @@ def test_flat_publication_discovers_standalone_requirements_directory_locks(
     monkeypatch.setattr(materializer, "_git", fake_git)
 
     assert materializer.base_hash_locks(tmp_path, "a" * 40) == [
+        ("requirements.txt", b"-r requirements/ci.txt\n"),
         ("requirements/ci.txt", ci_lock),
         ("service/requirements/package.txt", service_lock),
     ]
