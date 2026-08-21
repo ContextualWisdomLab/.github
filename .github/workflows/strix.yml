@@ -8,30 +8,6 @@ run-name: >-
 on:
   push:
     branches: ['**']
-    # Skip scans for changes that touch ONLY non-executable documentation and
-    # image assets. A change whose entire diff is these paths has no source,
-    # build, config, or workflow logic for a code security scanner to analyze,
-    # so skipping it loses no coverage while freeing shared runner capacity.
-    # Conservative by design: only file EXTENSIONS/paths that can never contain
-    # executable logic are listed (no source, no *.txt, no *.svg, no CODEOWNERS,
-    # no build scripts). A diff touching even one non-listed file still scans.
-    # The weekly full-tree schedule below re-scans protected branches with no
-    # path filter, backstopping every path.
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.markdown'
-      - '**/*.rst'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.jpeg'
-      - '**/*.gif'
-      - '**/*.webp'
-      - '**/*.bmp'
-      - '**/*.ico'
-      - 'LICENSE'
-      - 'LICENSE.*'
-      - 'COPYING'
-      - '.github/ISSUE_TEMPLATE/**'
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     # Same conservative doc/image-only skip for PR scans. GitHub evaluates these

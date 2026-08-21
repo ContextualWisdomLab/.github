@@ -38,6 +38,9 @@ def test_push_bootstrap_never_executes_pr_or_provider_mutations() -> None:
     semgrep = (
         REPO_ROOT / ".github" / "workflows" / "sast-semgrep.yml"
     ).read_text(encoding="utf-8")
+    strix = (
+        REPO_ROOT / ".github" / "workflows" / "strix.yml"
+    ).read_text(encoding="utf-8")
     doctoring = (
         REPO_ROOT / "docs" / "doctoring" / "required-workflow-branch-bootstrap.md"
     ).read_text(encoding="utf-8")
@@ -54,5 +57,10 @@ def test_push_bootstrap_never_executes_pr_or_provider_mutations() -> None:
         "        github.ref_name == 'develop'\n"
         "      )"
     ) in semgrep
+    push_trigger, pull_request_trigger = strix.split(
+        "  pull_request_target:\n", maxsplit=1
+    )
+    assert "paths-ignore:" not in push_trigger
+    assert "paths-ignore:" in pull_request_trigger
     assert "an unprotected\nstacked-branch push cannot close a PR" in doctoring
     assert "Protected `main`, `master`, and\n`develop` pushes continue to run" in doctoring
