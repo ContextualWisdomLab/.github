@@ -8,3 +8,4 @@ Conflict-scope roots fail closed when the immediate parent directory is a symbol
 Fatal OpenCode provider cleanup must signal the `setsid` process group, not only the timeout wrapper. See [`docs/doctoring/opencode-process-group-termination.md`](docs/doctoring/opencode-process-group-termination.md).
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
