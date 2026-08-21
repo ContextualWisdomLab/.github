@@ -72,6 +72,7 @@ def test_github_client_applies_one_finite_timeout(monkeypatch) -> None:
     observed = []
 
     def fake_run(command, **kwargs):
+        """Return a successful JSON response while recording subprocess options."""
         observed.append((command, kwargs))
         return SimpleNamespace(stdout='{"ok": true}\n', returncode=0)
 
@@ -88,6 +89,7 @@ def test_github_client_converts_timeout_to_bounded_diagnostic(monkeypatch) -> No
     router = router_module()
 
     def timeout_run(command, **kwargs):
+        """Raise the same timeout the production wrapper must translate."""
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(router.subprocess, "run", timeout_run)
@@ -107,6 +109,7 @@ def test_repository_fanout_uses_exactly_four_workers_at_scale(monkeypatch) -> No
     worker_limits = []
 
     def recording_executor(*, max_workers):
+        """Record the configured worker ceiling before creating real workers."""
         worker_limits.append(max_workers)
         return real_executor(max_workers=max_workers)
 
@@ -125,9 +128,66 @@ def test_repository_fanout_uses_exactly_four_workers_at_scale(monkeypatch) -> No
     )
 
     assert worker_limits == [4]
-    assert [item["repository"] for item in results] == [
+    assert sorted(item["repository"] for item in results) == sorted(
         f"ContextualWisdomLab/{name}" for name in names
-    ]
+    )
+
+
+def test_repository_fanout_yields_fast_repository_before_slow_one() -> None:
+    """A slow first repository must not hide a completed later repository."""
+
+    sweep = sweep_module()
+    slow_started = threading.Event()
+    fast_finished = threading.Event()
+    release_slow = threading.Event()
+    first_yielded = threading.Event()
+
+    class FairnessClient:
+        """Block one repository while allowing the next one to complete."""
+
+        def request(self, args, *, input_payload=None):
+            """Return the inventory or one deliberately paced pull list."""
+
+            del input_payload
+            endpoint = args[0]
+            if endpoint == "orgs/ContextualWisdomLab/repos":
+                return [repository("alpha"), repository("bravo")]
+            if endpoint.endswith("alpha/pulls"):
+                slow_started.set()
+                assert release_slow.wait(2)
+                return [pull(1)]
+            if endpoint.endswith("bravo/pulls"):
+                fast_finished.set()
+                return [pull(2)]
+            raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    generator = sweep.list_recent_pull_requests(
+        FairnessClient(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-19T00:00:00Z",
+    )
+    first_result = []
+
+    def read_first_result() -> None:
+        """Read one result without blocking the test's release signal."""
+
+        first_result.append(next(generator))
+        first_yielded.set()
+
+    reader = threading.Thread(target=read_first_result)
+    reader.start()
+    assert slow_started.wait(2)
+    assert fast_finished.wait(2)
+    yielded_before_slow_release = first_yielded.wait(0.5)
+    release_slow.set()
+    reader.join(2)
+    assert not reader.is_alive()
+    assert yielded_before_slow_release
+    assert first_result[0]["repository"] == "ContextualWisdomLab/bravo"
+    assert {item["repository"] for item in generator} == {
+        "ContextualWisdomLab/alpha"
+    }
 
 
 def test_empty_inventory_does_not_construct_an_executor(monkeypatch) -> None:
@@ -136,6 +196,7 @@ def test_empty_inventory_does_not_construct_an_executor(monkeypatch) -> None:
     sweep = sweep_module()
 
     def forbidden_executor(*args, **kwargs):
+        """Fail the test if the empty inventory allocates an executor."""
         raise AssertionError(f"executor called with {args!r} {kwargs!r}")
 
     monkeypatch.setattr(
@@ -167,6 +228,7 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
         """Keep the second repository in one bounded in-flight request."""
 
         def request(self, args, *, input_payload=None):
+            """Return page one or pause page two until the closer releases it."""
             del input_payload
             endpoint = args[0]
             if endpoint == "orgs/ContextualWisdomLab/repos":
@@ -191,12 +253,15 @@ def test_generator_close_stops_additional_pages_after_inflight_request(
         """Expose the moment shutdown begins while delegating real workers."""
 
         def __init__(self, *, max_workers):
+            """Create the real bounded executor used by this test double."""
             self._inner = real_executor(max_workers=max_workers)
 
         def submit(self, *args, **kwargs):
+            """Forward one repository fetch to the delegated executor."""
             return self._inner.submit(*args, **kwargs)
 
         def shutdown(self, *, wait, cancel_futures):
+            """Record shutdown before forwarding the bounded cancellation call."""
             shutdown_started.set()
             return self._inner.shutdown(
                 wait=wait,
