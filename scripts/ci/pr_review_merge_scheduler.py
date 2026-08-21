@@ -2443,12 +2443,19 @@ def inspect_draft_pr_for_review(
                 "draft PR; current head has no completed Strix evidence; "
                 f"{wait_reason}",
             )
-        dispatch_strix_evidence(
+        strix_dispatch_result = dispatch_strix_evidence(
             repo,
             security_workflow,
             pr,
             dry_run=dry_run,
         )
+        if strix_dispatch_result == "already_running":
+            return Decision(
+                number,
+                "wait",
+                "draft PR; current head has no completed Strix evidence; "
+                "same-head Strix workflow run is already active",
+            )
         return Decision(
             number,
             "security_dispatch",

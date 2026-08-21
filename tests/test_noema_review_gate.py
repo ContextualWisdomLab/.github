@@ -352,6 +352,23 @@ def test_codegraph_context_root_and_resolve_failure(monkeypatch, tmp_path):
     assert noema.confined_codegraph_context_path("graph.md", tmp_path.resolve()) is None
 
 
+def test_relative_codegraph_context_resolves_from_workspace(monkeypatch, tmp_path):
+    """Relative context paths are workspace-relative even when cwd differs."""
+    workspace = tmp_path / "workspace"
+    context_dir = workspace / "context"
+    context_dir.mkdir(parents=True)
+    graph = context_dir / "graph.md"
+    graph.write_text("trusted workspace graph", encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "context/graph.md")
+
+    assert noema.load_codegraph_context() == "trusted workspace graph"
+
+
 class FakeResponse:
     """Small context-manager response for urllib monkeypatches."""
 

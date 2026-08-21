@@ -392,6 +392,8 @@ def confined_codegraph_context_path(path: str, root: Path) -> Path | None:
     candidate = Path(path)
     if ".." in candidate.parts:
         return None
+    if not candidate.is_absolute():
+        candidate = Path(root / candidate)
     try:
         resolved = candidate.resolve()
     except OSError:
