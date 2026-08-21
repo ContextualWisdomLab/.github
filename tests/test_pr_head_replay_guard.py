@@ -183,6 +183,20 @@ def test_diff_evidence_overrides_repository_submodule_ignore_setting(tmp_path):
 
     assert first_submodule_commit != second_submodule_commit
     assert guard.git_output(repo, ["diff", "--name-only", base, head]) == "vendor/fixture"
+    assert (
+        guard.git_output(
+            repo,
+            [
+                "diff",
+                "--ignore-submodules",
+                "--ignore-submodules=all",
+                "--name-only",
+                base,
+                head,
+            ],
+        )
+        == "vendor/fixture"
+    )
 
 
 def fixture_repo_with_base_tests(tmp_path: Path) -> tuple[Path, str, str]:
