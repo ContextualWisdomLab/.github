@@ -306,6 +306,9 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
             raise ValueError("uv export contains an unsupported dependency line")
         dependency = {
             "package": match.group("package"),
+            "import_name": re.sub(
+                r"[-_.]+", "_", match.group("package").partition("[")[0]
+            ).lower(),
             "repository": match.group("repository"),
             "commit": match.group("commit").lower(),
         }

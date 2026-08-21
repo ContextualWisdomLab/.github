@@ -101,7 +101,7 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
     """An immutable organization source pin is separated from pip hash locks."""
     content = (
         b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
-        b"rankweave @ git+https://github.com/ContextualWisdomLab/RankWeave.git@"
+        b"rank.weave-extra[GPU] @ git+https://github.com/ContextualWisdomLab/RankWeave.git@"
         b"61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6\n"
     )
 
@@ -110,7 +110,8 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
     assert registry == b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
     assert vcs_sources == [
         {
-            "package": "rankweave",
+            "package": "rank.weave-extra[GPU]",
+            "import_name": "rank_weave_extra",
             "repository": "RankWeave",
             "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
         }

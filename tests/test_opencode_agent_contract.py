@@ -684,7 +684,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
     assert 'rev-parse HEAD)" = "$commit"' in measure_step
     assert "opencode-base-vcs-dependencies.pth" in measure_step
-    assert 'if [ -d "$destination/src" ]' in measure_step
+    assert 'vcs-manifest.json >"$dependency_list"' in measure_step
+    assert 'done <"$dependency_list"' in measure_step
+    assert '[ -d "$destination/src/$import_name" ]' in measure_step
+    assert '[ -d "$destination/$import_name" ]' in measure_step
+    assert "has no import root" in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(

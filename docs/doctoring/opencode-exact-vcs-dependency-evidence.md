@@ -10,9 +10,10 @@ Registry dependencies remain exact-version, SHA-256-pinned `pip` installs.
 The trusted materializer separates those two dependency classes. The networked,
 secret-free image build fetches each approved source revision, verifies that
 `FETCH_HEAD` and the checked-out `HEAD` equal the locked commit, removes Git
-metadata, and records only the repository root or its `src` directory in a
-Python path file. It does not run dependency build or installation code. The
-pull-request tree still runs later with no network and no credentials.
+metadata, verifies a normalized package import root, and records only that
+repository root or its `src` directory in a Python path file. It does not run
+dependency build or installation code. The pull-request tree still runs later
+with no network and no credentials.
 
 ## Root cause
 

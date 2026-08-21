@@ -122,6 +122,7 @@ def test_materializes_exact_vcs_sources_in_a_separate_manifest(
     vcs_sources = [
         {
             "package": "rankweave",
+            "import_name": "rankweave",
             "repository": "RankWeave",
             "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
             "source": "uv.lock",
@@ -154,6 +155,7 @@ def test_base_inputs_preserve_a_vcs_only_export(
     )
     dependency = {
         "package": "rankweave",
+        "import_name": "rankweave",
         "repository": "RankWeave",
         "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
     }
