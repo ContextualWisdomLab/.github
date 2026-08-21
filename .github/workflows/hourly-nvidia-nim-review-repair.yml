@@ -39,7 +39,7 @@ on:
       - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_context_head_binding.py
-      - tests/test_pr_review_autofix_contextual_orchestrator_contract.py
+      - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - tests/test_pr_review_autofix_writer_security_contract.py
       - docs/automation/hourly-review-repair.md
       - docs/doctoring/bandscope-hourly-review-caller.md
@@ -49,7 +49,7 @@ on:
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
-      - docs/doctoring/contextual-orchestrator-autofix.md
+      - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
@@ -92,7 +92,7 @@ on:
       - tests/test_pr_review_fix_scheduler.py
       - tests/test_pr_review_fix_scheduler_source_pin.py
       - tests/test_pr_review_autofix_context_head_binding.py
-      - tests/test_pr_review_autofix_contextual_orchestrator_contract.py
+      - tests/test_pr_review_autofix_nvidia_nim_contract.py
       - tests/test_pr_review_autofix_writer_security_contract.py
       - docs/automation/hourly-review-repair.md
       - docs/doctoring/bandscope-hourly-review-caller.md
@@ -102,7 +102,7 @@ on:
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
-      - docs/doctoring/contextual-orchestrator-autofix.md
+      - docs/doctoring/hourly-nvidia-nim-autofix.md
       - docs/doctoring/nonnest2-hourly-review-caller.md
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
@@ -117,7 +117,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Hourly cadence, immutable source, gateway credential, and conflict scope
+    name: Hourly cadence, immutable source, NIM credential, and conflict scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -138,7 +138,7 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
-      - name: Verify hourly scheduler and contextual-orchestrator autofix contracts
+      - name: Verify hourly scheduler and NVIDIA NIM autofix contracts
         run: |
           set -euo pipefail
           python -m pytest -q \
@@ -173,6 +173,6 @@ jobs:
             tests/test_pr_review_fix_scheduler.py \
             tests/test_pr_review_fix_scheduler_source_pin.py \
             tests/test_pr_review_autofix_context_head_binding.py \
-            tests/test_pr_review_autofix_contextual_orchestrator_contract.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py \
             tests/test_pr_review_autofix_writer_security_contract.py
           git diff --check
