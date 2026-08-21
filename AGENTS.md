@@ -7,4 +7,7 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+
 Hashed-lock pip-audit uses `--disable-pip` only when every package line is an exact SHA-256 pin; `--index-url` is configuration; directory-symlink hops fail closed. See [`docs/doctoring/strix-hashed-lock-no-deps.md`](docs/doctoring/strix-hashed-lock-no-deps.md).
+
+The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
