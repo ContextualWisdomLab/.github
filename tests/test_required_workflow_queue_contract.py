@@ -910,6 +910,8 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     assert workflow.count("--allow-no-lockfiles") == 4
     assert "--output-file=old-results.json" in workflow
     assert "--output-file=new-results.json" in workflow
+    assert "--output-files=sarif:results.sarif" in workflow
+    assert "--output-file=results.sarif" not in workflow
     assert "--output=old-results.json" not in workflow
     assert "--output=new-results.json" not in workflow
     assert "test -s old-results.json" in workflow
