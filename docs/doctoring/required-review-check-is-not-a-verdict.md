@@ -50,6 +50,19 @@ Live runs set `name` to the interpolated run-name. The matcher now
 accepts that prefix so a queued or in-progress same-head review is
 `already_running`.
 
+## Exact CodeQL merge-preview contract
+
+The central CodeQL pull-request workflow must analyze the merge tree formed by
+the current base and head, not merely trust the event's
+`pull_request.merge_commit_sha`. A live CodeQL failure showed that GitHub can
+provide a merge commit whose parents and tree belong to an older pull-request
+head. The workflow now verifies the supplied identity, computes
+`git merge-tree --write-tree` for the current pair, and materializes a
+deterministic two-parent local commit when the supplied metadata is stale or
+structurally different. CodeQL receives the resulting analyzed SHA and the
+workflow records both identities, so a stale preview cannot silently become
+current-head evidence (GitHub, n.d.-b).
+
 ## Draft pull-request review contract
 
 Draft status is a merge-readiness signal, not a request to suppress early
@@ -91,3 +104,6 @@ https://doi.org/10.1109/ICSE.2013.6606617
 
 GitHub. (n.d.-a). *About status checks*. GitHub Docs. Retrieved
 August 14, 2026, from https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks
+
+GitHub. (n.d.-b). *About code scanning with CodeQL*. GitHub Docs. Retrieved
+August 22, 2026, from https://docs.github.com/en/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning-with-codeql

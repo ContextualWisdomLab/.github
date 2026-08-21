@@ -86,9 +86,12 @@ code scanning analyses for ruleset `18156473` `code_scanning` (CodeQL, Scorecard
 osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
 Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
 
-CodeQL merge preview checks out `refs/pull/<n>/merge` and uploads SARIF with
-`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit,
-not the ephemeral merge ref OID.
+CodeQL merge preview verifies the current base/head pair and computes its exact
+merge tree before analysis. GitHub's `pull_request.merge_commit_sha` remains
+the supplied preview identity, but if its parents or tree are stale the
+workflow materializes a deterministic local two-parent merge preview and
+publishes the SHA of the tree it actually analyzed. The documented
+`refs/pull/<n>/merge` ref shape remains the SARIF publication boundary.
 
 Repository-local `codeql.yml` push/default-branch scans may remain for branch
 history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.

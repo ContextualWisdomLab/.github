@@ -200,6 +200,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Verify merge preview identity
+        id: verify-merge-preview
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -207,20 +208,39 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git -c "http.extraheader=AUTHORIZATION: bearer $GITHUB_TOKEN" fetch \
-            --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"
-          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer $GITHUB_TOKEN"
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          provided_tree="$(git rev-parse "$MERGE_SHA^{tree}")"
           read -r actual_merge parent_one parent_two extra <<EOF
           $(git rev-list --parents -n 1 "$MERGE_SHA")
           EOF
-          test "$actual_merge" = "$MERGE_SHA"
-          test "$parent_one" = "$BASE_SHA"
-          test "$parent_two" = "$HEAD_SHA"
-          test -z "${extra:-}"
           expected_tree="$(git merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA")"
-          actual_tree="$(git rev-parse "$MERGE_SHA^{tree}")"
-          test "$expected_tree" = "$actual_tree"
-          echo "Verified merge preview: base=$BASE_SHA head=$HEAD_SHA merge=$MERGE_SHA tree=$actual_tree"
+          local_merge_sha="$MERGE_SHA"
+          if [ "$actual_merge" != "$MERGE_SHA" ] ||
+            [ "$parent_one" != "$BASE_SHA" ] ||
+            [ "$parent_two" != "$HEAD_SHA" ] ||
+            [ -n "${extra:-}" ] ||
+            [ "$provided_tree" != "$expected_tree" ]; then
+            echo "::notice::GitHub merge preview metadata is stale or structurally different; materializing the exact base/head merge tree locally."
+            local_merge_sha="$(
+              printf 'CWL CodeQL exact merge preview\n\nbase=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" |
+                env GIT_AUTHOR_NAME='CWL CodeQL verifier' \
+                  GIT_AUTHOR_EMAIL='cwl-codeql-verifier@localhost' \
+                  GIT_COMMITTER_NAME='CWL CodeQL verifier' \
+                  GIT_COMMITTER_EMAIL='cwl-codeql-verifier@localhost' \
+                  git commit-tree "$expected_tree" -p "$BASE_SHA" -p "$HEAD_SHA"
+            )"
+          fi
+          git reset --hard "$local_merge_sha"
+          test "$(git rev-parse "$local_merge_sha^{tree}")" = "$expected_tree"
+          {
+            echo "merge_sha=$local_merge_sha"
+            echo "merge_tree=$expected_tree"
+          } >> "$GITHUB_OUTPUT"
+          echo "Verified merge preview: base=$BASE_SHA head=$HEAD_SHA provided_merge=$MERGE_SHA analyzed_merge=$local_merge_sha tree=$expected_tree"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
@@ -235,7 +255,7 @@ jobs:
           upload: false
           output: codeql-results-merge
           ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
-          sha: ${{ github.event.pull_request.merge_commit_sha }}
+          sha: ${{ steps.verify-merge-preview.outputs.merge_sha }}
 
       - name: Enforce CodeQL Medium+ SARIF gate
         shell: python3 {0}
