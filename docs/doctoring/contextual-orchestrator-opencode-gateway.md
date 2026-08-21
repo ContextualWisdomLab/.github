@@ -32,10 +32,13 @@ binding, independent approval, Strix, and branch protection are unchanged.
 `COPILOT_GITHUB_TOKEN` is not used.
 
 The sidecar receives the five provider credentials only in the model-execution
-step. It does not receive review-write tokens, and the generated local bearer
-token is masked and used only for loopback inference. Persistent production
-credential storage remains the gateway deployment's existing KV boundary; this
-runner bootstrap is intentionally process-local and ephemeral.
+step. Its child process explicitly unsets `GITHUB_TOKEN`, `GH_TOKEN`, the OIDC
+request and Actions runtime tokens, and redirects the Actions command files to
+`/dev/null`; it therefore does not receive review-write tokens or job-control
+surfaces. The generated local bearer token is masked and used only for loopback
+inference. Persistent production credential storage remains the gateway
+deployment's existing KV boundary; this runner bootstrap is intentionally
+process-local and ephemeral.
 
 ## References
 

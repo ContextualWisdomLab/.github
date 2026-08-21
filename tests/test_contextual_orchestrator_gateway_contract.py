@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
 OPENCODE_CONFIG = ROOT / "opencode.jsonc"
+DOCTORING = ROOT / "docs/doctoring/contextual-orchestrator-opencode-gateway.md"
 GATEWAY_COMMIT = "8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914"
 GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
 
@@ -29,6 +30,7 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     """The trusted review job imports the gateway without replacing fallbacks."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     runner = RUNNER.read_text(encoding="utf-8")
+    doctoring = DOCTORING.read_text(encoding="utf-8")
 
     assert "ContextualWisdomLab/contextual-orchestrator" in workflow
     assert GATEWAY_COMMIT in workflow
@@ -52,6 +54,25 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" in workflow
     assert "openrouter/deepseek/deepseek-v3.2" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert GATEWAY_COMMIT in doctoring
+    assert "127.0.0.1:18080" in doctoring
+    assert "/healthz" in doctoring
+    assert "/v1/models" in doctoring
+    assert "Private repositories never start or select the gateway" in doctoring
+
+    assert """            env \\
+              -u GITHUB_TOKEN \\
+              -u GH_TOKEN \\
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \\
+              -u ACTIONS_RUNTIME_TOKEN \\
+              GITHUB_ENV=/dev/null \\
+              GITHUB_OUTPUT=/dev/null \\
+              GITHUB_PATH=/dev/null \\
+              GITHUB_STEP_SUMMARY=/dev/null \\
+              BASH_ENV=/dev/null \\
+              python3 -m contextual_orchestrator.review_gateway \\
+""" in workflow
 
 
 def test_contextual_gateway_review_job_stays_loopback_only():
