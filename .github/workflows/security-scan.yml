@@ -81,7 +81,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -99,7 +99,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -120,7 +120,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -138,7 +138,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --no-resolve
             --allow-no-lockfiles
             -r

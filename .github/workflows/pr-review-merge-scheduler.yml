@@ -92,7 +92,7 @@ concurrency:
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'pull_request_review' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
-    github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number && format('workflow-run-no-pr-{0}', github.repository) ||
+    github.event_name == 'workflow_run' && format('workflow-run-{0}', github.ref) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
     github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
@@ -1038,6 +1038,47 @@ jobs:
                       }
                   ]' <<<"$active_runs_json"
               )"
+
+              # Metadata-free workflow_run events use a dedicated concurrency
+              # group, while this sweep keeps only the newest scan for the
+              # current default HEAD and cancels older same-head scans left by
+              # a queue backlog or an earlier scheduler implementation.
+              duplicate_scheduler_runs_json="[]"
+              if [ -n "$current_default_sha" ]; then
+                duplicate_scheduler_runs_json="$(
+                  jq \
+                    --arg default_branch "$default_branch" \
+                    --arg current_default_sha "$current_default_sha" \
+                    '[
+                      .[]
+                      | select(
+                          .event == "workflow_run" and
+                          .name == "Required PR Review Merge Scheduler" and
+                          .head_branch == $default_branch and
+                          .head_sha == $current_default_sha and
+                          ((.pull_requests // []) | length) == 0
+                        )
+                      | {
+                          id,
+                          name,
+                          status,
+                          event,
+                          head_branch,
+                          run_head: .head_sha,
+                          current_head: $current_default_sha,
+                          created_at
+                        }
+                    ]
+                    | sort_by(.created_at, .id)
+                    | .[0:-1]' <<<"$active_runs_json"
+                )"
+                superseded_runs_json="$(
+                  jq -n \
+                    --argjson superseded "$superseded_runs_json" \
+                    --argjson duplicates "$duplicate_scheduler_runs_json" \
+                    '$superseded + $duplicates | unique_by(.id)'
+                )"
+              fi
             fi
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then

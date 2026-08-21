@@ -1,0 +1,32 @@
+name: Contextual Orchestrator Hourly Review Repair
+
+on:
+  schedule:
+    # Run at minute 17 each hour; the slot is shared with the three-hourly
+    # pr-auto-rebase workflow, so both workflows use independent concurrency groups.
+    - cron: "17 * * * *"
+
+concurrency:
+  group: contextual-orchestrator-hourly-review-repair
+  # A complete exact-head review can exceed one hour; keep it alive for the next heartbeat.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/contextual-orchestrator
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      resolve_unreviewed_conflicts: true
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
