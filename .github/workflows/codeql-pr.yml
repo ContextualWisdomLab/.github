@@ -204,9 +204,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"
+          git -c "http.extraheader=AUTHORIZATION: bearer $GITHUB_TOKEN" fetch \
+            --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"
           test "$(git rev-parse HEAD)" = "$MERGE_SHA"
           read -r actual_merge parent_one parent_two extra <<EOF
           $(git rev-list --parents -n 1 "$MERGE_SHA")

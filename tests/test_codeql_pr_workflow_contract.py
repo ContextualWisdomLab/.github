@@ -39,6 +39,8 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert 'git rev-list --parents -n 1 "$MERGE_SHA"' in workflow
     assert 'git merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA"' in workflow
     assert 'git rev-parse "$MERGE_SHA^{tree}"' in workflow
+    assert 'GITHUB_TOKEN: ${{ github.token }}' in workflow
+    assert 'http.extraheader=AUTHORIZATION: bearer $GITHUB_TOKEN' in workflow
     assert "refs/pull/{0}/head" in workflow
     assert "ref: ${{ github.event.pull_request.merge_commit_sha }}" in workflow
     assert "ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}" in workflow
