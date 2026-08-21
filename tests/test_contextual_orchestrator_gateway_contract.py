@@ -41,8 +41,10 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "CONTEXTUAL_ORCHESTRATOR_ENABLED" in workflow
     assert "review_gateway.py" in workflow
     assert 'Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}' in workflow
+    assert '"${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/v1}/healthz"' in workflow
     assert '"${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/models"' in workflow
     assert 'payload.get("data")' in workflow
+    assert 'any(isinstance(model, dict) and str(model.get("id") or "").strip() for model in models)' in workflow
     assert "contextual-orchestrator/contextual-orchestrator" in workflow
     assert "OPENAI_API_KEY" in workflow
     assert "OPENROUTER_API_KEY" in workflow
@@ -59,20 +61,25 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "/healthz" in doctoring
     assert "/v1/models" in doctoring
     assert "Private repositories never start or select the gateway" in doctoring
+    assert 'license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"' in workflow
+    assert 'grep -Fq "MIT License" "$license_file"' in workflow
+    assert 'grep -Fq "Permission is hereby granted, free of charge" "$license_file"' in workflow
 
-    assert """            env \\
-              -u GITHUB_TOKEN \\
-              -u GH_TOKEN \\
-              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\
-              -u ACTIONS_ID_TOKEN_REQUEST_URL \\
-              -u ACTIONS_RUNTIME_TOKEN \\
-              GITHUB_ENV=/dev/null \\
-              GITHUB_OUTPUT=/dev/null \\
-              GITHUB_PATH=/dev/null \\
-              GITHUB_STEP_SUMMARY=/dev/null \\
-              BASH_ENV=/dev/null \\
-              python3 -m contextual_orchestrator.review_gateway \\
-""" in workflow
+    gateway_launch = workflow.rsplit("            env -i \\\n", 1)[1].split(
+        "              python3 -m contextual_orchestrator.review_gateway \\\n", 1
+    )[0]
+    assert "PATH=\"$PATH\"" in gateway_launch
+    assert "HOME=\"$HOME\"" in gateway_launch
+    assert "PYTHONPATH=\"$PYTHONPATH\"" in gateway_launch
+    assert "BYTEZ_API_KEY=\"${BYTEZ_API_KEY:-}\"" in gateway_launch
+    assert "NVIDIA_NIM_API_KEY=\"${NVIDIA_NIM_API_KEY:-}\"" in gateway_launch
+    assert "NVIDIA_NIM_API_KEY_SUB=\"${NVIDIA_NIM_API_KEY_SUB:-}\"" in gateway_launch
+    assert "OPENROUTER_API_KEY=\"${OPENROUTER_API_KEY:-}\"" in gateway_launch
+    assert "OPENAI_API_KEY=\"${OPENAI_API_KEY:-}\"" in gateway_launch
+    assert "STRIX_GITHUB_MODELS_TOKEN" not in gateway_launch
+    assert "OPENCODE_API_KEY" not in gateway_launch
+    assert "GITHUB_TOKEN" not in gateway_launch
+    assert "GITHUB_STATE=/dev/null" in gateway_launch
 
 
 def test_contextual_gateway_review_job_stays_loopback_only():

@@ -4433,7 +4433,18 @@ jobs:
           trap cleanup_contextual_gateway EXIT
 
           if [ "$REPOSITORY_IS_PRIVATE" = "false" ]; then
+            gateway_license_allowed=false
+            license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"
             if [ "$CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED" = "true" ] &&
+              [ -f "$license_file" ] &&
+              grep -Fq "MIT License" "$license_file" &&
+              grep -Fq "Permission is hereby granted, free of charge" "$license_file"; then
+              gateway_license_allowed=true
+            else
+              printf 'Pinned contextual-orchestrator gateway license is unavailable or not an allowed MIT license; preserving the existing provider pool.\n'
+            fi
+            if [ "$CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED" = "true" ] &&
+              [ "$gateway_license_allowed" = "true" ] &&
               [ -f "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/contextual_orchestrator/review_gateway.py" ] && {
                 [ -n "${BYTEZ_API_KEY:-}" ] ||
                   [ -n "${NVIDIA_NIM_API_KEY:-}" ] ||
@@ -4446,16 +4457,23 @@ jobs:
             export CONTEXTUAL_ORCHESTRATOR_TOKEN CONTEXTUAL_ORCHESTRATOR_BASE_URL
             echo "::add-mask::$CONTEXTUAL_ORCHESTRATOR_TOKEN"
             export PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator${PYTHONPATH:+:$PYTHONPATH}"
-            env \
-              -u GITHUB_TOKEN \
-              -u GH_TOKEN \
-              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
-              -u ACTIONS_ID_TOKEN_REQUEST_URL \
-              -u ACTIONS_RUNTIME_TOKEN \
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              PYTHONPATH="$PYTHONPATH" \
+              BYTEZ_API_KEY="${BYTEZ_API_KEY:-}" \
+              NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
+              NVIDIA_NIM_API_KEY="${NVIDIA_NIM_API_KEY:-}" \
+              NVIDIA_NIM_API_KEY_SUB="${NVIDIA_NIM_API_KEY_SUB:-}" \
+              OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+              OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+              CONTEXTUAL_ORCHESTRATOR_TOKEN="$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+              CONTEXTUAL_ORCHESTRATOR_BASE_URL="$CONTEXTUAL_ORCHESTRATOR_BASE_URL" \
               GITHUB_ENV=/dev/null \
               GITHUB_OUTPUT=/dev/null \
               GITHUB_PATH=/dev/null \
               GITHUB_STEP_SUMMARY=/dev/null \
+              GITHUB_STATE=/dev/null \
               BASH_ENV=/dev/null \
               python3 -m contextual_orchestrator.review_gateway \
               --host 127.0.0.1 \

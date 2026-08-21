@@ -23,7 +23,8 @@ The gateway candidate is first in the model pool only for public repositories,
 after the pinned checkout succeeds, the sidecar reaches the unauthenticated
 `/healthz` liveness check, and an authenticated `/v1/models` response contains
 at least one non-empty model id. `/healthz` is liveness only. A missing or
-unreadable pinned revision is non-fatal:
+unreadable pinned revision, missing `LICENSE`, or a license other than the
+allowed MIT declaration is non-fatal:
 the gateway candidate is skipped and the established provider-qualified pool
 remains available. Private repositories never start or select the gateway,
 because its auto-discovered catalog includes providers excluded by the review
@@ -32,13 +33,15 @@ binding, independent approval, Strix, and branch protection are unchanged.
 `COPILOT_GITHUB_TOKEN` is not used.
 
 The sidecar receives the five provider credentials only in the model-execution
-step. Its child process explicitly unsets `GITHUB_TOKEN`, `GH_TOKEN`, the OIDC
-request and Actions runtime tokens, and redirects the Actions command files to
-`/dev/null`; it therefore does not receive review-write tokens or job-control
-surfaces. The generated local bearer token is masked and used only for loopback
-inference. Persistent production credential storage remains the gateway
-deployment's existing KV boundary; this runner bootstrap is intentionally
-process-local and ephemeral.
+step, plus the existing `NVIDIA_API_KEY` alias required by the NIM adapter. Its
+child process starts under an `env -i` allowlist containing only those provider
+keys, loopback configuration, Python/runtime paths, and inert Actions command
+file paths. It therefore cannot inherit `GITHUB_TOKEN`, `GH_TOKEN`, OIDC or
+Actions runtime tokens, `STRIX_GITHUB_MODELS_TOKEN`, `OPENCODE_API_KEY`, or a
+future unrelated secret. The generated local bearer token is masked and used
+only for loopback inference. Persistent production credential storage remains
+the gateway deployment's existing KV boundary; this runner bootstrap is
+intentionally process-local and ephemeral.
 
 ## References
 
