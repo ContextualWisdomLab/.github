@@ -101,7 +101,7 @@ def parse_link_has_next(link_header: object) -> bool:
 
 
 def decode_registry_path(path: object) -> str:
-    """Decode one percent-encoding pass and reject traversal disguises."""
+    """Validate a canonical workflow path and reject traversal disguises."""
     if not isinstance(path, str) or not path or "\x00" in path:
         raise InventoryError("workflow path is missing or NUL-bearing")
     if "\\" in path:
@@ -249,7 +249,15 @@ def assert_default_branch_bound(start_sha: object, end_sha: object) -> str:
 
 def owner_issue_for(repository: str) -> str | None:
     """Return the known owning issue for a fleet repository, if any."""
-    return KNOWN_OWNER_ISSUES.get(repository)
+    repository_key = repository.casefold()
+    return next(
+        (
+            issue
+            for name, issue in KNOWN_OWNER_ISSUES.items()
+            if name.casefold() == repository_key
+        ),
+        None,
+    )
 
 
 def inventory_repository(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -303,7 +311,7 @@ def inventory_repository(record: Mapping[str, Any]) -> dict[str, Any]:
             "default_branch_sha": sha,
             "classification": classification,
         }
-        if classification == "orphan_active":
+        if classification in {"orphan_active", "orphan_disabled"}:
             owner = owner_issue_for(name)
             if owner is not None:
                 item["owner_issue"] = owner

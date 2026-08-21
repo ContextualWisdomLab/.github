@@ -111,6 +111,10 @@ def test_decode_registry_path_rejects_encoding_and_traversal() -> None:
         inventory.decode_registry_path(".github/workflows/%2e%2e/ci.yml")
     with pytest.raises(inventory.InventoryError, match="traversal"):
         inventory.decode_registry_path(".github/workflows/../../secret.yml")
+    assert (
+        inventory.decode_registry_path(".github/workflows//./ci.yml")
+        == ".github/workflows//./ci.yml"
+    )
 
 
 def test_path_predicates() -> None:
@@ -348,6 +352,24 @@ def test_owner_issue_for_known_fleet() -> None:
         == "ContextualWisdomLab/appguardrail#929"
     )
     assert inventory.owner_issue_for("naruon") == "ContextualWisdomLab/naruon#1324"
+    assert inventory.owner_issue_for("APPGUARDRAIL") == (
+        "ContextualWisdomLab/appguardrail#929"
+    )
+
+
+def test_disabled_orphan_routes_to_owner_issue() -> None:
+    """Disabled orphan evidence keeps its explicit owner route."""
+    result = inventory.inventory_repository(
+        _repo(
+            "appguardrail",
+            [_workflow(14, ".github/workflows/finalize-once.yml", state="deleted")],
+            [],
+        )
+    )
+    assert result["records"][0]["classification"] == "orphan_disabled"
+    assert result["records"][0]["owner_issue"] == (
+        "ContextualWisdomLab/appguardrail#929"
+    )
 
 
 def test_owner_issue_registry_covers_confirmed_fleet() -> None:

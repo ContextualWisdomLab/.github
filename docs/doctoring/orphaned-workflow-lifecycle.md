@@ -41,9 +41,11 @@ reviewer cannot treat "the YAML is gone" as "no writer remains enabled."
    claim. Operational identities (repository, workflow path, workflow ID)
    are not masked as PII.
 7. Confirmed repository owner routes are maintained as an explicit,
-   linkable registry from live fleet evidence. The scanner does not infer
-   issue numbers, create issues, or convert an absent owner route into a
-   passing result.
+   linkable registry from live fleet evidence. Repository slugs are matched
+   case-insensitively, and both `orphan_active` and `orphan_disabled`
+   classifications retain the route. The scanner does not infer issue
+   numbers, create issues, or convert an absent owner route into a passing
+   result.
 
 ## Trust boundary
 
