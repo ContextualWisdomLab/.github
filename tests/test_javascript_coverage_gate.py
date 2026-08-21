@@ -481,3 +481,69 @@ def test_comment_only_change_without_mapped_units_passes(
     report = capsys.readouterr().out
     assert "comments, delimiters, or type-only declarations" in report
     assert "Result: PASS" in report
+
+
+def test_changed_runtime_path_without_added_hunks_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    completed = subprocess.CompletedProcess(
+        args=["git"], returncode=0, stdout=b"src/runtime.ts\0", stderr=b""
+    )
+    monkeypatch.setattr(gate.subprocess, "run", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(gate, "git", lambda *args: "diff without an added hunk")
+    assert gate.changed_runtime_lines(tmp_path, "base", "head") == {}
+
+
+def test_global_summary_ignores_invalid_statement_locations() -> None:
+    metrics = gate.summarize_final(
+        {
+            "src/runtime.ts": {
+                "s": {"invalid": 1, "valid": 1},
+                "f": {},
+                "b": {},
+                "statementMap": {
+                    "invalid": {"start": {"line": "two"}},
+                    "valid": {"start": {"line": 2}},
+                },
+            }
+        }
+    )
+    assert metrics["statements"] == 100.0
+    assert metrics["lines"] == 100.0
+
+
+def test_path_normalization_falls_through_nonmatching_in_repo_paths(
+    tmp_path: Path,
+) -> None:
+    changed = {"frontend/src/runtime.ts"}
+    assert gate.normalize_coverage_path(
+        str(tmp_path / "other.ts"), tmp_path, changed
+    ) is None
+    assert gate.normalize_coverage_path("other.ts", tmp_path, changed) is None
+
+
+def test_coverage_loader_accepts_absolute_paths_and_ignores_unknown_json(
+    tmp_path: Path,
+) -> None:
+    final = tmp_path / "coverage-final.json"
+    other = tmp_path / "metadata.json"
+    final.write_text("{}", encoding="utf-8")
+    other.write_text("{}", encoding="utf-8")
+    listing = tmp_path / "coverage-files.txt"
+    listing.write_text(f"{final}\n{other}\n", encoding="utf-8")
+    summaries, finals = gate.load_coverage_files(tmp_path, listing)
+    assert summaries == []
+    assert finals == [(final, {})]
+
+
+def test_unrelated_coverage_records_do_not_satisfy_changed_source(
+    tmp_path: Path, capsys
+) -> None:
+    repo, base_sha, head_sha = fixture_repo(tmp_path)
+    summary_list = write_coverage(repo, statement_count=1)
+    final_path = repo / "coverage" / "coverage-final.json"
+    final_path.write_text(
+        json.dumps({str(repo / "src" / "other.ts"): {}}), encoding="utf-8"
+    )
+    assert run_gate(repo, base_sha, head_sha, summary_list) == 1
+    assert "src/calculate_total.ts is absent" in capsys.readouterr().out
