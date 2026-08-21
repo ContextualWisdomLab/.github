@@ -8,3 +8,4 @@ Conflict-scope roots fail closed when the immediate parent directory is a symbol
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 Auto-rebase treats GraphQL `invalid UTF-8 string` and query-cost overruns as transient and falls back to REST. Do not treat review/Checks wait as a blocker.
+The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).

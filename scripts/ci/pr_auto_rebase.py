@@ -206,7 +206,11 @@ def rest_auto_rebase_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "maintainerCanModify": bool(pr.get("maintainer_can_modify")),
         "labels": {"nodes": labels},
         "headRepository": (
-            {"nameWithOwner": head_repository_name} if head_repository_name else None
+            {
+                "nameWithOwner": repo if same_repository else head_repository_name
+            }
+            if head_repository_name
+            else None
         ),
         "commits": {
             "nodes": [
@@ -229,11 +233,11 @@ def fetch_open_prs_rest(repo: str, max_prs: int) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL transport fails."""
     prs: list[dict[str, Any]] = []
     page = 1
+    per_page = min(100, max_prs)
     while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
-            f"&per_page={page_size}&page={page}"
+            f"&per_page={per_page}&page={page}"
         )
         payload = gh_api_json(path)
         if not payload:
@@ -246,7 +250,7 @@ def fetch_open_prs_rest(repo: str, max_prs: int) -> list[dict[str, Any]]:
             prs.append(rest_auto_rebase_pr_node(repo, detail))
             if len(prs) >= max_prs:
                 break
-        if len(payload) < page_size:
+        if len(payload) < per_page:
             break
         page += 1
     return prs[:max_prs]

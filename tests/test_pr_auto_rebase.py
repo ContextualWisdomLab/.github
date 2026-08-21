@@ -1,6 +1,7 @@
 import json
 import runpy
 import sys
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -567,6 +568,19 @@ def test_rest_node_unknown_head_is_cross_repository_without_commit_lookup(monkey
     assert node["headRepository"] is None
 
 
+def test_rest_node_normalizes_case_variant_same_repository_head(monkeypatch):
+    """Case-only REST repository spelling must remain an internal pushable head."""
+    payload = _rest_list_pr(934, mergeable_state="behind", sha="c" * 40)
+    payload["head"]["repo"]["full_name"] = "contextualwisdomlab/.GITHUB"
+    monkeypatch.setattr(rebase, "gh_api_json", lambda path: {})
+
+    node = rebase.rest_auto_rebase_pr_node("ContextualWisdomLab/.github", payload)
+
+    assert node["isCrossRepository"] is False
+    assert node["headRepository"] == {"nameWithOwner": "ContextualWisdomLab/.github"}
+    assert rebase.same_repository_head("ContextualWisdomLab/.github", node)
+
+
 def test_graphql_resource_limit_falls_back_to_rest(monkeypatch):
     """A 58-PR GraphQL list that exceeds GitHub query cost uses REST instead of aborting."""
 
@@ -637,6 +651,31 @@ def test_rest_open_pr_list_stops_on_empty_page(monkeypatch):
     assert rebase.fetch_open_prs_rest("ContextualWisdomLab/.github", 10) == []
     assert len(calls) == 1
     assert "page=1" in calls[0]
+
+
+def test_rest_open_pr_list_keeps_fixed_page_size_across_large_pages(monkeypatch):
+    """Large REST queues use stable offsets and preserve PR order across pages."""
+    calls: list[str] = []
+
+    def fake_api(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        page = int(query["page"][0])
+        per_page = int(query["per_page"][0])
+        assert per_page == 100
+        if page == 1:
+            return [_rest_list_pr(number, mergeable_state="behind") for number in range(1, 101)]
+        if page == 2:
+            return [_rest_list_pr(number, mergeable_state="behind") for number in range(101, 161)]
+        raise AssertionError(f"unexpected page: {page}")
+
+    monkeypatch.setattr(rebase, "gh_api_json", fake_api)
+    monkeypatch.setattr(rebase, "rest_auto_rebase_pr_node", lambda repo, pr: {"number": pr["number"]})
+
+    prs = rebase.fetch_open_prs_rest("ContextualWisdomLab/.github", 150)
+
+    assert [pr["number"] for pr in prs] == list(range(1, 151))
+    assert [urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)["page"][0] for path in calls] == ["1", "2"]
 
 
 def test_git_runs_with_and_without_env(monkeypatch):
