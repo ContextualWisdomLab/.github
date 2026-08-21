@@ -13,7 +13,7 @@ import sys
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -148,8 +148,10 @@ def parse_direct_sources(lock_text: str) -> list[DirectSource]:
     return sources
 
 
-def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
-    """Yield package findings from an OSV Scanner result document."""
+def iter_result_packages(
+    payload: dict[str, Any],
+) -> Iterable[tuple[str | None, dict[str, Any]]]:
+    """Yield each scanner source path with its package findings."""
 
     results = payload.get("results")
     if not isinstance(results, list):
@@ -157,13 +159,52 @@ def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
     for result in results:
         if not isinstance(result, dict):
             raise TypeError("OSV result entries must be objects")
+        source = result.get("source")
+        observed_source_path = (
+            source.get("path")
+            if isinstance(source, dict) and isinstance(source.get("path"), str)
+            else None
+        )
         packages = result.get("packages") or []
         if not isinstance(packages, list):
             raise TypeError("OSV result packages must be an array")
         for package in packages:
             if not isinstance(package, dict):
                 raise TypeError("OSV package entries must be objects")
-            yield package
+            yield observed_source_path, package
+
+
+def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    """Yield package findings from an OSV Scanner result document."""
+
+    for _, package in iter_result_packages(payload):
+        yield package
+
+
+def validate_source_path(source_path: str) -> str:
+    """Return one normalized repository-relative governed lockfile path."""
+
+    candidate = PurePosixPath(source_path)
+    if (
+        not source_path
+        or candidate.is_absolute()
+        or "\\" in source_path
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        raise ValueError("governed OSV source path must be one normalized relative path")
+    return candidate.as_posix()
+
+
+def source_matches_governed_lockfile(
+    observed_source_path: str | None, governed_source_path: str
+) -> bool:
+    """Bind a scanner result to the exact governed workspace lockfile."""
+
+    governed = validate_source_path(governed_source_path)
+    return observed_source_path in {
+        governed,
+        f"/github/workspace/{governed}",
+    }
 
 
 def authoritative_affected_range(
@@ -243,19 +284,55 @@ def audit_entry(
 
 
 def reconcile_payload(
-    payload: dict[str, Any], lock_text: str, *, label: str
+    payload: dict[str, Any],
+    lock_text: str,
+    *,
+    label: str,
+    source_path: str = "pnpm-lock.yaml",
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Remove only findings disproven by exact source and affected-range evidence."""
 
     direct_sources = parse_direct_sources(lock_text)
     audit: list[dict[str, str]] = []
-    for package in iter_packages(payload):
+    governed_source_path = validate_source_path(source_path)
+    for observed_source_path, package in iter_result_packages(payload):
         package_info = package.get("package")
         vulnerabilities = package.get("vulnerabilities") or []
         if not isinstance(package_info, dict) or not isinstance(vulnerabilities, list):
             raise TypeError("OSV package evidence is malformed")
         package_name = str(package_info.get("name") or "")
         package_version = str(package_info.get("version") or "")
+        if not source_matches_governed_lockfile(
+            observed_source_path, governed_source_path
+        ):
+            if package_name != "xlsx":
+                continue
+            source = DirectSource(
+                package_name=package_name,
+                version=package_version,
+                source_url="",
+                integrity="",
+                valid=False,
+                reason="OSV finding source does not match governed lockfile",
+            )
+            for vulnerability in vulnerabilities:
+                if not isinstance(vulnerability, dict):
+                    raise TypeError("OSV vulnerability entries must be objects")
+                audit.append(
+                    audit_entry(
+                        label=label,
+                        source=source,
+                        package_name=package_name,
+                        package_version=package_version,
+                        vulnerability=vulnerability,
+                        affected_range=authoritative_affected_range(
+                            vulnerability, package_name
+                        ),
+                        status="SCANNER_METADATA_CONFLICT",
+                        reason=source.reason,
+                    )
+                )
+            continue
         candidates = [
             source
             for source in direct_sources
@@ -477,6 +554,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lockfile", required=True, type=Path)
     parser.add_argument("--audit", required=True, type=Path)
     parser.add_argument("--label", default="scan")
+    parser.add_argument("--source-path", default="pnpm-lock.yaml")
     return parser.parse_args()
 
 
@@ -490,6 +568,7 @@ def main() -> int:
             payload,
             read_utf8_text(args.lockfile, "pnpm lock provenance input"),
             label=args.label,
+            source_path=args.source_path,
         )
         existing_audit: list[dict[str, str]] = []
         audit_text = read_optional_utf8_text(args.audit, "audit input")

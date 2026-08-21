@@ -27,6 +27,14 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
+def osv_result_classifier_script(workflow: str) -> str:
+    step = workflow_step(workflow, "Install trusted OSV result evidence classifier")
+    marker = "          cat >\"$RUNNER_TEMP/classify-osv-result.py\" <<'PY'\n"
+    start = step.index(marker) + len(marker)
+    end = step.index("\n          PY", start)
+    return textwrap.dedent(step[start:end])
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -906,14 +914,16 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "id: osv_head" in workflow
     assert "id: osv_base_retry" in workflow
     assert "id: osv_head_retry" in workflow
-    assert "steps.osv_base.outcome == 'failure'" in workflow
-    assert "steps.osv_head.outcome == 'failure'" in workflow
+    assert "Classify base OSV result evidence" in workflow
+    assert "Classify head OSV result evidence" in workflow
+    assert "Classify retried base OSV result evidence" in workflow
+    assert "Classify retried head OSV result evidence" in workflow
     assert "Retry base OSV without transitive resolution" in workflow
     assert "Retry head OSV without transitive resolution" in workflow
     assert workflow.count("timeout-minutes: 8") == 2
     assert workflow.count("timeout-minutes: 4") == 2
     assert workflow.count("\n            --no-resolve\n") == 4
-    assert workflow.count("failed or timed out before reporter output was trusted") == 2
+    assert workflow.count("did not produce authoritative result evidence") == 2
     assert (
         "Direct manifest and lockfile vulnerability evidence remains enforced"
         in workflow
@@ -922,32 +932,153 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "external transitive registry resolution is intentionally avoided" in workflow
     )
     assert (
-        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        id: osv_base_retry\n        continue-on-error: true"
+        "Retry base OSV without transitive resolution\n"
+        "        if: steps.osv_base_evidence.outputs.complete != 'true'\n"
+        "        id: osv_base_retry\n        continue-on-error: true"
         in workflow
     )
     assert (
-        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        id: osv_head_retry\n        continue-on-error: true"
+        "Retry head OSV without transitive resolution\n"
+        "        if: steps.osv_head_evidence.outputs.complete != 'true'\n"
+        "        id: osv_head_retry\n        continue-on-error: true"
         in workflow
     )
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
-    assert "Require successful base and head OSV scans" in workflow
-    assert "Normalize successful empty OSV result documents" in workflow
-    assert "printf '%s\\n' '{\"results\":[]}' >\"$result_file\"" in workflow
-    assert "OSV completed successfully without findings output" in workflow
-    assert (
-        "steps.osv_base.outcome == 'success' || steps.osv_base_retry.outcome == 'success'"
-        in workflow
+    assert "Require authoritative base and head OSV evidence" in workflow
+    assert "Require successful base and head OSV scans" not in workflow
+    assert "Normalize successful empty OSV result documents" not in workflow
+    assert workflow.count("failure with authoritative vulnerability evidence") == 1
+    assert workflow.count("completed successfully without findings output") == 1
+    assert workflow.count('runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"]') == 4
+    assert "Preserve base OSV evidence and direct-source provenance" in workflow
+    assert 'cp -- old-results.json "$RUNNER_TEMP/osv-base-provenance/old-results.json"' in workflow
+    assert "Restore authoritative base OSV evidence" in workflow
+    assert workflow.index("Preserve base OSV evidence and direct-source provenance") < workflow.index(
+        "Checkout head"
+    ) < workflow.index("Restore authoritative base OSV evidence")
+    assert workflow.index("Require authoritative base and head OSV evidence") < workflow.index(
+        "Require OSV scan output"
     )
-    assert (
-        "steps.osv_head.outcome == 'success' || steps.osv_head_retry.outcome == 'success'"
-        in workflow
-    )
-    assert workflow.index("Require successful base and head OSV scans") < workflow.index(
-        "Normalize successful empty OSV result documents"
-    ) < workflow.index("Require OSV scan output")
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+@pytest.mark.parametrize(
+    ("outcome", "payload", "expected_complete", "expected_message"),
+    [
+        (
+            "failure",
+            {"results": [{"packages": [{"vulnerabilities": [{"id": "PYSEC-1"}]}]}]},
+            "true",
+            "failure with authoritative vulnerability evidence",
+        ),
+        (
+            "failure",
+            {"results": []},
+            "false",
+            "failed without authoritative vulnerability evidence",
+        ),
+        (
+            "failure",
+            {"results": "malformed"},
+            "false",
+            "results must be a list",
+        ),
+    ],
+)
+def test_osv_result_evidence_classifier_distinguishes_findings_from_scan_failure(
+    tmp_path: Path,
+    outcome: str,
+    payload: dict[str, object],
+    expected_complete: str,
+    expected_message: str,
+) -> None:
+    workflow = workflow_text("security-scan.yml")
+    script = osv_result_classifier_script(workflow)
+    result_path = tmp_path / "old-results.json"
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_path = tmp_path / "github-output"
+
+    result = subprocess.run(
+        [sys.executable, "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "SCAN_OUTCOME": outcome,
+            "RESULT_FILE": str(result_path),
+            "GITHUB_OUTPUT": str(output_path),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"complete={expected_complete}" in output_path.read_text(encoding="utf-8")
+    assert expected_message in result.stdout
+
+
+def test_osv_result_evidence_classifier_normalizes_only_successful_empty_scan(
+    tmp_path: Path,
+) -> None:
+    workflow = workflow_text("security-scan.yml")
+    script = osv_result_classifier_script(workflow)
+    result_path = tmp_path / "old-results.json"
+    output_path = tmp_path / "github-output"
+
+    result = subprocess.run(
+        [sys.executable, "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "SCAN_OUTCOME": "success",
+            "RESULT_FILE": str(result_path),
+            "GITHUB_OUTPUT": str(output_path),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.read_text(encoding="utf-8").strip() == "complete=true"
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"results": []}
+
+
+def test_osv_result_evidence_classifier_rejects_symlinked_finding_document(
+    tmp_path: Path,
+) -> None:
+    workflow = workflow_text("security-scan.yml")
+    script = osv_result_classifier_script(workflow)
+    target_path = tmp_path / "target.json"
+    target_path.write_text(
+        json.dumps(
+            {"results": [{"packages": [{"vulnerabilities": [{"id": "spoof"}]}]}]}
+        ),
+        encoding="utf-8",
+    )
+    result_path = tmp_path / "old-results.json"
+    result_path.symlink_to(target_path)
+    output_path = tmp_path / "github-output"
+
+    result = subprocess.run(
+        [sys.executable, "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "SCAN_OUTCOME": "failure",
+            "RESULT_FILE": str(result_path),
+            "GITHUB_OUTPUT": str(output_path),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.read_text(encoding="utf-8").strip() == "complete=false"
+    assert "result document must be a regular file" in result.stdout
 
 
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(

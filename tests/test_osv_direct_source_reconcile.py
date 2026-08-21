@@ -170,6 +170,76 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertTrue(all(entry["integrity"] == INTEGRITY for entry in audit))
 
+    def test_registry_finding_from_another_lockfile_cannot_borrow_direct_source_provenance(
+        self,
+    ) -> None:
+        """Bind reconciliation to the exact scanner source that supplied the lock evidence."""
+        payload = results(
+            "0.20.3", [vulnerability("GHSA-4r6h-8v6p-xvw6", "< 0.19.3")]
+        )
+        payload["results"][0]["source"]["path"] = (  # type: ignore[index]
+            "/github/workspace/packages/registry/pnpm-lock.yaml"
+        )
+
+        reconciled, audit = OSV.reconcile_payload(
+            payload,
+            direct_lock("0.20.3"),
+            label="head",
+            source_path="pnpm-lock.yaml",
+        )
+
+        self.assertEqual(remaining_ids(reconciled), ["GHSA-4r6h-8v6p-xvw6"])
+        self.assertEqual(audit[0]["status"], "SCANNER_METADATA_CONFLICT")
+        self.assertIn("does not match governed lockfile", audit[0]["reason"])
+
+    def test_container_workspace_path_matches_governed_root_lockfile(self) -> None:
+        """Accept OSV's pinned container mount path for the exact root lockfile."""
+        payload = results(
+            "0.20.3", [vulnerability("GHSA-4r6h-8v6p-xvw6", "< 0.19.3")]
+        )
+        payload["results"][0]["source"]["path"] = (  # type: ignore[index]
+            "/github/workspace/pnpm-lock.yaml"
+        )
+
+        reconciled, audit = OSV.reconcile_payload(
+            payload,
+            direct_lock("0.20.3"),
+            label="head",
+            source_path="pnpm-lock.yaml",
+        )
+
+        self.assertEqual(remaining_ids(reconciled), [])
+        self.assertEqual(audit[0]["status"], "RECONCILED")
+
+    def test_source_binding_helpers_and_malformed_cross_source_evidence_fail_closed(
+        self,
+    ) -> None:
+        """Cover normalized-path validation and cross-source malformed evidence."""
+        payload = results("0.20.3", [])
+        self.assertEqual(len(list(OSV.iter_packages(payload))), 1)
+        for invalid in ("", "/pnpm-lock.yaml", r"nested\pnpm-lock.yaml", "../pnpm-lock.yaml"):
+            with self.subTest(source_path=invalid), self.assertRaisesRegex(
+                ValueError, "normalized relative path"
+            ):
+                OSV.validate_source_path(invalid)
+
+        unrelated = results("1.0.0", [])
+        unrelated["results"][0]["source"]["path"] = "other-lock.json"  # type: ignore[index]
+        unrelated["results"][0]["packages"][0]["package"]["name"] = "react"  # type: ignore[index]
+        reconciled, audit = OSV.reconcile_payload(
+            unrelated, direct_lock("0.20.3"), label="head"
+        )
+        self.assertEqual(reconciled, unrelated)
+        self.assertEqual(audit, [])
+
+        malformed = results("0.20.3", [])
+        malformed["results"][0]["source"]["path"] = "other-lock.json"  # type: ignore[index]
+        malformed["results"][0]["packages"][0]["vulnerabilities"] = ["bad"]  # type: ignore[index]
+        with self.assertRaisesRegex(TypeError, "vulnerability entries"):
+            OSV.reconcile_payload(
+                malformed, direct_lock("0.20.3"), label="head"
+            )
+
     def test_official_but_affected_versions_remain_findings(self) -> None:
         """Keep versions inside their authoritative affected range."""
         for version, affected_range in (
@@ -505,7 +575,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
     def test_reusable_security_scan_reconciles_before_reporter_verdict(self) -> None:
         """Require provenance reconciliation before the reusable scan publishes its verdict."""
         workflow = SECURITY_WORKFLOW.read_text(encoding="utf-8")
-        preserve = workflow.index("Preserve base direct-source provenance")
+        preserve = workflow.index("Preserve base OSV evidence and direct-source provenance")
         head_scan = workflow.index("Scan head with OSV")
         policy = workflow.index("Checkout exact central provenance policy")
         reconcile_step = workflow.index("Reconcile immutable direct-source provenance")
@@ -524,6 +594,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertIn("osv_direct_source_reconcile.py", workflow)
         self.assertIn("osv-provenance-audit.json", workflow)
+        self.assertEqual(workflow.count("--source-path pnpm-lock.yaml"), 2)
 
 
 if __name__ == "__main__":
