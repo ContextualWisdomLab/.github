@@ -58,6 +58,18 @@ RATE_LIMIT_MIN_BACKOFF_SECONDS = 5.0
 RATE_LIMIT_MAX_BACKOFF_SECONDS = 60.0
 
 
+def split_gh_response(output: str) -> tuple[str, str]:
+    """Return HTTP headers and body from ``gh api --include`` output."""
+    status = re.search(r"(?m)^HTTP/[^\r\n]*\r?\n", output or "")
+    if status is None:
+        return "", output or ""
+    separator = re.search(r"\r?\n\r?\n", output[status.end() :])
+    if separator is None:
+        return output, ""
+    body_start = status.end() + separator.end()
+    return output[:body_start], output[body_start:]
+
+
 class VisibilityResolutionError(RuntimeError):
     """Fail-closed visibility lookup that must stop the Strix job."""
 
@@ -116,8 +128,8 @@ def classify_gh_failure(message: str) -> str:
 def run_gh_visibility(
     repository: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
 ) -> str:
-    """Return ``gh api`` stdout for ``repos/<repository>.private``."""
-    argv = ["gh", "api", f"repos/{repository}", "--jq", ".private"]
+    """Return only the boolean body from ``gh api`` response evidence."""
+    argv = ["gh", "api", f"repos/{repository}", "--include", "--jq", ".private"]
     try:
         completed = subprocess.run(
             argv,
@@ -133,12 +145,13 @@ def run_gh_visibility(
         ) from exc
     if completed.returncode != 0:
         detail = scrub_sensitive_data(
-            (completed.stderr or completed.stdout or "").strip()
+            "\n".join(part for part in (completed.stdout or "", completed.stderr or "") if part).strip()
         )
         raise VisibilityCommandError(
             detail or f"gh api exited {completed.returncode}"
         )
-    return completed.stdout
+    _headers, body = split_gh_response(completed.stdout)
+    return body
 
 
 def backoff_seconds(attempt: int) -> float:
@@ -201,8 +214,12 @@ def fetch_repository_visibility(
         )
     runner = run_gh or run_gh_visibility
     last_error = "Target repository visibility did not resolve to true or false."
+    transient_attempts = 0
     rate_limit_attempts = 0
-    for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failure raises
+    total_attempts = 0
+    total_attempt_cap = max_attempts + RATE_LIMIT_MAX_ATTEMPTS
+    while total_attempts < total_attempt_cap:  # pragma: no branch - terminal failure raises
+        total_attempts += 1
         kind = "transient"
         rate_limited = False
         try:
@@ -230,17 +247,23 @@ def fetch_repository_visibility(
             rate_limit_attempts += 1
             if rate_limit_attempts >= RATE_LIMIT_MAX_ATTEMPTS:
                 break
-        if attempt >= max_attempts or kind != "transient":
+        else:
+            transient_attempts += 1
+        if kind != "transient":
             break
         if rate_limited:
-            delay = rate_limit_backoff_seconds(attempt, last_error, now=now())
+            delay = rate_limit_backoff_seconds(rate_limit_attempts, last_error, now=now())
             label = "rate-limit"
         else:
-            delay = backoff_seconds(attempt)
+            if transient_attempts >= max_attempts:
+                break
+            delay = backoff_seconds(transient_attempts)
             label = "transient"
         print(
             f"{label.capitalize()} GitHub visibility lookup failure on attempt "
-            f"{attempt}/{RATE_LIMIT_MAX_ATTEMPTS if rate_limited else max_attempts}; "
+            f"{rate_limit_attempts if rate_limited else transient_attempts}/"
+            f"{RATE_LIMIT_MAX_ATTEMPTS if rate_limited else max_attempts} "
+            f"(total {total_attempts}/{total_attempt_cap}); "
             f"retrying in {delay:g}s.",
             file=sys.stderr,
         )

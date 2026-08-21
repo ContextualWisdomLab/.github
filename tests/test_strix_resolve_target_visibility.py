@@ -343,12 +343,13 @@ def test_rate_limit_reset_header_and_past_reset_are_bounded() -> None:
 
 
 def test_rate_limit_does_not_shrink_generic_retry_budget() -> None:
-    """A later generic transient may still use the full retry budget."""
+    """A rate-limit attempt cannot consume the separate generic retry budget."""
     runner = _ScriptedGh(
         [
             visibility.VisibilityCommandError(INSTALLATION_RATE_LIMIT_403),
             visibility.VisibilityCommandError("gh: HTTP 502: Bad Gateway"),
             visibility.VisibilityCommandError("gh: HTTP 503: Service Unavailable"),
+            visibility.VisibilityCommandError("gh: HTTP 504: Gateway Timeout"),
             "false",
         ]
     )
@@ -362,7 +363,7 @@ def test_rate_limit_does_not_shrink_generic_retry_budget() -> None:
         )
         == "false"
     )
-    assert sleeps == [30.0, 2.0, 4.0]
+    assert sleeps == [30.0, 1.0, 2.0, 4.0]
 
 
 def test_generic_transient_backoff_stays_short() -> None:
@@ -474,7 +475,14 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
 
     def succeed(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         """Return a successful ``gh api`` process result."""
-        assert argv == ["gh", "api", "repos/ContextualWisdomLab/aFIPC", "--jq", ".private"]
+        assert argv == [
+            "gh",
+            "api",
+            "repos/ContextualWisdomLab/aFIPC",
+            "--include",
+            "--jq",
+            ".private",
+        ]
         assert kwargs["shell"] is False
         return subprocess.CompletedProcess(argv, 0, stdout="false\n", stderr="")
 
@@ -519,6 +527,50 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     monkeypatch.setattr(visibility.subprocess, "run", fail_token)
     with pytest.raises(visibility.VisibilityCommandError, match="<redacted>"):
         visibility.run_gh_visibility("ContextualWisdomLab/aFIPC")
+
+    def fail_with_headers(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return response headers and stderr so both remain classifiable."""
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="HTTP/2 429 Too Many Requests\nRetry-After: 12\n\n",
+            stderr="secondary rate limit",
+        )
+
+    monkeypatch.setattr(visibility.subprocess, "run", fail_with_headers)
+    with pytest.raises(visibility.VisibilityCommandError, match="Retry-After: 12") as excinfo:
+        visibility.run_gh_visibility("ContextualWisdomLab/aFIPC")
+    assert "secondary rate limit" in str(excinfo.value)
+
+
+def test_run_gh_visibility_separates_included_headers_from_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the JSON body reaches the exact boolean parser."""
+
+    def included_response(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return realistic ``gh api --include`` output."""
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="HTTP/2 200 OK\r\nX-RateLimit-Remaining: 4999\r\n\r\nfalse\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(visibility.subprocess, "run", included_response)
+    assert visibility.run_gh_visibility("ContextualWisdomLab/aFIPC") == "false\n"
+
+
+def test_split_gh_response_handles_header_only_and_plain_output() -> None:
+    """The bounded splitter handles plain, complete, and incomplete responses."""
+
+    assert visibility.split_gh_response("false\n") == ("", "false\n")
+    assert visibility.split_gh_response("HTTP/2 200 OK\nHeader: value\n\ntrue\n") == (
+        "HTTP/2 200 OK\nHeader: value\n\n",
+        "true\n",
+    )
+    header_only = "HTTP/2 200 OK\nHeader: value\n"
+    assert visibility.split_gh_response(header_only) == (header_only, "")
 
 
 def test_cli_writes_visibility_and_fails_closed(
