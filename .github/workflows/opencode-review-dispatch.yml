@@ -1743,7 +1743,8 @@ jobs:
               printf '%s\n' Cargo.toml
               return 0
             fi
-            changed_files_for_coverage \
+            local manifests
+            manifests="$(changed_files_for_coverage \
               | while IFS= read -r changed_path; do
                   case "$changed_path" in
                     Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock|*.rs) ;;
@@ -1767,7 +1768,15 @@ jobs:
                     candidate_dir="$next_dir"
                   done
                 done \
-              | sort -u
+              | sort -u)"
+            # A root workspace run already covers every member; do not repeat
+            # nested package runs when root and member sources changed together.
+            if printf '%s\n' "$manifests" \
+              | awk '$0 == "Cargo.toml" { found=1 } END { exit found ? 0 : 1 }'; then
+              printf '%s\n' Cargo.toml
+            elif [ -n "$manifests" ]; then
+              printf '%s\n' "$manifests"
+            fi
           }
 
           rust_coverage_fail_under_lines() {

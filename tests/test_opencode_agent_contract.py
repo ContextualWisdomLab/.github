@@ -1161,6 +1161,7 @@ def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
     assert select("crates/alpha/Cargo.lock\n") == ["crates/alpha/Cargo.toml"]
     assert select("crates/alpha/src/lib.rs\n") == ["crates/alpha/Cargo.toml"]
     assert select("src/main.rs\n") == ["Cargo.toml"]
+    assert select("src/main.rs\ncrates/alpha/src/lib.rs\n") == ["Cargo.toml"]
     assert select("README.md\n") == []
 
     (repo / "crates" / "alpha" / "Cargo.toml").unlink()
