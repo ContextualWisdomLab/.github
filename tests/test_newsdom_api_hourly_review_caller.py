@@ -161,6 +161,10 @@ def test_focused_quality_workflow_tracks_newsdom_api_contracts() -> None:
     assert caller in push_paths
     assert doctoring in push_paths
     assert contract in push_paths
+    assert "AGENTS.md" in pull_request_paths
+    assert "ARCHITECTURE.md" in pull_request_paths
+    assert "AGENTS.md" in push_paths
+    assert "ARCHITECTURE.md" in push_paths
     assert contract in compileall_paths
     assert caller not in compileall_paths
     assert doctoring not in compileall_paths

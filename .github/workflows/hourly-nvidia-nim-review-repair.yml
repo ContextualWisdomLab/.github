@@ -17,6 +17,8 @@ on:
       - .github/workflows/nonnest2-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
+      - AGENTS.md
+      - ARCHITECTURE.md
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
@@ -70,6 +72,8 @@ on:
       - .github/workflows/nonnest2-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
+      - AGENTS.md
+      - ARCHITECTURE.md
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
