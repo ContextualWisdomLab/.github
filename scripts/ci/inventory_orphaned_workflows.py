@@ -387,6 +387,10 @@ def inventory_organization(payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(record, Mapping):
             raise InventoryError("repository record is not an object")
         inventories.append(inventory_repository(record))
+    if payload.get("repository_inventory_complete") is not True:
+        raise InventoryError(
+            "repository inventory is incomplete; caller must prove full visibility"
+        )
     records = [
         item
         for inventory in inventories
@@ -403,6 +407,7 @@ def inventory_organization(payload: Mapping[str, Any]) -> dict[str, Any]:
         "capability": CAPABILITY,
         "organization": organization,
         "observed_at": observed_at,
+        "repository_inventory_complete": True,
         "assurance_posture": {
             "csap": "design_constraint",
             "soc2": "design_constraint",

@@ -64,8 +64,11 @@ refuses the mutation.
 
 ## Operator contract
 
-Feed a JSON payload with `organization`, `observed_at`, and one object
-per visible non-archived repository. Each repository must include the
+Feed a JSON payload with `organization`, `observed_at`,
+`repository_inventory_complete: true`, and one object per visible non-archived
+repository. The completeness flag is mandatory: a partial repository list must
+fail closed instead of producing a ledger that overstates fleet coverage. Each
+repository must include the
 start and end default-branch SHAs, the exact tree paths at that SHA, and
 complete workflow pages (`total_count`, `workflows`, and either `_link_next`
 or a GitHub `Link` header). Archived repositories are skipped.

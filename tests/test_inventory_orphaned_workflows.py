@@ -59,6 +59,7 @@ def _payload(repositories: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "organization": "ContextualWisdomLab",
         "observed_at": "2026-08-16T12:00:00Z",
+        "repository_inventory_complete": True,
         "repositories": repositories,
     }
 
@@ -588,6 +589,7 @@ def test_inventory_organization_and_unknown_classification(
     )
     ledger = inventory.inventory_organization(payload)
     assert ledger["schema_version"] == "1"
+    assert ledger["repository_inventory_complete"] is True
     assert ledger["assurance_posture"]["certification_claim"] is False
     assert ledger["assurance_posture"]["operational_pii_mask"] is False
     assert ledger["counts"]["orphan_active"] == 1
@@ -632,6 +634,21 @@ def test_inventory_organization_and_unknown_classification(
                 ]
             )
         )
+
+
+def test_inventory_requires_complete_repository_visibility() -> None:
+    """A partial organization repository list cannot produce an audit ledger."""
+    payload = {
+        "organization": "ContextualWisdomLab",
+        "observed_at": "2026-08-16T12:00:00Z",
+        "repositories": [_repo("naruon", [], [])],
+    }
+    with pytest.raises(inventory.InventoryError, match="repository inventory"):
+        inventory.inventory_organization(payload)
+
+    payload["repository_inventory_complete"] = False
+    with pytest.raises(inventory.InventoryError, match="repository inventory"):
+        inventory.inventory_organization(payload)
 
 
 def test_write_ledger_and_main(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
