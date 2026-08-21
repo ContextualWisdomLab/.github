@@ -3232,6 +3232,15 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
                         "status": "COMPLETED",
                         "conclusion": "SUCCESS",
                     },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "checkSuite": {
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}}
+                        },
+                    },
                 ]
             }
         },
@@ -3278,6 +3287,19 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
     )
     assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+
+    coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
+        {
+            "__typename": "CheckRun",
+            "name": "Security Scan",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+        }
+    )
+    unrelated_failure = inspect(coverage_request)
+    assert unrelated_failure.action == "block"
+    assert unrelated_failure.reason == "current-head OpenCode review requested changes"
+
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
