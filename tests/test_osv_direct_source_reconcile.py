@@ -407,6 +407,12 @@ class DirectSourceReconcileTests(unittest.TestCase):
             missing = root / "missing.json"
             with self.assertRaises(ValueError):
                 OSV.load_json_object(missing)
+            target = root / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            linked = root / "linked.json"
+            linked.symlink_to(target)
+            with self.assertRaises(ValueError):
+                OSV.load_json_object(linked)
             array_path = root / "array.json"
             array_path.write_text("[]", encoding="utf-8")
             with self.assertRaises(ValueError):

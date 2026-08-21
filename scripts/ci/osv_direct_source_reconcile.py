@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 from typing import Any, Iterable
@@ -394,26 +395,57 @@ def atomic_json_write(path: Path, value: object) -> None:
 def load_json_object(path: Path) -> dict[str, Any]:
     """Load one JSON object from a regular non-symlink file."""
 
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"required JSON input is not a regular file: {path}")
     value = json.loads(read_utf8_text(path, "required JSON input"))
     if not isinstance(value, dict):
         raise ValueError(f"required JSON input is not an object: {path}")
     return value
 
 
-def read_utf8_text(path: Path, description: str) -> str:
-    """Read trusted text input and turn malformed UTF-8 into an explicit error.
+def _read_regular_utf8_text(path: Path, description: str) -> str:
+    """Read one regular file through a descriptor that cannot follow symlinks.
 
     Lockfiles and scanner receipts are attacker-controlled repository inputs.
-    Rejecting malformed bytes at this boundary keeps the security scan
-    fail-closed without exposing an unhandled decoder traceback.
+    Opening with ``O_NOFOLLOW`` and checking the descriptor's type closes the
+    check/use gap between path validation and the actual read.
     """
 
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError("secure regular-file reads require O_NOFOLLOW support")
+    descriptor: int | None = None
     try:
-        return path.read_text(encoding="utf-8")
+        descriptor = os.open(os.fspath(path), os.O_RDONLY | no_follow)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{description} is not a regular file: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            return handle.read()
+    except FileNotFoundError as error:
+        raise ValueError(f"{description} is not a regular file: {path}") from error
     except UnicodeDecodeError as error:
         raise ValueError(f"{description} is not valid UTF-8: {path}") from error
+    except OSError as error:
+        raise ValueError(f"{description} is not a regular file: {path}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def read_utf8_text(path: Path, description: str) -> str:
+    """Read trusted text input and turn malformed UTF-8 into an explicit error."""
+
+    return _read_regular_utf8_text(path, description)
+
+
+def read_optional_utf8_text(path: Path, description: str) -> str | None:
+    """Read an existing regular file, returning ``None`` only when absent."""
+
+    try:
+        return read_utf8_text(path, description)
+    except ValueError as error:
+        if isinstance(error.__cause__, FileNotFoundError):
+            return None
+        raise
 
 
 def parse_args() -> argparse.Namespace:
@@ -432,8 +464,6 @@ def main() -> int:
 
     try:
         args = parse_args()
-        if args.lockfile.is_symlink() or not args.lockfile.is_file():
-            raise ValueError("pnpm lock provenance input must be a regular file")
         payload = load_json_object(args.results)
         reconciled, new_audit = reconcile_payload(
             payload,
@@ -441,10 +471,9 @@ def main() -> int:
             label=args.label,
         )
         existing_audit: list[dict[str, str]] = []
-        if args.audit.exists():
-            if args.audit.is_symlink() or not args.audit.is_file():
-                raise ValueError("audit output must be a regular file")
-            loaded_audit = json.loads(read_utf8_text(args.audit, "audit input"))
+        audit_text = read_optional_utf8_text(args.audit, "audit input")
+        if audit_text is not None:
+            loaded_audit = json.loads(audit_text)
             if not isinstance(loaded_audit, list):
                 raise ValueError("audit output must contain an array")
             existing_audit = loaded_audit
