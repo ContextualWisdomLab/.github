@@ -128,7 +128,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         workflows = workflow_parameters.get("workflows")
         workflows = workflows if isinstance(workflows, list) else []
 
-    if workflow_parameters.get("do_not_enforce_on_create") is not True:
+    if len(workflow_rules) == 1 and workflow_parameters.get("do_not_enforce_on_create") is not True:
         errors.append("central required workflows block the branch create transition")
 
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}

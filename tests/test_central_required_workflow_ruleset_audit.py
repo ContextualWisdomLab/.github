@@ -138,6 +138,17 @@ def test_workflows_must_not_block_branch_create_transition() -> None:
     ]
 
 
+def test_multiple_workflow_rules_do_not_invent_create_transition_drift() -> None:
+    """Report structural multiplicity without attributing a missing flag to it."""
+    payload = ruleset_payload()
+    payload["rules"].append(payload["rules"][0].copy())
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "expected one workflows rule, found 2" in errors
+    assert "central required workflows block the branch create transition" not in errors
+
+
 def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
     payload = inherited_ruleset_payload()
     payload[audit.INHERITED_SCOPE_FIELD].pop("IRT-bibliography-set")
@@ -250,7 +261,6 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset ref scope must be exactly the default branch",
         "expected one workflows rule, found 0",
-        "central required workflows block the branch create transition",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
