@@ -36,6 +36,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Pinned the hash-locked pip-audit toolchain to pip 26.2.1, avoiding
+  PYSEC-2026-3721 / CVE-2026-13346 in pip 26.1.2.
 - Normalized a successful OSV scan with no findings output to a valid empty
   result document after both base and head scan outcomes are verified, while
   keeping failed scans, failed retries, and symlinked result paths fail-closed.
