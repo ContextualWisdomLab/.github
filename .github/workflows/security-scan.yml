@@ -104,13 +104,6 @@ jobs:
             --allow-no-lockfiles
             -r
             ./
-      - name: Preserve base OSV result before head checkout
-        if: always()
-        run: |
-          set -euo pipefail
-          if [ -s old-results.json ]; then
-            cp old-results.json "$RUNNER_TEMP/osv-old-results.json"
-          fi
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -119,22 +112,6 @@ jobs:
           fetch-depth: 0
           clean: false
           persist-credentials: false
-      - name: Remove base OSV result before head restore
-        if: always()
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          Path("old-results.json").unlink(missing_ok=True)
-          PY
-      - name: Restore base OSV result after head checkout
-        if: always()
-        run: |
-          set -euo pipefail
-          if [ -s "$RUNNER_TEMP/osv-old-results.json" ]; then
-            cp "$RUNNER_TEMP/osv-old-results.json" old-results.json
-          fi
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
