@@ -65,6 +65,17 @@ def test_newsdom_api_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert 'retry_hours: "2"' in caller
 
 
+def test_sibling_slot_registry_uses_newsdom_api_minute_eighteen() -> None:
+    """Keep central hourly slot comments aligned with the caller's real cron."""
+    for sibling in (
+        Path(".github/workflows/nonnest2-hourly-review-repair.yml"),
+        Path(".github/workflows/originweave-hourly-review-repair.yml"),
+    ):
+        content = _read(sibling)
+        assert "newsdom-api (18)" in content
+        assert "newsdom-api (43)" not in content
+
+
 def test_newsdom_api_caller_preserves_oidc_and_explicit_secret_scope() -> None:
     """The queue scanner maps established credentials without model secrets."""
     caller = _read(CALLER)
