@@ -3159,6 +3159,7 @@ def test_draft_pr_review_dispatch_failures_are_wait_states(monkeypatch):
 
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
     draft = inspect(make_pr(isDraft=True))
     assert draft.action == "security_dispatch"
     assert draft.reason == (
