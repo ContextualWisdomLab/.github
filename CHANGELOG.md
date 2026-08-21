@@ -39,6 +39,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Include the exact `backend/app/*.py` package context in PR-scoped Strix
+  scans when a module in that package changes. The trusted resolver uses a
+  NUL-delimited exact-head tree listing, copies unchanged dependencies from
+  the trusted base, and keeps changed-file attribution and provider failures
+  fail-closed.
 - Run Strix with an explicit canonical scan target from a temporary working
   directory outside that target, so scanner state and relative reports cannot
   become self-scanned source findings; preserve those reports as gate evidence.

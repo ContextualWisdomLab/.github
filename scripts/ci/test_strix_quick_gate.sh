@@ -7124,6 +7124,20 @@ if [ -f "$target_path/backend/services/email_parser.py" ]; then
 	matched_backend_context=1
 fi
 
+if [ -f "$target_path/backend/app/knowledge_graph.py" ]; then
+	if [ ! -f "$target_path/backend/app/post_eligibility.py" ]; then
+		echo "Error: backend/app local import context missing from PR scope ($target_path)" >&2
+		exit 78
+	fi
+	if ! grep -Fq -- 'BASE_POST_ELIGIBILITY_SHOULD_BE_SCANNED' "$target_path/backend/app/post_eligibility.py"; then
+		echo "Error: backend/app dependency context did not use trusted base content" >&2
+		cat -- "$target_path/backend/app/post_eligibility.py" >&2
+		exit 79
+	fi
+	echo "scan ok with backend/app local import context"
+	matched_backend_context=1
+fi
+
 if [ "$matched_backend_context" -eq 1 ]; then
 	exit 0
 fi
@@ -7140,11 +7154,12 @@ EOF
 		git config user.name 'Strix Test'
 		git config user.email 'strix-test@example.invalid'
 		echo 'seed' >README.md
-		mkdir -p backend/api backend/services
+		mkdir -p backend/api backend/app backend/services
 		printf '%s\n' 'BASE_AUTH_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/auth.py
 		printf '%s\n' 'BASE_EMAILS_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/emails.py
 		printf '%s\n' 'BASE_CALENDAR_SERVICE_SHOULD_BE_SCANNED' >backend/services/calendar_service.py
 		printf '%s\n' 'BASE_LLM_PROVIDER_URLS_SHOULD_NOT_BE_SCANNED' >backend/services/llm_provider_urls.py
+		printf '%s\n' 'BASE_POST_ELIGIBILITY_SHOULD_BE_SCANNED' >backend/app/post_eligibility.py
 		git add .
 		git commit -qm 'base commit'
 	)
@@ -7194,6 +7209,10 @@ EOF
 def require_workspace_admin():
 	return 'HEAD_RUNNER_CONFIG_SHOULD_BE_SCANNED'
 EOF
+		cat >backend/app/knowledge_graph.py <<'EOF'
+from .post_eligibility import SOURCE_POST_ELIGIBILITY_SQL
+HEAD_KNOWLEDGE_GRAPH_SHOULD_BE_SCANNED
+EOF
 		git add .
 		git commit -qm 'head commit'
 	)
@@ -7210,7 +7229,7 @@ EOF
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
-			PR_HEAD_SHA="$head_sha" \
+			PR_HEAD_SHA="  $head_sha  " \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_LLM_FILE="$strix_llm_file" \
@@ -7227,6 +7246,7 @@ EOF
 	assert_file_contains "$output_log" "scan ok with PR-head backend dependency context" "case=pull-request-target-changed-backend-context-uses-head-blob output"
 	assert_file_contains "$output_log" "scan ok with PR-head LLM provider URL validation context" "case=pull-request-target-changed-backend-context-includes-llm-provider-url-validation output"
 	assert_file_contains "$output_log" "scan ok with PR-head email parser text safety context" "case=pull-request-target-changed-backend-context-includes-email-parser-text-safety output"
+	assert_file_contains "$output_log" "scan ok with backend/app local import context" "case=pull-request-target-changed-backend-context-includes-backend-app-local-import output"
 	assert_equals "1" "$(wc -l <"$call_log" | tr -d ' ')" "case=pull-request-target-changed-backend-context-uses-head-blob strix call count"
 
 	rm -rf "$tmp_dir"

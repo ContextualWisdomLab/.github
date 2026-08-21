@@ -1199,6 +1199,7 @@ is_scannable_changed_file() {
 
 pull_request_scope_context_files() {
 	local needs_backend_python=0
+	local needs_backend_app_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
@@ -1208,6 +1209,9 @@ pull_request_scope_context_files() {
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
+			fi
+			if [[ "$normalized_changed_file" =~ ^backend/app/.+\.py$ ]]; then
+				needs_backend_app_python=1
 			fi
 			;;
 		# The app shell, email components, threading URL builder, and API client can
@@ -1286,6 +1290,35 @@ EOF
 				printf '%s\n' "$context_file"
 			fi
 		done
+	fi
+
+	if [ "$needs_backend_app_python" -eq 1 ]; then
+		local backend_app_head_sha
+		backend_app_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if { [ -z "$backend_app_head_sha" ] || ! is_valid_git_commit_sha "$backend_app_head_sha"; } && pull_request_head_blob_required; then
+			echo "ERROR: backend/app PR-head context requires an exact head SHA; failing closed." >&2
+			return 2
+		elif [ -n "$backend_app_head_sha" ] && is_valid_git_commit_sha "$backend_app_head_sha"; then
+			local backend_app_tree_file context_file normalized_context_file
+			backend_app_tree_file="$(mktemp "${RUNNER_TEMP:-/tmp}/strix-backend-app-context.XXXXXX")" || return 2
+			if ! git -c core.quotepath=false ls-tree -rz --name-only "$backend_app_head_sha" -- backend/app >"$backend_app_tree_file"; then
+				rm -f -- "$backend_app_tree_file"
+				echo "ERROR: backend/app PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r -d '' context_file; do
+				normalized_context_file="$(normalize_changed_file_path "$context_file")" || {
+					rm -f -- "$backend_app_tree_file"
+					return 2
+				}
+				case "$normalized_context_file" in
+				backend/app/*.py)
+					printf '%s\n' "$normalized_context_file"
+					;;
+				esac
+			done <"$backend_app_tree_file"
+			rm -f -- "$backend_app_tree_file"
+		fi
 	fi
 
 	if [ "$needs_frontend_email_api_context" -eq 1 ]; then
