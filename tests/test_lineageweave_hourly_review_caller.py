@@ -164,6 +164,7 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     owned_paths = (
         ".github/workflows/lineageweave-hourly-review-repair.yml",
         ".github/workflows/lineageweave-hourly-review-repair-quality.yml",
+        "scripts/ci/pr_review_fix_scheduler.py",
         "scripts/ci/pr_review_fix_stack_scheduler.py",
         "scripts/ci/pr_review_merge_scheduler.py",
         "tests/test_pr_review_fix_stack_scheduler.py",

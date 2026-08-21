@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/lineageweave-hourly-review-repair.yml
       - .github/workflows/lineageweave-hourly-review-repair-quality.yml
+      - scripts/ci/pr_review_fix_scheduler.py
       - scripts/ci/pr_review_fix_stack_scheduler.py
       - scripts/ci/pr_review_merge_scheduler.py
       - tests/test_pr_review_fix_stack_scheduler.py
@@ -59,9 +60,11 @@ jobs:
             --include=scripts/ci/pr_review_fix_stack_scheduler.py \
             --fail-under=100
           interrogate -vv --fail-under 100 \
+            scripts/ci/pr_review_fix_scheduler.py \
             scripts/ci/pr_review_fix_stack_scheduler.py \
             scripts/ci/pr_review_merge_scheduler.py
           python -m compileall -q \
+            scripts/ci/pr_review_fix_scheduler.py \
             scripts/ci/pr_review_fix_stack_scheduler.py \
             scripts/ci/pr_review_merge_scheduler.py \
             tests/test_lineageweave_hourly_review_caller.py \
