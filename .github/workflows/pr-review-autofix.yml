@@ -576,6 +576,34 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
+          cd "$TARGET_WORKSPACE"
+
+          # Merge the base branch into the detached head. A clean merge stays
+          # staged (--no-commit); a conflicting merge leaves git conflict
+          # markers for OpenCode to resolve.
+          echo "Merging base ${PR_BASE_REF} (${PR_BASE_SHA}) into head ${PR_HEAD_SHA} for conflict resolution."
+          git merge --no-commit --no-ff "$PR_BASE_SHA" || echo "Merge produced conflicts to resolve."
+          conflicted_files="$(git diff --name-only --diff-filter=U || true)"
+          printf 'Conflicted files:\n%s\n' "${conflicted_files:-<none>}"
+
+          # No-op success path: the base is already contained in the head
+          # (git reports "Already up to date"), so there is no merge in
+          # progress, no conflicts, and nothing to resolve or push. This
+          # happens when the PR stopped being conflicted between scheduler
+          # dispatch and worker execution (e.g. the head was refreshed).
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+            if [ -z "$conflicted_files" ] \
+              && git diff --quiet \
+              && git diff --cached --quiet \
+              && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+              echo "Base ${PR_BASE_REF} (${PR_BASE_SHA}) is already merged into head ${PR_HEAD_SHA}; no conflict resolution needed. Exiting as a no-op."
+              exit 0
+            fi
+            echo "::error::Base merge left no merge in progress but the working tree is not clean; refusing to continue."
+            git status --short
+            exit 1
+          fi
+
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||
             [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
             echo "::error::CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
@@ -604,33 +632,6 @@ jobs:
           if ! jq -e '(.data | type == "array") and ([.data[]? | select((.id? | type) == "string" and (.id | length > 0))] | length >= 1)' \
               >/dev/null <<<"$models_response"; then
             echo "::error::Contextual Orchestrator gateway returned no discovered models."
-            exit 1
-          fi
-          cd "$TARGET_WORKSPACE"
-
-          # Merge the base branch into the detached head. A clean merge stays
-          # staged (--no-commit); a conflicting merge leaves git conflict
-          # markers for OpenCode to resolve.
-          echo "Merging base ${PR_BASE_REF} (${PR_BASE_SHA}) into head ${PR_HEAD_SHA} for conflict resolution."
-          git merge --no-commit --no-ff "$PR_BASE_SHA" || echo "Merge produced conflicts to resolve."
-          conflicted_files="$(git diff --name-only --diff-filter=U || true)"
-          printf 'Conflicted files:\n%s\n' "${conflicted_files:-<none>}"
-
-          # No-op success path: the base is already contained in the head
-          # (git reports "Already up to date"), so there is no merge in
-          # progress, no conflicts, and nothing to resolve or push. This
-          # happens when the PR stopped being conflicted between scheduler
-          # dispatch and worker execution (e.g. the head was refreshed).
-          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-            if [ -z "$conflicted_files" ] \
-              && git diff --quiet \
-              && git diff --cached --quiet \
-              && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-              echo "Base ${PR_BASE_REF} (${PR_BASE_SHA}) is already merged into head ${PR_HEAD_SHA}; no conflict resolution needed. Exiting as a no-op."
-              exit 0
-            fi
-            echo "::error::Base merge left no merge in progress but the working tree is not clean; refusing to continue."
-            git status --short
             exit 1
           fi
 
