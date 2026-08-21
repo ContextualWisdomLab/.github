@@ -243,6 +243,19 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_outer_workflow_neutralizes_caido_bootstrap_failure_without_findings(
+        self,
+    ) -> None:
+        """Treat the observed Strix Caido bootstrap outage as infrastructure noise."""
+
+        self.assertTrue(
+            _workflow_neutralizes(
+                "loginAsGuest failed after 10 attempts: curl exit 7: "
+                "Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
     def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
