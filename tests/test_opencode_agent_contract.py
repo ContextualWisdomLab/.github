@@ -2000,7 +2000,14 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
     assert "The scheduled organization sweep remains authoritative." in workflow
-    assert "cancel-in-progress: false" in workflow
+    concurrency_match = re.search(
+        r"(?ms)^concurrency:\n(.*?)(?=^[A-Za-z_][A-Za-z0-9_-]*:\n|\Z)",
+        workflow,
+    )
+    assert concurrency_match is not None
+    concurrency_block = concurrency_match.group(0)
+    assert "central-pr-review-merge-scheduler-" in concurrency_block
+    assert "cancel-in-progress: false" in concurrency_block
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():
@@ -2047,6 +2054,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert 'formal_review_file="$(mktemp)"' in cross_repository_guard
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in cross_repository_guard
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp' in cross_repository_guard
+    assert "jq 'flatten'" in cross_repository_guard
     assert '(.commit_id // "") == $head' in cross_repository_guard
     assert 'opencode-agent[bot]' in cross_repository_guard
     assert "APPROVED" in cross_repository_guard

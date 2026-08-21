@@ -15,8 +15,9 @@ required check, so incomplete security evidence looked like a pass.
    and executable-version checks. Repository or user data cannot select the
    network origin.
 2. Before skipping cross-repository status publication, prove an exact-head
-   formal OpenCode review (`APPROVED` or `CHANGES_REQUESTED`). Missing proof
-   fails closed.
+   formal OpenCode review from an accepted author (`opencode-agent[bot]` or
+   `opencode-agent`) with state (`APPROVED` or `CHANGES_REQUESTED`). Missing
+   proof, an unaccepted author, or a mismatched head fails closed.
 3. Keep Strix red when the backend is unavailable. Incomplete provider
    evidence is not a clean scan.
 
