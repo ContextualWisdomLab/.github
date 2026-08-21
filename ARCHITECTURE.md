@@ -39,6 +39,13 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## Coverage asyncio toolchain
+
+The hash-pinned OpenCode review lock includes `pytest-asyncio==1.4.0`.
+`scripts/ci/ensure_opencode_asyncio_toolchain.sh` fail-closed imports that
+plugin. The independent review-dispatch workflow remains the hashed
+review-agent key blob.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -147,5 +154,7 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.

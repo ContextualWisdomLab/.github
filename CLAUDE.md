@@ -121,6 +121,9 @@ repeatable compile command.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
+- **Asyncio coverage plugin** is pinned in `requirements-opencode-review-ci.txt` and checked by
+  `scripts/ci/ensure_opencode_asyncio_toolchain.sh`. Do not edit
+  `opencode-review-dispatch.yml` to carry that import.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
