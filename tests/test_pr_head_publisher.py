@@ -482,6 +482,13 @@ def test_open_stack_list_shape_count_and_reuse(monkeypatch):
     )
     assert result and result.pull_number == 91
 
+    stale = stack_pr("stack")
+    stale["head"]["sha"] = "c" * 40
+    monkeypatch.setattr(publisher, "_json", lambda *a, **k: [stale])
+    assert publisher._open_stack(
+        "owner/repo", 7, EXPECTED_HEAD, LOCAL_HEAD, "actor/repo", "stack", "feature/topic"
+    ) is None
+
 
 def test_publication_branch_uses_safe_secondary_without_overwrite(monkeypatch):
     """A closed divergent primary stack gets a new non-force output branch."""

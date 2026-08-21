@@ -315,6 +315,10 @@ def _open_stack(
         raise RuntimeError("multiple live stacked pull requests claim one publication branch")
     if not payload:
         return None
+    head = payload[0].get("head") if isinstance(payload[0], dict) else None
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    if isinstance(head_sha, str) and head_sha != local_head_sha:
+        return None
     return _stack_result(
         payload[0],
         repo=repo,
