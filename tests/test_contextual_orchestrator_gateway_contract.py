@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
 OPENCODE_CONFIG = ROOT / "opencode.jsonc"
-GATEWAY_COMMIT = "0071751782ae535721e71785c3037989d2d27b77"
+GATEWAY_COMMIT = "d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc"
 GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
 
 
@@ -37,6 +37,10 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_ENABLED" in workflow
+    assert "review_gateway.py" in workflow
+    assert 'Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}' in workflow
+    assert '"${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/models"' in workflow
+    assert 'payload.get("data")' in workflow
     assert "contextual-orchestrator/contextual-orchestrator" in workflow
     assert "OPENAI_API_KEY" in workflow
     assert "OPENROUTER_API_KEY" in workflow
@@ -81,8 +85,8 @@ def test_gateway_checkout_failure_preserves_existing_review_provider_pool():
         in model_step
     )
     assert (
-        '[ -d "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/'
-        'contextual_orchestrator" ]'
+        '[ -f "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/'
+        'contextual_orchestrator/review_gateway.py" ]'
         in model_step
     )
 

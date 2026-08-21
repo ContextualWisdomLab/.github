@@ -1,7 +1,9 @@
 # Contextual Orchestrator OpenCode gateway
 
 The trusted OpenCode review job starts `contextual-orchestrator` from the
-pinned commit `0071751782ae535721e71785c3037989d2d27b77`. The sidecar binds only
+pinned predecessor commit `d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc` from
+contextual-orchestrator#790. After that predecessor merges, this pin must be
+replaced with the resulting protected `main` SHA. The sidecar binds only
 to `127.0.0.1:18080`, registers any available provider keys in its process-local
 KV bootstrap, discovers models across Bytez, both NVIDIA NIM credentials,
 OpenRouter, and OpenAI, then serves the existing OpenAI-compatible review
@@ -17,8 +19,10 @@ flowchart LR
 ```
 
 The gateway candidate is first in the model pool only for public repositories,
-after the pinned checkout succeeds and the sidecar reaches the unauthenticated
-`/healthz` liveness check. A missing or unreadable pinned revision is non-fatal:
+after the pinned checkout succeeds, the sidecar reaches the unauthenticated
+`/healthz` liveness check, and an authenticated `/v1/models` response contains
+at least one non-empty model id. `/healthz` is liveness only. A missing or
+unreadable pinned revision is non-fatal:
 the gateway candidate is skipped and the established provider-qualified pool
 remains available. Private repositories never start or select the gateway,
 because its auto-discovered catalog includes providers excluded by the review

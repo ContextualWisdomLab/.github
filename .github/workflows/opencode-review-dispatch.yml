@@ -2298,7 +2298,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/contextual-orchestrator
-          ref: 0071751782ae535721e71785c3037989d2d27b77
+          ref: d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc
           path: trusted-contextual-orchestrator
           fetch-depth: 1
           persist-credentials: false
@@ -4434,7 +4434,7 @@ jobs:
 
           if [ "$REPOSITORY_IS_PRIVATE" = "false" ]; then
             if [ "$CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED" = "true" ] &&
-              [ -d "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/contextual_orchestrator" ] && {
+              [ -f "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/contextual_orchestrator/review_gateway.py" ] && {
                 [ -n "${BYTEZ_API_KEY:-}" ] ||
                   [ -n "${NVIDIA_NIM_API_KEY:-}" ] ||
                   [ -n "${NVIDIA_NIM_API_KEY_SUB:-}" ] ||
@@ -4452,8 +4452,16 @@ jobs:
               >"${RUNNER_TEMP}/contextual-orchestrator-gateway.log" 2>&1 &
             contextual_gateway_pid=$!
             contextual_gateway_ready=false
+            models_file="$(mktemp "${RUNNER_TEMP}/contextual-orchestrator-models.XXXXXX")"
             for gateway_attempt in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -fsS --max-time 3 "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/v1}/healthz" >/dev/null; then
+              if curl -fsS --max-time 3 \
+                  "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/v1}/healthz" >/dev/null &&
+                curl -fsS --max-time 3 \
+                  -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \
+                  -o "$models_file" \
+                  "${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/models" &&
+                python3 -c 'import json,sys; payload=json.load(open(sys.argv[1], encoding="utf-8")); models=payload.get("data") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(models, list) and any(isinstance(model, dict) and str(model.get("id") or "").strip() for model in models) else 1)' "$models_file"
+              then
                 contextual_gateway_ready=true
                 break
               fi
