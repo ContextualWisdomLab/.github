@@ -2184,6 +2184,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "repository_dispatch:" not in bootstrap.split("permissions:", 1)[0]
     assert "actions/checkout" not in bootstrap
     assert "${{ secrets." not in bootstrap
+    assert 'jq -r -s --arg sha "$HEAD_SHA"' in bootstrap
     assert "required-workflow-bootstrap:" in bootstrap
     assert "  coverage-source-tree:\n" in bootstrap
     assert "  coverage-evidence:\n" in bootstrap
