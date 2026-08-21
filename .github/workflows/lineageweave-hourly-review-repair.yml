@@ -146,11 +146,17 @@ jobs:
       - name: Dispatch one missing stacked-PR review
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
+          MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.scheduler_app_token.outputs.available == 'true' }}
           SCHEDULER_ACTIONS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
           SCHEDULER_DISPATCH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
         run: |
           set -euo pipefail
+          if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then
+            echo "::error::An established scheduler mutation credential or exchanged OpenCode app token is required."
+            exit 1
+          fi
+
           python3 scripts/ci/pr_review_merge_scheduler.py \
             --repo "$TARGET_REPOSITORY" \
             --base-branch "$ROOT_BASE_BRANCH" \

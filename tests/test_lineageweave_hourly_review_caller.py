@@ -77,6 +77,30 @@ def test_lineageweave_caller_is_protected_main_only_and_least_privilege() -> Non
         assert forbidden not in caller
 
 
+def test_each_mutating_dispatch_fails_closed_without_a_scheduler_credential() -> None:
+    """Review and repair dispatches emit the same typed credential failure."""
+
+    caller = _read(CALLER)
+    availability = (
+        "MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' ||"
+    )
+    guard = 'if [ "$MUTATION_CREDENTIAL_AVAILABLE" != "true" ]; then'
+    diagnostic = (
+        "::error::An established scheduler mutation credential or exchanged "
+        "OpenCode app token is required."
+    )
+
+    assert caller.count(availability) == 2
+    assert caller.count(guard) == 2
+    assert caller.count(diagnostic) == 2
+    review_dispatch = caller.split(
+        "      - name: Dispatch one missing stacked-PR review", 1
+    )[1].split("      - name: Dispatch one dependency-safe review repair", 1)[0]
+    assert review_dispatch.index(guard) < review_dispatch.index(
+        "python3 scripts/ci/pr_review_merge_scheduler.py"
+    )
+
+
 def test_stack_driver_is_product_neutral_and_one_shot_is_absent() -> None:
     """LineageWeave identity and PR numbers remain in the thin caller only."""
 
