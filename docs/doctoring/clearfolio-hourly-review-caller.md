@@ -62,8 +62,9 @@ The caller passes exactly two established optional scheduler credentials:
 
 It does not use `secrets: inherit`. It does not receive
 `NVIDIA_NIM_API_KEY`, because queue inspection and dispatch are not model
-execution. The NVIDIA credential is bound only inside the separately reviewed
-`PR Review Autofix` workflow's two OpenCode execution steps.
+execution. The NVIDIA credential is bound only inside three provider-bound
+steps in the separately reviewed `PR Review Autofix` workflow: live model
+resolution and its two OpenCode execution steps.
 
 Both the caller and reusable scheduler keep the workflow-generated
 `GITHUB_TOKEN` read-only with only `contents: read`; neither declares job-level

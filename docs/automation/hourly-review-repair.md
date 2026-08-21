@@ -44,8 +44,9 @@ not overlap its successor. At most one repair dispatch is created per run.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
-`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
-OpenCode execution steps in the separately reviewed autofix worker.
+`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the live
+model-resolution step and the two OpenCode execution steps in the separately
+reviewed autofix worker.
 
 ## Orgmetra execution contract
 
