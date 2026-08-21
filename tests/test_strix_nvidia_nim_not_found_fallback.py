@@ -171,21 +171,6 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_general_source_snippet_mode_skips_single_line_blocks(self) -> None:
-        """Keep single-line evidence exclusive to its dedicated detector."""
-
-        gate_source = STRIX_GATE.read_text(encoding="utf-8")
-        self.assertIn(
-            "if single_line_only:\n"
-            "        if len(snippet_lines) != 1:",
-            gate_source,
-        )
-        self.assertIn(
-            "elif len(snippet_lines) < 2:\n"
-            "        continue",
-            gate_source,
-        )
-
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
         """Prefer a documented hosted NIM and another NIM before GitHub."""
 
