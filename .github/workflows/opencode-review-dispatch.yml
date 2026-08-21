@@ -2294,6 +2294,7 @@ jobs:
 
       - name: Checkout pinned contextual-orchestrator review gateway
         id: contextual_orchestrator_checkout
+        if: needs.validate-pr-metadata.outputs.is_private == 'false'
         continue-on-error: true
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -4334,7 +4335,7 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_ENABLED: "false"
-          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ""
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: "http://127.0.0.1:18080/v1"
           CONTEXTUAL_ORCHESTRATOR_TOKEN: ""
           CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED: ${{ steps.contextual_orchestrator_checkout.outcome == 'success' && 'true' || 'false' }}
           REPOSITORY_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
@@ -4501,10 +4502,9 @@ jobs:
               printf 'contextual-orchestrator review gateway ready on loopback with auto-discovered provider pool.\n'
             else
               export CONTEXTUAL_ORCHESTRATOR_ENABLED=false
-              CONTEXTUAL_ORCHESTRATOR_BASE_URL=""
               CONTEXTUAL_ORCHESTRATOR_TOKEN=""
-              export CONTEXTUAL_ORCHESTRATOR_BASE_URL CONTEXTUAL_ORCHESTRATOR_TOKEN
-              printf 'contextual-orchestrator review gateway unavailable; preserving the existing OpenCode provider pool.\n'
+              export CONTEXTUAL_ORCHESTRATOR_TOKEN
+              printf 'contextual-orchestrator review gateway unavailable; preserving the existing OpenCode provider pool and its valid loopback base URL.\n'
               cleanup_contextual_gateway
               contextual_gateway_pid=""
             fi

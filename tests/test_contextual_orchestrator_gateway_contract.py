@@ -35,6 +35,7 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "ContextualWisdomLab/contextual-orchestrator" in workflow
     assert GATEWAY_COMMIT in workflow
     assert "persist-credentials: false" in workflow
+    assert "if: needs.validate-pr-metadata.outputs.is_private == 'false'" in workflow
     assert '"contextual-orchestrator"' in workflow
     assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN" in workflow
@@ -53,6 +54,7 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "BYTEZ_API_KEY" in workflow
     assert "is_contextual_orchestrator_candidate" in runner
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL" in runner
+    assert 'CONTEXTUAL_ORCHESTRATOR_BASE_URL: "http://127.0.0.1:18080/v1"' in workflow
     assert "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" in workflow
     assert "openrouter/deepseek/deepseek-v3.2" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
