@@ -904,6 +904,8 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     )
     assert "id: osv_base" in workflow
     assert "id: osv_head" in workflow
+    assert "id: osv_base_retry" in workflow
+    assert "id: osv_head_retry" in workflow
     assert "steps.osv_base.outcome == 'failure'" in workflow
     assert "steps.osv_head.outcome == 'failure'" in workflow
     assert "Retry base OSV without transitive resolution" in workflow
@@ -920,15 +922,30 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "external transitive registry resolution is intentionally avoided" in workflow
     )
     assert (
-        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true"
+        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        id: osv_base_retry\n        continue-on-error: true"
         in workflow
     )
     assert (
-        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
+        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        id: osv_head_retry\n        continue-on-error: true"
         in workflow
     )
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
+    assert "Require successful base and head OSV scans" in workflow
+    assert "Normalize successful empty OSV result documents" in workflow
+    assert "printf '%s\\n' '{\"results\":[]}' >\"$result_file\"" in workflow
+    assert "OSV completed successfully without findings output" in workflow
+    assert (
+        "steps.osv_base.outcome == 'success' || steps.osv_base_retry.outcome == 'success'"
+        in workflow
+    )
+    assert (
+        "steps.osv_head.outcome == 'success' || steps.osv_head_retry.outcome == 'success'"
+        in workflow
+    )
+    assert workflow.index("Require successful base and head OSV scans") < workflow.index(
+        "Normalize successful empty OSV result documents"
+    ) < workflow.index("Require OSV scan output")
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 

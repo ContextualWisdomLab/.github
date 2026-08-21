@@ -93,6 +93,7 @@ jobs:
           echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry base OSV without transitive resolution
         if: steps.osv_base.outcome == 'failure'
+        id: osv_base_retry
         continue-on-error: true
         timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
@@ -143,6 +144,7 @@ jobs:
           echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry head OSV without transitive resolution
         if: steps.osv_head.outcome == 'failure'
+        id: osv_head_retry
         continue-on-error: true
         timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
@@ -154,6 +156,30 @@ jobs:
             --allow-no-lockfiles
             -r
             ./
+      - name: Require successful base and head OSV scans
+        run: |
+          set -euo pipefail
+          base_success="${{ steps.osv_base.outcome == 'success' || steps.osv_base_retry.outcome == 'success' }}"
+          head_success="${{ steps.osv_head.outcome == 'success' || steps.osv_head_retry.outcome == 'success' }}"
+          test "$base_success" = true
+          test "$head_success" = true
+      - name: Normalize successful empty OSV result documents
+        if: >-
+          (steps.osv_base.outcome == 'success' || steps.osv_base_retry.outcome == 'success') &&
+          (steps.osv_head.outcome == 'success' || steps.osv_head_retry.outcome == 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result_file in old-results.json new-results.json; do
+            if [ -L "$result_file" ]; then
+              echo "::error::OSV result document is a symlink: $result_file"
+              exit 1
+            fi
+            if [ ! -s "$result_file" ]; then
+              printf '%s\n' '{"results":[]}' >"$result_file"
+              echo "::notice::OSV completed successfully without findings output; normalized $result_file as an empty result document."
+            fi
+          done
       - name: Checkout exact central provenance policy
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

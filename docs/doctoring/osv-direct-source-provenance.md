@@ -24,6 +24,17 @@ package name, or severity is blanket-ignored. The audit artifact records every
 retained or reconciled direct-source decision without copying untrusted
 advisory prose.
 
+## Empty result documents
+
+The pinned OSV action can complete successfully without creating its requested
+JSON file when a repository has no findings or no supported lockfile. The
+central workflow first requires both base and head scans to report success,
+then writes the valid empty document `{"results":[]}` for any missing or empty
+result file. A failed first scan and failed retry never enter this path, and
+symlinked result paths remain a hard failure. This preserves the distinction
+between a verified clean scan and an unavailable scan without weakening the
+base/head reporter gate.
+
 ## Rollback and operations
 
 Rollback removes the reconciliation step and helper together, restoring raw
