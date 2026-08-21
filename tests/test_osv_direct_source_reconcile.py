@@ -413,6 +413,13 @@ class DirectSourceReconcileTests(unittest.TestCase):
             linked.symlink_to(target)
             with self.assertRaises(ValueError):
                 OSV.load_json_object(linked)
+            with mock.patch.object(OSV.os, "O_NOFOLLOW", None):
+                with self.assertRaises(ValueError):
+                    OSV.read_utf8_text(target, "required JSON input")
+            directory = root / "directory"
+            directory.mkdir()
+            with self.assertRaises(ValueError):
+                OSV.read_utf8_text(directory, "required JSON input")
             array_path = root / "array.json"
             array_path.write_text("[]", encoding="utf-8")
             with self.assertRaises(ValueError):
