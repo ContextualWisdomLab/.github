@@ -890,7 +890,7 @@ def label_section(text: str, label: str) -> str:
 
         starts = []
         pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
-        if pattern is None:  # pragma: no cover
+        if pattern is None:
             pattern = re.compile(re.escape(candidate))
         for match in pattern.finditer(text):
             index = match.start()
