@@ -1825,8 +1825,12 @@ def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "unrecognized-token")
 
     assert not sched.head_mutation_credential_starts_workflows()
-    with pytest.raises(RuntimeError, match="never start new workflow runs"):
+    with pytest.raises(RuntimeError, match="not allowlisted as workflow-starting") as exc_info:
         sched.require_workflow_starting_mutation_credential("update-branch")
+    assert "GITHUB_TOKEN" not in str(exc_info.value)
+    assert sched.decision_guidance(
+        sched.Decision(7, "wait", str(exc_info.value))
+    )["type"] == "head_mutation_credential_upgrade"
 
 
 def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):

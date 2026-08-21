@@ -247,9 +247,18 @@ def head_mutation_credential_starts_workflows() -> bool:
 
 def non_triggering_head_mutation_reason(action: str) -> str:
     """Explain why a head mutation is withheld for a non-triggering credential."""
+    source = mutation_token_source()
+    if source == "github-token":
+        credential_reason = (
+            "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
+        )
+    else:
+        credential_reason = (
+            f"the {mutation_token_label()}, which is not allowlisted as workflow-starting"
+        )
     return (
-        f"{action} withheld because the scheduler mutation credential is the workflow GITHUB_TOKEN, "
-        "whose head mutations never start new workflow runs, so the moved head would stay permanently "
+        f"{action} withheld because the scheduler mutation credential is {credential_reason}, "
+        "so the moved head would stay permanently "
         "BLOCKED without current-head required checks; configure PR_REVIEW_MERGE_TOKEN, "
         "OPENCODE_APPROVE_TOKEN, or the OpenCode app token for the scheduler job"
     )
@@ -3054,7 +3063,10 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
 
 def parse_non_triggering_head_mutation_reason(reason: str) -> bool:
     """Return whether a reason describes a withheld non-triggering head mutation."""
-    return "whose head mutations never start new workflow runs" in reason
+    return (
+        "whose head mutations never start new workflow runs" in reason
+        or "which is not allowlisted as workflow-starting" in reason
+    )
 
 
 def parse_last_push_approval_restamp_reason(reason: str) -> bool:
