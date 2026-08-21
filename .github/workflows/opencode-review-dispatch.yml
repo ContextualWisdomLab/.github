@@ -635,6 +635,7 @@ jobs:
               --output-dir "$coverage_build_dir/base-javascript-packages"
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_toolchain.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
               --output-dir "$coverage_build_dir/base-rust"
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
