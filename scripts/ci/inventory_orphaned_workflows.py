@@ -100,6 +100,18 @@ def parse_link_has_next(link_header: object) -> bool:
     return 'rel="next"' in link_header
 
 
+def page_link_header(page: Mapping[str, Any]) -> object:
+    """Return one case-insensitive HTTP ``Link`` field or fail closed."""
+    values = [
+        value
+        for key, value in page.items()
+        if isinstance(key, str) and key.casefold() == "link"
+    ]
+    if len(values) > 1:
+        raise InventoryError("workflow page has ambiguous Link headers")
+    return values[0] if values else None
+
+
 def decode_registry_path(path: object) -> str:
     """Validate a workflow path and reject traversal disguises."""
     if not isinstance(path, str) or not path or "\x00" in path:
@@ -188,18 +200,20 @@ def collect_workflow_pages(
     pages: Iterable[Mapping[str, Any]],
     *,
     per_page: int = PER_PAGE_DEFAULT,
-) -> list[dict[str, Any]]:
-    """Merge workflow pages and fail closed on truncation or count drift."""
+) -> tuple[list[dict[str, Any]], int]:
+    """Merge workflow pages and return the number actually consumed."""
     if per_page <= 0:
         raise InventoryError("per_page must be positive")
     collected: list[dict[str, Any]] = []
     expected_total: int | None = None
     saw_page = False
+    consumed_pages = 0
     open_next = False
     for page in pages:
         saw_page = True
         if not isinstance(page, Mapping):
             raise InventoryError("workflow page is not an object")
+        consumed_pages += 1
         workflows = page.get("workflows")
         total_count = page.get("total_count")
         if not isinstance(workflows, list):
@@ -218,7 +232,7 @@ def collect_workflow_pages(
         collected.extend(workflows)
         link_next = page.get("_link_next")
         if link_next is None:
-            open_next = parse_link_has_next(page.get("link"))
+            open_next = parse_link_has_next(page_link_header(page))
         elif isinstance(link_next, bool):
             open_next = link_next
         else:
@@ -235,7 +249,7 @@ def collect_workflow_pages(
     if expected_total is None or len(collected) != expected_total:
         raise InventoryError("pagination truncated or incomplete")
     assert_unique_workflow_ids(collected)
-    return collected
+    return collected, consumed_pages
 
 
 def assert_default_branch_bound(start_sha: object, end_sha: object) -> str:
@@ -286,7 +300,7 @@ def inventory_repository(record: Mapping[str, Any]) -> dict[str, Any]:
     pages = record.get("workflow_pages")
     if not isinstance(pages, list):
         raise InventoryError(f"{name} workflow_pages must be a list")
-    workflows = collect_workflow_pages(pages)
+    workflows, page_count = collect_workflow_pages(pages)
     records: list[dict[str, Any]] = []
     for workflow in workflows:
         path = decode_registry_path(workflow.get("path"))
@@ -320,7 +334,7 @@ def inventory_repository(record: Mapping[str, Any]) -> dict[str, Any]:
         "repository": name,
         "default_branch": record.get("default_branch"),
         "default_branch_sha": sha,
-        "page_count": len(pages),
+        "page_count": page_count,
         "workflow_count": len(records),
         "records": records,
     }

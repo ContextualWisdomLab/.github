@@ -49,15 +49,17 @@ reviewer cannot treat "the YAML is gone" as "no writer remains enabled."
 
 ## Trust boundary
 
-The inventory consumes only a caller-supplied fixture or a least-privilege
-read of the Actions registry and git tree. It does not receive repository
-write permission, `secrets: inherit`, or a guessed PAT. GitHub-owned
-`dynamic/` identities are never treated as deleted repository files.
+The inventory CLI consumes only a caller-collected JSON fixture. A separate
+least-privilege caller may read the Actions registry and git tree to assemble
+that fixture, but this script performs no live API reads. Neither boundary
+receives repository write permission, `secrets: inherit`, or a guessed PAT.
+GitHub-owned `dynamic/` identities are never treated as deleted repository
+files.
 
-MITRE CWE-200 describes exposure of sensitive information when an observer
-cannot tell which control-plane writers are enabled. CWE-862 describes
-missing authorization when a registry mutation is performed without a
-reviewed operator path. This increment closes the visibility gap and
+The ledger improves operational visibility into enabled control-plane writers;
+that visibility gap is not itself CWE-200 sensitive-information exposure.
+CWE-862 describes missing authorization when a registry mutation is performed
+without a reviewed operator path. This increment closes the visibility gap and
 refuses the mutation.
 
 ## Operator contract
@@ -80,9 +82,9 @@ classification without disabling sibling-repository writers.
 
 ## Rollback
 
-Delete `scripts/ci/inventory_orphaned_workflows.py` and its tests. No
-registry state is mutated, so rollback does not re-enable or disable
-workflows.
+Rollback removes the inventory script, focused tests, schema example,
+architecture entry, changelog entry, and this doctoring record together. No
+registry state is mutated, so rollback does not re-enable or disable workflows.
 
 ## References
 

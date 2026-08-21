@@ -101,9 +101,9 @@ def test_decode_registry_path_rejects_encoding_and_traversal() -> None:
         inventory.decode_registry_path(".github/workflows/ci.yml")
         == ".github/workflows/ci.yml"
     )
-    with pytest.raises(inventory.InventoryError, match="NUL|missing"):
+    with pytest.raises(inventory.InventoryError, match=r"NUL|missing"):
         inventory.decode_registry_path("")
-    with pytest.raises(inventory.InventoryError, match="NUL|missing"):
+    with pytest.raises(inventory.InventoryError, match=r"NUL|missing"):
         inventory.decode_registry_path(".github/workflows/ci.yml\x00")
     with pytest.raises(inventory.InventoryError, match="backslash"):
         inventory.decode_registry_path(".github\\workflows\\ci.yml")
@@ -231,7 +231,11 @@ def test_collect_workflow_pages_fail_closed() -> None:
         "workflows": [_workflow(2, ".github/workflows/b.yml")],
         "_link_next": False,
     }
-    assert len(inventory.collect_workflow_pages([first, second], per_page=1)) == 2
+    workflows, page_count = inventory.collect_workflow_pages(
+        [first, second], per_page=1
+    )
+    assert len(workflows) == 2
+    assert page_count == 2
 
     with pytest.raises(inventory.InventoryError, match="per_page"):
         inventory.collect_workflow_pages([], per_page=0)
@@ -310,7 +314,7 @@ def test_collect_workflow_pages_fail_closed() -> None:
         "workflows": [],
         "link": '<https://example/page/1>; rel="prev"',
     }
-    assert inventory.collect_workflow_pages([linked]) == []
+    assert inventory.collect_workflow_pages([linked]) == ([], 1)
     with pytest.raises(inventory.InventoryError, match="reused workflow id"):
         inventory.collect_workflow_pages(
             [
@@ -334,6 +338,58 @@ def test_collect_workflow_pages_fail_closed() -> None:
                 }
             ]
         )
+
+
+def test_inventory_records_only_consumed_pages() -> None:
+    """The audit ledger never counts unconsumed trailing page fixtures."""
+    terminal = {
+        "total_count": 1,
+        "workflows": [_workflow(1, ".github/workflows/ci.yml")],
+        "_link_next": False,
+    }
+    trailing = {
+        "total_count": 1,
+        "workflows": [_workflow(2, ".github/workflows/unread.yml")],
+        "_link_next": False,
+    }
+
+    result = inventory.inventory_repository(
+        _repo(
+            "naruon",
+            [],
+            [".github/workflows/ci.yml"],
+            pages=[terminal, trailing],
+        )
+    )
+
+    assert result["page_count"] == 1
+    assert result["workflow_count"] == 1
+    assert result["records"][0]["workflow_id"] == 1
+
+
+def test_collect_workflow_pages_accepts_case_insensitive_link_header() -> None:
+    """GitHub's canonical ``Link`` header spelling drives pagination."""
+    first = {
+        "total_count": 2,
+        "workflows": [_workflow(1, ".github/workflows/a.yml")],
+        "Link": '<https://example/page/2>; rel="next"',
+    }
+    second = {
+        "total_count": 2,
+        "workflows": [_workflow(2, ".github/workflows/b.yml")],
+        "Link": '<https://example/page/1>; rel="prev"',
+    }
+
+    workflows, page_count = inventory.collect_workflow_pages(
+        [first, second], per_page=1
+    )
+
+    assert [workflow["id"] for workflow in workflows] == [1, 2]
+    assert page_count == 2
+
+    ambiguous = dict(first, link='<https://example/page/2>; rel="next"')
+    with pytest.raises(inventory.InventoryError, match="ambiguous Link"):
+        inventory.collect_workflow_pages([ambiguous], per_page=1)
 
 
 def test_assert_default_branch_bound() -> None:
