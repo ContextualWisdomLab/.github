@@ -219,12 +219,13 @@ def list_recent_pull_requests(
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=min(4, len(repositories))
     )
-    futures = [
-        (repository, executor.submit(fetch, repository))
+    futures = {
+        executor.submit(fetch, repository): repository
         for repository in repositories
-    ]
+    }
     try:
-        for repository, future in futures:
+        for future in concurrent.futures.as_completed(futures):
+            repository = futures[future]
             try:
                 yield from future.result()
             except Exception as exc:  # noqa: BLE001 - repository isolation boundary
@@ -233,7 +234,7 @@ def list_recent_pull_requests(
                 on_error(repository, exc)
     finally:
         stop_event.set()
-        for _, future in futures:
+        for future in futures:
             future.cancel()
         executor.shutdown(wait=True, cancel_futures=True)
 
