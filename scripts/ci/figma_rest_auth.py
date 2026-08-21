@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import ssl
 import sys
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
@@ -117,9 +118,10 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
             "/v1/me endpoint.",
             EXIT_TRANSPORT,
         )
-    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
+    connection = http.client.HTTPSConnection(
         "api.figma.com",
         timeout=REQUEST_TIMEOUT_SECONDS,
+        context=ssl.create_default_context(),
     )
     try:
         connection.request("GET", "/v1/me", headers=sanitize_request_headers(headers))

@@ -19,6 +19,7 @@ import json
 import math
 import os
 import re
+import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TextIO
@@ -61,6 +62,9 @@ MAX_TEXT_CHARS = 2_000
 MAX_SOLID_FILLS = 8
 MAX_CATALOG_ITEMS = 32
 MAX_LAYOUT_ABS = 10_000_000
+S3_IMAGE_HOST = re.compile(
+    r"^figma-[a-z0-9-]+\.s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$"
+)
 FileOpener = Callable[[str, Mapping[str, str]], tuple[int, bytes]]
 
 
@@ -205,9 +209,10 @@ def default_file_opener(path: str, headers: Mapping[str, str]) -> tuple[int, byt
             "/v1/files or /v1/images requests on api.figma.com.",
             EXIT_TRANSPORT,
         )
-    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
+    connection = http.client.HTTPSConnection(
         FIGMA_API_HOST,
         timeout=REQUEST_TIMEOUT_SECONDS,
+        context=ssl.create_default_context(),
     )
     try:
         connection.request("GET", path, headers=sanitize_request_headers(headers))
@@ -393,9 +398,12 @@ def named_catalog(value: object, name_key: str, type_key: str | None) -> list[di
         if name is None:
             continue
         entry = {name_key: name}
-        catalog_key = safe_label(raw_item.get("key")) or safe_label(raw_key)
+        source_key = safe_label(raw_key)
+        catalog_key = safe_label(raw_item.get("key")) or source_key
         if catalog_key is not None:
             entry["catalog_key"] = catalog_key
+        if source_key is not None and source_key != catalog_key:
+            entry["source_key"] = source_key
         if type_key is not None:
             style_type = safe_label(raw_item.get(type_key))
             if style_type is not None:
@@ -468,7 +476,7 @@ def allowed_image_host(host: str) -> bool:
     lowered = host.lower().rstrip(".")
     if lowered == "figma.com" or lowered.endswith(".figma.com"):
         return True
-    return lowered.startswith("figma-") and lowered.endswith(".amazonaws.com")
+    return S3_IMAGE_HOST.fullmatch(lowered) is not None
 
 
 def https_image_url(value: object) -> str | None:
@@ -513,16 +521,38 @@ def summarize_file_payload(payload: Mapping[str, Any], outline_depth: int) -> di
     document = outline_node(payload.get("document"), outline_depth)
     if document is not None:
         summary["document_outline"] = document
-    components = named_catalog(payload.get("components"), "component_name", None)
+    raw_nodes = payload.get("nodes")
+
+    def combined_catalog(
+        field: str, name_key: str, type_key: str | None
+    ) -> list[dict[str, str]]:
+        """Collect bounded top-level and per-node catalogs without duplicates."""
+        values: list[object] = [payload.get(field)]
+        if isinstance(raw_nodes, Mapping):
+            values.extend(
+                raw_node.get(field)
+                for raw_node in raw_nodes.values()
+                if isinstance(raw_node, Mapping)
+            )
+        entries: list[dict[str, str]] = []
+        for value in values:
+            for entry in named_catalog(value, name_key, type_key):
+                if entry in entries:
+                    continue
+                entries.append(entry)
+                if len(entries) >= MAX_CATALOG_ITEMS:
+                    return entries
+        return entries
+
+    components = combined_catalog("components", "component_name", None)
     if components:
         summary["component_names"] = components
-    component_sets = named_catalog(payload.get("componentSets"), "component_set_name", None)
+    component_sets = combined_catalog("componentSets", "component_set_name", None)
     if component_sets:
         summary["component_set_catalog"] = component_sets
-    styles = named_catalog(payload.get("styles"), "style_name", "styleType")
+    styles = combined_catalog("styles", "style_name", "styleType")
     if styles:
         summary["style_catalog"] = styles
-    raw_nodes = payload.get("nodes")
     if isinstance(raw_nodes, Mapping):
         nodes: dict[str, Any] = {}
         for raw_id, raw_node in raw_nodes.items():

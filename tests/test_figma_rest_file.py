@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import ssl
 from typing import Any
 
 import pytest
@@ -187,10 +188,16 @@ class _FakeFileConnection:
 
     last: _FakeFileConnection | None = None
 
-    def __init__(self, host: str, timeout: int = 0) -> None:
+    def __init__(
+        self,
+        host: str,
+        timeout: int = 0,
+        context: ssl.SSLContext | None = None,
+    ) -> None:
         """Capture the TLS host and timeout."""
         self.host = host
         self.timeout = timeout
+        self.context = context
         self.method = ""
         self.path = ""
         self.headers: dict[str, str] = {}
@@ -225,6 +232,7 @@ def test_default_file_opener_reads_success_body(monkeypatch: pytest.MonkeyPatch)
     assert connection is not None
     assert connection.host == "api.figma.com"
     assert connection.timeout == auth.REQUEST_TIMEOUT_SECONDS
+    assert isinstance(connection.context, ssl.SSLContext)
     assert connection.method == "GET"
     assert connection.path == path
     assert connection.headers == {auth.TOKEN_HEADER: TOKEN}
@@ -237,9 +245,14 @@ def test_default_file_opener_rejects_oversize_body(monkeypatch: pytest.MonkeyPat
     class HugeConnection(_FakeFileConnection):
         """Return more bytes than the file cap."""
 
-        def __init__(self, host: str, timeout: int = 0) -> None:
+        def __init__(
+            self,
+            host: str,
+            timeout: int = 0,
+            context: ssl.SSLContext | None = None,
+        ) -> None:
             """Initialize an oversized body."""
-            super().__init__(host, timeout)
+            super().__init__(host, timeout, context)
             self._body = b"x" * (files.MAX_FILE_BODY_BYTES + 1)
 
     monkeypatch.setattr(files.http.client, "HTTPSConnection", HugeConnection)
@@ -387,6 +400,7 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
     assert summary["component_set_catalog"][0]["component_set_name"] == "Controls"
     assert summary["style_catalog"][0]["style_name"] == "Ink"
     assert summary["style_catalog"][0]["catalog_key"] == "style-key"
+    assert summary["style_catalog"][0]["source_key"] == "S:1"
     assert summary["style_catalog"][0]["description"] == "Brand ink"
     assert summary["document_outline"]["node_type"] == "DOCUMENT"
     assert summary["selected_nodes"]["12:34"]["node_name"] == "Hero"
@@ -404,6 +418,38 @@ def test_summarize_file_payload_covers_file_nodes_and_images() -> None:
     assert "selected_nodes" not in filtered
     assert "image_urls" not in filtered
     assert filtered["read_status"].startswith("Figma REST file read succeeded")
+
+
+def test_summarize_file_payload_collects_nested_node_catalogs() -> None:
+    """Node endpoint catalogs remain available alongside node style references."""
+    summary = files.summarize_file_payload(
+        {
+            "nodes": {
+                "12:34": {
+                    "document": {
+                        "id": "12:34",
+                        "name": "Hero",
+                        "type": "FRAME",
+                        "styles": {"FILL": "S:1"},
+                    },
+                    "components": {"1:9": {"name": "Button"}},
+                    "componentSets": {"2:9": {"name": "Controls"}},
+                    "styles": {
+                        "S:1": {
+                            "key": "style-key",
+                            "name": "Ink",
+                            "styleType": "FILL",
+                        }
+                    },
+                }
+            }
+        },
+        2,
+    )
+    assert summary["component_names"][0]["component_name"] == "Button"
+    assert summary["component_set_catalog"][0]["component_set_name"] == "Controls"
+    assert summary["style_catalog"][0]["source_key"] == "S:1"
+    assert summary["selected_nodes"]["12:34"]["style_references"] == {"FILL": "S:1"}
 
 
 @pytest.mark.parametrize(
@@ -628,6 +674,7 @@ def test_design_field_helpers_stay_bounded_and_token_free() -> None:
     assert len(files.named_catalog(catalog, "component_name", None)) == files.MAX_CATALOG_ITEMS
     assert files.allowed_image_host("figma.com") is True
     assert files.allowed_image_host("evil.amazonaws.com") is False
+    assert files.allowed_image_host("figma-x.attacker.amazonaws.com") is False
     assert files.encode_node_id_query("I1:2;3:4") == "I1:2%3B3:4"
     metrics = files.layout_metrics(
         {

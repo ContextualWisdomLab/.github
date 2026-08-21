@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import ssl
 from typing import Any
 
 import pytest
@@ -159,10 +160,16 @@ class _FakeWhoamiConnection:
 
     last: _FakeWhoamiConnection | None = None
 
-    def __init__(self, host: str, timeout: int = 0) -> None:
+    def __init__(
+        self,
+        host: str,
+        timeout: int = 0,
+        context: ssl.SSLContext | None = None,
+    ) -> None:
         """Capture the TLS host and timeout."""
         self.host = host
         self.timeout = timeout
+        self.context = context
         self.method = ""
         self.path = ""
         self.headers: dict[str, str] = {}
@@ -213,9 +220,14 @@ def test_default_opener_returns_http_error_bodies(monkeypatch: pytest.MonkeyPatc
     class ForbiddenConnection(_FakeWhoamiConnection):
         """Return HTTP 403 from the pinned origin."""
 
-        def __init__(self, host: str, timeout: int = 0) -> None:
+        def __init__(
+            self,
+            host: str,
+            timeout: int = 0,
+            context: ssl.SSLContext | None = None,
+        ) -> None:
             """Initialize a 403 canned response."""
-            super().__init__(host, timeout)
+            super().__init__(host, timeout, context)
             self._status = 403
             self._body = b"nope"
 
@@ -237,6 +249,7 @@ def test_default_opener_reads_success_body(monkeypatch: pytest.MonkeyPatch) -> N
     assert connection is not None
     assert connection.host == "api.figma.com"
     assert connection.timeout == auth.REQUEST_TIMEOUT_SECONDS
+    assert isinstance(connection.context, ssl.SSLContext)
     assert connection.method == "GET"
     assert connection.path == "/v1/me"
     assert connection.headers == {auth.TOKEN_HEADER: TOKEN}
@@ -303,9 +316,14 @@ def test_default_opener_rejects_oversize_whoami_body(monkeypatch: pytest.MonkeyP
     class HugeConnection(_FakeWhoamiConnection):
         """Return more bytes than the whoami cap."""
 
-        def __init__(self, host: str, timeout: int = 0) -> None:
+        def __init__(
+            self,
+            host: str,
+            timeout: int = 0,
+            context: ssl.SSLContext | None = None,
+        ) -> None:
             """Initialize an oversized body."""
-            super().__init__(host, timeout)
+            super().__init__(host, timeout, context)
             self._body = b"x" * (auth.MAX_WHOAMI_BODY_BYTES + 1)
 
     monkeypatch.setattr(auth.http.client, "HTTPSConnection", HugeConnection)
