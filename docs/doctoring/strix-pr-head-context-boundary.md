@@ -7,19 +7,22 @@ Status: accepted 2026-08-21
 The Strix run for LineageWeave PR #192 materialized changed Python files but
 not the unchanged local `backend/app` dependency package. The scanner then
 reported `backend.app.post_eligibility` as missing even though that module was
-present in the PR head and base repository. Earlier attempts also encountered
-NVIDIA NIM rate limits; those provider failures must remain visible and must
-not be confused with a source finding.
+present in the PR head and base repository. The same changed-file-only failure
+mode affected `contextual-orchestrator` PR #801: `__main__.py` imported sibling
+modules that were omitted from the temporary scan tree. Earlier attempts also
+encountered NVIDIA NIM rate limits; those provider failures must remain visible
+and must not be confused with a source finding.
 
 ## Decision
 
-When a PR changes a Python module under `backend/app`, the trusted Strix scope
-resolver enumerates every Python file under `backend/app` from the exact PR
-head tree. The scope builder copies changed files from that head and unchanged
-context from the trusted base checkout. The changed-file list remains the
-finding-attribution boundary; this does not turn a context file into a changed
-finding. The scan still executes only trusted scanner code and treats PR-head
-blobs as non-executable data.
+When a PR changes a Python module under `backend/app` or
+`contextual_orchestrator`, the trusted Strix scope resolver enumerates every
+Python file under that package from the exact PR head tree. The scope builder
+copies changed files from that head and unchanged context from the trusted
+base checkout. The changed-file list remains the finding-attribution boundary;
+this does not turn a context file into a changed finding. The scan still
+executes only trusted scanner code and treats PR-head blobs as non-executable
+data.
 
 This is a product-neutral extension of the existing backend context contract;
 it does not replace the repository-specific context list for other backend
@@ -27,11 +30,11 @@ layouts and does not downgrade provider or vulnerability failures.
 
 ## Evidence and rollback
 
-The regression fixture creates a changed `backend/app/knowledge_graph.py` that
-imports an unchanged `backend/app/post_eligibility.py`, then asserts that the
-production scope contains the dependency and the trusted content. Roll back
-this change only with an equivalent exact-head dependency-context contract;
-removing the context or weakening the Strix gate is not an acceptable rollback.
+The regression fixture creates changed modules that import unchanged siblings in
+both packages, then asserts that the production scope contains the dependencies
+and the trusted content. Roll back this change only with an equivalent exact-
+head dependency-context contract; removing the context or weakening the Strix
+gate is not an acceptable rollback.
 
 ## References
 

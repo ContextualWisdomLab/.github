@@ -39,6 +39,10 @@ Semantic Versioning where the repository publishes a release.
   scans when a backend application module changes. This prevents a real local
   import from being reported as missing merely because the dependency was
   unchanged and therefore outside the changed-file attribution set.
+- Include the exact `contextual_orchestrator/*.py` package context in PR-scoped
+  Strix scans when a gateway module changes, covering local sibling imports
+  without expanding the changed-file attribution boundary
+  (ContextualWisdomLab/contextual-orchestrator#801).
 
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).

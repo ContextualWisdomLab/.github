@@ -1185,6 +1185,7 @@ is_scannable_changed_file() {
 pull_request_scope_context_files() {
 	local needs_backend_python=0
 	local needs_backend_app_python=0
+	local needs_contextual_orchestrator_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
@@ -1198,6 +1199,9 @@ pull_request_scope_context_files() {
 			if [[ "$normalized_changed_file" =~ ^backend/app/.+\.py$ ]]; then
 				needs_backend_app_python=1
 			fi
+			;;
+		contextual_orchestrator/*.py)
+			needs_contextual_orchestrator_python=1
 			;;
 		# The app shell, email components, threading URL builder, and API client can
 		# shape frontend email retrieval flows; include backend auth context with them.
@@ -1282,6 +1286,29 @@ EOF
 					;;
 				esac
 			done <<<"$backend_app_files"
+		fi
+	fi
+
+	if [ "$needs_contextual_orchestrator_python" -eq 1 ]; then
+		# contextual-orchestrator is a flat Python package whose changed modules
+		# commonly import unchanged sibling modules. Enumerate the exact PR-head
+		# package so the scanner receives import context without scanning unrelated
+		# repository files or changing finding attribution.
+		local contextual_orchestrator_head_sha
+		contextual_orchestrator_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if [ -n "$contextual_orchestrator_head_sha" ] && is_valid_git_commit_sha "$contextual_orchestrator_head_sha"; then
+			local contextual_orchestrator_files
+			if ! contextual_orchestrator_files="$(git -c core.quotepath=false ls-tree -r --name-only "$contextual_orchestrator_head_sha" -- contextual_orchestrator)"; then
+				echo "ERROR: contextual_orchestrator PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r context_file; do
+				case "$context_file" in
+				contextual_orchestrator/*.py)
+					printf '%s\n' "$context_file"
+					;;
+				esac
+			done <<<"$contextual_orchestrator_files"
 		fi
 	fi
 
