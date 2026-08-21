@@ -93,5 +93,6 @@ def test_web_e2e_reports_bounded_capture_finalization_failure(
     assert exit_code == bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
     assert captured.err.count("bounded service capture failed") == 2
     assert f'"exit_code": {bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE}' in captured.out
-    assert '"output_limited": true' in captured.out
-
+    assert '"output_limited": false' in captured.out
+    assert '"output_limit_unsupported": false' in captured.out
+    assert '"service_capture_failed": true' in captured.out

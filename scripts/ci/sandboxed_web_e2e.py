@@ -262,7 +262,10 @@ def tail_text(
         return ""
     bounded_text = bounded_subprocess.read_bounded_suffix(path, max_bytes)
     lines = bounded_text.text.splitlines()
-    return "\n".join(lines[-max_lines:])
+    tail = "\n".join(lines[-max_lines:])
+    if bounded_text.truncated and bounded_subprocess.TRUNCATION_MARKER.strip() not in tail:
+        return f"{bounded_subprocess.TRUNCATION_MARKER.strip()}\n{tail}"
+    return tail
 
 
 def emit_result(
@@ -275,6 +278,8 @@ def emit_result(
     exit_code: int,
     elapsed_seconds: float,
     output_limited: bool,
+    output_limit_unsupported: bool,
+    service_capture_failed: bool,
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
@@ -291,8 +296,10 @@ def emit_result(
         "network": args.network,
         "output_limit_bytes": args.output_limit_bytes,
         "output_limited": output_limited,
+        "output_limit_unsupported": output_limit_unsupported,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
+        "service_capture_failed": service_capture_failed,
         "service_log_limit_bytes": args.service_log_limit_bytes,
     }
     print()
@@ -316,6 +323,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     frontend_ready = False
     exit_code = 1
     output_limited = False
+    output_limit_unsupported = False
+    service_capture_failed = False
     service_limit_reported = False
     start = time.monotonic()
     try:
@@ -395,7 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
                     exit_code = 124
         except bounded_subprocess.OutputLimitUnsupportedError:
-            output_limited = True
+            output_limit_unsupported = True
             print(
                 "sandboxed-web-e2e: bounded child output is unavailable on this platform",
                 file=sys.stderr,
@@ -412,8 +421,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     wait = getattr(service.process, "wait", None)
                     if wait is not None:
                         wait(timeout=10)
-                output_limited = True
-                if exit_code != 124:
+                service_capture_failed = True
+                if exit_code == 0:
                     exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
                 print(
                     "sandboxed-web-e2e: bounded service capture failed",
@@ -421,7 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
         if _services_output_limited(services):
             output_limited = True
-            if exit_code != 124:
+            if exit_code == 0:
                 exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
             if not service_limit_reported:
                 print(
@@ -443,6 +452,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code=exit_code,
             elapsed_seconds=time.monotonic() - start,
             output_limited=output_limited,
+            output_limit_unsupported=output_limit_unsupported,
+            service_capture_failed=service_capture_failed,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)

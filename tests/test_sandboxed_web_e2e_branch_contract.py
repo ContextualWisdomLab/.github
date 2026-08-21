@@ -427,7 +427,9 @@ def test_capture_finalization_failure_maps_to_resource_exit(
 
     assert exit_code == bounded.OUTPUT_LIMIT_EXIT_CODE
     assert "bounded service capture failed" in captured.err
-    assert _result(captured.out)["output_limited"] is True
+    assert _result(captured.out)["output_limited"] is False
+    assert _result(captured.out)["output_limit_unsupported"] is False
+    assert _result(captured.out)["service_capture_failed"] is True
     assert len(forced) == 2
 
 
@@ -482,3 +484,62 @@ def test_timeout_precedence_survives_cleanup_and_late_service_limit(
             "1",
         ]
     ) == 124
+
+
+def test_late_service_overflow_preserves_nonzero_e2e_exit(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """A late service overflow must not hide an earlier command failure."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
+        """Return completed service doubles for the late-limit branch."""
+
+        del command, cwd, env, log_limit_bytes
+        return sandboxed_web_e2e.Service(
+            label=label,
+            command=label,
+            process=cast(subprocess.Popen[bytes], _DoneProcess()),
+            log_path=logs_dir / f"{label}.log",
+            log_limit_bytes=4096,
+        )
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda *args: True)
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "run_shell",
+        lambda *args: bounded.BoundedCompletedProcess(
+            args=("e2e",),
+            returncode=7,
+            stdout="",
+            stderr="",
+            output_limited=False,
+        ),
+    )
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
+    limit_checks = iter([False, True])
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "_services_output_limited",
+        lambda services: next(limit_checks),
+    )
+
+    assert sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repository),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    ) == 7
+    payload = _result(capsys.readouterr().out)
+    assert payload["output_limited"] is True
+    assert payload["service_capture_failed"] is False

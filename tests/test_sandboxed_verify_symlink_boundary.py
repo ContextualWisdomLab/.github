@@ -88,8 +88,10 @@ def test_main_classifies_repository_path_boundary_without_traceback(
     assert exit_code == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
     assert payload["exit_code"] == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
     assert payload["path_boundary_rejected"] is True
+    assert payload["cwd"] == "(not-created)"
     assert "repository path boundary rejected" in captured.err
     assert str(sensitive_target) not in captured.err
+    assert str(repo) not in captured.err
     assert "Traceback" not in captured.err
 
 

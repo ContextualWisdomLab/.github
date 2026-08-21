@@ -61,7 +61,7 @@ SAFE_ENV_ALLOWLIST = (
     "PYTHONPATH",
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
-PATH_BOUNDARY_EXIT_CODE = 126
+PATH_BOUNDARY_EXIT_CODE = 122
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -278,8 +278,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         try:
             copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
-        except RepositoryPathBoundaryError:
+        except ValueError:
             path_boundary_rejected = True
+            copied_repo = Path("(not-created)")
             print(
                 "sandboxed-verify: repository path boundary rejected",
                 file=sys.stderr,

@@ -41,7 +41,7 @@ A truncation marker is included inside, not in addition to, the declared retaine
 
 Each backend and frontend uses one combined stdout/stderr pipe and the same bounded drainer. The capture retains the final suffix in memory and writes only its bounded rendered form to the private sandbox log file when the stream closes. The evidence file therefore cannot exceed the declared service-log budget.
 
-Service overflow is checked during readiness, after E2E execution, and after service shutdown. It takes precedence over an ordinary command or readiness result, but a true E2E timeout remains `124`. `tail_text()` reads no more than 65,536 bytes from the end of the already bounded file, retains the configured final line count, and publishes only that bounded suffix. Credential redaction remains a separate active integration line and is not claimed by this slice.
+Service overflow is checked during readiness, after E2E execution, and after service shutdown. It takes precedence over an ordinary command or readiness result, but a true E2E timeout remains `124`. `tail_text()` reads no more than 65,536 bytes from the end of the already bounded file, retains the configured final line count, and keeps the truncation marker visible. The machine-readable result separates `output_limited`, `output_limit_unsupported`, and `service_capture_failed` so consumers can distinguish a byte-budget breach, unavailable enforcement, and cleanup failure. Credential redaction remains a separate active integration line and is not claimed by this slice.
 
 If orderly service or capture finalization raises, the wrapper makes a second
 best-effort process-group kill and bounded reap before publishing resource

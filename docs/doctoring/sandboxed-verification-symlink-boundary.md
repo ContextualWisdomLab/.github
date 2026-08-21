@@ -20,7 +20,7 @@ relative links remain links so project semantics are preserved. Links under
 ignored paths such as `node_modules` never enter the copy and are not evaluated.
 
 The validation happens before the untrusted command starts. Rejection is
-fail-closed with stable exit code `126`, `path_boundary_rejected=true` in the
+fail-closed with stable exit code `122`, `path_boundary_rejected=true` in the
 machine-readable result, and a generic diagnostic that does not disclose the
 resolved host target. It produces no verification success evidence. This is
 filesystem containment, not an operating-system sandbox claim; the existing

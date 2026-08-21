@@ -30,12 +30,19 @@ def _repository(tmp_path: Path) -> Path:
     return repository
 
 
-def _free_port() -> int:
-    """Return one currently available localhost port for a short-lived service."""
+def _free_ports(count: int) -> list[int]:
+    """Return distinct localhost ports reserved at the same time."""
 
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
+    listeners = [socket.socket() for _ in range(count)]
+    try:
+        ports = []
+        for listener in listeners:
+            listener.bind(("127.0.0.1", 0))
+            ports.append(int(listener.getsockname()[1]))
+        return ports
+    finally:
+        for listener in listeners:
+            listener.close()
 
 
 def _http_service_command(port: int, label: str) -> str:
@@ -125,6 +132,8 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
     assert exit_code == bounded.OUTPUT_LIMIT_EXIT_CODE
     assert "service output exceeded 4096 bytes" in captured.err
     assert payload["output_limited"] is True
+    assert payload["output_limit_unsupported"] is False
+    assert payload["service_capture_failed"] is False
     assert payload["service_log_limit_bytes"] == 4096
     assert not sentinel.exists()
 
@@ -162,6 +171,8 @@ def test_e2e_output_overflow_is_bounded_and_returns_123(
     assert "E2E output exceeded 4096 bytes" in captured.err
     assert payload["output_limit_bytes"] == 4096
     assert payload["output_limited"] is True
+    assert payload["output_limit_unsupported"] is False
+    assert payload["service_capture_failed"] is False
     assert len((captured.out + captured.err).encode("utf-8")) < 25_000
 
 
@@ -171,8 +182,7 @@ def test_normal_services_and_e2e_preserve_existing_success_contract(
 ) -> None:
     """Ordinary services, Unicode output, cleanup, and evidence remain unchanged."""
 
-    backend_port = _free_port()
-    frontend_port = _free_port()
+    backend_port, frontend_port = _free_ports(2)
     exit_code = sandboxed_web_e2e.main(
         [
             "--repo-root",
@@ -201,6 +211,8 @@ def test_normal_services_and_e2e_preserve_existing_success_contract(
     assert "backend-ready" in captured.out
     assert "frontend-ready" in captured.out
     assert payload["output_limited"] is False
+    assert payload["output_limit_unsupported"] is False
+    assert payload["service_capture_failed"] is False
     assert payload["output_limit_bytes"] == 4096
     assert payload["service_log_limit_bytes"] == 4096
 
@@ -233,7 +245,7 @@ def test_tail_text_uses_bounded_suffix_and_tolerates_partial_utf8(
     )
 
     assert observed == {"path": log_path, "maximum_bytes": 4096}
-    assert tail == "�\nlast-line"
+    assert tail == f"{bounded.TRUNCATION_MARKER.strip()}\n�\nlast-line"
 
 
 def test_unsupported_resource_boundary_fails_closed(
@@ -265,7 +277,9 @@ def test_unsupported_resource_boundary_fails_closed(
 
     assert exit_code == bounded.OUTPUT_LIMIT_EXIT_CODE
     assert "bounded child output is unavailable" in captured.err
-    assert payload["output_limited"] is True
+    assert payload["output_limited"] is False
+    assert payload["output_limit_unsupported"] is True
+    assert payload["service_capture_failed"] is False
 
 
 @pytest.mark.parametrize(
