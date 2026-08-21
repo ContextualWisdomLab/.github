@@ -6,7 +6,7 @@
 
 ContextualWisdomLab operates one protected hourly caller for
 `ContextualWisdomLab/newsdom-api` (PDF-to-DOM recognition sidecar,
-generalized beyond JP newspapers). The caller runs at minute 43,
+generalized beyond JP newspapers). The caller runs at minute 18,
 delegates to the product-neutral central review-fix scheduler, inspects
 at most 50 open pull requests targeting protected `develop`, and
 dispatches at most one bounded repair per heartbeat.
@@ -93,7 +93,7 @@ exact-head, approval, or security gates.
 
 ## Verification and rollback
 
-Machine-checkable contracts require the exact target/base, minute 43
+Machine-checkable contracts require the exact target/base, minute 18
 cadence, non-cancelling single-flight group, one dispatch, two-hour
 retry floor, explicit secret mapping, read-only contents plus job-scoped
 `id-token: write`, focused path-filter coverage, and absence of model or

@@ -2,11 +2,12 @@ name: newsdom-api Hourly Review Repair
 
 on:
   schedule:
-    # Minute 43 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
+    # Minute 18 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
     # BandScope (53), naruon (11), Inkspan (47), orchestrator (17),
     # Wardnet (7), codec-carver (5), pg-erd-cloud (13), Keyverse (29),
-    # noema (19), Scopeweave (31), and Appguardrail (41).
-    - cron: "43 * * * *"
+    # noema (19), Scopeweave (31), Appguardrail (41), and
+    # governance-risk-compliance (43).
+    - cron: "18 * * * *"
 
 concurrency:
   group: newsdom-api-hourly-review-repair

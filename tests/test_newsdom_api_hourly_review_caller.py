@@ -54,7 +54,7 @@ def test_newsdom_api_caller_is_hourly_bounded_and_non_cancelling() -> None:
     """newsdom-api receives one realistic PDF/DOM repair without cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "43 * * * *"' in caller
+    assert 'cron: "18 * * * *"' in caller
     assert "group: newsdom-api-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
