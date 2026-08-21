@@ -63,7 +63,7 @@ def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
 
     assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
-    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
+    assert "format('workflow-run-{0}', github.ref)" in concurrency_contract
     assert (
         "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
         in concurrency_contract
@@ -91,6 +91,29 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
+
+
+def test_scheduler_deduplicates_metadata_free_workflow_run_scans() -> None:
+    """Keep only the newest same-head central scheduler scan without PR metadata."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
+    cancel_line = next(
+        line for line in concurrency.splitlines() if "cancel-in-progress:" in line
+    )
+    queue_hygiene = workflow.split("# Queue hygiene, part 1:", 1)[1].split(
+        "# Queue hygiene, part 2:", 1
+    )[0]
+
+    assert "github.event_name == 'workflow_run'" in concurrency
+    assert "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number" in cancel_line
+    assert "format('workflow-run-{0}', github.ref)" in concurrency
+    assert '.event == "workflow_run"' in queue_hygiene
+    assert '.name == "Required PR Review Merge Scheduler"' in queue_hygiene
+    assert '((.pull_requests // []) | length) == 0' in queue_hygiene
+    assert '.head_sha == $current_default_sha' in queue_hygiene
+    assert 'sort_by(.created_at, .id)' in queue_hygiene
 
 
 def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:

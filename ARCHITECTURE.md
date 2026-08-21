@@ -107,6 +107,14 @@ sequenceDiagram
   MS->>PR: merge only on current-head approval + green checks
 ```
 
+The central scheduler also performs fail-closed queue hygiene. A
+`workflow_run` event without PR metadata uses a workflow-run-specific
+default-branch fallback, separate from push runs; the workflow cancels older
+runs in that group, and the organization sweep retains only the newest
+metadata-free scheduler scan for the current default-branch SHA.
+PR-associated and unrelated workflow runs are not included in this
+deduplication.
+
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
