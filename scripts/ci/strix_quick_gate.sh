@@ -629,7 +629,7 @@ copy_pr_head_blob_to_file() {
 
 is_supported_source_file() {
 	case "$1" in
-	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
+	*.java | *.kt | *.kts | *.groovy | *.scala | *.rs | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
 	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
@@ -643,7 +643,7 @@ is_supported_source_file() {
 
 is_dependency_manifest_path() {
 	case "$1" in
-	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
+	pom.xml | */pom.xml | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
 		return 0
 		;;
 	*)
@@ -1383,6 +1383,17 @@ docker-compose.yml
 render.yaml
 VERSION
 EOF
+		# Workflow changes in a Rust workspace need dependency, toolchain, and
+		# policy context so Strix can analyze the repository as a complete unit.
+		if [ -f "$REPO_ROOT/Cargo.toml" ]; then
+			cat <<'EOF'
+Cargo.toml
+Cargo.lock
+rust-toolchain.toml
+rust-toolchain
+deny.toml
+EOF
+		fi
 	fi
 }
 

@@ -13,6 +13,10 @@ modules omitted from the temporary scan tree. Earlier attempts also encountered
 NVIDIA NIM rate limits; those provider failures must remain visible and must not
 be confused with a source finding.
 
+TEPP PR #154 exposed the same completeness boundary for Rust: a workflow change
+scoped the CI definition without the workspace's unchanged Cargo manifests,
+toolchain selection, or cargo-deny policy.
+
 ## Decision
 
 When a PR changes a Python module under `backend/app` or
@@ -37,6 +41,11 @@ in both packages, then asserts that the production scope contains the
 dependencies and their trusted content. Roll back this change only with an
 equivalent exact-head dependency-context contract;
 removing the context or weakening the Strix gate is not an acceptable rollback.
+
+For a workflow-scoped root Rust workspace, the behavioral fixture also requires
+trusted `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, and `deny.toml`
+contents in the materialized target. Rust source and Cargo manifests remain
+governed changed inputs rather than context-only exemptions.
 
 ## References
 

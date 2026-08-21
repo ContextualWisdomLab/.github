@@ -170,6 +170,11 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
 	assert_file_contains "$GATE_SCRIPT" "frontend/postcss.config.mjs" "strix gate includes frontend build config context"
 	assert_file_contains "$GATE_SCRIPT" "VERSION" "strix gate includes release version context for workflow scans"
+	assert_file_contains "$GATE_SCRIPT" "*.rs" "strix gate recognizes Rust source files"
+	assert_file_contains "$GATE_SCRIPT" "Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock" "strix gate recognizes Rust dependency manifests"
+	assert_file_contains "$GATE_SCRIPT" 'if [ -f "$REPO_ROOT/Cargo.toml" ]; then' "strix gate detects Rust workspaces for workflow scan context"
+	assert_file_contains "$GATE_SCRIPT" "rust-toolchain.toml" "strix gate includes Rust toolchain context for workflow scans"
+	assert_file_contains "$GATE_SCRIPT" "deny.toml" "strix gate includes Rust dependency policy context for workflow scans"
 	assert_file_contains "$GATE_SCRIPT" "scripts/ci/test_*.sh" "strix gate excludes large CI self-test harnesses from PR scan targets"
 }
 
@@ -5182,6 +5187,20 @@ EOS
 		echo "scan ok with deployment entrypoint context"
 		exit 0
 		;;
+	pr-rust-workspace-context)
+		for rust_context in Cargo.toml Cargo.lock rust-toolchain.toml deny.toml; do
+			if [ ! -f "$target_path/$rust_context" ]; then
+				echo "Error: Rust workflow scope missing $rust_context ($target_path)" >&2
+				exit 61
+			fi
+		done
+		if ! grep -Fq -- 'name = "trusted-workspace"' "$target_path/Cargo.toml"; then
+			echo "Error: Rust workflow context did not preserve trusted Cargo content ($target_path)" >&2
+			exit 62
+		fi
+		echo "scan ok with Rust workspace context"
+		exit 0
+		;;
 	*)
 		echo "unknown scenario ${FAKE_STRIX_SCENARIO:?}" >&2
 		exit 8
@@ -5389,6 +5408,18 @@ EOS
 		touch "$repo_root_dir/docker-compose.yml"
 		touch "$repo_root_dir/render.yaml"
 		echo '0.0.0' >"$repo_root_dir/VERSION"
+	elif [ "$scenario" = "pr-rust-workspace-context" ]; then
+		mkdir -p "$repo_root_dir/.github/workflows" "$repo_root_dir/src"
+		echo 'name: Rust CI' >"$repo_root_dir/.github/workflows/rust.yml"
+		cat >"$repo_root_dir/Cargo.toml" <<'EOS'
+[package]
+name = "trusted-workspace"
+version = "0.1.0"
+EOS
+		echo '# trusted lock' >"$repo_root_dir/Cargo.lock"
+		echo '[toolchain]' >"$repo_root_dir/rust-toolchain.toml"
+		echo '[advisories]' >"$repo_root_dir/deny.toml"
+		echo 'fn main() {}' >"$repo_root_dir/src/main.rs"
 	elif [ "$scenario" = "github-models-fallback-dockerfile-test-baseline-before-next-success-continues" ]; then
 		mkdir -p "$repo_root_dir/.github/workflows"
 		cat >"$repo_root_dir/.github/workflows/build-ci-image.yml" <<'EOS'
@@ -5863,6 +5894,28 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	pr-rust-workspace-context)
+		run_gate_case "pr-rust-workspace-context" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"0" \
+			"scan ok with Rust workspace context" \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			".github/workflows/rust.yml"
 		;;
 	success-with-critical-report)
 		run_gate_case "success-with-critical-report" \
@@ -11164,6 +11217,27 @@ run_gate_case "pr-deployment-scope-entrypoint-context" \
 	"0" \
 	"pull_request" \
 	".github/workflows/opencode-review.yml"
+
+run_gate_case "pr-rust-workspace-context" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with Rust workspace context" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/rust.yml"
 
 run_gate_case "pr-empty-diff-skip" \
 	"openai/gpt-4o-mini" \
