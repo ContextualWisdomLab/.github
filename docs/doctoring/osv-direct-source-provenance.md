@@ -27,10 +27,10 @@ advisory prose.
 ## Empty result documents
 
 The pinned OSV action can complete successfully without creating its requested
-JSON file when a repository has no findings or no supported lockfile. The
-central workflow first requires both base and head scans to report success,
-then writes the valid empty document `{"results":[]}` for any missing or empty
-result file. A failed first scan and failed retry never enter this path, and
+JSON file when a repository has no findings or no supported lockfile. For each
+base or head scan independently, the central workflow first requires that
+scan's outcome to be success before writing the valid empty document
+`{"results":[]}` for its missing or empty result file. A failed first scan and failed retry never enter this path, and
 symlinked result paths remain a hard failure. This preserves the distinction
 between a verified clean scan and an unavailable scan without weakening the
 base/head reporter gate.
