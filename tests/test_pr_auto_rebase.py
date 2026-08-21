@@ -114,10 +114,11 @@ def test_recent_bot_commit_is_a_candidate():
     assert skip_reason(pr) is None
 
 
-def test_zero_human_window_disables_guard():
-    """A zero human window means recent human commits are still rebased."""
+def test_non_positive_human_window_cannot_disable_guard():
+    """A non-positive human window is rejected instead of disabling protection."""
     pr = make_pr(commits={"nodes": [{"commit": {"committedDate": "2026-07-08T11:59:00Z", **HUMAN_COMMIT}}]})
-    assert skip_reason(pr, human_window_minutes=0) is None
+    with pytest.raises(ValueError, match="positive"):
+        rebase.head_commit_by_recent_human(pr, now=NOW, window_minutes=0)
 
 
 def test_has_manual_rebase_label_detects_label():
@@ -384,13 +385,14 @@ def test_authenticated_remote_url_uses_app_token():
 
 
 def test_parse_args_validates_inputs(monkeypatch):
-    """CLI parsing rejects malformed repositories and negative bounds."""
+    """CLI parsing rejects malformed repositories and unsafe bounds."""
     for bad_args in (
         ["--base-branch", "main"],
         ["--repo", "bad repo", "--base-branch", "main"],
         ["--repo", "owner/repo"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-prs", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-per-run", "-1"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--human-window-minutes", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--human-window-minutes", "-1"],
     ):
         monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)

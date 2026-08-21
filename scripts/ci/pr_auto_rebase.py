@@ -345,8 +345,8 @@ def commit_author_is_bot(commit: dict[str, Any]) -> bool:
 
 def head_commit_by_recent_human(pr: dict[str, Any], *, now: datetime, window_minutes: int) -> bool:
     """Return whether the head's newest commit is a human commit within the window."""
-    if window_minutes <= 0:
-        return False
+    if window_minutes < 1:
+        raise ValueError("human window minutes must be positive")
     commit = last_commit(pr)
     if not commit or commit_author_is_bot(commit):
         return False
@@ -842,7 +842,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--human-window-minutes",
         type=int,
         default=int(os.environ.get("AUTO_REBASE_HUMAN_WINDOW_MINUTES", str(DEFAULT_HUMAN_WINDOW_MINUTES))),
-        help="Skip branches whose newest commit is a human commit within this many minutes.",
+        help="Skip branches whose newest commit is a human commit within this positive-minute window.",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -859,8 +859,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--max-prs must be positive")
     if args.max_per_run < 0:
         parser.error("--max-per-run must not be negative")
-    if args.human_window_minutes < 0:
-        parser.error("--human-window-minutes must not be negative")
+    if args.human_window_minutes < 1:
+        parser.error("--human-window-minutes must be positive")
     return args
 
 
