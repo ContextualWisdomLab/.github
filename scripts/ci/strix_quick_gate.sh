@@ -2817,6 +2817,17 @@ is_nvidia_nim_not_found_error() {
 	return 1
 }
 
+is_model_behavior_error() {
+	# Classify only a module-qualified Strix/Agents SDK protocol exception.
+	# A bare source-file mention of ModelBehaviorError is not retryable.
+	# Cross-model fallback may continue; same-model retry does not.
+	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
 ## Four error families qualify:
@@ -3142,6 +3153,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 
@@ -3992,6 +4007,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 

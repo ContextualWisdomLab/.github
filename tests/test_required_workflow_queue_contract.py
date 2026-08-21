@@ -1158,7 +1158,8 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
-    assert "agents\\.exceptions\\.ModelBehaviorError:[[:space:]]*" in workflow
+    assert "model_behavior_error_signal=" in workflow
+    assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
