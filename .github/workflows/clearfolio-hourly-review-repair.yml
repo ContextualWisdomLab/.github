@@ -14,6 +14,11 @@ permissions:
 
 jobs:
   dispatch-review-repair:
+    # The reusable scheduler exchanges a GitHub OIDC token for its established
+    # OpenCode app credential; reusable workflows cannot elevate this permission.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
       target_repository: ContextualWisdomLab/clearfolio

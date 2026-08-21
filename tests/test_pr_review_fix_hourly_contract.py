@@ -64,11 +64,12 @@ def test_clearfolio_caller_runs_once_each_hour() -> None:
 
 
 def test_clearfolio_caller_keeps_github_token_read_only() -> None:
-    """The hourly caller delegates with explicit secrets and no token elevation."""
+    """The hourly caller delegates with explicit secrets and only OIDC elevation."""
     text = _read(_CLEARFOLIO_CALLER)
     workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
+    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
     for permission in (
         "actions: write",
         "issues: write",
@@ -77,7 +78,7 @@ def test_clearfolio_caller_keeps_github_token_read_only() -> None:
         "statuses: write",
     ):
         assert permission not in text
-    assert "\n    permissions:\n" not in jobs_scope
+    assert "id-token: write" in text
 
 
 def test_reusable_scheduler_has_no_product_specific_timer() -> None:

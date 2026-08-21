@@ -65,9 +65,11 @@ It does not use `secrets: inherit`. It does not receive
 execution. The NVIDIA credential is bound only inside the separately reviewed
 `PR Review Autofix` workflow's two OpenCode execution steps.
 
-Both the caller and reusable scheduler keep the workflow-generated
-`GITHUB_TOKEN` read-only with only `contents: read`; neither declares job-level
-write elevation. Cross-repository PR inspection, acknowledgement, workflow
+The caller keeps the workflow-generated `GITHUB_TOKEN` read-only with
+`contents: read` and grants only job-scoped `id-token: write` so the reusable
+scheduler can exchange the signed GitHub OIDC token for its established
+OpenCode app credential. The caller does not grant repository, pull-request, or
+workflow write permissions. Cross-repository PR inspection, acknowledgement, workflow
 dispatch, and branch updates are authorized only through the explicitly mapped
 `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`, exposed to the scheduler as
 `GH_TOKEN`. The scheduler has no `github.token` fallback. Missing credentials
@@ -104,7 +106,8 @@ Permanent tests require all of the following:
    binding are absent from the caller;
 9. the focused exact-head contract workflow reruns whenever the caller changes;
 10. the caller and reusable scheduler retain read-only workflow-token
-    permissions, declare no job-level write elevation, and contain no
+    permissions, the caller declares only job-scoped `id-token: write` for the
+    OIDC exchange, and contain no
     `github.token` mutation fallback.
 
 Repository acceptance still requires current-head workflow, security,

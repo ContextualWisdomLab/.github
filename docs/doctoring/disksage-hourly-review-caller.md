@@ -61,7 +61,9 @@ controls every mutation and merge decision.
 
 ## Credential and model boundary
 
-The queue-scanning caller has only `contents: read`. It maps only the established
+The queue-scanning caller keeps the workflow token at `contents: read` and grants
+only job-scoped `id-token: write`, which is required for the reusable scheduler's
+OIDC-to-OpenCode app-token exchange. It maps only the established
 `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` scheduler credentials and
 does not use `secrets: inherit`.
 
@@ -89,7 +91,7 @@ neutral-required, stale-head, or synthetic-merge evidence is not success.
 
 Repository contracts require the exact cron, target repository, one-dispatch
 budget, two-hour retry floor, non-cancelling single-flight policy, read-only
-workflow token, explicit secret mapping, and absence of both
+workflow token plus job-scoped `id-token: write`, explicit secret mapping, and absence of both
 `NVIDIA_NIM_API_KEY` and `COPILOT_GITHUB_TOKEN` from the caller.
 
 Rollback is a reviewed source change. Do not disable exact-head binding, reduce
