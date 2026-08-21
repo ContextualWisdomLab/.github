@@ -1282,6 +1282,8 @@ def has_any_opencode_verdict(pr: dict[str, Any]) -> bool:
     for review in (pr.get("reviews") or {}).get("nodes") or []:
         if not is_opencode_review(review):
             continue
+        if is_deterministic_fallback_approval(review):
+            continue
         if (review.get("state") or "").upper() in {"APPROVED", "CHANGES_REQUESTED"}:
             return True
     return False

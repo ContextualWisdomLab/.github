@@ -4759,20 +4759,39 @@ def test_review_dispatch_priority_ranks_empty_reviews_before_leftover_rereview()
         number=7,
         reviews={"nodes": [opencode_review("APPROVED", "head", login="seonghobae")]},
     )
+    fallback_only = make_pr(
+        number=8,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", "old-head"),
+                    "body": "Deterministic fallback approval: providers unavailable.",
+                }
+            ]
+        },
+    )
     assert sched.has_any_opencode_verdict(never_reviewed) is False
     assert sched.has_any_opencode_verdict(commented_only) is False
     assert sched.has_any_opencode_verdict(human_only) is False
+    assert sched.has_any_opencode_verdict(fallback_only) is False
     assert sched.has_any_opencode_verdict(leftover_rereview) is True
     assert sched.review_dispatch_priority(never_reviewed) == 0
     assert sched.review_dispatch_priority(commented_only) == 0
+    assert sched.review_dispatch_priority(fallback_only) == 0
     assert sched.review_dispatch_priority(leftover_rereview) == 1
     assert sched.review_dispatch_priority(already_verdicted) == 2
     assert [
         pr["number"]
         for pr in sched.prioritize_review_dispatch_queue(
-            [leftover_rereview, already_verdicted, never_reviewed, commented_only]
+            [
+                leftover_rereview,
+                already_verdicted,
+                never_reviewed,
+                commented_only,
+                fallback_only,
+            ]
         )
-    ] == [176, 42, 998, 1002]
+    ] == [176, 42, 8, 998, 1002]
 
 
 def test_main_prefers_never_reviewed_pr_when_dispatch_budget_is_one(monkeypatch, capsys):
