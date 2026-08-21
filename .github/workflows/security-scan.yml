@@ -81,7 +81,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=/github/runner_temp/old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -99,7 +99,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=/github/runner_temp/old-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -120,7 +120,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -138,7 +138,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -146,7 +146,8 @@ jobs:
       - name: Require OSV scan output
         run: |
           set -euo pipefail
-          test -s old-results.json
+          test -s "$RUNNER_TEMP/old-results.json"
+          cp "$RUNNER_TEMP/old-results.json" old-results.json
           test -s new-results.json
       - name: Print OSV findings being compared
         shell: python3 {0}
