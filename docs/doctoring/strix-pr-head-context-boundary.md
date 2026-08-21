@@ -7,15 +7,18 @@ Status: accepted 2026-08-21
 The Strix run for LineageWeave PR #192 materialized changed Python files but
 not the unchanged local `backend/app` dependency package. The scanner then
 reported `backend.app.post_eligibility` as missing even though that module was
-present in the PR head and base repository. Earlier attempts also encountered
-NVIDIA NIM rate limits; those provider failures must remain visible and must
-not be confused with a source finding.
+present in the PR head and base repository. The same changed-file-only failure
+mode affected `contextual-orchestrator` PR #801: `__main__.py` imported sibling
+modules omitted from the temporary scan tree. Earlier attempts also encountered
+NVIDIA NIM rate limits; those provider failures must remain visible and must not
+be confused with a source finding.
 
 ## Decision
 
-When a PR changes a Python module under `backend/app`, the trusted Strix scope
-resolver enumerates every Python file under `backend/app` from the exact PR
-head tree. It reads the Git tree as NUL-delimited paths and applies the same
+When a PR changes a Python module under `backend/app` or
+`contextual_orchestrator`, the trusted Strix scope resolver enumerates every
+Python file under that package from the exact PR head tree. It reads the Git
+tree as NUL-delimited paths and applies the same
 bounded path validator used for changed files, so ambiguous or unsafe entries
 fail closed. The scope builder copies changed files from that head and
 unchanged context from the trusted base checkout. The changed-file list
@@ -29,10 +32,10 @@ layouts and does not downgrade provider or vulnerability failures.
 
 ## Evidence and rollback
 
-The regression fixture creates a changed `backend/app/knowledge_graph.py` that
-imports an unchanged `backend/app/post_eligibility.py`, then asserts that the
-production scope contains the dependency and the trusted content. Roll back
-this change only with an equivalent exact-head dependency-context contract;
+The regression fixture creates changed modules that import unchanged siblings
+in both packages, then asserts that the production scope contains the
+dependencies and their trusted content. Roll back this change only with an
+equivalent exact-head dependency-context contract;
 removing the context or weakening the Strix gate is not an acceptable rollback.
 
 ## References

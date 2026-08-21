@@ -173,6 +173,14 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "scripts/ci/test_*.sh" "strix gate excludes large CI self-test harnesses from PR scan targets"
 }
 
+assert_strix_pr_scope_includes_contextual_orchestrator_context() {
+	assert_file_contains "$GATE_SCRIPT" "needs_contextual_orchestrator_python=0" "strix gate tracks contextual-orchestrator package context"
+	assert_file_contains "$GATE_SCRIPT" 'contextual_orchestrator/*.py)' "strix gate detects contextual-orchestrator Python changes"
+	assert_file_contains "$GATE_SCRIPT" 'git -c core.quotepath=false ls-tree -rz --name-only "$contextual_orchestrator_head_sha" -- contextual_orchestrator' "strix gate enumerates contextual-orchestrator context from the exact PR head"
+	assert_file_contains "$GATE_SCRIPT" 'contextual_orchestrator_tree_file="$(mktemp' "strix gate bounds contextual-orchestrator context enumeration in a private file"
+	assert_file_contains "$GATE_SCRIPT" 'rm -f -- "$contextual_orchestrator_tree_file"' "strix gate cleans contextual-orchestrator context enumeration evidence"
+}
+
 assert_strix_workflow_pr_trigger_hardened() {
 	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
 
@@ -7138,6 +7146,20 @@ if [ -f "$target_path/backend/app/knowledge_graph.py" ]; then
 	matched_backend_context=1
 fi
 
+if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
+	if [ ! -f "$target_path/contextual_orchestrator/cost_ledger.py" ]; then
+		echo "Error: contextual-orchestrator local import context missing from PR scope ($target_path)" >&2
+		exit 80
+	fi
+	if ! grep -Fq -- 'BASE_COST_LEDGER_SHOULD_BE_SCANNED' "$target_path/contextual_orchestrator/cost_ledger.py"; then
+		echo "Error: contextual-orchestrator dependency context did not use trusted base content" >&2
+		cat -- "$target_path/contextual_orchestrator/cost_ledger.py" >&2
+		exit 81
+	fi
+	echo "scan ok with contextual-orchestrator local import context"
+	matched_backend_context=1
+fi
+
 if [ "$matched_backend_context" -eq 1 ]; then
 	exit 0
 fi
@@ -7160,6 +7182,8 @@ EOF
 		printf '%s\n' 'BASE_CALENDAR_SERVICE_SHOULD_BE_SCANNED' >backend/services/calendar_service.py
 		printf '%s\n' 'BASE_LLM_PROVIDER_URLS_SHOULD_NOT_BE_SCANNED' >backend/services/llm_provider_urls.py
 		printf '%s\n' 'BASE_POST_ELIGIBILITY_SHOULD_BE_SCANNED' >backend/app/post_eligibility.py
+		mkdir -p contextual_orchestrator
+		printf '%s\n' 'BASE_COST_LEDGER_SHOULD_BE_SCANNED' >contextual_orchestrator/cost_ledger.py
 		git add .
 		git commit -qm 'base commit'
 	)
@@ -7213,6 +7237,10 @@ EOF
 from .post_eligibility import SOURCE_POST_ELIGIBILITY_SQL
 HEAD_KNOWLEDGE_GRAPH_SHOULD_BE_SCANNED
 EOF
+		cat >contextual_orchestrator/__main__.py <<'EOF'
+from .cost_ledger import UsageRecord
+HEAD_CONTEXTUAL_ORCHESTRATOR_SHOULD_BE_SCANNED
+EOF
 		git add .
 		git commit -qm 'head commit'
 	)
@@ -7247,6 +7275,7 @@ EOF
 	assert_file_contains "$output_log" "scan ok with PR-head LLM provider URL validation context" "case=pull-request-target-changed-backend-context-includes-llm-provider-url-validation output"
 	assert_file_contains "$output_log" "scan ok with PR-head email parser text safety context" "case=pull-request-target-changed-backend-context-includes-email-parser-text-safety output"
 	assert_file_contains "$output_log" "scan ok with backend/app local import context" "case=pull-request-target-changed-backend-context-includes-backend-app-local-import output"
+	assert_file_contains "$output_log" "scan ok with contextual-orchestrator local import context" "case=pull-request-target-changed-contextual-orchestrator-includes-local-import output"
 	assert_equals "1" "$(wc -l <"$call_log" | tr -d ' ')" "case=pull-request-target-changed-backend-context-uses-head-blob strix call count"
 
 	rm -rf "$tmp_dir"
@@ -9062,6 +9091,8 @@ EOF
 assert_strix_workflow_pr_trigger_hardened
 
 assert_strix_pr_scope_includes_deployment_context
+
+assert_strix_pr_scope_includes_contextual_orchestrator_context
 
 assert_strix_gpt54_model_guard_cases
 

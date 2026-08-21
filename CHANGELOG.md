@@ -44,6 +44,9 @@ Semantic Versioning where the repository publishes a release.
   NUL-delimited exact-head tree listing, copies unchanged dependencies from
   the trusted base, and keeps changed-file attribution and provider failures
   fail-closed.
+- Include the exact `contextual_orchestrator/*.py` sibling-import context under
+  the same NUL-delimited exact-head and fail-closed path boundary without
+  expanding changed-file finding attribution.
 - Run Strix with an explicit canonical scan target from a temporary working
   directory outside that target, so scanner state and relative reports cannot
   become self-scanned source findings; preserve those reports as gate evidence.

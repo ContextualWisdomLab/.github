@@ -1200,6 +1200,7 @@ is_scannable_changed_file() {
 pull_request_scope_context_files() {
 	local needs_backend_python=0
 	local needs_backend_app_python=0
+	local needs_contextual_orchestrator_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
@@ -1213,6 +1214,9 @@ pull_request_scope_context_files() {
 			if [[ "$normalized_changed_file" =~ ^backend/app/.+\.py$ ]]; then
 				needs_backend_app_python=1
 			fi
+			;;
+		contextual_orchestrator/*.py)
+			needs_contextual_orchestrator_python=1
 			;;
 		# The app shell, email components, threading URL builder, and API client can
 		# shape frontend email retrieval flows; include backend auth context with them.
@@ -1318,6 +1322,35 @@ EOF
 				esac
 			done <"$backend_app_tree_file"
 			rm -f -- "$backend_app_tree_file"
+		fi
+	fi
+
+	if [ "$needs_contextual_orchestrator_python" -eq 1 ]; then
+		local contextual_orchestrator_head_sha
+		contextual_orchestrator_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if { [ -z "$contextual_orchestrator_head_sha" ] || ! is_valid_git_commit_sha "$contextual_orchestrator_head_sha"; } && pull_request_head_blob_required; then
+			echo "ERROR: contextual_orchestrator PR-head context requires an exact head SHA; failing closed." >&2
+			return 2
+		elif [ -n "$contextual_orchestrator_head_sha" ] && is_valid_git_commit_sha "$contextual_orchestrator_head_sha"; then
+			local contextual_orchestrator_tree_file context_file normalized_context_file
+			contextual_orchestrator_tree_file="$(mktemp "${RUNNER_TEMP:-/tmp}/strix-contextual-orchestrator-context.XXXXXX")" || return 2
+			if ! git -c core.quotepath=false ls-tree -rz --name-only "$contextual_orchestrator_head_sha" -- contextual_orchestrator >"$contextual_orchestrator_tree_file"; then
+				rm -f -- "$contextual_orchestrator_tree_file"
+				echo "ERROR: contextual_orchestrator PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r -d '' context_file; do
+				normalized_context_file="$(normalize_changed_file_path "$context_file")" || {
+					rm -f -- "$contextual_orchestrator_tree_file"
+					return 2
+				}
+				case "$normalized_context_file" in
+				contextual_orchestrator/*.py)
+					printf '%s\n' "$normalized_context_file"
+					;;
+				esac
+			done <"$contextual_orchestrator_tree_file"
+			rm -f -- "$contextual_orchestrator_tree_file"
 		fi
 	fi
 
