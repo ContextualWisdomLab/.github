@@ -311,6 +311,40 @@ def test_normalise_pull_request_preserves_exact_head_identity() -> None:
     assert normalized["number"] == 1
     assert normalized["head_sha"] == "head"
     assert normalized["base_repository"] == "owner/repo"
+    normalized_snapshot = queue_health._normalise_pull_request(
+        {
+            "number": 1,
+            "state": "open",
+            "base_ref": "main",
+            "base_repository": "owner/repo",
+            "head_sha": "head",
+            "updated_at": "2026-08-19T11:00:00Z",
+        },
+        allow_normalized=True,
+    )
+    assert normalized_snapshot == {
+        "number": 1,
+        "state": "open",
+        "base_ref": "main",
+        "base_repository": "owner/repo",
+        "head_sha": "head",
+        "updated_at": "2026-08-19T11:00:00Z",
+    }
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="normalized"):
+        queue_health._normalise_pull_request(
+            {"number": 1, "base_ref": "main"}, allow_normalized=True
+        )
+    with pytest.raises(queue_health.QueueHealthError, match="positive integer"):
+        queue_health._normalise_pull_request(
+            {
+                "number": 0,
+                "base_ref": "main",
+                "base_repository": "owner/repo",
+                "head_sha": "head",
+                "updated_at": "2026-08-19T11:00:00Z",
+            },
+            allow_normalized=True,
+        )
     for invalid in ({"number": True}, {"number": 0}, {"number": "1"}, "bad"):
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._normalise_pull_request(invalid)  # type: ignore[arg-type]
@@ -397,6 +431,9 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     assert snapshot["repositories"][0]["runs"][0]["id"] == 10
     assert [run["id"] for run in snapshot["repositories"][0]["runs"]] == [10, 11, 12]
     assert snapshot["repositories"][0]["default_branch"] == "main"
+    report = queue_health.build_report(snapshot, now=NOW)
+    assert report["summary"]["observed_job_count"] == 3
+    assert report["summary"]["current_head_pending_count"] == 2
 
     with pytest.raises(queue_health.QueueHealthError):
         queue_health.collect_snapshot(["owner/repo", "owner/repo"], runner=runner)

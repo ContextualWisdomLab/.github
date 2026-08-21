@@ -150,11 +150,31 @@ def github_json(path: str, *, paginate: bool = False, runner: Runner = subproces
     return payload
 
 
-def _normalise_pull_request(pull_request: dict[str, Any]) -> dict[str, Any]:
+def _normalise_pull_request(
+    pull_request: dict[str, Any], *, allow_normalized: bool = False
+) -> dict[str, Any]:
     """Keep only exact-head identity fields needed for queue classification."""
     if not isinstance(pull_request, dict):
         raise QueueHealthError("pull request entry must be an object")
     number = pull_request.get("number")
+    if allow_normalized and "head" not in pull_request and "base" not in pull_request:
+        if not all(
+            isinstance(pull_request.get(field), str)
+            for field in ("base_ref", "base_repository", "head_sha", "updated_at")
+        ):
+            raise IncompletePullRequestIdentity(
+                "normalized pull request identity fields must be strings"
+            )
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise QueueHealthError("pull request number must be a positive integer")
+        return {
+            "number": number,
+            "state": pull_request.get("state", "open"),
+            "base_ref": pull_request["base_ref"],
+            "base_repository": pull_request["base_repository"],
+            "head_sha": pull_request["head_sha"],
+            "updated_at": pull_request["updated_at"],
+        }
     head = pull_request.get("head")
     base = pull_request.get("base")
     if not isinstance(head, dict) or not isinstance(base, dict):
@@ -423,7 +443,7 @@ def build_report(
             raise QueueHealthError(f"pull requests for {full_name} must be an array")
         pull_requests: dict[int, dict[str, Any]] = {}
         for pull_request in pull_request_entries:
-            normalized = _normalise_pull_request(pull_request)
+            normalized = _normalise_pull_request(pull_request, allow_normalized=True)
             if normalized["number"] in pull_requests:
                 raise QueueHealthError(f"duplicate pull request {normalized['number']} for {full_name}")
             pull_requests[normalized["number"]] = normalized
