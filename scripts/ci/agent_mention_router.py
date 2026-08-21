@@ -9,8 +9,16 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
+
+if __package__ in (None, ""):  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci.redact_sensitive_log import redact_text
+
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -86,9 +94,10 @@ class GitHubClient:
                 timeout=GITHUB_API_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
+            args_str = redact_text(str(getattr(exc, "cmd", [])))
             raise RuntimeError(
-                "gh api timed out after "
-                f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
+                f"gh api timed out after {GITHUB_API_TIMEOUT_SECONDS} seconds "
+                f"while executing {args_str}"
             ) from exc
         return_code = int(getattr(completed, "returncode", 0))
         if return_code:
@@ -98,7 +107,7 @@ class GitHubClient:
             if not diagnostic:
                 diagnostic = "no stderr output"
             raise RuntimeError(
-                f"gh api failed with exit code {return_code}: {diagnostic[:2000]}"
+                f"gh api failed with exit code {return_code}: {redact_text(diagnostic)[:2000]}"
             )
         output = completed.stdout.strip()
         return None if not output else json.loads(output)

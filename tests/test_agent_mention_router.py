@@ -17,7 +17,7 @@ MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 def load_module() -> ModuleType:
     """Load the router module from its script path."""
 
-    module_name = "agent_mention_router"
+    module_name = "router"
     spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -371,3 +371,54 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+def test_github_client_redacts_stderr_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_module()
+    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+
+    class Completed:
+        returncode = 1
+        stderr = "gh: command failed. token ghp_123456789012345678901234567890123456 is invalid"
+        stdout = ""
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: Completed())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client.request(["--help"])
+
+    assert "ghp_123456789012345678901234567890123456" not in str(excinfo.value)
+    assert "[REDACTED]" in str(excinfo.value)
+
+def test_github_client_redacts_timeout_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_module()
+    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+
+    import subprocess
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["gh", "api", "ghp_123456789012345678901234567890123456"], timeout=30)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client.request(["--help"])
+
+    assert "ghp_123456789012345678901234567890123456" not in str(excinfo.value)
+    assert "[REDACTED]" in str(excinfo.value)
+
+def test_github_client_redacts_stderr_on_error_no_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_module()
+    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+
+    class Completed:
+        returncode = 1
+        stderr = ""
+        stdout = ""
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: Completed())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client.request(["--help"])
+
+    assert "no stderr output" in str(excinfo.value)
