@@ -2294,6 +2294,77 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
+def test_workflow_run_name_matches_accepts_github_run_name_prefix():
+    aliases = frozenset({"OpenCode Review Dispatch", "Required OpenCode Review"})
+    assert sched.workflow_run_name_matches(
+        "OpenCode Review Dispatch", "OpenCode Review", aliases
+    )
+    assert sched.workflow_run_name_matches(
+        "OpenCode Review Dispatch ContextualWisdomLab/.github#1002@" + ("a" * 40),
+        "OpenCode Review",
+        aliases,
+    )
+    assert not sched.workflow_run_name_matches(
+        "Strix Security Scan ContextualWisdomLab/.github#1002@" + ("a" * 40),
+        "OpenCode Review",
+        aliases,
+    )
+
+
+def test_dispatch_opencode_review_deduplicates_github_run_name_as_display_title(
+    monkeypatch, capsys
+):
+    calls = []
+    head_sha = "a" * 40
+    live_name = f"OpenCode Review Dispatch owner/repo#1@{head_sha}"
+    current_dispatch = {
+        "id": 9101,
+        "name": live_name,
+        "event": "repository_dispatch",
+        "head_sha": "default-branch-sha",
+        "display_title": live_name,
+        "pull_requests": [],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/ContextualWisdomLab/.github/actions/runs",
+        ]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": [current_dispatch]})
+            return json.dumps({"workflow_runs": []})
+        if "/actions/runs" in " ".join(args):
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    result = sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+        dry_run=False,
+    )
+
+    assert result == "already_running"
+    assert (
+        "active same-head workflow run(s) ContextualWisdomLab/.github@9101"
+        in capsys.readouterr().out
+    )
+    assert not any(call[-2:] == ["--input", "-"] for call in calls)
+
+
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
     calls = []
     head_sha = "a" * 40
@@ -2382,6 +2453,13 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
             "head_sha": head_sha,
             "pull_requests": [{"number": 1}],
         },
+        {
+            "id": 9405,
+            "name": "Required OpenCode Review",
+            "event": "workflow_run",
+            "head_sha": head_sha,
+            "pull_requests": [],
+        },
     ]
 
     def fake_active_runs(repo, statuses=("queued", "in_progress")):
@@ -2456,6 +2534,34 @@ def test_central_run_filter_ignores_same_repository_required_workflow_placeholde
 
     assert sched.active_opencode_run_refs(
         "ContextualWisdomLab/.github",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == ([], [])
+
+
+def test_legacy_same_repository_filter_ignores_required_workflow_placeholder(
+    monkeypatch,
+):
+    """A required-workflow placeholder must not suppress the real dispatch."""
+    head_sha = "a" * 40
+    placeholder = {
+        "id": 9404,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "pull_requests": [{"number": 1}],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [placeholder],
+    )
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
         "OpenCode Review",
         make_pr(headRefOid=head_sha),
     ) == ([], [])
@@ -2993,8 +3099,201 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
     assert "- PR #5: `fork/repo` is external" in "\n".join(external_merge_lines)
 
 
+def test_draft_pr_review_path_never_mutates_branch_or_merge_state(monkeypatch):
+    mutations = []
+    dispatches = []
+    for name in ("update_branch", "enable_auto_merge", "merge_pr", "disable_auto_merge"):
+        monkeypatch.setattr(
+            sched,
+            name,
+            lambda *args, _name=name, **kwargs: mutations.append(_name),
+        )
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: dispatches.append(
+            ("strix", pr["number"], dry_run)
+        )
+        or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatches.append(
+            ("opencode", pr["number"], dry_run)
+        )
+        or "dispatched",
+    )
+
+    missing_strix = inspect(make_pr(isDraft=True), dry_run=False)
+    assert missing_strix.action == "security_dispatch"
+    assert missing_strix.reason == (
+        "draft PR; current head has no completed Strix evidence; same-head Strix dispatched"
+    )
+
+    completed_strix = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+        dry_run=False,
+    )
+    assert completed_strix.action == "review_dispatch"
+    assert completed_strix.reason == (
+        "draft PR; current head has completed Strix evidence; same-head OpenCode dispatched"
+    )
+
+    approved = inspect(
+        make_pr(
+            isDraft=True,
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+        dry_run=False,
+    )
+    assert approved.action == "skip"
+    assert approved.reason == "draft PR; current-head OpenCode approval recorded"
+
+    changes_requested = inspect(
+        make_pr(
+            isDraft=True,
+            autoMergeRequest={"enabledAt": "now"},
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+        ),
+        dry_run=False,
+    )
+    assert changes_requested.action == "skip"
+    assert changes_requested.reason == (
+        "draft PR; current-head OpenCode review requested changes"
+    )
+
+    assert dispatches == [("strix", 1, False), ("opencode", 1, False)]
+    assert mutations == []
+
+
+def test_draft_pr_review_wait_states_are_read_only(monkeypatch):
+    dispatches = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda *args, **kwargs: dispatches.append("strix") or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatches.append("opencode") or "dispatched",
+    )
+
+    disabled = inspect(make_pr(isDraft=True), trigger_reviews=False)
+    assert disabled.action == "skip"
+    assert disabled.reason == "draft PR; review dispatch disabled"
+
+    running = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={
+                "contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}
+            },
+        )
+    )
+    assert running.action == "wait"
+    assert running.reason == "draft PR; OpenCode review is already in progress"
+
+    limited = inspect(make_pr(isDraft=True), review_dispatch_allowed=False)
+    assert limited.action == "wait"
+    assert limited.reason == "draft PR; review dispatch limit reached"
+
+    strix_running = inspect(
+        make_pr(
+            isDraft=True,
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [strix_check(status="IN_PROGRESS", conclusion=None)]
+                }
+            },
+        )
+    )
+    assert strix_running.action == "wait"
+    assert strix_running.reason == "draft PR; same-head Strix evidence is still running"
+    assert dispatches == []
+
+
+def test_draft_pr_review_dispatch_failures_are_wait_states(monkeypatch):
+    missing_reason = "central Strix dispatch workflow unavailable"
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: missing_reason
+        if workflow == "Strix Security Scan"
+        else "",
+    )
+    missing = inspect(make_pr(isDraft=True))
+    assert missing.action == "wait"
+    assert missing.reason == (
+        "draft PR; current head has no completed Strix evidence; " + missing_reason
+    )
+
+    opencode_reason = "central OpenCode dispatch workflow unavailable"
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: opencode_reason
+        if workflow == "OpenCode Review"
+        else "",
+    )
+    completed = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+    unavailable = inspect(completed)
+    assert unavailable.action == "wait"
+    assert unavailable.reason == (
+        "draft PR; current head has completed Strix evidence; " + opencode_reason
+    )
+
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: "already_running",
+    )
+    already_running = inspect(completed)
+    assert already_running.action == "wait"
+    assert already_running.reason == (
+        "draft PR; current head has completed Strix evidence; "
+        "same-head OpenCode workflow run is already active"
+    )
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda *args, **kwargs: "already_running",
+    )
+    strix_already_running = inspect(make_pr(isDraft=True))
+    assert strix_already_running.action == "wait"
+    assert strix_already_running.reason == (
+        "draft PR; current head has no completed Strix evidence; "
+        "same-head Strix workflow run is already active"
+    )
+
+
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
-    assert inspect(make_pr(isDraft=True)).action == "skip"
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+    draft = inspect(make_pr(isDraft=True))
+    assert draft.action == "security_dispatch"
+    assert draft.reason == (
+        "draft PR; current head has no completed Strix evidence; same-head Strix dispatched"
+    )
     stacked = inspect(make_pr(baseRefName="develop"))
     assert stacked.action == "review_dispatch"
     assert stacked.reason == "stacked PR onto develop; OpenCode review dispatched"
@@ -4480,6 +4779,114 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     assert payload["decisions"][3]["contract_decision"] == "WAIT"
     assert payload["decisions"][3]["reason"] == (
         "branch update limit reached (1 update/run); defer outdated branch to the next scheduler run"
+    )
+
+
+def test_review_dispatch_priority_ranks_empty_reviews_before_leftover_rereview():
+    never_reviewed = make_pr(number=176)
+    leftover_rereview = make_pr(
+        number=998,
+        reviews={
+            "nodes": [
+                opencode_review("COMMENTED", "old-head", login="seonghobae"),
+                opencode_review("CHANGES_REQUESTED", "old-head"),
+            ]
+        },
+    )
+    already_verdicted = make_pr(
+        number=1002,
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    commented_only = make_pr(
+        number=42,
+        reviews={"nodes": [opencode_review("COMMENTED", "head")]},
+    )
+
+    human_only = make_pr(
+        number=7,
+        reviews={"nodes": [opencode_review("APPROVED", "head", login="seonghobae")]},
+    )
+    fallback_only = make_pr(
+        number=8,
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("APPROVED", "old-head"),
+                    "body": "Deterministic fallback approval: providers unavailable.",
+                }
+            ]
+        },
+    )
+    assert sched.has_any_opencode_verdict(never_reviewed) is False
+    assert sched.has_any_opencode_verdict(commented_only) is False
+    assert sched.has_any_opencode_verdict(human_only) is False
+    assert sched.has_any_opencode_verdict(fallback_only) is False
+    assert sched.has_any_opencode_verdict(leftover_rereview) is True
+    assert sched.review_dispatch_priority(never_reviewed) == 0
+    assert sched.review_dispatch_priority(commented_only) == 0
+    assert sched.review_dispatch_priority(fallback_only) == 0
+    assert sched.review_dispatch_priority(leftover_rereview) == 1
+    assert sched.review_dispatch_priority(already_verdicted) == 2
+    assert [
+        pr["number"]
+        for pr in sched.prioritize_review_dispatch_queue(
+            [
+                leftover_rereview,
+                already_verdicted,
+                never_reviewed,
+                commented_only,
+                fallback_only,
+            ]
+        )
+    ] == [176, 42, 8, 998, 1002]
+
+
+def test_main_prefers_never_reviewed_pr_when_dispatch_budget_is_one(monkeypatch, capsys):
+    prs = [
+        make_pr(
+            number=998,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "old-head")]},
+        ),
+        make_pr(
+            number=176,
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+    ]
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+
+    assert (
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--review-dispatch-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert dispatched == [176]
+    assert payload["decisions"][0]["pr"] == 176
+    assert payload["decisions"][0]["action"] == "review_dispatch"
+    assert payload["decisions"][1]["pr"] == 998
+    assert payload["decisions"][1]["reason"] == (
+        "current head has completed Strix evidence; review dispatch limit reached"
     )
 
 

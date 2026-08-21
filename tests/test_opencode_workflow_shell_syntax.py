@@ -34,6 +34,11 @@ def test_opencode_review_run_blocks_are_valid_bash():
     )
     assert 'gsub("`"; "&apos;")' in workflow_text
     assert 'gsub("`"; "\'")' not in workflow_text
+    assert (
+        '              elif [ "$pr_head_fetch_attempt" -lt 6 ]; then\n'
+        '                echo "PR head ref fetch failed on attempt $pr_head_fetch_attempt; retrying after propagation delay."\n'
+        '                sleep 10'
+    ) in workflow_text
 
     if sys.platform == "win32":
         return
@@ -148,7 +153,7 @@ def test_merge_scheduler_targeted_dispatch_run_block_is_valid_bash():
 
 
 def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
-    """Only an allowlisted same-repository open PR reaches scheduler outputs."""
+    """Only an allowlisted open PR with a target base reaches scheduler outputs."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -170,8 +175,11 @@ def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
         """#!/usr/bin/env bash
 set -euo pipefail
 test "$1" = api
-test "$2" = repos/ContextualWisdomLab/naruon/pulls/1179
-printf '%s\\n' "$FAKE_PULL_JSON"
+case "$2" in
+  repos/ContextualWisdomLab/naruon/pulls/1179) printf '%s\\n' "$FAKE_PULL_JSON" ;;
+  repos/ContextualWisdomLab/naruon) printf '%s\\n' "$FAKE_REPOSITORY_JSON" ;;
+  *) exit 1 ;;
+esac
 """,
         encoding="utf-8",
     )
@@ -193,6 +201,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
+        "FAKE_REPOSITORY_JSON": json.dumps({"default_branch": "main"}),
         "GITHUB_EVENT_NAME": "repository_dispatch",
         "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
         "GITHUB_OUTPUT": str(output),
@@ -218,6 +227,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
         "base_branch=develop",
+        "default_branch=main",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 
@@ -260,6 +270,92 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         env=cross_repo_env,
     )
 
-    assert cross_repo.returncode == 1
-    assert "cross-repository" in cross_repo.stdout
-    assert not output.exists()
+    assert cross_repo.returncode == 0, cross_repo.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "repository=ContextualWisdomLab/naruon",
+        "base_branch=develop",
+        "default_branch=main",
+        "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+    ]
+
+
+def test_opencode_dispatch_validation_accepts_external_head_as_review_data(tmp_path):
+    """The central metadata gate accepts a fork while preserving exact identity."""
+    if sys.platform == "win32":
+        return
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+
+    workflow_text = (
+        REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml"
+    ).read_text(encoding="utf-8")
+    script = _extract_run_block(
+        workflow_text,
+        "Bind workflow inputs to live organization pull request metadata",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = api
+test "$2" = repos/ContextualWisdomLab/naruon/pulls/1179
+printf '%s\\n' "$FAKE_PULL_JSON"
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    pull = {
+        "number": 1179,
+        "state": "open",
+        "base": {
+            "ref": "develop",
+            "sha": "1" * 40,
+            "repo": {"full_name": "ContextualWisdomLab/naruon", "private": False},
+        },
+        "head": {
+            "ref": "feature/fork-review",
+            "sha": "2" * 40,
+            "repo": {"full_name": "outside/fork"},
+        },
+    }
+    output = tmp_path / "github-output"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_PULL_JSON": json.dumps(pull),
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "scheduler",
+        "DISPATCH_SENDER": "scheduler",
+        "ALLOWED_DISPATCH_ACTOR": "scheduler",
+        "ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/naruon",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "1179",
+        "SUPPLIED_BASE_REF": "develop",
+        "SUPPLIED_BASE_SHA": "1" * 40,
+        "SUPPLIED_HEAD_REF": "feature/fork-review",
+        "SUPPLIED_HEAD_SHA": "2" * 40,
+        "GITHUB_OUTPUT": str(output),
+    }
+
+    result = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "target_repository=ContextualWisdomLab/naruon",
+        "pr_number=1179",
+        "base_ref=develop",
+        f"base_sha={'1' * 40}",
+        "head_ref=feature/fork-review",
+        f"head_sha={'2' * 40}",
+        "is_private=false",
+    ]

@@ -258,6 +258,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     monkeypatch.setattr(noema, "run", fake_run)
     codegraph_path = tmp_path / "codegraph.md"
     codegraph_path.write_text("call graph: src/a.py -> tests", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
     monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(codegraph_path))
     pr = make_pr(
         headRefOid="head sha",
@@ -294,6 +295,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
 
 
 def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
     assert noema.load_codegraph_context() == ""
 
@@ -307,6 +309,64 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     context = noema.changed_file_context("owner/repo", 7, "head")
 
     assert "1 changed files omitted from context budget" in context
+
+
+def test_load_codegraph_context_rejects_workspace_escape(monkeypatch, tmp_path):
+    """Traversal, absolute, and symlink paths outside the workspace are rejected."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    outside = tmp_path.parent / "passwd-shape"
+    outside.write_text("root:x:0:0:root:/root:/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(outside))
+    assert noema.load_codegraph_context() == (
+        "CodeGraph context unavailable: path escapes the workspace."
+    )
+
+    monkeypatch.setenv(
+        "NOEMA_CODEGRAPH_CONTEXT_PATH",
+        str(tmp_path / "nested" / ".." / ".." / outside.name),
+    )
+    assert "path escapes the workspace" in noema.load_codegraph_context()
+
+    link = tmp_path / "escape.md"
+    link.symlink_to(outside)
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(link))
+    assert "path escapes the workspace" in noema.load_codegraph_context()
+
+
+def test_codegraph_context_root_and_resolve_failure(monkeypatch, tmp_path):
+    """Workspace root prefers GITHUB_WORKSPACE and resolve errors stay closed."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    assert noema.codegraph_context_root() == tmp_path.resolve()
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert noema.codegraph_context_root() == tmp_path.resolve()
+
+    class FailingPath(type(tmp_path)):
+        """Path stand-in whose resolve always fails."""
+
+        def resolve(self, *args, **kwargs):
+            """Raise OSError to cover the confinement resolve failure."""
+            raise OSError("resolve failed")
+
+    monkeypatch.setattr(noema, "Path", FailingPath)
+    assert noema.confined_codegraph_context_path("graph.md", tmp_path.resolve()) is None
+
+
+def test_relative_codegraph_context_resolves_from_workspace(monkeypatch, tmp_path):
+    """Relative context paths are workspace-relative even when cwd differs."""
+    workspace = tmp_path / "workspace"
+    context_dir = workspace / "context"
+    context_dir.mkdir(parents=True)
+    graph = context_dir / "graph.md"
+    graph.write_text("trusted workspace graph", encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", "context/graph.md")
+
+    assert noema.load_codegraph_context() == "trusted workspace graph"
 
 
 class FakeResponse:
@@ -526,10 +586,17 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
 
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert calls == []
+
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(isDraft=True))
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert calls == []
+
     cases = [
-        (make_pr(), "noema"),
-        (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+        (make_pr(isDraft=True, reviews={"nodes": [review(body=marker_body)]}), "noema"),
         (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
         (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
@@ -541,6 +608,37 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7) == 0
         assert calls == []
+
+
+
+def test_existing_noema_review_cannot_bypass_primary_approval(monkeypatch):
+    """A Noema verdict is never sufficient without current-head OpenCode approval."""
+    noema_review = review(
+        login="noema",
+        body="<!-- noema-review-gate head_sha=head -->",
+    )
+    pr = make_pr(reviews={"nodes": [noema_review]})
+    submitted = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: submitted.append(args),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7) == 1
+    assert submitted == []
+
+    primary_review = review(
+        body=(
+            "OpenCode reviewed the current-head bounded evidence and found "
+            "no blocking issues."
+        )
+    )
+    pr = make_pr(reviews={"nodes": [primary_review, noema_review]})
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert submitted == []
 
 
 def test_parse_args_and_main(monkeypatch):

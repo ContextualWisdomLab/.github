@@ -497,6 +497,7 @@ assert_opencode_review_uses_codegraph_and_gpt5_fallback() {
 	assert_file_contains "$bootstrap_file" "coverage-evidence:" "opencode required workflow preserves the stable coverage-evidence branch-protection context"
 	assert_file_contains "$bootstrap_file" "name: opencode-review" "opencode required workflow preserves the stable opencode-review branch-protection context"
 	assert_file_contains "$bootstrap_file" "authenticated default-branch OpenCode review dispatch" "opencode required workflow delegates real review execution to the protected dispatch path"
+	assert_file_contains "$bootstrap_file" "This required check is not a review" "opencode required workflow fails closed without a current-head OpenCode verdict"
 	assert_file_not_contains "$bootstrap_file" "repository_dispatch:" "opencode required workflow does not mix privileged dispatch execution with pull_request_target"
 	assert_file_not_contains "$bootstrap_file" "actions/checkout" "opencode required workflow never checks out pull-request content"
 	assert_file_not_contains "$bootstrap_file" '${{ secrets.' "opencode required workflow never binds repository secrets"
@@ -924,7 +925,10 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	if [[ "$coverage_merge_tree_step" != *'GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}'* ]]; then
 		record_failure "opencode coverage merge-tree fetch must use the coverage App token and central fallback credentials before github.token for target repository reads"
 	fi
-	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' "coverage evidence fetches exact base and head commits as data"
+	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' "coverage evidence fetches the exact base commit as data"
+	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' "coverage evidence first attempts the exact head commit as data"
+	assert_file_contains "$workflow_file" 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' "coverage evidence can resolve an external exact head through the target PR ref"
+	assert_file_contains "$workflow_file" 'fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"' "coverage evidence binds the fetched PR ref back to the expected exact head"
 	assert_file_contains "$workflow_file" 'merge --no-ff --no-edit "$PR_HEAD_SHA"' "coverage evidence materializes the current pull request merge tree without action checkout"
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
 	assert_file_contains "$workflow_file" "--require-hashes" "coverage tooling installs from a hash-pinned lock"
@@ -1506,6 +1510,8 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
+	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
+	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number) }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository)" "scheduler keeps manual queue scans isolated per repository"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number" "scheduler cancels only metadata-free workflow-run scans in their isolated fallback group"
 	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"

@@ -22,6 +22,13 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Noema now validates the current-head primary OpenCode approval before accepting an existing Noema verdict, preventing a secondary review from making the required gate look successful on its own.
+- Draft pull requests now receive same-head Strix and OpenCode review dispatches while remaining excluded from branch updates, auto-merge changes, direct merge, and review-state cleanup.
+- The required `opencode-review` check now fails closed unless `opencode-agent` already posted `APPROVED` or `CHANGES_REQUESTED` on the current head, so a stub success can no longer look like a review (ContextualWisdomLab/contextual-orchestrator#176).
+- The merge scheduler now spends its review-dispatch budget on pull requests with no OpenCode verdict on any commit before leftover increments that already have a previous-head APPROVED or CHANGES_REQUESTED, so one-dispatch-per-run no longer starves an empty Reviews tab.
+- The scheduler treats GitHub's full `run-name` (`OpenCode Review Dispatch owner/repo#N@sha`) as an in-progress same-head dispatch, so a later sweep cannot `cancel-in-progress` a review that already passed coverage.
+- Noema no longer exits 0 when the current head has no primary OpenCode approval, including on draft pull requests; that skip was the green `noema-review` check with an empty Reviews tab.
+- `load_codegraph_context` now confines `NOEMA_CODEGRAPH_CONTEXT_PATH` to `GITHUB_WORKSPACE` (or cwd) with `..` rejection and realpath checks, so a Strix path-traversal report on that helper cannot read files outside the review workspace.
 - Deduplicate central `workflow_run` scheduler scans: metadata-free workflow-run events now cancel an older run in a workflow-run-specific branch fallback, and the organization queue sweep retains only the newest metadata-free scheduler scan for the current default-branch HEAD while preserving push, PR-associated, and unrelated workflow runs.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Quarantine Sandbox Runtime heartbeat at minute 14 without granting the caller model secrets, repository mutation permissions, approval, merge, release, artifact-execution, or final security-verdict authority.

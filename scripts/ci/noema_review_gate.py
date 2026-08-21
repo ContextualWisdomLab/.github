@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 
@@ -380,13 +381,38 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def codegraph_context_root() -> Path:
+    """Return the workspace root that may contain CodeGraph context files."""
+    raw = os.environ.get("GITHUB_WORKSPACE", "").strip() or os.getcwd()
+    return Path(raw).resolve()
+
+
+def confined_codegraph_context_path(path: str, root: Path) -> Path | None:
+    """Return the resolved path when it cannot escape the workspace root."""
+    candidate = Path(path)
+    if ".." in candidate.parts:
+        return None
+    if not candidate.is_absolute():
+        candidate = Path(root / candidate)
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(root):
+        return None
+    return resolved
+
+
 def load_codegraph_context() -> str:
     """Load optional precomputed CodeGraph context for structural review evidence."""
     path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
     if not path:
         return ""
+    confined = confined_codegraph_context_path(path, codegraph_context_root())
+    if confined is None:
+        return "CodeGraph context unavailable: path escapes the workspace."
     try:
-        with open(path, encoding="utf-8") as handle:
+        with confined.open(encoding="utf-8") as handle:
             return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
     except OSError as exc:
         return f"CodeGraph context unavailable: {exc}"
@@ -582,7 +608,12 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 
 def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's LLM review when gates are clean."""
+    """Inspect PR state and submit Noema's LLM review when gates are clean.
+
+    Missing current-head primary OpenCode approval fails closed, including
+    on draft pull requests, so the required check cannot look reviewed
+    without a Reviews-tab verdict.
+    """
     pr = fetch_pr(repo, number)
     actor = current_actor()
     if actor in PRIMARY_REVIEW_AUTHORS:
@@ -591,14 +622,18 @@ def inspect_and_review(repo: str, number: int) -> int:
             "Noema review skipped so GitHub receives an independent reviewer."
         )
         return 0
+    if not current_primary_approval(pr):
+        print(
+            "Current head does not have a primary OpenCode approval; "
+            "Noema cannot skip as success because that made the required "
+            "check look like a review."
+        )
+        return 1
     if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
+        print("PR is draft; Noema review skipped after primary OpenCode approval.")
         return 0
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
-        return 0
-    if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
         return 0
     if has_current_changes_requested(pr):
         print("Current head has requested changes; Noema review skipped.")

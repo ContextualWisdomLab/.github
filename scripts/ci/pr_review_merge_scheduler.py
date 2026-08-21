@@ -1277,6 +1277,38 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def has_any_opencode_verdict(pr: dict[str, Any]) -> bool:
+    """Return whether OpenCode ever posted APPROVED or CHANGES_REQUESTED on this PR."""
+    for review in (pr.get("reviews") or {}).get("nodes") or []:
+        if not is_opencode_review(review):
+            continue
+        if is_deterministic_fallback_approval(review):
+            continue
+        if (review.get("state") or "").upper() in {"APPROVED", "CHANGES_REQUESTED"}:
+            return True
+    return False
+
+
+def review_dispatch_priority(pr: dict[str, Any]) -> int:
+    """Return a lower rank for PRs that should consume the dispatch budget first.
+
+    Rank 0 has no OpenCode APPROVED or CHANGES_REQUESTED on any commit — the
+    empty Reviews tab from ContextualWisdomLab/contextual-orchestrator#176.
+    Rank 1 already received a verdict on a previous head and can wait for a
+    leftover re-review. Rank 2 already has a current-head verdict.
+    """
+    if has_current_head_approval(pr) or has_current_head_changes_requested(pr):
+        return 2
+    if has_any_opencode_verdict(pr):
+        return 1
+    return 0
+
+
+def prioritize_review_dispatch_queue(prs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort so never-reviewed PRs take the dispatch slot before leftover increments."""
+    return sorted(prs, key=review_dispatch_priority)
+
+
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
     """Return dismissible automated change requests tied to previous heads."""
     review_ids: list[int] = []
@@ -1979,6 +2011,22 @@ def stale_opencode_run_ids(repo: str, workflow: str, pr: dict[str, Any]) -> list
     return stale
 
 
+def workflow_run_name_matches(
+    run_name: str, workflow: str, workflow_aliases: frozenset[str]
+) -> bool:
+    """Return whether a GitHub run name is the workflow or a run-name prefix of it.
+
+    Workflow runs use ``run-name:`` as ``name``. OpenCode Review Dispatch therefore
+    appears as ``OpenCode Review Dispatch owner/repo#1@sha``, which is not equal to
+    the short alias. Exact-only matching misses the live run, a second dispatch is
+    posted, and ``cancel-in-progress`` kills the review that was about to finish.
+    """
+    names = {workflow, *workflow_aliases}
+    if run_name in names:
+        return True
+    return any(run_name.startswith(f"{candidate} ") for candidate in names)
+
+
 def active_review_run_refs(
     repo: str,
     workflow: str,
@@ -2010,13 +2058,27 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            display_title = str(run_data.get("display_title") or "")
+            # Required-workflow pull_request_target runs materialize the protected
+            # check only; they never execute the authenticated reviewer. Ignore
+            # that placeholder even in the legacy same-repository mode so it
+            # cannot suppress the real repository_dispatch review.
+            if run_data.get("event") == "pull_request_target" and (
+                run_name == run_title
+                or display_title == run_title
+                or display_title.startswith(f"{run_title} ")
+            ):
+                continue
+            if not workflow_run_name_matches(
+                run_name, workflow, workflow_aliases
+            ) and not workflow_run_name_matches(
+                display_title, workflow, workflow_aliases
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
             run_ref = (run_repo, str(run_id))
-            display_title = str(run_data.get("display_title") or "")
             dispatch_title_prefix = next(
                 (
                     prefix
@@ -2333,6 +2395,119 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+
+def inspect_draft_pr_for_review(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    trigger_reviews: bool,
+    review_dispatch_allowed: bool,
+    workflow: str,
+    security_workflow: str,
+    stale_opencode_minutes: int,
+) -> Decision:
+    """Dispatch current-head review evidence without mutating a draft PR branch.
+
+    Draft pull requests remain excluded from branch updates, auto-merge,
+    direct merge, stale-review dismissal, and review-thread mutation. They
+    still need early Strix and OpenCode feedback so authors can finish the
+    implementation before marking the pull request ready for review.
+    """
+    number = pr["number"]
+    if has_current_head_changes_requested(pr):
+        return Decision(
+            number,
+            "skip",
+            "draft PR; current-head OpenCode review requested changes",
+        )
+    if has_current_head_approval(pr):
+        return Decision(
+            number,
+            "skip",
+            "draft PR; current-head OpenCode approval recorded",
+        )
+    if not trigger_reviews:
+        return Decision(number, "skip", "draft PR; review dispatch disabled")
+
+    opencode_state = opencode_progress_state(
+        pr,
+        stale_after_minutes=stale_opencode_minutes,
+    )
+    if opencode_state == "running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; OpenCode review is already in progress",
+        )
+    if not review_dispatch_allowed:
+        return Decision(number, "wait", "draft PR; review dispatch limit reached")
+
+    strix_state = strix_evidence_state(pr)
+    if strix_state == "missing":
+        wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return Decision(
+                number,
+                "wait",
+                "draft PR; current head has no completed Strix evidence; "
+                f"{wait_reason}",
+            )
+        strix_dispatch_result = dispatch_strix_evidence(
+            repo,
+            security_workflow,
+            pr,
+            dry_run=dry_run,
+        )
+        if strix_dispatch_result == "already_running":
+            return Decision(
+                number,
+                "wait",
+                "draft PR; current head has no completed Strix evidence; "
+                "same-head Strix workflow run is already active",
+            )
+        return Decision(
+            number,
+            "security_dispatch",
+            "draft PR; current head has no completed Strix evidence; "
+            "same-head Strix dispatched",
+        )
+    if strix_state == "running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; same-head Strix evidence is still running",
+        )
+
+    wait_reason = repository_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return Decision(
+            number,
+            "wait",
+            "draft PR; current head has completed Strix evidence; "
+            f"{wait_reason}",
+        )
+    dispatch_result = dispatch_opencode_review(
+        repo,
+        workflow,
+        pr,
+        dry_run=dry_run,
+    )
+    if dispatch_result == "already_running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR; current head has completed Strix evidence; "
+            "same-head OpenCode workflow run is already active",
+        )
+    return Decision(
+        number,
+        "review_dispatch",
+        "draft PR; current head has completed Strix evidence; "
+        "same-head OpenCode dispatched",
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2355,7 +2530,16 @@ def inspect_pr(
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
-        return Decision(number, "skip", "draft PR")
+        return inspect_draft_pr_for_review(
+            repo,
+            pr,
+            dry_run=dry_run,
+            trigger_reviews=trigger_reviews,
+            review_dispatch_allowed=review_dispatch_allowed,
+            workflow=workflow,
+            security_workflow=security_workflow,
+            stale_opencode_minutes=stale_opencode_minutes,
+        )
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
@@ -3918,6 +4102,8 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if not args.pr_number:
+        prs = prioritize_review_dispatch_queue(prs)
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0

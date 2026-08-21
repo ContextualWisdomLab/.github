@@ -523,10 +523,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
     assert "AUTHORIZATION: bearer ${GH_TOKEN}" not in step
     assert "AUTHORIZATION: bearer" not in step
+    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' in step
+    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' in step
+    assert 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' in step
     assert (
-        'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"'
-        in step
-    )
+        'fetched_head_sha="$(git -C "$fetch_dir" rev-parse '
+        '"refs/remotes/origin/pr-${PR_NUMBER}-head")"'
+    ) in step
     assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert "Coverage merge tree could not be materialized" in step
@@ -2184,12 +2187,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "repository_dispatch:" not in bootstrap.split("permissions:", 1)[0]
     assert "actions/checkout" not in bootstrap
     assert "${{ secrets." not in bootstrap
+    assert 'jq -r -s --arg sha "$HEAD_SHA"' in bootstrap
     assert "required-workflow-bootstrap:" in bootstrap
     assert "  coverage-source-tree:\n" in bootstrap
     assert "  coverage-evidence:\n" in bootstrap
     assert "  opencode-review-target:\n" in bootstrap
     assert "    name: opencode-review\n" in bootstrap
     assert "authenticated default-branch OpenCode review dispatch" in bootstrap
+    assert "This required check is not a review" in bootstrap
+    assert "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head" in bootstrap
+    assert "pull-requests: read" in bootstrap
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
