@@ -1,0 +1,12 @@
+Wait, let's restore the `uv pip compile` command we previously used to maintain the exact `custom-compile-command` comment.
+
+```bash
+uv pip compile \
+  --upgrade \
+  --generate-hashes \
+  --python-version 3.12 \
+  --python-platform x86_64-manylinux_2_28 \
+  --custom-compile-command "uv pip compile requirements-pip-audit-ci.txt" \
+  --output-file requirements-pip-audit-ci-hashes.txt \
+  requirements-pip-audit-ci.txt
+```

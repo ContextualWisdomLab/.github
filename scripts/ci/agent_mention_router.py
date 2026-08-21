@@ -558,24 +558,16 @@ def dispatch_request(
         "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
-    try:
-        target_client.request(
-            [
-                f"{target_api}/issues/{request.pull_request_number}/comments",
-                "-X",
-                "POST",
-            ],
-            input_payload={"body": acknowledgement},
-        )
-    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
-        message = " ".join(str(exc).split()) or exc.__class__.__name__
-        print(
-            "::warning::Agent mention acknowledgement comment failed; "
-            f"durable dispatch state is preserved: {message[:1000]}"
-        )
-    else:
-        if ledger_artifact_cache is not None:
-            ledger_artifact_cache[acknowledgement_cache_key] = True
+    target_client.request(
+        [
+            f"{target_api}/issues/{request.pull_request_number}/comments",
+            "-X",
+            "POST",
+        ],
+        input_payload={"body": acknowledgement},
+    )
+    if ledger_artifact_cache is not None:
+        ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 
