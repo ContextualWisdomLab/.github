@@ -80,6 +80,10 @@ def _workflow_neutralizes(log_text: str) -> bool:
         workflow,
         "backend_unavailable_signal",
     )
+    model_behavior_pattern = _workflow_signal_pattern(
+        workflow,
+        "model_behavior_error_signal",
+    )
     vulnerability_pattern = _workflow_signal_pattern(
         workflow,
         "reported_vulnerability_signal",
@@ -93,6 +97,12 @@ def _workflow_neutralizes(log_text: str) -> bool:
             capture_output=True,
             text=True,
         )
+        model_behavior = subprocess.run(
+            ["grep", "-Eq", model_behavior_pattern, str(log_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         vulnerability = subprocess.run(
             ["grep", "-Eiq", vulnerability_pattern, str(log_path)],
             check=False,
@@ -101,9 +111,14 @@ def _workflow_neutralizes(log_text: str) -> bool:
         )
     if backend.returncode not in {0, 1}:
         raise AssertionError(backend.stderr)
+    if model_behavior.returncode not in {0, 1}:
+        raise AssertionError(model_behavior.stderr)
     if vulnerability.returncode not in {0, 1}:
         raise AssertionError(vulnerability.stderr)
-    return backend.returncode == 0 and vulnerability.returncode == 1
+    return (
+        (backend.returncode == 0 or model_behavior.returncode == 0)
+        and vulnerability.returncode == 1
+    )
 
 
 class StrixModelBehaviorErrorTests(unittest.TestCase):
@@ -164,6 +179,11 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
         self.assertFalse(
             _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 0\n")
         )
+        self.assertFalse(
+            _workflow_neutralizes(
+                "agents.foo.modelbehaviorerror\nVulnerabilities 0\n"
+            )
+        )
 
     def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
         """Keep a real vulnerability signal blocking despite protocol failure."""
@@ -186,6 +206,7 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("ModelBehaviorError", workflow)
+        self.assertIn("model_behavior_error_signal", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
         self.assertIn(
