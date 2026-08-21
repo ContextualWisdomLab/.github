@@ -73,6 +73,37 @@ def test_organization_readiness_does_not_echo_untrusted_http_method(
     assert "[REDACTED_METHOD]" in message
 
 
+def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
+    """Dispatch payloads must not smuggle shell syntax into scheduler arguments."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count("STALE_OPENCODE_MINUTES must contain only decimal digits") == 2
+    assert workflow.count("STALE_OPENCODE_MINUTES must be between 1 and 1440") == 4
+    assert workflow.count("stale_opencode_minutes=$((10#$STALE_OPENCODE_MINUTES))") == 2
+    assert workflow.count('STALE_OPENCODE_MINUTES="$stale_opencode_minutes"') == 2
+
+
+def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
+    """Use stable repository-scoped concurrency keys for unscoped events."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
+
+    assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
+    assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
+    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
+    assert (
+        "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
+        in concurrency_contract
+    )
+    assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
+        concurrency_contract
+    )
+    assert "cancel-in-progress: ${{" in concurrency_contract
+    assert "github.event_name == 'repository_dispatch'" in concurrency_contract
+
+
 def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     """Guard the runner-token dispatch credential for central review workflows.
 
