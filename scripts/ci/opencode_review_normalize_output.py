@@ -375,7 +375,12 @@ def model_failure_approval_phrase(reason: str, summary: str) -> str:
 
 def mentions_changed_file_evidence(reason: str, summary: str) -> bool:
     """Return whether an approval names at least one concrete changed file/path."""
-    return bool(CHANGED_FILE_EVIDENCE_PATTERN.search(f"{reason}\n{summary}"))
+    for raw_token in f"{reason}\n{summary}".split():
+        token = raw_token.strip(".,;:!?()[]{}<>`'\"")
+        token = token.split("#", 1)[0].split(":", 1)[0]
+        if CHANGED_FILE_EVIDENCE_PATTERN.fullmatch(token):
+            return True
+    return False
 
 
 def trusted_runner_temp() -> Path | None:

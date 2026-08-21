@@ -842,7 +842,9 @@ def test_changed_file_and_verification_posture_detection():
     assert norm.mentions_changed_file_evidence("reviewed AGENTS.md", "")
     assert norm.mentions_changed_file_evidence("The file dir/sub/app.js is good", "")
     assert norm.mentions_changed_file_evidence("Fixed bug in module.rs", "")
+    assert norm.mentions_changed_file_evidence("Updated scripts/ci/example.py:12", "")
     assert not norm.mentions_changed_file_evidence("No path here", "")
+    assert not norm.mentions_changed_file_evidence("a." * 20_000, "")
     assert not norm.mentions_changed_file_evidence("Security/privacy: checked", "")
     assert not norm.mentions_changed_file_evidence(
         "changed some code", "no file listed here"
