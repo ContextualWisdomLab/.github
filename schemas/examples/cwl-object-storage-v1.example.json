@@ -1,0 +1,57 @@
+{
+  "schema_version": "1",
+  "capability": "object_storage",
+  "repository": "ContextualWisdomLab/naruon",
+  "provider_class": "s3_compatible",
+  "endpoint_policy": {
+    "transport": "https",
+    "host_allowlist": [
+      "s3.ap-northeast-2.amazonaws.com",
+      "objects.example.example"
+    ],
+    "allow_wildcards": false,
+    "follow_redirects": false,
+    "dns_pinning": true,
+    "private_network_trust": "explicit_allowlist",
+    "custom_endpoint": "https://objects.example.example"
+  },
+  "credentials": {
+    "broadcast": false,
+    "browser_long_lived": false,
+    "ambient_process_wide": false,
+    "mechanism": "scoped_secret_registry"
+  },
+  "permissions": {
+    "public_acls": false,
+    "public_buckets": false,
+    "least_privilege": true
+  },
+  "encryption": {
+    "server_side": "required"
+  },
+  "integrity": {
+    "content_length": true,
+    "digest": "sha256",
+    "fail_closed_read": true
+  },
+  "lifecycle": {
+    "states": ["pending", "available", "consumed", "archived", "held"],
+    "consumed_implies_immediate_delete": false,
+    "zero_retention_explicit": false,
+    "legal_hold_distinct": true
+  },
+  "rollback": {
+    "delete_customer_data_on_partial_migration": false
+  },
+  "observability": {
+    "high_cardinality_labels_forbid": [
+      "bucket",
+      "object_key",
+      "credential",
+      "raw_pii"
+    ]
+  },
+  "database_object_names": "multiword_snake_case",
+  "tenant_purpose_bound": true,
+  "assurance_posture": "design_constraints_only"
+}

@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/.github/schemas/cwl-object-storage-v1.schema.json",
+  "title": "CWL object-storage contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capability",
+    "repository",
+    "provider_class",
+    "endpoint_policy",
+    "credentials",
+    "permissions",
+    "encryption",
+    "integrity",
+    "lifecycle",
+    "rollback",
+    "observability",
+    "database_object_names",
+    "tenant_purpose_bound",
+    "assurance_posture"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "capability": { "const": "object_storage" },
+    "repository": {
+      "type": "string",
+      "pattern": "^ContextualWisdomLab/[A-Za-z0-9._-]*[A-Za-z0-9_-]$"
+    },
+    "provider_class": { "enum": ["aws_s3", "s3_compatible"] },
+    "endpoint_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "host_allowlist",
+        "allow_wildcards",
+        "follow_redirects",
+        "dns_pinning",
+        "private_network_trust"
+      ],
+      "properties": {
+        "transport": { "const": "https" },
+        "host_allowlist": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allow_wildcards": { "const": false },
+        "follow_redirects": { "const": false },
+        "dns_pinning": { "const": true },
+        "private_network_trust": {
+          "enum": ["explicit_allowlist", "denied"]
+        },
+        "custom_endpoint": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "broadcast",
+        "browser_long_lived",
+        "ambient_process_wide",
+        "mechanism"
+      ],
+      "properties": {
+        "broadcast": { "const": false },
+        "browser_long_lived": { "const": false },
+        "ambient_process_wide": { "const": false },
+        "mechanism": {
+          "enum": ["scoped_secret_registry", "workload_identity"]
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_acls", "public_buckets", "least_privilege"],
+      "properties": {
+        "public_acls": { "const": false },
+        "public_buckets": { "const": false },
+        "least_privilege": { "const": true }
+      }
+    },
+    "encryption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server_side"],
+      "properties": {
+        "server_side": { "const": "required" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_length", "digest", "fail_closed_read"],
+      "properties": {
+        "content_length": { "const": true },
+        "digest": { "enum": ["sha256", "sha384", "sha512"] },
+        "fail_closed_read": { "const": true }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "states",
+        "consumed_implies_immediate_delete",
+        "zero_retention_explicit",
+        "legal_hold_distinct"
+      ],
+      "properties": {
+        "states": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "allOf": [
+            { "contains": { "const": "pending" } },
+            { "contains": { "const": "available" } },
+            { "contains": { "const": "consumed" } },
+            { "contains": { "const": "archived" } },
+            { "contains": { "const": "held" } }
+          ],
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "consumed_implies_immediate_delete": { "type": "boolean" },
+        "zero_retention_explicit": { "type": "boolean" },
+        "legal_hold_distinct": { "const": true }
+      },
+      "if": {
+        "properties": {
+          "consumed_implies_immediate_delete": { "const": true }
+        },
+        "required": ["consumed_implies_immediate_delete"]
+      },
+      "then": {
+        "properties": {
+          "zero_retention_explicit": { "const": true }
+        },
+        "required": ["zero_retention_explicit"]
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delete_customer_data_on_partial_migration"],
+      "properties": {
+        "delete_customer_data_on_partial_migration": { "const": false }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["high_cardinality_labels_forbid"],
+      "properties": {
+        "high_cardinality_labels_forbid": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "allOf": [
+            { "contains": { "const": "bucket" } },
+            { "contains": { "const": "object_key" } },
+            { "contains": { "const": "credential" } },
+            { "contains": { "const": "raw_pii" } }
+          ],
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "database_object_names": { "const": "multiword_snake_case" },
+    "tenant_purpose_bound": { "const": true },
+    "assurance_posture": { "const": "design_constraints_only" }
+  }
+}
