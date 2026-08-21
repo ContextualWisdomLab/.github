@@ -1032,10 +1032,10 @@ jobs:
                   ]' <<<"$active_runs_json"
               )"
 
-              # Metadata-free workflow_run events share the default-branch
-              # concurrency fallback. Keep the newest scan for the current
-              # default HEAD and cancel older same-head scans left by a queue
-              # backlog or an earlier scheduler implementation.
+              # Metadata-free workflow_run events use a dedicated concurrency
+              # group, while this sweep keeps only the newest scan for the
+              # current default HEAD and cancels older same-head scans left by
+              # a queue backlog or an earlier scheduler implementation.
               duplicate_scheduler_runs_json="[]"
               if [ -n "$current_default_sha" ]; then
                 duplicate_scheduler_runs_json="$(
