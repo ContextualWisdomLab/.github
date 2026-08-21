@@ -71,7 +71,7 @@ def test_scheduler_deduplicates_metadata_free_workflow_run_scans() -> None:
     )[0]
 
     assert "github.event_name == 'workflow_run'" in concurrency
-    assert "|| github.event_name == 'workflow_run'" in cancel_line
+    assert "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number" in cancel_line
     assert "format('workflow-run-{0}', github.ref)" in concurrency
     assert '.event == "workflow_run"' in queue_hygiene
     assert '.name == "Required PR Review Merge Scheduler"' in queue_hygiene

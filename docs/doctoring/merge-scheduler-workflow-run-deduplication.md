@@ -14,10 +14,11 @@ not remove an older queued scan.
 
 ## Decision
 
-1. Include `workflow_run` in the scheduler's existing conditional
-   `cancel-in-progress` expression. PR-associated workflow-run events retain
-   their PR-specific concurrency key; metadata-free events use the existing
-   workflow-run-specific default-branch fallback, separate from push runs.
+1. Include only metadata-free `workflow_run` events in the scheduler's
+   existing conditional `cancel-in-progress` expression. PR-associated
+   workflow-run events retain their existing non-cancelling behavior and
+   PR-specific concurrency key; metadata-free events use the workflow-run-
+   specific default-branch fallback, separate from push runs.
 2. During the organization sweep, inspect only runs named exactly
    `Required PR Review Merge Scheduler` with event `workflow_run`, the current
    default branch, an empty `pull_requests` list, and complete Actions-run
