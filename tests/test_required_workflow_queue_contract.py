@@ -904,14 +904,16 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
 
 
 def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
-    """Keep the base artifact outside a fork checkout's replaced workspace."""
+    """Limit cross-fork replacement to a child checkout directory."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
-    assert workflow.count("--output-file=/github/runner_temp/old-results.json") == 2
+    assert workflow.count("path: source") == 2
+    assert workflow.count("--output-file=old-results.json") == 2
     assert workflow.count("--output-file=new-results.json") == 2
-    assert 'test -s "$RUNNER_TEMP/old-results.json"' in workflow
-    assert 'cp "$RUNNER_TEMP/old-results.json" old-results.json' in workflow
+    assert workflow.count("source/") == 4
+    assert "clean: false" not in workflow
+    assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
 
@@ -984,7 +986,7 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
-    assert "--output-file=/github/runner_temp/old-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
     assert "--output-file=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow

@@ -12,26 +12,25 @@ whose repository identity changed.
 
 ## Decision
 
-Write the base result to `/github/runner_temp/old-results.json`, the container
-mount for the job-scoped runner temporary directory. After the head checkout,
-require that artifact and copy it back to `old-results.json` so the existing
-OSV reporter, log, SARIF, and debug-artifact boundaries stay unchanged. Keep the
-head result in the current workspace. Missing or empty output remains a hard
-failure; this change does not weaken vulnerability comparison.
+Checkout both exact repositories into the same `source/` child directory and
+scan that directory. The head checkout may replace `source/` when the repository
+identity changes, but the base result remains at the workspace root. Reusing the
+same checkout path also gives the base and head scan identical source paths, so
+the existing OSV comparison retains its meaning. Missing or empty output remains
+a hard failure; this change does not weaken vulnerability comparison.
 
 The workflow also uses OSV Scanner's current `--output-file` spelling instead
 of the deprecated `--output` alias.
 
 ## Verification and rollback
 
-- The workflow contract proves both base attempts target the runner-temporary
-  mount and that the required-output step restores the artifact before use.
+- The workflow contract proves both checkouts target `source/`, every scan reads
+  that same directory, and both result files remain at the workspace root.
 - `actionlint` validates the edited workflow.
 - Rerun a fork PR's `Security Scan`; both `old-results.json` and
   `new-results.json` must be non-empty before the reporter runs.
-- Roll back only after the base and head are scanned in independently named
-  workspaces with normalized source paths, or another job-scoped store retains
-  the base artifact across repository replacement.
+- Roll back only after another job-scoped store retains the base artifact across
+  repository replacement without changing the compared source paths.
 
 ## References
 
