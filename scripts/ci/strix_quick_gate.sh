@@ -1184,6 +1184,7 @@ is_scannable_changed_file() {
 
 pull_request_scope_context_files() {
 	local needs_backend_python=0
+	local needs_backend_app_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
@@ -1193,6 +1194,9 @@ pull_request_scope_context_files() {
 		backend/*)
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
+			fi
+			if [[ "$normalized_changed_file" =~ ^backend/app/.+\.py$ ]]; then
+				needs_backend_app_python=1
 			fi
 			;;
 		# The app shell, email components, threading URL builder, and API client can
@@ -1255,6 +1259,28 @@ backend/services/llm_provider_urls.py
 backend/services/text_safety.py
 backend/services/threading_service.py
 EOF
+	fi
+
+	if [ "$needs_backend_app_python" -eq 1 ]; then
+		# Some products use backend/app rather than the central backend/api layout.
+		# Include every Python module in that exact PR-head package so a changed
+		# module's local imports are available to Strix without scanning the whole
+		# repository. Unchanged files are copied from the trusted base checkout;
+		# changed files are copied from PR_HEAD_SHA by the scope builder.
+		if [ -n "${PR_HEAD_SHA:-}" ] && is_valid_git_commit_sha "$PR_HEAD_SHA"; then
+			local backend_app_files
+			if ! backend_app_files="$(git -c core.quotepath=false ls-tree -r --name-only "$PR_HEAD_SHA" -- backend/app)"; then
+				echo "ERROR: backend/app PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r context_file; do
+				case "$context_file" in
+				backend/app/*.py)
+					printf '%s\n' "$context_file"
+					;;
+				esac
+			done <<<"$backend_app_files"
+		fi
 	fi
 
 	if [ "$needs_frontend_email_api_context" -eq 1 ]; then
