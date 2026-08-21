@@ -148,9 +148,12 @@ def _is_candidate_lock_name(name: str) -> bool:
     return (
         (
             fnmatch.fnmatch(name, "requirements*.txt")
-            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
+            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.*")
         )
-        or fnmatch.fnmatch(name, "requirements*.lock")
+        or (
+            fnmatch.fnmatch(name, "requirements*.lock")
+            and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.*")
+        )
     )
 
 

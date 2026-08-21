@@ -158,6 +158,9 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
     assert not materializer._is_candidate_lock_name(
         "requirements-opencode-review-ci-hashes.txt"
     )
+    assert not materializer._is_candidate_lock_name(
+        "requirements-opencode-review-ci-hashes.lock"
+    )
     assert not materializer._is_candidate_lock_name("uv.lock")
     assert not materializer._is_candidate_lock_name("pyproject.toml")
 
