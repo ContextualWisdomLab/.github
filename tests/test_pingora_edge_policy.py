@@ -63,6 +63,7 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     sample = "FROM nginx:latest\nnginx.ingress.kubernetes.io/foo: bar\n"
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
+    assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/test_policy.py", sample) == ()
     assert policy.scan_content("tests/negative_fixture.rs", sample) == ()
 

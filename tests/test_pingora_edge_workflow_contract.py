@@ -17,7 +17,9 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert "WORKFLOW_REF: ${{ github.workflow_ref }}" in text
     assert "GITHUB_CONTEXT_JSON" not in text
     assert 'job_context.get("workflow_sha") or os.environ.get("WORKFLOW_SHA")' in text
-    assert "job.workflow_repository" not in text
+    assert 'workflow_ref.partition("@")' in text
+    assert 'workflow_repository = "/".join(ref_parts[:2])' in text
+    assert 'job_context.get("workflow_repository")' not in text
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.sha }}" in text
     assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in text
     assert "Trusted central policy source ref must resolve to the immutable workflow commit SHA" in text
@@ -38,6 +40,7 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert '[ -L "$trusted_source_dir/$EXPECTED_FILE" ]' in text
     assert '[ ! -f "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
     assert '[ -L "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
+    assert "if: ${{ github.event_name == 'pull_request_target' }}" in text
     assert text.index("Verify immutable central policy source") < text.index(
         "Enforce Cloudflare Pingora edge policy"
     )

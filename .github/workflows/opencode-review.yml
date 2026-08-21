@@ -54,15 +54,21 @@ jobs:
 
           expected_repository = "ContextualWisdomLab/.github"
           expected_file = ".github/workflows/opencode-review.yml"
-          workflow_repository = str(
-              job_context.get("workflow_repository") or expected_repository
-          ).strip()
           workflow_sha = str(
               job_context.get("workflow_sha") or os.environ.get("WORKFLOW_SHA") or ""
           ).strip()
           workflow_ref = str(
               job_context.get("workflow_ref") or os.environ.get("WORKFLOW_REF") or ""
           ).strip()
+          workflow_ref_head, separator, _ = workflow_ref.partition("@")
+          if not separator:
+              print("::error::Required workflow ref is missing its immutable ref separator.", file=sys.stderr)
+              raise SystemExit(1)
+          ref_parts = workflow_ref_head.split("/", 2)
+          if len(ref_parts) < 2 or not ref_parts[0] or not ref_parts[1]:
+              print("::error::Required workflow ref does not identify a repository.", file=sys.stderr)
+              raise SystemExit(1)
+          workflow_repository = "/".join(ref_parts[:2])
           workflow_file_path = str(job_context.get("workflow_file_path") or "").strip()
 
           if not workflow_file_path:
@@ -130,6 +136,7 @@ jobs:
           fi
 
       - name: Enforce Cloudflare Pingora edge policy
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
