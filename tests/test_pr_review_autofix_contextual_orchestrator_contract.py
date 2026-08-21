@@ -216,7 +216,7 @@ def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model
         '            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \\\n'
         '            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"'
     )
-    assert workflow.count(readiness.splitlines()[0]) == 2
+    assert workflow.count(readiness) == 2
     assert workflow.count(
         "jq -e '(.data | type == \"array\") and ([.data[]? | select((.id? | type) == \"string\" and (.id | length > 0))] | length >= 1)'"
     ) == 2

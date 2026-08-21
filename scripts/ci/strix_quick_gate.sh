@@ -3510,10 +3510,11 @@ for source_path, lang, raw_lines in blocks:
     if source_lines is None:
         continue
     snippet_lines = meaningful_lines(lang, raw_lines)
-    if len(snippet_lines) < 1:
-        continue
-    if single_line_only and len(snippet_lines) != 1:
-        non_single_line_blocks += 1
+    if single_line_only:
+        if len(snippet_lines) != 1:
+            non_single_line_blocks += 1
+            continue
+    elif len(snippet_lines) < 2:
         continue
     checked_blocks += 1
     present = sum(1 for line in snippet_lines if line in source_lines)
