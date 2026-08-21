@@ -35,7 +35,8 @@ def test_baseline_inventory_contains_sha_bound_open_pr_rows() -> None:
     source = BASELINE.read_text(encoding="utf-8")
     rows = [line for line in source.splitlines() if line.startswith("| #")]
 
-    assert len(rows) == 90
+    declared_count = int(re.search(r"현재 열린 PR 수:\s*\*\*(\d+)\*\*", source).group(1))
+    assert len(rows) == declared_count
     for row in rows:
         assert re.search(r"[0-9a-f]{40}", row), row
         assert any(state in row for state in ("MERGEABLE", "CONFLICTING")), row
