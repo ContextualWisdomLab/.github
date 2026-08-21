@@ -102,16 +102,16 @@ cannot merge unreviewed.
 ## Head mutations need a workflow-starting credential
 
 GitHub never starts a new workflow run for an event created with the workflow
-GITHUB_TOKEN (GitHub, 2025). A PR head moved with that credential therefore
+`GITHUB_TOKEN` (GitHub, 2025). A PR head moved with that credential therefore
 collects no current-head required checks, so a protected PR that requires
-current-head checks stays BLOCKED forever and no later scheduler run can
+current-head checks stays `BLOCKED` forever and no later scheduler run can
 repair it, because the branch is no longer behind.
 
-The scheduler now refuses both head mutations, update-branch and the
-last-push approval head restamp, whenever SCHEDULER_MUTATION_TOKEN_SOURCE
-resolves to github-token. It records a WAIT decision with
-head_mutation_credential_upgrade guidance instead: configure
-PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or keep the OpenCode app
+The scheduler now refuses both head mutations, `update-branch` and the
+last-push approval head restamp, whenever `SCHEDULER_MUTATION_TOKEN_SOURCE`
+resolves to `github-token`. It records a `WAIT` decision with
+`head_mutation_credential_upgrade` guidance instead: configure
+`PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or keep the OpenCode app
 token exchange available for the scheduler job, or let the PR author push the
 branch so required checks rerun on the new head.
 

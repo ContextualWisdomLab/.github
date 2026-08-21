@@ -190,7 +190,7 @@ SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
     (
         re.compile(
-            r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)"
+            r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)'
             r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\r\n,;}\]]+)',
         ),
         r'\1***',
@@ -216,6 +216,18 @@ def mutation_token_source() -> str:
 WORKFLOW_STARTING_MUTATION_SOURCES = frozenset(
     {"PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"}
 )
+
+
+def mutation_token_label() -> str:
+    """Return a non-secret label for the scheduler mutation credential."""
+    source = mutation_token_source()
+    labels = {
+        "PR_REVIEW_MERGE_TOKEN": "PR_REVIEW_MERGE_TOKEN",
+        "OPENCODE_APPROVE_TOKEN": "OPENCODE_APPROVE_TOKEN",
+        "opencode-app": "OpenCode app token",
+        "github-token": "workflow GITHUB_TOKEN",
+    }
+    return labels.get(source, "workflow GH_TOKEN")
 
 
 def head_mutation_credential_starts_workflows() -> bool:
@@ -269,18 +281,6 @@ def head_mutation_credential_guidance_text() -> tuple[str, str]:
         f"The scheduler withheld a head mutation because {mutation_token_label()} is not allowlisted as workflow-starting.",
         "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
     )
-
-
-def mutation_token_label() -> str:
-    """Return a non-secret label for the scheduler mutation credential."""
-    source = mutation_token_source()
-    labels = {
-        "PR_REVIEW_MERGE_TOKEN": "PR_REVIEW_MERGE_TOKEN",
-        "OPENCODE_APPROVE_TOKEN": "OPENCODE_APPROVE_TOKEN",
-        "opencode-app": "OpenCode app token",
-        "github-token": "workflow GITHUB_TOKEN",
-    }
-    return labels.get(source, "workflow GH_TOKEN")
 
 
 def mutation_actor_label() -> str:
@@ -3085,7 +3085,7 @@ def head_mutation_credential_upgrade_summary(decisions: list[Decision]) -> list[
     lines = ["", "### Head mutation withheld", "", summary, automation_limit]
     lines.extend(
         [
-            "Configure PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app credential, then rerun the scheduler.",
+            "Configure `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the OpenCode app credential, then rerun the scheduler.",
             "Alternatively, let the PR author push the branch so required checks start from the owning actor.",
             "",
             "Withheld decisions:",
