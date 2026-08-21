@@ -40,6 +40,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Publish only the sanitized cumulative Strix report tree, avoiding a later
+  copy of relative scanner output that could reintroduce known internal warning
+  text into uploaded security evidence.
+
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and
   evaluate each fallback against its newest report without letting an older

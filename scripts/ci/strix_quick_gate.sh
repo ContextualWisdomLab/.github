@@ -131,16 +131,8 @@ publish_artifact_reports() {
 	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
 		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
 	fi
-	local scope_dir scope_reports_dir
-	for scope_dir in "${PULL_REQUEST_SCOPE_DIRS[@]}"; do
-		scope_reports_dir="$scope_dir/strix_runs"
-		if [ -d "$scope_reports_dir" ] && [ ! -L "$scope_reports_dir" ]; then
-			cp -R -- "$scope_reports_dir"/. "$ARTIFACT_REPORTS_DIR"/
-		fi
-	done
-	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
-		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ARTIFACT_REPORTS_DIR"/
-	fi
+	# Relative scanner output is copied into ACTIVE_REPORTS_DIR immediately
+	# after each attempt and sanitized before this publication trap runs.
 }
 
 preserve_attempt_log() {

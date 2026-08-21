@@ -4504,6 +4504,11 @@ EOS
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal agent coordination note
 2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
+		mkdir -p strix_runs/fake-known-internal-warning-relative
+		cat >strix_runs/fake-known-internal-warning-relative/strix.log <<'EOS'
+2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): relative internal agent coordination note
+2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
 		outside_report_dir="${FAKE_STRIX_OUTSIDE_REPORT_DIR:-$(dirname -- "$STRIX_REPORTS_DIR")/outside-strix-report}"
 		mkdir -p "$outside_report_dir"
 		cat >"$outside_report_dir/strix.log" <<'EOS'
@@ -5800,6 +5805,14 @@ PY
 			"$repo_root_dir/strix_runs/fake-known-internal-warning/strix.log" \
 			"finish_scan: completed scan with 0 vulnerability report(s)" \
 			"scenario=$scenario keeps non-warning Strix report evidence"
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-relative/strix.log" \
+			"produced non-lifecycle final output" \
+			"scenario=$scenario sanitizes relative scanner output before publication"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-relative/strix.log" \
+			"finish_scan: completed scan with 0 vulnerability report(s)" \
+			"scenario=$scenario publishes sanitized relative scanner evidence"
 		assert_file_contains \
 			"$repo_root_dir/outside-strix-report/strix.log" \
 			"outside report should not be rewritten" \
@@ -6317,6 +6330,16 @@ run_filtered_gate_case_if_requested() {
 		;;
 	pull-request-target-changed-backend-context)
 		run_pull_request_target_changed_backend_context_scope_case
+		;;
+	report-known-internal-warning-sanitized)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-known-internal-warning-sanitized" \
+		"" \
+		"0" \
+		"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
+		"1" \
+		"vertex_ai/report-known-internal-warning-sanitized" \
+		"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
