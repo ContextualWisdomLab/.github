@@ -1506,7 +1506,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
-	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.run_id" "scheduler keeps manual queue scans isolated per run"
+	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository)" "scheduler keeps manual queue scans isolated per repository"
 	local scheduler_concurrency_block
 	scheduler_concurrency_block="$(
 		awk '
