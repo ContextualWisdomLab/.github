@@ -1407,8 +1407,17 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
     return len(review_ids)
 
 
-def failed_status_checks(pr: dict[str, Any]) -> list[str]:
-    """Return failing check or status context names from the PR rollup."""
+def failed_status_checks(
+    pr: dict[str, Any],
+    *,
+    ignore_opencode: bool = False,
+) -> list[str]:
+    """Return failing check or status context names from the PR rollup.
+
+    ``ignore_opencode`` is reserved for the authenticated coverage-only retry
+    path: the previous OpenCode run is expected to be failing there because it
+    published the current-head coverage change request being retried.
+    """
     failed: list[str] = []
     latest_check_runs: dict[
         tuple[str, str],
@@ -1449,6 +1458,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if ignore_opencode and is_opencode_context(node):
+                continue
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
             if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
@@ -1457,6 +1468,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     for node in status_contexts:
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
+            if ignore_opencode and is_opencode_context(node):
+                continue
             failed.append(node.get("context") or "status-context")
     return failed
 
@@ -2439,7 +2452,7 @@ def inspect_pr(
             and current_head_coverage_change_request(pr)
             and coverage_evidence_state(pr) == "complete"
             and strix_evidence_state(pr) == "complete"
-            and not failed_status_checks(pr)
+            and not failed_status_checks(pr, ignore_opencode=True)
         )
         if coverage_ready:
             wait_reason = repository_dispatch_wait_reason(repo, workflow)
