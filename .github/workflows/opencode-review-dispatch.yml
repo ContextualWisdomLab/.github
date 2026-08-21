@@ -1734,7 +1734,11 @@ jobs:
           }
 
           rust_coverage_manifests() {
-            if [ -f Cargo.toml ]; then
+            # A repository-wide coverage run is required when the workspace
+            # manifest or lockfile changed. Otherwise measure only the
+            # changed Rust package(s); building every workspace member at once
+            # can exhaust the review runner disk before tests begin.
+            if has_changed_tracked_files Cargo.toml Cargo.lock; then
               printf '%s\n' Cargo.toml
               return 0
             fi
@@ -1745,11 +1749,12 @@ jobs:
                     *) continue ;;
                   esac
                   candidate_dir="$(dirname "$changed_path")"
-                  while [ "$candidate_dir" != "." ] && [ "$candidate_dir" != "/" ]; do
+                  while :; do
                     if [ -f "${candidate_dir}/Cargo.toml" ]; then
                       printf '%s\n' "${candidate_dir}/Cargo.toml"
                       break
                     fi
+                    [ "$candidate_dir" = "." ] && break
                     next_dir="$(dirname "$candidate_dir")"
                     if [ "$next_dir" = "$candidate_dir" ]; then
                       break
