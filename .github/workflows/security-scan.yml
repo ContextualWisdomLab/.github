@@ -111,15 +111,6 @@ jobs:
           if [ -s old-results.json ]; then
             cp old-results.json "$RUNNER_TEMP/osv-old-results.json"
           fi
-      - name: Remove base OSV result before head checkout
-        if: always()
-        shell: python3 {0}
-        run: |
-          from pathlib import Path
-
-          result = Path("old-results.json")
-          if result.exists() or result.is_symlink():
-              result.unlink()
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
