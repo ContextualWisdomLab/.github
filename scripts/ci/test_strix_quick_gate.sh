@@ -4075,6 +4075,37 @@ EOS
 			;;
 		esac
 		;;
+	pr-stale-single-line-snippet-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/stale-single-line-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-stale-single-line/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-stale-single-line/vulnerabilities/vuln-0001.md" <<'EOS'
+# Hardcoded test credential in workflow
+
+**Severity:** HIGH
+**Target:** .github/workflows/hourly-nvidia-nim-review-repair.yml
+
+## Code Analysis
+
+**Location 1:** `.github/workflows/hourly-nvidia-nim-review-repair.yml` (line 30)
+  Hardcoded credential
+  ```yaml
+  LOB_API_KEY: stale_model_claim
+  ```
+EOS
+			echo "Penetration test failed: stale single-line workflow snippet"
+			exit 1
+		;;
+		vertex_ai/fallback-one)
+			echo "scan ok after stale single-line snippet fallback"
+			exit 0
+		;;
+		*)
+			echo "Error: stale-single-line scenario unexpected model (${STRIX_LLM:-})" >&2
+			exit 39
+		;;
+		esac
+		;;
 	pr-stale-source-plus-real-finding-blocks)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/stale-source-primary)
@@ -5240,6 +5271,16 @@ async def get_snapshot(schema_snapshot_uuid, user, session):
     data = await session.get("SchemaSnapshotData", schema_snapshot_uuid)
     return {"status": snap.status, "snapshot_json": data.snapshot_json if data else None}
 EOS
+	elif [ "$scenario" = "pr-stale-single-line-snippet-fallback-success" ]; then
+		mkdir -p "$repo_root_dir/.github/workflows"
+		cat >"$repo_root_dir/.github/workflows/hourly-nvidia-nim-review-repair.yml" <<'EOS'
+name: hourly review repair
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      SAFE_WORKFLOW_VALUE: configured-secret-reference
+EOS
 	elif [ "$scenario" = "pr-stale-source-plus-real-finding-blocks" ]; then
 		mkdir -p "$repo_root_dir/backend/db" "$repo_root_dir/backend/api"
 		cat >"$repo_root_dir/backend/db/models.py" <<'EOS'
@@ -6230,6 +6271,28 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"backend/app/api/snapshots.py"
+		;;
+	pr-stale-single-line-snippet-fallback-success)
+		run_gate_case "pr-stale-single-line-snippet-fallback-success" \
+			"vertex_ai/stale-single-line-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after stale single-line snippet fallback" \
+			"2" \
+			"vertex_ai/stale-single-line-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"HIGH" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			".github/workflows/hourly-nvidia-nim-review-repair.yml"
 		;;
 	pull-request-target-modified-file-pr-head-tree-lookup-failure)
 		run_pull_request_target_aborts_on_pr_head_blob_failure_case \
@@ -10160,6 +10223,27 @@ run_gate_case "pr-stale-snapshot-snippet-fallback-success" \
 	"0" \
 	"pull_request" \
 	"backend/app/api/snapshots.py"
+
+run_gate_case "pr-stale-single-line-snippet-fallback-success" \
+	"vertex_ai/stale-single-line-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after stale single-line snippet fallback" \
+	"2" \
+	"vertex_ai/stale-single-line-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"HIGH" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/hourly-nvidia-nim-review-repair.yml"
 
 run_gate_case "pr-stale-source-plus-real-finding-blocks" \
 	"vertex_ai/stale-source-primary" \

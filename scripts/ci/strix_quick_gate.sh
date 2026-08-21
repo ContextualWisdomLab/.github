@@ -3362,6 +3362,7 @@ is_hallucinated_endpoint_finding() {
 
 vulnerability_file_has_absent_source_snippets() {
 	local vuln_file="$1"
+	local single_line_only="${2:-0}"
 	if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 		return 1
 	fi
@@ -3376,7 +3377,7 @@ vulnerability_file_has_absent_source_snippets() {
 
 	local resolved_scan_target=""
 	resolved_scan_target="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null || true)"
-	if python3 - "$vuln_file" "$REPO_ROOT" "$resolved_scan_target" "$location_records_file" <<'PY'
+	if python3 - "$vuln_file" "$REPO_ROOT" "$resolved_scan_target" "$location_records_file" "$single_line_only" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -3385,6 +3386,7 @@ vuln_path = Path(sys.argv[1])
 repo_root = Path(sys.argv[2])
 scan_target = Path(sys.argv[3]) if sys.argv[3] else None
 records_path = Path(sys.argv[4])
+single_line_only = sys.argv[5] == "1"
 
 record_paths = {
     line.split("\t", 1)[0].strip().replace("\\", "/")
@@ -3502,19 +3504,23 @@ def meaningful_lines(lang: str, raw_lines: list[str]) -> list[str]:
 
 checked_blocks = 0
 stale_blocks = 0
+non_single_line_blocks = 0
 for source_path, lang, raw_lines in blocks:
     source_lines = source_by_path.get(source_path)
     if source_lines is None:
         continue
     snippet_lines = meaningful_lines(lang, raw_lines)
-    if len(snippet_lines) < 2:
+    if len(snippet_lines) < 1:
+        continue
+    if single_line_only and len(snippet_lines) != 1:
+        non_single_line_blocks += 1
         continue
     checked_blocks += 1
     present = sum(1 for line in snippet_lines if line in source_lines)
     if present * 2 < len(snippet_lines):
         stale_blocks += 1
 
-if checked_blocks > 0 and stale_blocks == checked_blocks:
+if checked_blocks > 0 and stale_blocks == checked_blocks and non_single_line_blocks == 0:
     raise SystemExit(0)
 raise SystemExit(1)
 PY
@@ -3526,6 +3532,10 @@ PY
 
 	rm -f "$location_records_file"
 	return 1
+}
+
+vulnerability_file_has_absent_single_line_source_snippets() {
+	vulnerability_file_has_absent_source_snippets "$1" 1
 }
 
 source_file_has_encrypted_runner_registration_token() {
@@ -3777,6 +3787,9 @@ vulnerability_file_reports_generic_github_actions_workflow_insecurity() {
 
 vulnerability_file_is_retryable_model_inconsistency() {
 	local vuln_file="$1"
+	if vulnerability_file_has_absent_single_line_source_snippets "$vuln_file"; then
+		return 0
+	fi
 	if ! vulnerability_file_is_below_threshold "$vuln_file"; then
 		return 1
 	fi
