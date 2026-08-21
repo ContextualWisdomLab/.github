@@ -2453,6 +2453,13 @@ def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatc
             "head_sha": head_sha,
             "pull_requests": [{"number": 1}],
         },
+        {
+            "id": 9405,
+            "name": "Required OpenCode Review",
+            "event": "workflow_run",
+            "head_sha": head_sha,
+            "pull_requests": [],
+        },
     ]
 
     def fake_active_runs(repo, statuses=("queued", "in_progress")):
