@@ -173,15 +173,15 @@ def test_focused_quality_workflow_tracks_kaefa_contracts() -> None:
     assert doctoring not in compileall_paths
 
 
-def test_strix_gate_uses_medium_threshold_and_neutral_scope_signal() -> None:
-    """Low/INFO reports do not block, while medium-or-higher findings do."""
+def test_strix_gate_uses_fail_closed_findings_and_neutral_scope_signal() -> None:
+    """Positive counts or medium findings block, while INFO scope stays neutral."""
     strix = _read(STRIX_WORKFLOW)
 
+    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|" in strix
     assert (
-        "reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
+        "(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
         "(critical|high|medium)([^A-Za-z0-9_]|$)'"
         in strix
     )
-    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]" not in strix
     assert "non_assessable_scope_signal='No Assessable Application Code Found in Scope'" in strix
-    assert "produced no medium-or-higher vulnerability evidence" in strix
+    assert "produced no blocking vulnerability evidence" in strix

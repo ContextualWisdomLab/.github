@@ -239,7 +239,17 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertFalse(
             _workflow_neutralizes(
                 "litellm.exceptions.NotFoundError: Nvidia_nimException - "
-                "Error code: 404\nSeverity: Medium\n"
+                "Error code: 404\nVulnerabilities 1\n"
+            )
+        )
+
+    def test_outer_workflow_never_neutralizes_count_without_severity(self) -> None:
+        """Keep count-only findings blocking when Strix omits severity text."""
+
+        self.assertFalse(
+            _workflow_neutralizes(
+                "litellm.exceptions.NotFoundError: Nvidia_nimException - "
+                "Error code: 404\nVulnerabilities 2\n"
             )
         )
 
@@ -250,15 +260,12 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("Nvidia_nimException", workflow)
         self.assertIn("Error code:[[:space:]]*404", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
+        self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
         self.assertIn(
             "severity[[:space:]]*:[[:space:]]*(critical|high|medium)",
             workflow,
         )
         self.assertIn("No Assessable Application Code Found in Scope", workflow)
-        self.assertNotIn(
-            "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]",
-            workflow,
-        )
         self.assertIn(
             '! grep -Eiq "$reported_vulnerability_signal"',
             workflow,

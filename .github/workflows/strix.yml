@@ -867,11 +867,11 @@ jobs:
 
           # Recognized signals that the LLM backend was unavailable / starved.
           backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
-          # Only medium-or-higher findings are blocking evidence. Low and INFO
-          # reports are retained as artifacts but do not block merge progress;
-          # the configured Strix threshold is MEDIUM. Keep the severity branch
-          # anchored away from identifiers such as STRIX_FAIL_ON_MIN_SEVERITY.
-          reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*(critical|high|medium)([^A-Za-z0-9_]|$)'
+          # A positive vulnerability count is fail-closed evidence even when a
+          # provider omits per-finding severity. Medium-or-higher severity is
+          # also blocking; keep that branch anchored away from identifiers such
+          # as STRIX_FAIL_ON_MIN_SEVERITY.
+          reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*(critical|high|medium)([^A-Za-z0-9_]|$)'
 
           # Workflow-only callers can legitimately produce an informational
           # "no assessable application code" report. It is not a vulnerability
@@ -880,7 +880,7 @@ jobs:
           non_assessable_scope_signal='No Assessable Application Code Found in Scope'
           if grep -Eiq "$non_assessable_scope_signal" "$strix_run_log" \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
-            echo "::warning title=Strix scope not assessable::Strix received workflow-only scope and produced no medium-or-higher vulnerability evidence; treating the informational scope result as neutral."
+            echo "::warning title=Strix scope not assessable::Strix received workflow-only scope and produced no blocking vulnerability evidence; treating the informational scope result as neutral."
             exit 0
           fi
 
