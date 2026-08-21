@@ -34,6 +34,13 @@ def test_opencode_review_run_blocks_are_valid_bash():
     )
     assert 'gsub("`"; "&apos;")' in workflow_text
     assert 'gsub("`"; "\'")' not in workflow_text
+    assert (
+        'if [ "$pr_head_fetch_attempt" -lt 6 ]; then\n'
+        '                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay."\n'
+        '                  sleep 10\n'
+        '                else\n'
+        '                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; no retries remain."'
+    ) in workflow_text
 
     if sys.platform == "win32":
         return

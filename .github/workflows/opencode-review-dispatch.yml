@@ -356,10 +356,12 @@ jobs:
                   head_fetch_succeeded=1
                   break
                 fi
-                echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay."
-              fi
-              if [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                sleep 10
+                if [ "$pr_head_fetch_attempt" -lt 6 ]; then
+                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay."
+                  sleep 10
+                else
+                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; no retries remain."
+                fi
               fi
             done
           fi
