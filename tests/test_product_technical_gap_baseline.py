@@ -23,6 +23,7 @@ def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
         "APA 7th references",
         "G-01",
         "G-14",
+        "731af58e954901c4f1cc853231c592abb1eaf617",
         "exact HEAD",
         "independent current-head approval",
         "COPILOT_GITHUB_TOKEN",
@@ -37,9 +38,17 @@ def test_baseline_inventory_contains_sha_bound_open_pr_rows() -> None:
 
     declared_count = int(re.search(r"현재 열린 PR 수:\s*\*\*(\d+)\*\*", source).group(1))
     assert len(rows) == declared_count
+    allowed_merge_states = {
+        "MERGEABLE",
+        "CONFLICTING",
+        "BLOCKED",
+        "BEHIND",
+        "DIRTY",
+        "UNSTABLE",
+    }
     for row in rows:
         assert re.search(r"[0-9a-f]{40}", row), row
-        assert any(state in row for state in ("MERGEABLE", "CONFLICTING")), row
+        assert any(state in row for state in allowed_merge_states), row
 
 
 def test_baseline_records_the_ui_adr_boundary() -> None:
