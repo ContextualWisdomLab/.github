@@ -69,8 +69,8 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
   `scorecard-governance.md`, SBOM inventory. Doctoring records live under
   `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
-  diagram for review, hourly NVIDIA NIM repair, exact-artifact SBOM attestation,
-  and merge trust boundaries.
+  diagram for review, contextual-orchestrator repair, historical hourly NVIDIA
+  NIM callers, exact-artifact SBOM attestation, and merge trust boundaries.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
@@ -119,8 +119,10 @@ repeatable compile command.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
-  into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
-  on the worker, never `COPILOT_GITHUB_TOKEN`.
+  into `pr-review-fix-scheduler.yml`. The write-capable worker routes through the
+  contextual-orchestrator KV gateway; upstream provider credentials stay in that gateway,
+  and the independent read-only reviewer keeps its existing credential chain. Never use
+  `COPILOT_GITHUB_TOKEN`.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

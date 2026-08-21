@@ -1,5 +1,10 @@
 # Hourly NVIDIA NIM Review-Autofix Boundary
 
+> Superseded on August 20, 2026 by
+> [Contextual Orchestrator Review-Autofix Boundary](contextual-orchestrator-autofix.md).
+> The NIM material below is retained as historical provenance only; it is not
+> current worker configuration.
+
 ## Decision
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.

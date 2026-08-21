@@ -17,7 +17,11 @@ HOURLY_CALLER_WORKFLOW = Path(
     ".github/workflows/clearfolio-hourly-review-repair.yml"
 )
 AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
-DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
+DOCTORING_RECORD = Path("docs/doctoring/contextual-orchestrator-autofix.md")
+ARCHITECTURE = Path("ARCHITECTURE.md")
+AUTOFIX_CONTRACT_WORKFLOW = Path(
+    ".github/workflows/hourly-nvidia-nim-review-repair.yml"
+)
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 REVIEW_DISPATCH_BLOB_SHA = "83f6830d5c21a324b4dbcd4e5c21a07968994b81"
@@ -36,25 +40,35 @@ def test_review_fix_caller_runs_once_each_hour() -> None:
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
-def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
-    """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
+def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
+    """Require the writer to use the gateway-owned provider contract only."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     required_fragments = (
-        '"model": "nvidia-nim/mistralai/mistral-small-4-119b-2603"',
-        '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
-        '"enabled_providers": ["nvidia-nim"]',
-        '"nvidia-nim": {',
-        '"mistralai/mistral-small-4-119b-2603": {',
-        '"reasoningEffort": "high"',
+        '"model": "contextual-orchestrator/contextual-orchestrator"',
+        '"small_model": "contextual-orchestrator/contextual-orchestrator"',
+        '"enabled_providers": ["contextual-orchestrator"]',
+        '"contextual-orchestrator": {',
+        '"contextual-orchestrator": {',
         '"npm": "@ai-sdk/openai-compatible"',
-        '"baseURL": "https://integrate.api.nvidia.com/v1"',
-        '"apiKey": "{env:NVIDIA_API_KEY}"',
-        'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603',
+        '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"',
+        '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
+        '"X-Contextual-Orchestrator-Tool-Loop": "v1"',
+        'CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}',
+        'CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}',
+        'MODEL: contextual-orchestrator/contextual-orchestrator',
+        'parsed.scheme != "https"',
+        'or not parsed.hostname',
+        'or parsed.username',
+        'or parsed.password',
+        'or parsed.query',
+        'or parsed.fragment',
+        'CONTEXTUAL_ORCHESTRATOR_BASE_URL must be an HTTPS URL without credentials or query data',
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
     forbidden_fragments = (
+        'NVIDIA_NIM_API_KEY',
+        'NVIDIA_API_KEY:',
         'mistralai/mistral-nemotron',
         'STRIX_GITHUB_MODELS_TOKEN:',
         'MODEL: github-models/',
@@ -66,6 +80,36 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
+
+
+def test_autofix_contract_check_uses_gateway_terminology() -> None:
+    """Keep the hosted contract check aligned with the gateway it validates."""
+    workflow = _workflow_text(AUTOFIX_CONTRACT_WORKFLOW)
+    assert (
+        "Hourly cadence, immutable source, gateway credential, and conflict scope"
+        in workflow
+    )
+    assert (
+        "Verify hourly scheduler and contextual-orchestrator autofix contracts"
+        in workflow
+    )
+    assert "NIM credential" not in workflow
+    assert "NVIDIA NIM autofix contracts" not in workflow
+
+
+def test_architecture_separates_reviewer_and_write_capable_gateway_flows() -> None:
+    """Prevent the independent reviewer from appearing to use the writer gateway."""
+    architecture = _workflow_text(ARCHITECTURE)
+    assert (
+        "RW->>OC: bounded evidence + independent reviewer credential" in architecture
+    )
+    assert "participant AF as Write-capable autofix worker" in architecture
+    assert "participant GW as contextual-orchestrator gateway" in architecture
+    assert "AF->>GW: bounded repair prompt" in architecture
+    assert (
+        "RW->>OC: bounded evidence + contextual-orchestrator / OpenCode"
+        not in architecture
+    )
 
 
 def test_trusted_autofix_source_is_bound_to_dispatch_sha() -> None:
@@ -99,20 +143,22 @@ def test_opencode_agent_denies_non_file_interactions() -> None:
         assert workflow.count(f'"{permission_name}": "deny"') == 2
 
 
-def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
-    """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
+def test_contextual_gateway_credentials_are_scoped_to_agent_execution_steps() -> None:
+    """Prevent gateway URL/token values from leaking beyond model execution."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+    base_binding = 'CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}'
+    token_binding = 'CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}'
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(binding) == 2
-    assert binding in workflow[ordinary_start:ordinary_end]
-    assert binding in workflow[conflict_start:]
-    assert binding not in workflow[:ordinary_start]
-    assert binding not in workflow[ordinary_end:conflict_start]
+    for binding in (base_binding, token_binding):
+        assert workflow.count(binding) == 2
+        assert binding in workflow[ordinary_start:ordinary_end]
+        assert binding in workflow[conflict_start:]
+        assert binding not in workflow[:ordinary_start]
+        assert binding not in workflow[ordinary_end:conflict_start]
 
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
@@ -136,12 +182,13 @@ def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> Non
     assert workflow.count(sanitized_invocation) == 2
 
 
-def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None:
-    """Reject an empty model credential instead of falling back to another provider."""
+def test_missing_contextual_gateway_configuration_fails_closed_before_model_execution() -> None:
+    """Reject missing gateway configuration instead of falling back to a provider."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     guard = (
-        'if [ -z "${NVIDIA_API_KEY:-}" ]; then\n'
-        '            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled '
+        'if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||\n'
+        '            [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then\n'
+        '            echo "::error::CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled '
         'OpenCode autofix."\n'
         "            exit 1\n"
         "          fi"
@@ -151,9 +198,41 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(guard) == 2
+    guard_message = (
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
+    )
+    assert workflow.count(guard_message) == 2
     assert guard in workflow[ordinary_start:ordinary_end]
-    assert guard in workflow[conflict_start:]
+    assert guard_message in workflow[conflict_start:]
+
+
+def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model() -> None:
+    """Do not start either writer when the gateway has no auto-discovered model."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    readiness = (
+        'models_response="$(curl -fsS \\\n'
+        '            --connect-timeout 10 \\\n'
+        '            --max-time 30 \\\n'
+        '            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \\\n'
+        '            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"'
+    )
+    assert workflow.count(readiness) == 2
+    assert workflow.count(
+        "jq -e '(.data | type == \"array\") and ([.data[]? | select((.id? | type) == \"string\" and (.id | length > 0))] | length >= 1)'"
+    ) == 2
+    assert workflow.count(
+        "Contextual Orchestrator gateway returned no discovered models."
+    ) == 2
+    conflict_start = workflow.index(
+        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    )
+    conflict = workflow[conflict_start:]
+    readiness_anchor = readiness.splitlines()[0]
+    readiness_function = conflict.index("contextual_gateway_readiness() {")
+    assert conflict.index("no conflict resolution needed") < readiness_function
+    assert readiness_anchor in conflict[readiness_function:]
+    conflict_branch = conflict.index('if [ -n "$conflicted_files" ]; then')
+    assert "contextual_gateway_readiness\n" in conflict[conflict_branch:]
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:
@@ -231,7 +310,9 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "Ignored build caches are outside the comparison" not in doctoring
     assert "Git Project. (2026). *git-ls-files*" in doctoring
     assert "Git Project. (2026). *githooks*" in doctoring
-    assert "OpenCode. (2026a). *Permissions*" in doctoring
+    assert "OpenCode. (n.d.). *Permissions*" in doctoring
+    assert "At gateway startup, its automatic model-discovery process" in doctoring
+    assert "--auto-discover-model-agents" not in doctoring
     assert "ignored-path inventory" in changelog
     assert "model-mutable Git metadata" in changelog
 
