@@ -4477,6 +4477,27 @@ EOS
 		echo "Denied: provider credentials were rejected"
 		exit 0
 		;;
+	provider-report-rate-limit-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/report-rate-limit-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-report-rate-limit"
+			cat >"$STRIX_REPORTS_DIR/fake-report-rate-limit/strix.log" <<'EOS'
+2026-08-21 04:00:00.000 WARNING strix-pr-scope-example - strix.provider: RateLimitError: provider response was exhausted
+EOS
+			echo "scan aborted after provider report-rate-limit signal"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-report-rate-limit-fallback"
+			echo "scan ok after report-only provider fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: report-only provider fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 60
+			;;
+		esac
+		;;
 	report-known-internal-warning-sanitized)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning/strix.log" <<'EOS'
@@ -6293,6 +6314,29 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/excluded-dir-primary" \
 			"<unset>"
+		;;
+	pull-request-target-changed-backend-context)
+		run_pull_request_target_changed_backend_context_scope_case
+		;;
+	provider-fatal-success-signal | provider-warning-success-signal)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
+		"" \
+		"1" \
+		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+		"1" \
+		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
+		"<unset>"
+		;;
+	provider-report-rate-limit-fallback-success)
+		run_gate_case "provider-report-rate-limit-fallback-success" \
+			"vertex_ai/report-rate-limit-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/report-rate-limit-primary|vertex_ai/fallback-one" \
+			"<unset>|<unset>"
 		;;
 	total-timeout)
 		run_total_timeout_case
@@ -10289,6 +10333,15 @@ run_gate_case "provider-warning-success-signal" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "provider-report-rate-limit-fallback-success" \
+	"vertex_ai/report-rate-limit-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/report-rate-limit-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
 
 run_gate_case "report-known-internal-warning-sanitized" \
 	"vertex_ai/report-known-internal-warning-sanitized" \

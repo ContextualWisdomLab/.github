@@ -214,8 +214,44 @@ has_strix_report_failure_signal() {
 		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
 			continue
 		fi
+		# A fallback attempt must be judged by its own newest structured report.
+		# Older attempt directories remain published for audit evidence, but a
+		# provider warning from an earlier failed model must not poison a complete
+		# later fallback report.
+		if [ "$report_root" = "$STRIX_REPORTS_DIR" ]; then
+			local newest_report_root
+			newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+			if [ -z "$newest_report_root" ]; then
+				continue
+			fi
+			report_root="$newest_report_root"
+		fi
 		while IFS= read -r -d '' report_log; do
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
+				return 0
+			fi
+		done < <(find "$report_root" -type f -name '*.log' -print0)
+	done
+	return 1
+}
+
+has_strix_report_provider_failure_signal() {
+	local report_root
+	local report_log
+	for report_root in "$@"; do
+		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+			continue
+		fi
+		if [ "$report_root" = "$STRIX_REPORTS_DIR" ]; then
+			local newest_report_root
+			newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+			if [ -z "$newest_report_root" ]; then
+				continue
+			fi
+			report_root="$newest_report_root"
+		fi
+		while IFS= read -r -d '' report_log; do
+			if grep -Eiq 'RateLimitError|Nvidia_nimException|Too Many Requests|Error code:[[:space:]]*429|provider.{0,80}(unavailable|exhausted|rate.?limit|timeout|connection)' "$report_log"; then
 				return 0
 			fi
 		done < <(find "$report_root" -type f -name '*.log' -print0)
@@ -3995,6 +4031,16 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	# A provider failure can be recorded only in Strix's structured report log.
+	# run_strix_once already marks that evidence as infrastructure failure, but
+	# the child stdout log used by the classifiers may not contain the provider
+	# exception. In strict mode, let configured distinct fallbacks run instead of
+	# treating the report-only signal as a non-recoverable source failure.
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled &&
+		has_strix_report_provider_failure_signal "$ACTIVE_REPORTS_DIR" "${TARGET_PATH%/}/strix_runs"; then
 		return 0
 	fi
 

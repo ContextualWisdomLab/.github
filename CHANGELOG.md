@@ -39,6 +39,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Retry configured Strix fallback models when the primary provider records a
+  rate-limit or infrastructure failure only in its structured report log, and
+  evaluate each fallback against its newest report without letting an older
+  failed attempt poison a complete later report.
+
 - Include the exact `backend/app/*.py` package context in PR-scoped Strix
   scans when a module in that package changes. The trusted resolver uses a
   NUL-delimited exact-head tree listing, copies unchanged dependencies from
