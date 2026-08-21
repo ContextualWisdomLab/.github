@@ -665,7 +665,9 @@ def test_build_report_classifies_exact_head_and_external_blockers() -> None:
     assert report["summary"]["unlinked_job_count"] == 1
     assert report["summary"]["duplicate_pending_lane_count"] == 1
     assert report["summary"]["terminal_job_count"] == 1
-    assert report["duplicate_pending_lanes"][0]["count"] == 3
+    # Run 10 has two pending jobs and run 13 has one fallback row; the metric
+    # counts concurrent runs, not the number of pending jobs in those runs.
+    assert report["duplicate_pending_lanes"][0]["count"] == 2
     assert any(row["blocker"] == "obsolete_run_requires_identity_confirmed_cleanup" for row in report["runs"])
     assert any(row["blocker"] == "run_not_linked_to_pull_request" for row in report["runs"])
     assert report["runs"] == sorted(report["runs"], key=lambda row: (row["repository"], row["run_id"], row["job_id"]))

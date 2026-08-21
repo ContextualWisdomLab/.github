@@ -6,6 +6,10 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Count duplicate Actions queue lanes by distinct workflow runs so matrix or multi-job runs do not appear as false concurrent-run duplicates.
+
 ### Added
 
 - Added a read-only hourly GitHub Actions queue-health report for the central

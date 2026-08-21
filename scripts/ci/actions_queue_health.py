@@ -9,7 +9,6 @@ turns an unavailable runner into a successful check.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 from datetime import datetime, timezone
 import html
 import json
@@ -530,15 +529,23 @@ def build_report(
     rows.sort(key=lambda row: (row["repository"], row["run_id"], row["job_id"]))
     pending = [row for row in rows if row["execution_state"].startswith("queued_")]
     current_pending = [row for row in pending if row["identity_state"] == "current_head"]
-    lane_counts = Counter(
-        (row["repository"], row["pull_request_number"], row["workflow_name"])
-        for row in current_pending
-        if row["pull_request_number"] is not None
-    )
+    lane_run_ids: dict[tuple[str, int, str], set[int]] = {}
+    for row in current_pending:
+        lane = (
+            row["repository"],
+            row["pull_request_number"],
+            row["workflow_name"],
+        )
+        lane_run_ids.setdefault(lane, set()).add(row["run_id"])
     duplicate_lanes = [
-        {"repository": key[0], "pull_request_number": key[1], "workflow_name": key[2], "count": count}
-        for key, count in sorted(lane_counts.items())
-        if count > 1
+        {
+            "repository": key[0],
+            "pull_request_number": key[1],
+            "workflow_name": key[2],
+            "count": len(run_ids),
+        }
+        for key, run_ids in sorted(lane_run_ids.items())
+        if len(run_ids) > 1
     ]
     external_actions = sorted(
         {
