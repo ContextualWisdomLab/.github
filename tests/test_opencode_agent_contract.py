@@ -1079,6 +1079,87 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
     assert result.stdout.splitlines() == ["ADFS 연동 라이브러리/Node.JS/Node App"]
 
 
+def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
+    """Select only the Rust manifests whose packages contain changed files."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required for the extracted workflow function regression test")
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+    changed_start = measure_step.index("          has_changed_tracked_files() {\n")
+    changed_end = measure_step.index(
+        "\n\n          tracked_python_projects_with_tests()", changed_start
+    )
+    rust_start = measure_step.index("          rust_coverage_manifests() {\n")
+    rust_end = measure_step.index(
+        "\n\n          rust_coverage_fail_under_lines()", rust_start
+    )
+    shell = "\n".join(
+        (
+            "set -euo pipefail",
+            "trusted_git() { git \"$@\"; }",
+            "changed_files_for_coverage() { cat \"$CHANGED_FILE_LIST\"; }",
+            textwrap.dedent(measure_step[changed_start:changed_end]),
+            textwrap.dedent(measure_step[rust_start:rust_end]),
+            "rust_coverage_manifests",
+        )
+    )
+
+    repo = tmp_path / "repo"
+    (repo / "crates" / "alpha" / "src").mkdir(parents=True)
+    (repo / "src").mkdir()
+    for relative_path, content in {
+        "Cargo.toml": "[workspace]\nmembers = [\"crates/alpha\"]\n",
+        "Cargo.lock": "# lock\n",
+        "crates/alpha/Cargo.toml": "[package]\nname = \"alpha\"\n",
+        "crates/alpha/src/lib.rs": "pub fn alpha() {}\n",
+        "src/main.rs": "fn main() {}\n",
+        "README.md": "unrelated\n",
+    }.items():
+        path = repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Coverage Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "coverage@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixtures"], cwd=repo, check=True)
+
+    def select(changed_paths: str) -> list[str]:
+        """Run the extracted selector against one changed-file inventory."""
+        changed_file_list = repo / "changed-files.txt"
+        changed_file_list.write_text(changed_paths, encoding="utf-8")
+        result = subprocess.run(
+            [bash, "-c", shell],
+            cwd=repo,
+            env={**os.environ, "CHANGED_FILE_LIST": str(changed_file_list)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.splitlines()
+
+    assert select("Cargo.toml\n") == ["Cargo.toml"]
+    assert select("Cargo.lock\n") == ["Cargo.toml"]
+    assert select("crates/alpha/Cargo.toml\n") == ["crates/alpha/Cargo.toml"]
+    assert select("crates/alpha/Cargo.lock\n") == ["crates/alpha/Cargo.toml"]
+    assert select("crates/alpha/src/lib.rs\n") == ["crates/alpha/Cargo.toml"]
+    assert select("src/main.rs\n") == ["./Cargo.toml"]
+    assert select("README.md\n") == []
+
+
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
     review_workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
