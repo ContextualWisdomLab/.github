@@ -424,7 +424,8 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         in workflow
     )
     assert "Resolve Noema target repository visibility" in workflow
-    assert 'if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then' in workflow
+    assert 'case "$TARGET_REPOSITORY_PRIVATE" in' in workflow
+    assert "Private diff evidence is not sent to the hosted NVIDIA NIM endpoint" in workflow
     assert "https://integrate.api.nvidia.com/v1/chat/completions" in workflow
     assert 'export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"' in workflow
     assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
@@ -505,6 +506,74 @@ def test_nvidia_nim_defaults_fail_closed_without_secret(
     assert noema.returncode == 1
     assert "Noema LLM is unconfigured" in noema.stdout
     assert noema_probe.read_text() == "synthetic-openai-key"
+
+
+def test_noema_visibility_keeps_private_diffs_off_public_nim() -> None:
+    """Route only public-repository review data to the hosted NIM endpoint."""
+    noema_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Run Noema LLM review and submit verdict",
+        ).split("        run: |\n", 1)[1]
+    ).split("python3 scripts/ci/noema_review_gate.py", 1)[0]
+
+    def resolve_configuration(**overrides: str) -> subprocess.CompletedProcess[str]:
+        env = {
+            **os.environ,
+            "PR_NUMBER": "1",
+            "GH_TOKEN": "synthetic-review-token",
+            "NOEMA_LLM_API_URL": "",
+            "NOEMA_LLM_MODEL": "",
+            "NOEMA_LLM_API_KEY": "",
+            "NVIDIA_NIM_API_KEY": "synthetic-nim-key",
+            "TARGET_REPOSITORY_PRIVATE": "false",
+            **overrides,
+        }
+        return subprocess.run(
+            ["bash", "-c", noema_script + "env\n"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def noema_environment(completed: subprocess.CompletedProcess[str]) -> dict[str, str]:
+        return {
+            key: value
+            for line in completed.stdout.splitlines()
+            if line.startswith("NOEMA_LLM_")
+            for key, value in [line.split("=", 1)]
+        }
+
+    public = resolve_configuration()
+    assert public.returncode == 0
+    assert noema_environment(public) == {
+        "NOEMA_LLM_API_URL": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "NOEMA_LLM_MODEL": "nvidia/nemotron-3-ultra-550b-a55b",
+        "NOEMA_LLM_API_KEY": "synthetic-nim-key",
+    }
+
+    private = resolve_configuration(
+        TARGET_REPOSITORY_PRIVATE="true",
+        NOEMA_LLM_API_URL="https://trusted-noema.internal/v1/chat/completions",
+        NOEMA_LLM_MODEL="trusted-private-reviewer",
+        NOEMA_LLM_API_KEY="synthetic-private-key",
+    )
+    assert private.returncode == 0
+    assert noema_environment(private) == {
+        "NOEMA_LLM_API_URL": "https://trusted-noema.internal/v1/chat/completions",
+        "NOEMA_LLM_MODEL": "trusted-private-reviewer",
+        "NOEMA_LLM_API_KEY": "synthetic-private-key",
+    }
+
+    private_without_explicit_endpoint = resolve_configuration(
+        TARGET_REPOSITORY_PRIVATE="true",
+    )
+    assert private_without_explicit_endpoint.returncode != 0
+    assert "private repository requires an explicitly configured" in (
+        private_without_explicit_endpoint.stdout
+        + private_without_explicit_endpoint.stderr
+    )
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
