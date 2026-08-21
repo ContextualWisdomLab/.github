@@ -188,7 +188,13 @@ SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
     (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
     (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
-    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (
+        re.compile(
+            r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)'
+            r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\r\n,;}\]]+)'
+        ),
+        r'\1***',
+    ),
     (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
 )
 
