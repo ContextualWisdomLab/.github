@@ -1267,9 +1267,11 @@ EOF
 		# module's local imports are available to Strix without scanning the whole
 		# repository. Unchanged files are copied from the trusted base checkout;
 		# changed files are copied from PR_HEAD_SHA by the scope builder.
-		if [ -n "${PR_HEAD_SHA:-}" ] && is_valid_git_commit_sha "$PR_HEAD_SHA"; then
+		local backend_app_head_sha
+		backend_app_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if [ -n "$backend_app_head_sha" ] && is_valid_git_commit_sha "$backend_app_head_sha"; then
 			local backend_app_files
-			if ! backend_app_files="$(git -c core.quotepath=false ls-tree -r --name-only "$PR_HEAD_SHA" -- backend/app)"; then
+			if ! backend_app_files="$(git -c core.quotepath=false ls-tree -r --name-only "$backend_app_head_sha" -- backend/app)"; then
 				echo "ERROR: backend/app PR-head context could not be enumerated; failing closed." >&2
 				return 2
 			fi

@@ -7056,7 +7056,7 @@ EOF
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			GITHUB_EVENT_NAME="pull_request_target" \
 			PR_BASE_SHA="$base_sha" \
-			PR_HEAD_SHA="$head_sha" \
+			PR_HEAD_SHA="  $head_sha  " \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			FAKE_STRIX_CALL_LOG="$call_log" \
 			STRIX_LLM_FILE="$strix_llm_file" \
