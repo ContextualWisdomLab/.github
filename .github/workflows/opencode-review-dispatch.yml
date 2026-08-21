@@ -1752,7 +1752,11 @@ jobs:
                   candidate_dir="$(dirname "$changed_path")"
                   while :; do
                     if [ -f "${candidate_dir}/Cargo.toml" ]; then
-                      printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      if [ "$candidate_dir" = "." ]; then
+                        printf '%s\n' Cargo.toml
+                      else
+                        printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      fi
                       break
                     fi
                     [ "$candidate_dir" = "." ] && break
