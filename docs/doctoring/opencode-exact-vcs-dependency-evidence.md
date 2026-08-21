@@ -1,0 +1,66 @@
+# OpenCode exact VCS dependency evidence
+
+## Decision
+
+The OpenCode coverage image may expose a Python dependency directly from source
+only when the validated base branch's frozen `uv.lock` names an HTTPS GitHub
+repository owned by `ContextualWisdomLab` and a full 40-character Git commit.
+Registry dependencies remain exact-version, SHA-256-pinned `pip` installs.
+
+The trusted materializer separates those two dependency classes. The networked,
+secret-free image build fetches each approved source revision, verifies that
+`FETCH_HEAD` and the checked-out `HEAD` equal the locked commit, removes Git
+metadata, and records only the repository root or its `src` directory in a
+Python path file. It does not run dependency build or installation code. The
+pull-request tree still runs later with no network and no credentials.
+
+## Root cause
+
+LineageWeave's protected base lock contains RankWeave at its immutable release
+commit because the current RankWeave release is not yet available from PyPI.
+`uv export` therefore emitted one exact VCS requirement alongside fully hashed
+registry requirements. The former materializer rejected the complete export,
+so OpenCode never reached tests and repeatedly requested changes despite the
+product's current-head tests passing.
+
+## Safety boundary
+
+- Symbolic refs, abbreviated commits, non-HTTPS schemes, credentials, ports,
+  query strings, fragments, subdirectories, and repositories outside the exact
+  organization origin fail closed.
+- Duplicate references to one repository must resolve to one commit; conflicting
+  revisions fail before the image build.
+- Only metadata read from the validated base SHA can select a dependency. Pull
+  request source cannot modify the networked image build inputs.
+- Source dependencies are import-only. No `pip install`, PEP 517 backend, setup
+  hook, or dependency lifecycle script runs while the network is available.
+- This records exact source inputs for a test image; it does not claim a SLSA
+  build level or substitute for upstream package publication and attestation.
+
+These controls follow pip's recommendation to use full VCS commit hashes and
+SLSA 1.2's treatment of Git revisions as immutable identifiers, while retaining
+the isolated, ephemeral test execution boundary (Python Packaging Authority,
+2026; Supply-chain Levels for Software Artifacts, 2025). They also support the
+SSDF practice of preserving dependency provenance and preventing recurrence of
+toolchain failures (Souppaya et al., 2022).
+
+## Verification
+
+Regression tests cover the real LineageWeave export shape, rejection of unsafe
+VCS forms, conflicting commits, deterministic manifests, exact-fetch workflow
+commands, source-only Python path publication, and the existing registry hash
+contract. The central Python quality workflow retains 100% statement/branch and
+docstring coverage.
+
+## References
+
+Python Packaging Authority. (2026). *VCS support*. pip documentation v26.2.
+https://pip.pypa.io/en/stable/topics/vcs-support/
+
+Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development
+framework (SSDF) version 1.1: Recommendations for mitigating the risk of
+software vulnerabilities* (NIST Special Publication 800-218). National
+Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
+
+Supply-chain Levels for Software Artifacts. (2025). *SLSA specification
+(Version 1.2)*. https://slsa.dev/spec/v1.2/

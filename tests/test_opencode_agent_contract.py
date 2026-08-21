@@ -679,6 +679,12 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
+    assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
+    assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
+    assert 'rev-parse HEAD)" = "$commit"' in measure_step
+    assert "opencode-base-vcs-dependencies.pth" in measure_step
+    assert 'if [ -d "$destination/src" ]' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(

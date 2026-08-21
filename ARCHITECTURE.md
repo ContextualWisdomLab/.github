@@ -135,6 +135,10 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
+An exact-base `uv.lock` may additionally expose source from an organization-owned
+GitHub repository pinned to a full commit: the secret-free image build verifies
+the fetched revision and makes its source importable without running package
+build or installation hooks. Pull-request execution remains networkless.
 
 ## Related durable documents
 
@@ -150,6 +154,8 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md)
   — LLM probe publication without inventing observed proof.
+- [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md)
+  — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)

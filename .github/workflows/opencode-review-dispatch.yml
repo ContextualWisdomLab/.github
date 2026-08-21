@@ -726,8 +726,34 @@ jobs:
               --only-binary=:all: \
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
-          COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           COPY base-python-requirements /tmp/base-python-requirements
+          RUN set -eu; \
+              mkdir -p /opt/base-vcs-dependencies; \
+              site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+              path_file="${site_packages}/opencode-base-vcs-dependencies.pth"; \
+              : >"$path_file"; \
+              dependency_index=0; \
+              jq -r '.[] | [.repository, .commit] | @tsv' \
+                /tmp/base-python-requirements/vcs-manifest.json \
+                | while IFS="$(printf '\t')" read -r repository commit; do \
+                    destination="$(printf '/opt/base-vcs-dependencies/dependency-%03d' "$dependency_index")"; \
+                    git init --quiet "$destination"; \
+                    git -C "$destination" remote add origin \
+                      "https://github.com/ContextualWisdomLab/${repository}.git"; \
+                    git -C "$destination" -c protocol.version=2 fetch \
+                      --quiet --no-tags --depth=1 origin "$commit"; \
+                    test "$(git -C "$destination" rev-parse FETCH_HEAD)" = "$commit"; \
+                    git -C "$destination" checkout --quiet --detach FETCH_HEAD; \
+                    test "$(git -C "$destination" rev-parse HEAD)" = "$commit"; \
+                    rm -rf -- "$destination/.git"; \
+                    if [ -d "$destination/src" ]; then \
+                      printf '%s/src\n' "$destination" >>"$path_file"; \
+                    else \
+                      printf '%s\n' "$destination" >>"$path_file"; \
+                    fi; \
+                    dependency_index=$((dependency_index + 1)); \
+                  done
+          COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \

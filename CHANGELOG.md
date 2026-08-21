@@ -6,6 +6,9 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
+  dependencies without weakening registry hashes or the networkless PR sandbox.
+
 ### Added
 
 - Added an hourly organization commercial-readiness coordinator that discovers writable repositories, honors enabled dedicated writer leases and fully paginated live writer runs, refetches exact repository/workflow/run/PR state before dispatch, rotates bounded review-repair and opt-in NVIDIA OpenCode product-development targets, fails nonzero on fleet-wide inspection or dispatch outages, retains three-day JSON receipts, and keeps the existing 15-minute merge scheduler authoritative.
