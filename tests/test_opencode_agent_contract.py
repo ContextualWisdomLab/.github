@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 from scripts.ci import opencode_review_surfaces as surfaces
 from scripts.ci import rust_coverage_policy as rust_policy
+from scripts.ci.assert_opencode_reasoning_effort import strip_jsonc_comments
 
 
 def load_opencode_jsonc() -> dict:
@@ -649,6 +649,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "CARGO_HOME=/work/.opencode-sandbox-home/.cargo" in measure_step
     assert "materialize_base_rust_toolchain.py" in measure_step
+    rust_materializer = measure_step.split("materialize_base_rust_toolchain.py", 1)[1]
+    assert '--base-sha "$PR_BASE_SHA"' in rust_materializer.split("cat >", 1)[0]
     assert "RUSTUP_HOME=/opt/rustup" in measure_step
     assert "CARGO_NET_OFFLINE=true" in measure_step
     assert 'PATH="/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' in measure_step

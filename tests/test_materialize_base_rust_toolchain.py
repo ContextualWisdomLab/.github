@@ -1,10 +1,9 @@
-"""Tests for bounded Rust toolchain materialization into the coverage image."""
+"""Tests for exact-base Rust toolchain materialization."""
 
 from __future__ import annotations
 
 import json
 import runpy
-import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -14,22 +13,8 @@ import pytest
 from scripts.ci import materialize_base_rust_toolchain as materializer
 
 
-def _git_index(names: list[bytes], *, version: int = 2, extended: bool = False) -> bytes:
-    """Build a minimal git index for parser tests."""
-    entries = b""
-    for name in names:
-        flags = (0x0FFF if len(name) >= 0x0FFF else len(name)) | (0x4000 if extended else 0)
-        header = b"\0" * 60 + struct.pack(">H", flags)
-        if extended:
-            header += b"\0\0"
-        payload = header + name + b"\0"
-        payload += b"\0" * ((8 - (len(payload) % 8)) % 8)
-        entries += payload
-    return b"DIRC" + struct.pack(">II", version, len(names)) + entries
-
-
 def git(repo: Path, *args: str) -> str:
-    """Run git in a temporary fixture repository."""
+    """Run Git in one temporary fixture repository."""
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
@@ -38,13 +23,26 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def rust_workspace(tmp_path: Path) -> Path:
-    """Create an OriginWeave-style virtual workspace with a pinned toolchain."""
-    repo = tmp_path / "repo"
+def init_repo(tmp_path: Path, name: str = "repo") -> Path:
+    """Create an empty Git repository with a deterministic test identity."""
+    repo = tmp_path / name
     repo.mkdir()
     git(repo, "init")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
+    return repo
+
+
+def commit(repo: Path, message: str = "fixture") -> str:
+    """Commit the fixture tree and return its exact revision."""
+    git(repo, "add", "-A")
+    git(repo, "commit", "--allow-empty", "-m", message)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def rust_workspace(tmp_path: Path) -> tuple[Path, str]:
+    """Create an OriginWeave-style workspace and return its base revision."""
+    repo = init_repo(tmp_path)
     (repo / "Cargo.toml").write_text(
         "[workspace]\n"
         'members = ["crates/originweave-destination", "crates/originweave-core"]\n'
@@ -62,7 +60,7 @@ def rust_workspace(tmp_path: Path) -> Path:
     destination = repo / "crates/originweave-destination"
     destination.mkdir(parents=True)
     (destination / "Cargo.toml").write_text(
-        "[package]\nname = \"originweave-destination\"\nversion = \"0.1.0\"\n",
+        '[package]\nname = "originweave-destination"\nversion = "0.1.0"\n',
         encoding="utf-8",
     )
     (destination / "src").mkdir()
@@ -70,414 +68,330 @@ def rust_workspace(tmp_path: Path) -> Path:
     core = repo / "crates/originweave-core"
     core.mkdir(parents=True)
     (core / "Cargo.toml").write_text(
-        "[package]\nname = \"originweave-core\"\nversion = \"0.1.0\"\n",
+        '[package]\nname = "originweave-core"\nversion = "0.1.0"\n',
         encoding="utf-8",
     )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "workspace")
-    return repo
+    return repo, commit(repo, "workspace")
 
 
-def test_originweave_workspace_selects_rustup_1_97(tmp_path: Path) -> None:
-    """A 1.97 rust-toolchain.toml is a rustup install, not Debian rustc 1.85."""
-    repo = rust_workspace(tmp_path)
+def test_materialize_reads_rust_inputs_from_exact_base_commit(tmp_path: Path) -> None:
+    """A pull request cannot select the trusted base Rust toolchain or lock."""
+    repo, base_sha = rust_workspace(tmp_path)
+    (repo / "rust-toolchain.toml").write_text(
+        '[toolchain]\nchannel = "1.99.0"\n',
+        encoding="utf-8",
+    )
+    (repo / "Cargo.lock").write_text("# pull-request lock\n", encoding="utf-8")
+    commit(repo, "untrusted pull-request inputs")
+
     output = tmp_path / "base-rust"
-    payload = materializer.materialize(repo, output)
+    assert materializer.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--base-sha",
+            base_sha,
+            "--output-dir",
+            str(output),
+        ]
+    ) == 0
+
+    payload = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert payload["revision_sha"] == base_sha
     assert payload["rustup_channel"] == "1.97.1"
-    assert payload["has_lock"] is True
-    assert (output / "rust-toolchain.toml").is_file()
+    assert (output / "Cargo.lock").read_text(encoding="utf-8") == "# lock\n"
+
+
+def test_originweave_workspace_copies_only_base_rust_metadata(tmp_path: Path) -> None:
+    """Only tracked base manifests, lock, and toolchain metadata enter the image."""
+    repo, base_sha = rust_workspace(tmp_path)
+    output = tmp_path / "base-rust"
+    payload = materializer.materialize(repo, base_sha, output)
+    assert payload == {
+        "revision_sha": base_sha,
+        "rustup_channel": "1.97.1",
+        "has_lock": True,
+        "has_manifest": True,
+        "inputs": [
+            "rust-toolchain.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+            "crates/originweave-destination/Cargo.toml",
+            "crates/originweave-core/Cargo.toml",
+        ],
+    }
     assert (output / "crates/originweave-destination/Cargo.toml").is_file()
     assert not (output / "crates/originweave-destination/src/lib.rs").exists()
-    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["rustup_channel"] == "1.97.1"
 
 
-def test_rust_version_newer_than_debian_selects_rustup(tmp_path: Path) -> None:
-    """A rust-version newer than Debian rustc 1.85 selects rustup without a pin file."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
+@pytest.mark.parametrize(
+    ("rust_version", "expected"),
+    [("1.97", "1.97"), ("1.85.0", None), ("1.80", None), ("stable", None)],
+)
+def test_rust_version_selects_only_newer_numeric_toolchains(
+    tmp_path: Path, rust_version: str, expected: str | None
+) -> None:
+    """Only a numeric rust-version newer than Debian rustc selects rustup."""
+    repo = init_repo(tmp_path)
     (repo / "Cargo.toml").write_text(
-        "[package]\nname = \"newer\"\nversion = \"0.1.0\"\nrust-version = \"1.97\"\n",
+        f'[package]\nname = "fixture"\nversion = "0.1.0"\nrust-version = "{rust_version}"\n',
         encoding="utf-8",
     )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "newer")
-    assert materializer.declared_rust_version(repo) == "1.97"
-    assert materializer.rustup_channel(repo) == "1.97"
+    revision = commit(repo)
+    assert materializer.declared_rust_version(repo, revision) == rust_version
+    assert materializer.rustup_channel(repo, revision) == expected
 
 
-def test_old_rust_version_keeps_debian_toolchain(tmp_path: Path) -> None:
-    """A crate that Debian rustc 1.85 can build does not force rustup."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "Cargo.toml").write_text(
-        "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nrust-version = \"1.80\"\n",
-        encoding="utf-8",
-    )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "legacy")
-    assert materializer.rustup_channel(repo) is None
+def test_legacy_toolchain_file_selects_a_safe_channel(tmp_path: Path) -> None:
+    """A base-owned legacy rust-toolchain file can select a bounded channel."""
+    repo = init_repo(tmp_path)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "rust-toolchain").write_text("nightly-2026-08-01\n")
+    revision = commit(repo)
+    assert materializer.toolchain_channel(repo, revision) == "nightly-2026-08-01"
+    assert materializer.rustup_channel(repo, revision) == "nightly-2026-08-01"
 
 
-def test_legacy_rust_toolchain_file(tmp_path: Path) -> None:
-    """A one-line rust-toolchain file is accepted as the rustup channel."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "Cargo.toml").write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
-    (repo / "rust-toolchain").write_text("nightly-2026-08-01\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "nightly")
-    assert materializer.toolchain_channel(repo) == "nightly-2026-08-01"
-    assert materializer.rustup_channel(repo) == "nightly-2026-08-01"
-
-
-def test_no_cargo_toml_writes_empty_manifest(tmp_path: Path) -> None:
-    """Python-only trees do not install a Rust toolchain."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    payload = materializer.materialize(repo, tmp_path / "out")
+def test_tree_without_cargo_manifest_writes_empty_revision_manifest(tmp_path: Path) -> None:
+    """A non-Rust base commit records its revision without installing Rust."""
+    repo = init_repo(tmp_path)
+    revision = commit(repo)
+    payload = materializer.materialize(repo, revision, tmp_path / "out")
+    assert payload["revision_sha"] == revision
     assert payload["rustup_channel"] is None
     assert payload["has_manifest"] is False
     assert payload["inputs"] == []
 
 
-def test_rejects_parent_directory_workspace_member(tmp_path: Path) -> None:
-    """Workspace members cannot escape the repository root."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "Cargo.toml").write_text(
-        "[workspace]\nmembers = [\"../escape\"]\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="bounded path"):
-        materializer.workspace_member_manifests(repo)
+def test_workspace_member_path_and_glob_validation_fail_closed(tmp_path: Path) -> None:
+    """Traversal, recursive globs, and in-segment globs cannot select blobs."""
+    repo = init_repo(tmp_path)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["../escape"]\n')
+    revision = commit(repo, "traversal")
+    with pytest.raises(ValueError, match="bounded repository path"):
+        materializer.workspace_member_manifests(repo, revision)
+    for member in ("crates/**", "cr*tes/foo", "crates/?"):
+        with pytest.raises(ValueError, match="unsupported workspace member glob"):
+            materializer.expand_workspace_member(member, {"Cargo.toml"})
 
 
-def test_rejects_symlink_input(tmp_path: Path) -> None:
-    """Symlinked Cargo inputs cannot enter the trusted image context."""
-    repo = rust_workspace(tmp_path)
-    target = tmp_path / "outside.toml"
-    target.write_text("[package]\n", encoding="utf-8")
+def test_symlink_inputs_do_not_cross_the_regular_blob_boundary(tmp_path: Path) -> None:
+    """Git symlink entries are excluded instead of following worktree targets."""
+    repo, _ = rust_workspace(tmp_path)
+    outside = tmp_path / "outside.lock"
+    outside.write_text("outside\n")
     (repo / "Cargo.lock").unlink()
-    (repo / "Cargo.lock").symlink_to(target)
-    git(repo, "add", "-A")
-    git(repo, "commit", "-m", "symlink")
-    with pytest.raises(ValueError, match="non-regular"):
-        materializer.materialize(repo, tmp_path / "out")
+    (repo / "Cargo.lock").symlink_to(outside)
+    revision = commit(repo, "symlink lock")
+    output = tmp_path / "out"
+    payload = materializer.materialize(repo, revision, output)
+    assert payload["has_lock"] is False
+    assert not (output / "Cargo.lock").exists()
 
 
-def test_cli_and_entrypoint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_cli_and_script_entrypoint_require_exact_base_sha(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The workflow CLI prints the manifest and the script entrypoint succeeds."""
-    repo = rust_workspace(tmp_path)
+    """The workflow CLI and script entrypoint bind output to the given revision."""
+    repo, revision = rust_workspace(tmp_path)
     output = tmp_path / "cli-out"
-    assert materializer.main(["--repo-root", str(repo), "--output-dir", str(output)]) == 0
-    printed = json.loads(capsys.readouterr().out)
-    assert printed["rustup_channel"] == "1.97.1"
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [materializer.__file__, "--repo-root", str(repo), "--output-dir", str(tmp_path / "entry")],
-    )
+    argv = [
+        "--repo-root",
+        str(repo),
+        "--base-sha",
+        revision,
+        "--output-dir",
+        str(output),
+    ]
+    assert materializer.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["revision_sha"] == revision
+    monkeypatch.setattr(sys, "argv", [materializer.__file__, *argv[:-1], str(tmp_path / "entry")])
     with pytest.raises(SystemExit, match="0"):
         runpy.run_path(materializer.__file__, run_name="__main__")
 
 
-def test_parse_rust_version_helpers() -> None:
-    """Version parsing distinguishes Debian rustc from newer rust-version pins."""
-    assert materializer.parse_rust_version("1.97") == (1, 97, 0)
-    assert materializer.parse_rust_version("1.85.0") == (1, 85, 0)
-    assert materializer.parse_rust_version("nightly") is None
-    assert materializer.parse_rust_version("1.97") > materializer.DEBIAN_RUSTC
+def test_workspace_glob_expands_only_immediate_base_crates(tmp_path: Path) -> None:
+    """A trailing glob includes immediate crate manifests but not deeper paths."""
+    repo = init_repo(tmp_path)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n')
+    direct = repo / "crates/direct"
+    direct.mkdir(parents=True)
+    (direct / "Cargo.toml").write_text('[package]\nname = "direct"\nversion = "0.1.0"\n')
+    deep = repo / "crates/group/deep"
+    deep.mkdir(parents=True)
+    (deep / "Cargo.toml").write_text('[package]\nname = "deep"\nversion = "0.1.0"\n')
+    revision = commit(repo)
+    assert materializer.workspace_member_manifests(repo, revision) == [
+        "crates/direct/Cargo.toml"
+    ]
 
 
-def test_workspace_glob_members_copy_crate_manifests(tmp_path: Path) -> None:
-    """A trailing crates/* glob copies each member Cargo.toml without sources."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "Cargo.toml").write_text(
-        '[workspace]\nmembers = ["crates/*"]\n',
-        encoding="utf-8",
-    )
-    crate = repo / "crates/originweave-destination"
-    crate.mkdir(parents=True)
-    (crate / "Cargo.toml").write_text(
-        "[package]\nname = \"originweave-destination\"\nversion = \"0.1.0\"\n",
-        encoding="utf-8",
-    )
-    (crate / "src").mkdir()
-    (crate / "src/lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "glob")
-    output = tmp_path / "out"
-    payload = materializer.materialize(repo, output)
-    assert "crates/originweave-destination/Cargo.toml" in payload["inputs"]
-    assert (output / "crates/originweave-destination/Cargo.toml").is_file()
-    assert not (output / "crates/originweave-destination/src/lib.rs").exists()
+def test_non_list_and_missing_workspace_members_yield_no_manifests(tmp_path: Path) -> None:
+    """Non-list metadata and absent member blobs cannot become Rust inputs."""
+    repo = init_repo(tmp_path)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = "crates/*"\n')
+    non_list = commit(repo, "non-list")
+    assert materializer.workspace_member_manifests(repo, non_list) == []
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = [1, "missing"]\n')
+    missing = commit(repo, "missing")
+    assert materializer.workspace_member_manifests(repo, missing) == []
 
 
-def test_unsupported_workspace_glob_fails_closed(tmp_path: Path) -> None:
-    """Recursive or in-segment globs are not trusted image inputs."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "Cargo.toml").write_text(
-        '[workspace]\nmembers = ["crates/**"]\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="unsupported workspace member glob"):
-        materializer.workspace_member_manifests(repo)
-    (repo / "Cargo.toml").write_text(
-        '[workspace]\nmembers = ["cr*tes/foo"]\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="unsupported workspace member glob"):
-        materializer.workspace_member_manifests(repo)
-
-
-def test_non_git_repo_with_cargo_toml_fails_closed(tmp_path: Path) -> None:
-    """Materialization requires a readable git tree for tracked-path evidence."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "Cargo.toml").write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
-    with pytest.raises(SystemExit):
-        materializer.main(["--repo-root", str(repo), "--output-dir", str(tmp_path / "out")])
-
-
-def test_read_toml_requires_a_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A TOML document that is not a table cannot describe a Cargo workspace."""
-    path = tmp_path / "Cargo.toml"
-    path.write_text("[package]\nname = \"x\"\n", encoding="utf-8")
-    monkeypatch.setattr(materializer.tomllib, "loads", lambda _text: ["not-a-table"])
-    with pytest.raises(ValueError, match="TOML table"):
-        materializer.read_toml(path)
-
-
-def test_invalid_toml_and_channel(tmp_path: Path) -> None:
-    """Non-table manifests and unsafe toolchain channels fail closed."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "Cargo.toml").write_text("[]\n", encoding="utf-8")
+def test_invalid_toml_and_unsafe_channels_fail_closed(tmp_path: Path) -> None:
+    """Malformed metadata and unsafe toolchain channels never select rustup."""
     with pytest.raises(materializer.tomllib.TOMLDecodeError):
-        materializer.read_toml(repo / "Cargo.toml")
-    (repo / "Cargo.toml").write_text("[workspace]\nmembers = [1]\n", encoding="utf-8")
-    assert materializer.workspace_member_manifests(repo) == []
-    (repo / "rust-toolchain.toml").write_text(
-        '[toolchain]\nchannel = "../evil"\n',
-        encoding="utf-8",
-    )
-    assert materializer.toolchain_channel(repo) is None
-    (repo / "rust-toolchain").write_text("not a channel!\n", encoding="utf-8")
-    assert materializer.toolchain_channel(repo) is None
+        materializer.read_toml(b"this is not toml [[[", "Cargo.toml")
+    with (
+        pytest.raises(TypeError, match="TOML table"),
+        pytest.MonkeyPatch.context() as monkeypatch,
+    ):
+        monkeypatch.setattr(materializer.tomllib, "loads", lambda _text: ["not-table"])
+        materializer.read_toml(b"ignored", "Cargo.toml")
+
+    repo = init_repo(tmp_path)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "../evil"\n')
+    (repo / "rust-toolchain").write_text("not a channel!\n")
+    revision = commit(repo)
+    assert materializer.toolchain_channel(repo, revision) is None
 
 
-def test_empty_glob_directory_and_missing_member(tmp_path: Path) -> None:
-    """Missing glob parents and absent member directories yield no manifests."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "Cargo.toml").write_text(
-        '[workspace]\nmembers = ["crates/*", "missing-crate"]\n',
-        encoding="utf-8",
-    )
-    assert materializer.workspace_member_manifests(repo) == []
-
-
-def test_symlink_glob_parent_is_ignored(tmp_path: Path) -> None:
-    """A symlinked crates/ directory cannot expand workspace members."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "crate").mkdir()
-    (outside / "crate/Cargo.toml").write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
-    (repo / "crates").symlink_to(outside)
-    assert materializer.expand_workspace_member(repo, "crates/*") == []
-
-
-def test_non_numeric_rust_version_does_not_select_rustup(tmp_path: Path) -> None:
-    """A rust-version channel name is not treated as newer than Debian rustc."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "Cargo.toml").write_text(
-        "[package]\nname = \"stable\"\nversion = \"0.1.0\"\nrust-version = \"stable\"\n",
-        encoding="utf-8",
-    )
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "stable")
-    assert materializer.declared_rust_version(repo) == "stable"
-    assert materializer.rustup_channel(repo) is None
-
-
-def test_symlink_manifest_and_non_list_members(tmp_path: Path) -> None:
-    """Symlinked manifests and non-list workspace members yield no rustup inputs."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    target = tmp_path / "outside.toml"
-    target.write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
-    (repo / "Cargo.toml").symlink_to(target)
-    assert materializer.declared_rust_version(repo) is None
-    assert materializer.workspace_member_manifests(repo) == []
-    (repo / "Cargo.toml").unlink()
-    (repo / "Cargo.toml").write_text("[workspace]\nmembers = \"crates/*\"\n", encoding="utf-8")
-    assert materializer.workspace_member_manifests(repo) == []
-
-
-def test_glob_skips_non_crate_children_and_unsafe_git_paths(tmp_path: Path) -> None:
-    """Glob expansion ignores files, symlinked crates, and unsafe git paths."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    crates = repo / "crates"
-    crates.mkdir()
-    (crates / "README").write_text("not a crate\n", encoding="utf-8")
-    linked = tmp_path / "linked-crate"
-    linked.mkdir()
-    (linked / "Cargo.toml").write_text("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", encoding="utf-8")
-    (crates / "linked").symlink_to(linked)
-    empty = crates / "empty"
-    empty.mkdir()
-    (empty / "Cargo.toml").symlink_to(linked / "Cargo.toml")
-    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n', encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "glob-skips")
-    assert materializer.expand_workspace_member(repo, "crates/*") == []
-    listed = materializer.tracked_paths(repo)
-    assert all(".." not in path and not path.startswith("/") for path in listed)
-
-
-def test_declared_version_without_manifest_and_unsafe_tracked_paths(
+def test_tracked_paths_accept_only_well_formed_regular_blobs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Missing manifests and git paths with traversal do not enter the image."""
-    assert materializer.declared_rust_version(tmp_path) is None
+    """Tree parsing excludes symlinks and directories and validates every entry."""
+    repo = tmp_path
+    revision = "a" * 40
+    blob = "b" * 40
     monkeypatch.setattr(
         materializer,
         "_git",
-        lambda *_args, **_kwargs: b"../escape\0/abs/Cargo.toml\0Cargo.toml\0",
+        lambda *_args: (
+            f"100644 blob {blob}\tCargo.toml\0"
+            f"100755 blob {blob}\tscripts/tool\0"
+            f"120000 blob {blob}\tCargo.lock\0"
+            f"040000 tree {blob}\tcrates\0"
+        ).encode(),
     )
-    assert materializer.tracked_paths(tmp_path) == {"Cargo.toml"}
+    assert materializer.tracked_paths(repo, revision) == {"Cargo.toml", "scripts/tool"}
+
+    for malformed, match in (
+        (b"broken\0", "malformed tree entry"),
+        (b"100644 blob bad\tCargo.toml\0", "invalid object identity"),
+        (f"100644 blob {blob}\t../escape\0".encode(), "bounded repository path"),
+        (f"100644 blob {blob}\tbad-".encode() + b"\xff\0", "valid UTF-8"),
+    ):
+        monkeypatch.setattr(materializer, "_git", lambda *_args, value=malformed: value)
+        with pytest.raises((RuntimeError, ValueError), match=match):
+            materializer.tracked_paths(repo, revision)
 
 
-def test_git_index_reader_rejects_unsafe_and_truncated_trees(tmp_path: Path) -> None:
-    """Tracked-path evidence fails closed when the git dir or index is unusable."""
+def test_git_object_reader_rejects_untrusted_invocations_and_repositories(tmp_path: Path) -> None:
+    """Only exact tree/blob reads execute, and invalid repository metadata fails closed."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    with pytest.raises(RuntimeError, match="not a git repository"):
-        materializer.tracked_paths(repo)
-
-    git_link = repo / ".git"
-    git_link.symlink_to(tmp_path)
-    with pytest.raises(RuntimeError, match="symbolic link"):
-        materializer.tracked_paths(repo)
-    git_link.unlink()
-
-    git_link.write_text("not a pointer\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="invalid gitdir pointer"):
-        materializer.tracked_paths(repo)
-
-    missing_dir = tmp_path / "missing-git"
-    git_link.write_text(f"gitdir: {missing_dir}\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="not a regular directory"):
-        materializer.tracked_paths(repo)
-
-    linked_dir = tmp_path / "linked-git"
-    linked_dir.symlink_to(tmp_path)
-    git_link.write_text("gitdir: linked-git\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="not a regular directory"):
-        materializer.tracked_paths(repo)
-    git_link.unlink()
-    linked_dir.unlink()
-
-    git_dir = repo / ".git"
-    git_dir.mkdir()
-    with pytest.raises(RuntimeError, match="git index is not a regular file"):
-        materializer.tracked_paths(repo)
-    index = git_dir / "index"
-    index.symlink_to(tmp_path / "outside-index")
-    with pytest.raises(RuntimeError, match="git index is not a regular file"):
-        materializer.tracked_paths(repo)
-    index.unlink()
-
-    index.write_bytes(b"NOPE")
-    with pytest.raises(RuntimeError, match="header is invalid"):
-        materializer.tracked_paths(repo)
-    index.write_bytes(_git_index([b"Cargo.toml"], version=4))
-    with pytest.raises(RuntimeError, match="unsupported git index version"):
-        materializer.tracked_paths(repo)
-    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1))
-    with pytest.raises(RuntimeError, match="truncated git index"):
-        materializer.tracked_paths(repo)
-    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 0x4000))
-    with pytest.raises(RuntimeError, match="truncated git index"):
-        materializer.tracked_paths(repo)
-    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 20))
-    with pytest.raises(RuntimeError, match="truncated git index path"):
-        materializer.tracked_paths(repo)
-    index.write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + b"\0" * 60 + struct.pack(">H", 0x0FFF))
-    with pytest.raises(RuntimeError, match="truncated git index path"):
-        materializer.tracked_paths(repo)
-
     with pytest.raises(RuntimeError, match="unsupported invocation"):
         materializer._git(repo, "status")
     with pytest.raises(RuntimeError, match="unsupported invocation"):
         materializer._git(repo)
-    index.write_bytes(_git_index([]))
-    assert materializer.tracked_paths(repo) == set()
+    with pytest.raises(ValueError, match="exactly 40"):
+        materializer._git(repo, "ls-tree", "-rz", "--full-tree", "main")
+    with pytest.raises(ValueError, match="blob selector"):
+        materializer._git(repo, "show", "main:Cargo.toml")
+    with pytest.raises(RuntimeError, match="not a git repository"):
+        materializer.tracked_paths(repo, "a" * 40)
+
+    git_path = repo / ".git"
+    git_path.symlink_to(tmp_path)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        materializer.tracked_paths(repo, "a" * 40)
+    git_path.unlink()
+    git_path.write_text("not a pointer\n")
+    with pytest.raises(RuntimeError, match="invalid gitdir pointer"):
+        materializer.tracked_paths(repo, "a" * 40)
+    git_path.write_text("gitdir: missing\n")
+    with pytest.raises(RuntimeError, match="not a regular directory"):
+        materializer.tracked_paths(repo, "a" * 40)
 
 
-def test_git_index_reader_parses_extended_and_long_names(tmp_path: Path) -> None:
-    """Index v3 extended entries and 0xFFF-length names still yield bounded paths."""
-    repo = tmp_path / "repo"
-    git_dir = repo / ".git"
-    git_dir.mkdir(parents=True)
-    long_name = b"crates/" + (b"a" * 20) + b"/Cargo.toml"
-    (git_dir / "index").write_bytes(_git_index([long_name], version=3, extended=True))
-    assert materializer.tracked_paths(repo) == {long_name.decode("ascii")}
-
-    flags = 0x0FFF
-    header = b"\0" * 60 + struct.pack(">H", flags)
-    payload = header + long_name + b"\0"
-    payload += b"\0" * ((8 - (len(payload) % 8)) % 8)
-    (git_dir / "index").write_bytes(b"DIRC" + struct.pack(">II", 2, 1) + payload)
-    assert materializer.tracked_paths(repo) == {long_name.decode("ascii")}
-
-
-def test_gitdir_pointer_reads_real_index(tmp_path: Path) -> None:
-    """A gitdir pointer file still exposes tracked rust inputs."""
-    repo = rust_workspace(tmp_path)
+def test_real_git_failures_and_gitdir_pointers_are_handled(tmp_path: Path) -> None:
+    """Missing objects fail closed while a regular worktree pointer remains readable."""
+    repo, revision = rust_workspace(tmp_path)
+    with pytest.raises(RuntimeError, match="git ls-tree failed"):
+        materializer.tracked_paths(repo, "f" * 40)
     moved = tmp_path / "real-git"
     (repo / ".git").rename(moved)
-    (repo / ".git").write_text(f"gitdir: {moved}\n", encoding="utf-8")
-    assert "Cargo.toml" in materializer.tracked_paths(repo)
+    (repo / ".git").write_text(f"gitdir: {moved}\n")
+    assert "Cargo.toml" in materializer.tracked_paths(repo, revision)
 
 
-def test_invalid_toml_decode_fails_cli(tmp_path: Path) -> None:
-    """Corrupt Cargo.toml fails the materializer CLI instead of building an image."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Test")
-    git(repo, "config", "user.email", "test@example.invalid")
-    (repo / "Cargo.toml").write_text("this is not toml [[[\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-m", "corrupt")
+def test_invalid_sha_output_symlink_and_nonregular_blob_fail_closed(tmp_path: Path) -> None:
+    """Revision, output, and regular-blob boundaries reject ambiguous inputs."""
+    repo, revision = rust_workspace(tmp_path)
+    with pytest.raises(ValueError, match="base SHA"):
+        materializer.materialize(repo, "main", tmp_path / "out")
+    linked_output = tmp_path / "linked-output"
+    linked_output.symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="output directory"):
+        materializer.materialize(repo, revision, linked_output)
+    with pytest.raises(ValueError, match="non-regular"):
+        materializer._read_blob(repo, revision, "Cargo.lock", {"Cargo.toml"})
+
+
+def test_existing_destination_symlink_and_invalid_base_toml_fail_cli(tmp_path: Path) -> None:
+    """The materializer neither replaces output symlinks nor accepts malformed base TOML."""
+    repo, revision = rust_workspace(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "Cargo.toml").symlink_to(tmp_path / "outside")
+    with pytest.raises(ValueError, match="symlinked Rust output"):
+        materializer.materialize(repo, revision, output)
+
+    (repo / "Cargo.toml").write_text("this is not toml [[[\n")
+    corrupt = commit(repo, "corrupt")
     with pytest.raises(SystemExit):
-        materializer.main(["--repo-root", str(repo), "--output-dir", str(tmp_path / "out")])
+        materializer.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--base-sha",
+                corrupt,
+                "--output-dir",
+                str(tmp_path / "corrupt-out"),
+            ]
+        )
+
+
+def test_parse_helpers_and_bounded_paths_cover_edge_cases() -> None:
+    """Version and path helpers accept normalized values and reject ambiguity."""
+    assert materializer.parse_rust_version("1.97") == (1, 97, 0)
+    assert materializer.parse_rust_version("1.85.0") == (1, 85, 0)
+    assert materializer.parse_rust_version("nightly") is None
+    assert materializer._nested({}, "missing.value") is None
+    assert materializer._nested({"value": "not-a-table"}, "value.child") is None
+    assert materializer._bounded_member_path("crates/core").as_posix() == "crates/core"
+    for path in ("", "/absolute", "./dot", "a/../b", "a\\b", "a//b"):
+        with pytest.raises(ValueError, match="bounded repository path"):
+            materializer._bounded_repo_path(path)
+
+
+def test_absent_rust_metadata_and_empty_legacy_channel_take_no_toolchain_path(
+    tmp_path: Path,
+) -> None:
+    """Absent version fields and an empty legacy file select no Rust toolchain."""
+    repo = init_repo(tmp_path)
+    empty = commit(repo, "empty")
+    assert materializer.declared_rust_version(repo, empty) is None
+    assert materializer.workspace_member_manifests(repo, empty) == []
+    assert materializer.rustup_channel(repo, empty) is None
+    with pytest.raises(ValueError, match="base SHA"):
+        materializer.tracked_paths(repo, "main")
+
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "rust-toolchain").write_text("")
+    no_version = commit(repo, "no version")
+    assert materializer.declared_rust_version(repo, no_version) is None
+    assert materializer.toolchain_channel(repo, no_version) is None
+    assert materializer.rustup_channel(repo, no_version) is None
