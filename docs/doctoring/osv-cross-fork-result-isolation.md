@@ -19,9 +19,6 @@ same checkout path also gives the base and head scan identical source paths, so
 the existing OSV comparison retains its meaning. Missing or empty output remains
 a hard failure; this change does not weaken vulnerability comparison.
 
-The workflow also uses OSV Scanner's current `--output-file` spelling instead
-of the deprecated `--output` alias.
-
 ## Verification and rollback
 
 - The workflow contract proves both checkouts target `source/`, every scan reads
