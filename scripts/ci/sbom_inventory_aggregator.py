@@ -279,6 +279,7 @@ def _markdown_text(value: Any) -> str:
         "@": "&#64;",
         "#": "&#35;",
         ".": "&#46;",
+        "$": "&#36;",
     }
     return "".join(replacements.get(character, character) for character in text)
 

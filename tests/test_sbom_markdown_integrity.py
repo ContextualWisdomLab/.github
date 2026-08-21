@@ -133,3 +133,23 @@ def test_empty_error_remains_unavailable_in_summary_and_report() -> None:
     assert inventory["summary"]["complete"] is False
     assert "SBOM unavailable:" in markdown
     assert "No components reported." not in markdown
+
+
+def test_render_inventory_markdown_neutralizes_dollar_math_delimiters() -> None:
+    """Untrusted SBOM values cannot become GitHub inline-math expressions."""
+    inventory = agg.build_inventory(
+        [
+            agg.RepoInventory(
+                repo="acme/$x$",
+                components=[
+                    agg.Component(name="$x$", version="$x$", license="$x$")
+                ],
+            ),
+            agg.RepoInventory(repo="acme/broken", error="$x$"),
+        ]
+    )
+
+    markdown = agg.render_inventory_markdown(inventory, generated_at="$x$")
+
+    assert "$x$" not in markdown
+    assert markdown.count("&#36;") >= 12
