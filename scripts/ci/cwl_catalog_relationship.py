@@ -61,6 +61,11 @@ def validate_relationship(value: object, index: int, services: dict[str, dict[st
         raise CatalogValidationError(f"{path} references unknown authoritative data owner")
     if provider == consumer:
         raise CatalogValidationError(f"{path} creates a forbidden self-edge")
+    consumer_repository = str(services[consumer]["repository"])
+    if consumer_repository not in services[provider]["consumer_repositories"]:
+        raise CatalogValidationError(
+            f"{path} consumer repository is not declared by provider service"
+        )
     kind = require_enum(relation["contract_kind"], f"{path}.contract_kind", CONTRACT_KINDS)
     require_semver(relation["contract_version"], f"{path}.contract_version")
     require_immutable_reference(relation["immutable_reference"], f"{path}.immutable_reference")

@@ -8,13 +8,14 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from catalogue_test_helpers import (
     CATALOG,
     ROOT,
     load_catalog,
+    load_service,
     validator,
     write_catalog_tree,
+    write_service,
 )
 from cwl_catalog_contract import CatalogValidationError
 
@@ -160,6 +161,22 @@ def test_authoritative_update_is_accepted_only_at_authoritative_consumer(
     relation["authoritative_data_owner_service_id"] = "orgmetra_hris"
     relation["may_update_authoritative_fact"] = True
     validator.validate_catalog(write_catalog_tree(tmp_path, catalog))
+
+
+def test_relationship_requires_provider_consumer_declaration(tmp_path: Path) -> None:
+    """A relationship edge must be declared by the provider manifest too."""
+
+    catalog = load_catalog()
+    relation = first_relation(catalog)
+    provider_id = str(relation["provider_service_id"])
+    provider = load_service(provider_id)
+    provider["consumer_repositories"] = []
+
+    with pytest.raises(
+        CatalogValidationError,
+        match="consumer repository is not declared by provider service",
+    ):
+        validator.validate_catalog(write_service(tmp_path, provider_id, provider))
 
 
 def test_documentation_workflow_and_docstrings_are_complete() -> None:

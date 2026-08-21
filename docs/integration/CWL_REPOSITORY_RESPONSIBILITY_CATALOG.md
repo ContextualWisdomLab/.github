@@ -41,7 +41,8 @@ The canonical product names are `EgressWeave`, `appguardrail`, `wardnet`, and
 globally unique in the reviewed catalogue so two products cannot silently claim
 the same authority. A provider-facing contract does not create a consumer edge:
 `consumer_repositories` and relationship records are added only when matching
-versioned integration source exists.
+versioned integration source exists, and the validator rejects any relationship
+whose consumer repository is absent from the provider manifest.
 
 ## Ownership rules
 
