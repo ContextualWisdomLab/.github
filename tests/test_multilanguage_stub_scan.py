@@ -398,6 +398,33 @@ def test_inventory_payload_binding_and_clean_gates() -> None:
     assert not scan.inventory_payload_is_clean({**clean, "errors": ["x"]})
 
 
+def test_inventory_payload_identity_gate_binds_all_revisions() -> None:
+    """Reject valid-looking inventories emitted for a different target or scanner."""
+    clean = {
+        "schema": "cwl.implementation-completeness/v2",
+        "result": "pass",
+        "findings": [],
+        "errors": [],
+        "checked_runtime_source_files": 0,
+        "repository": "ContextualWisdomLab/naruon",
+        "repository_sha": "a" * 40,
+        "workflow_sha": "b" * 40,
+    }
+
+    assert scan.inventory_payload_matches_identity(
+        clean,
+        "ContextualWisdomLab/naruon",
+        "a" * 40,
+        "b" * 40,
+    )
+    assert not scan.inventory_payload_matches_identity(
+        {**clean, "repository_sha": "c" * 40},
+        "ContextualWisdomLab/naruon",
+        "a" * 40,
+        "b" * 40,
+    )
+
+
 def test_cli_binds_exact_repository_and_workflow_shas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

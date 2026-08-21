@@ -146,6 +146,25 @@ def test_dispatch_uses_explicit_bounded_offsets_for_full_fleet_replay(
     }
 
 
+def test_empty_scheduled_shard_is_a_successful_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Treat an empty hash shard as normal hourly operation rather than failure."""
+    selected, receipt = run_selector(
+        tmp_path,
+        monkeypatch,
+        [],
+        event_name="schedule",
+        epoch_hour=0,
+        max_repositories=12,
+    )
+
+    assert selected == []
+    assert receipt["eligible_repository_count"] == 0
+    assert receipt["selected_repository_count"] == 0
+    assert receipt["complete"] is True
+
+
 def test_dispatch_rejects_an_out_of_range_continuation_offset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

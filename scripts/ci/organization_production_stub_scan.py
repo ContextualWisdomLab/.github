@@ -122,6 +122,21 @@ def inventory_payload_is_binding(payload: object) -> bool:
     return isinstance(payload.get("checked_runtime_source_files"), int)
 
 
+def inventory_payload_matches_identity(
+    payload: object,
+    repository: str,
+    repository_sha: str,
+    workflow_sha: str,
+) -> bool:
+    """Return whether a valid inventory belongs to the exact scanned revisions."""
+    return (
+        inventory_payload_is_binding(payload)
+        and payload.get("repository") == repository
+        and payload.get("repository_sha") == repository_sha
+        and payload.get("workflow_sha") == workflow_sha
+    )
+
+
 def inventory_payload_is_clean(payload: Mapping[str, Any]) -> bool:
     """Return whether a valid inventory may close a remediation issue."""
     return (

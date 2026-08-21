@@ -61,6 +61,7 @@ def test_manual_dispatch_uses_bounded_offsets_for_the_full_fleet_replay() -> Non
     assert "client_payload.continuation_offset=${next_continuation_offset}" in text
     assert "selected-repositories.json" in text
     assert "No eligible organization repository was selected" in text
+    assert "scheduled shard is a successful no-op" in text
 
 
 def test_operator_documentation_matches_the_hourly_sharded_contract() -> None:
@@ -166,6 +167,7 @@ def test_finding_state_is_never_reclassified_as_a_successful_scan() -> None:
     assert "--workflow-sha \"$WORKFLOW_SHA\"" in text
     assert "inventory_payload_is_binding" in text
     assert "inventory_payload_is_clean" in text
+    assert "inventory_payload_matches_identity" in text
     assert '--input "${RUNNER_TEMP}/issue-payload.json"' in text
     assert 'body="$(cat "${RUNNER_TEMP}/issue-body.md")"' not in text
     assert '-f body="$body"' not in text
@@ -184,6 +186,7 @@ def test_shard_execution_budget_is_observable_and_preventive() -> None:
     assert "DEFERRED_REPOSITORY_COUNT: ${{ needs.discover-repositories.outputs.deferred_repository_count }}" in text
     assert "MAX_REPOSITORIES_PER_RUN: ${{ needs.discover-repositories.outputs.max_repositories_per_run }}" in text
     assert "violated the enforced run budget" in text
+    assert "completed as a successful no-op" in text
     assert "Selection budget receipt:" in text
     assert "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" in text
     assert "Shard execution receipt:" in text

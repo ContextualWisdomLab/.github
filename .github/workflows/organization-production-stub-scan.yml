@@ -223,8 +223,7 @@ jobs:
           matrix="$(jq -sc '{include: .}' "${RUNNER_TEMP}/matrix.ndjson")"
           selected_repository_count="$(jq '.include | length' <<<"$matrix")"
           if [ "$selected_repository_count" -eq 0 ]; then
-            echo "::error::No eligible organization repository was selected."
-            exit 1
+            echo "::notice::No eligible organization repository was selected; this scheduled shard is a successful no-op."
           fi
           if [ "$selected_repository_count" -ne "$receipt_selected_repository_count" ]; then
             echo "::error::Selection receipt count does not match the exact-SHA matrix."
@@ -319,6 +318,7 @@ jobs:
           from scripts.ci.organization_production_stub_scan import (
               inventory_payload_is_binding,
               inventory_payload_is_clean,
+              inventory_payload_matches_identity,
           )
 
           report_path = Path(os.environ["REPORT_PATH"])
@@ -328,6 +328,13 @@ jobs:
               raise SystemExit(2)
           if not inventory_payload_is_binding(payload):
               raise SystemExit(2)
+          if not inventory_payload_matches_identity(
+              payload,
+              os.environ["TARGET_REPOSITORY"],
+              os.environ["TARGET_SHA"],
+              os.environ["WORKFLOW_SHA"],
+          ):
+              raise SystemExit(2)
           if os.environ["SCANNER_EXIT_CODE"] == "0" and not inventory_payload_is_clean(
               payload
           ):
@@ -335,7 +342,12 @@ jobs:
           PY
           validation_exit=$?
           if [ "$validation_exit" -ne 0 ]; then
-            if ! jq -e '.schema == "cwl.implementation-completeness/v2"' "$report_path" >/dev/null 2>&1; then
+            if ! jq -e \
+              --arg repository "$TARGET_REPOSITORY" \
+              --arg repository_sha "$TARGET_SHA" \
+              --arg workflow_sha "$WORKFLOW_SHA" \
+              '.schema == "cwl.implementation-completeness/v2" and .repository == $repository and .repository_sha == $repository_sha and .workflow_sha == $workflow_sha' \
+              "$report_path" >/dev/null 2>&1; then
               jq -n \
                 --arg repository "$TARGET_REPOSITORY" \
                 --arg repository_sha "$TARGET_SHA" \
@@ -518,9 +530,12 @@ jobs:
               exit 1
             fi
           done
-          if [ "$SELECTED_REPOSITORY_COUNT" -eq 0 ] || [ "$SELECTED_REPOSITORY_COUNT" -gt "$MAX_REPOSITORIES_PER_RUN" ]; then
+          if [ "$SELECTED_REPOSITORY_COUNT" -gt "$MAX_REPOSITORIES_PER_RUN" ]; then
             echo "::error::The selected repository count violated the enforced run budget."
             exit 1
+          fi
+          if [ "$SELECTED_REPOSITORY_COUNT" -eq 0 ]; then
+            echo "::notice::No eligible organization repository was selected; this scheduled shard completed as a successful no-op."
           fi
           echo "Selection budget receipt: mode=${SELECTION_MODE}; eligible=${ELIGIBLE_REPOSITORY_COUNT}; selected=${SELECTED_REPOSITORY_COUNT}; deferred=${DEFERRED_REPOSITORY_COUNT}; cap=${MAX_REPOSITORIES_PER_RUN}; offset=${CONTINUATION_OFFSET}; next_offset=${NEXT_CONTINUATION_OFFSET}."
           created_at="$(
