@@ -233,6 +233,15 @@ def test_list_payload_flattens_bounded_paginated_responses() -> None:
     ) == [{"id": 1}, {"id": 2}]
 
 
+def test_list_payload_rejects_incompletely_paginated_total_count() -> None:
+    """A declared total larger than collected pages cannot look healthy."""
+    with pytest.raises(queue_health.QueueHealthError, match="incompletely paginated"):
+        queue_health._list_payload(
+            {"_queue_health_pages": [{"items": [{"id": 1}], "total_count": 2}]},
+            "items",
+        )
+
+
 def test_github_json_is_read_only_and_rejects_failures() -> None:
     """Use safe read-only CLI arguments and fail closed on transport errors."""
     def success_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:

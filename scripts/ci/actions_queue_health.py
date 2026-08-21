@@ -80,8 +80,13 @@ def load_allowlist(path: Path) -> list[str]:
     return repositories
 
 
-def _list_payload(payload: Any, key: str) -> list[dict[str, Any]]:
-    """Extract a bounded GitHub list response without guessing its shape."""
+def _list_payload(
+    payload: Any,
+    key: str,
+    *,
+    max_items: int = MAX_API_PAGE_SIZE * MAX_API_PAGES,
+) -> list[dict[str, Any]]:
+    """Extract one bounded GitHub list response without accepting under-collection."""
     declared_total_counts: list[Any] = []
     if isinstance(payload, dict) and PAGINATED_PAGES_KEY in payload:
         pages = payload[PAGINATED_PAGES_KEY]
@@ -111,8 +116,10 @@ def _list_payload(payload: Any, key: str) -> list[dict[str, Any]]:
         if any(isinstance(total_count, bool) or not isinstance(total_count, int) for total_count in declared_total_counts):
             raise QueueHealthError(f"GitHub response field {key!r} has invalid total counts")
         total_count = max(declared_total_counts)
-        if total_count < len(values) or total_count > MAX_API_PAGE_SIZE * MAX_API_PAGES:
+        if total_count < len(values) or total_count > max_items:
             raise QueueHealthError(f"GitHub response field {key!r} exceeds the bounded page size")
+        if PAGINATED_PAGES_KEY in payload and total_count != len(values):
+            raise QueueHealthError(f"GitHub response field {key!r} is incompletely paginated")
     return values
 
 
@@ -277,6 +284,7 @@ def collect_snapshot(
             pull_requests = _list_payload(
                 github_json(pulls_endpoint, paginate=True, runner=runner),
                 "pulls",
+                max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
             )
             normalized_pull_requests = sorted(
                 (_normalise_pull_request(item) for item in pull_requests),
@@ -288,6 +296,7 @@ def collect_snapshot(
                 retry_pull_requests = _list_payload(
                     github_json(pulls_endpoint, paginate=True, runner=runner),
                     "pulls",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
                 )
                 normalized_pull_requests = sorted(
                     (_normalise_pull_request(item) for item in retry_pull_requests),
@@ -315,6 +324,7 @@ def collect_snapshot(
                         runner=runner,
                     ),
                     "workflow_runs",
+                    max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
                 )
                 for run in runs:
                     run_id = run.get("id")
@@ -332,7 +342,11 @@ def collect_snapshot(
                         paginate=True,
                         runner=runner,
                     )
-                    jobs = _list_payload(jobs_payload, "jobs")
+                    jobs = _list_payload(
+                        jobs_payload,
+                        "jobs",
+                        max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                    )
                     runs_by_id[run_id] = _normalise_run(repository, run, jobs)
         except QueueHealthError as exc:
             collection_errors.append({"repository": repository, "error": str(exc)})
