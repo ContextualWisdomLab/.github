@@ -116,6 +116,30 @@ def test_keyverse_doctoring_records_idp_activation_and_credentials() -> None:
         assert phrase in doctoring
 
 
+def test_keyverse_documentation_preserves_adjacent_nonnest2_contract() -> None:
+    """Keep the new section from splitting the preceding architecture paragraph."""
+    architecture = Path("ARCHITECTURE.md").read_text(encoding="utf-8")
+    nonnest2 = architecture.split("## nonnest2 hourly caller\n", 1)[1].split(
+        "## Keyverse hourly caller\n", 1
+    )[0]
+
+    assert "protected `master`" in nonnest2
+    assert "only established scheduler credentials" in nonnest2
+    assert "`id-token: write`" in nonnest2
+    assert nonnest2.rstrip().endswith("The reusable engine stays product-neutral.")
+
+
+def test_product_caller_guidance_has_one_complete_scheduler_boundary() -> None:
+    """Keep contributor guidance singular and actionable after adding a caller."""
+    guidance = Path("CLAUDE.md").read_text(encoding="utf-8")
+    bullets = [line for line in guidance.splitlines() if "Product hourly callers" in line]
+
+    assert bullets == [
+        "- **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse"
+    ]
+    assert "into `pr-review-fix-scheduler.yml`." in guidance
+
+
 def test_path_block_helpers_keep_trigger_and_compileall_sets_disjoint() -> None:
     """A path listed only under push or compileall must not satisfy pull_request."""
     quality = (
