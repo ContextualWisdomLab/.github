@@ -108,11 +108,12 @@ sequenceDiagram
 ```
 
 The central scheduler also performs fail-closed queue hygiene. A
-`workflow_run` event without PR metadata falls back to the default-branch
-concurrency group; the workflow cancels older runs in that group, and the
-organization sweep retains only the newest metadata-free scheduler scan for
-the current default-branch SHA. PR-associated and unrelated workflow runs are
-not included in this deduplication.
+`workflow_run` event without PR metadata uses a workflow-run-specific
+default-branch fallback, separate from push runs; the workflow cancels older
+runs in that group, and the organization sweep retains only the newest
+metadata-free scheduler scan for the current default-branch SHA.
+PR-associated and unrelated workflow runs are not included in this
+deduplication.
 
 ## Trust boundaries
 

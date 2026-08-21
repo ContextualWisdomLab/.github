@@ -9,15 +9,15 @@ The central `Required PR Review Merge Scheduler` accumulated several queued
 metadata. These runs were redundant repository-wide scans. The existing
 current-head cleanup handled pull-request, push, and schedule runs, but did
 not classify this metadata-free `workflow_run` shape. The same event also used
-the default concurrency fallback without `cancel-in-progress`, so later runs
-did not remove an older queued scan.
+the default-branch fallback without `cancel-in-progress`, so later runs did
+not remove an older queued scan.
 
 ## Decision
 
 1. Include `workflow_run` in the scheduler's existing conditional
    `cancel-in-progress` expression. PR-associated workflow-run events retain
    their PR-specific concurrency key; metadata-free events use the existing
-   default-branch fallback.
+   workflow-run-specific default-branch fallback, separate from push runs.
 2. During the organization sweep, inspect only runs named exactly
    `Required PR Review Merge Scheduler` with event `workflow_run`, the current
    default branch, an empty `pull_requests` list, and complete Actions-run

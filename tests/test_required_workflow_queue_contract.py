@@ -72,11 +72,12 @@ def test_scheduler_deduplicates_metadata_free_workflow_run_scans() -> None:
 
     assert "github.event_name == 'workflow_run'" in concurrency
     assert "|| github.event_name == 'workflow_run'" in cancel_line
+    assert "format('workflow-run-{0}', github.ref)" in concurrency
     assert '.event == "workflow_run"' in queue_hygiene
     assert '.name == "Required PR Review Merge Scheduler"' in queue_hygiene
     assert '((.pull_requests // []) | length) == 0' in queue_hygiene
     assert '.head_sha == $current_default_sha' in queue_hygiene
-    assert 'sort_by(.created_at, (.id | tostring))' in queue_hygiene
+    assert 'sort_by(.created_at, .id)' in queue_hygiene
 
 
 def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:

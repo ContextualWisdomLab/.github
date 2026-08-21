@@ -92,6 +92,7 @@ concurrency:
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'pull_request_review' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+    github.event_name == 'workflow_run' && format('workflow-run-{0}', github.ref) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
     github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
@@ -1028,7 +1029,7 @@ jobs:
                           created_at
                         }
                     ]
-                    | sort_by(.created_at, (.id | tostring))
+                    | sort_by(.created_at, .id)
                     | .[0:-1]' <<<"$active_runs_json"
                 )"
                 superseded_runs_json="$(
