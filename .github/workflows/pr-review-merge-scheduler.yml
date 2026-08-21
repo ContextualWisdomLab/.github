@@ -99,7 +99,7 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.run_id ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || github.event_name == 'workflow_run' }}
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
@@ -997,6 +997,47 @@ jobs:
                       }
                   ]' <<<"$active_runs_json"
               )"
+
+              # Metadata-free workflow_run events share the default-branch
+              # concurrency fallback. Keep the newest scan for the current
+              # default HEAD and cancel older same-head scans left by a queue
+              # backlog or an earlier scheduler implementation.
+              duplicate_scheduler_runs_json="[]"
+              if [ -n "$current_default_sha" ]; then
+                duplicate_scheduler_runs_json="$(
+                  jq \
+                    --arg default_branch "$default_branch" \
+                    --arg current_default_sha "$current_default_sha" \
+                    '[
+                      .[]
+                      | select(
+                          .event == "workflow_run" and
+                          .name == "Required PR Review Merge Scheduler" and
+                          .head_branch == $default_branch and
+                          .head_sha == $current_default_sha and
+                          ((.pull_requests // []) | length) == 0
+                        )
+                      | {
+                          id,
+                          name,
+                          status,
+                          event,
+                          head_branch,
+                          run_head: .head_sha,
+                          current_head: $current_default_sha,
+                          created_at
+                        }
+                    ]
+                    | sort_by(.created_at, (.id | tostring))
+                    | .[0:-1]' <<<"$active_runs_json"
+                )"
+                superseded_runs_json="$(
+                  jq -n \
+                    --argjson superseded "$superseded_runs_json" \
+                    --argjson duplicates "$duplicate_scheduler_runs_json" \
+                    '$superseded + $duplicates | unique_by(.id)'
+                )"
+              fi
             fi
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then

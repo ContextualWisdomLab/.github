@@ -69,6 +69,13 @@ block a policy-clean current head. The scheduler logs the exact run id and
 bounded API error as an Actions warning, then continues the current-head
 decision.
 
+Metadata-free `workflow_run` scheduler events use the default-branch fallback
+concurrency group. They therefore cancel older runs in that group, and the
+organization sweep keeps only the newest same-HEAD central scheduler scan.
+This cleanup is limited to the exact scheduler workflow, the default branch,
+and an empty `pull_requests` list; PR-associated and unrelated workflow runs
+remain eligible for their own queue decisions.
+
 Old approvals and old checks are not merge evidence after the head SHA
 changes. OpenCode review evidence must be internally same-head as well as
 GitHub-attached same-head. If the review body includes `Gate evidence` with

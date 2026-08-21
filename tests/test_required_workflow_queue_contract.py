@@ -57,6 +57,28 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 2
 
 
+def test_scheduler_deduplicates_metadata_free_workflow_run_scans() -> None:
+    """Keep only the newest same-head central scheduler scan without PR metadata."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency = workflow.split("concurrency:", 1)[1].split(
+        "permissions:", 1
+    )[0]
+    cancel_line = next(
+        line for line in concurrency.splitlines() if "cancel-in-progress:" in line
+    )
+    queue_hygiene = workflow.split("# Queue hygiene, part 1:", 1)[1].split(
+        "# Queue hygiene, part 2:", 1
+    )[0]
+
+    assert "github.event_name == 'workflow_run'" in concurrency
+    assert "|| github.event_name == 'workflow_run'" in cancel_line
+    assert '.event == "workflow_run"' in queue_hygiene
+    assert '.name == "Required PR Review Merge Scheduler"' in queue_hygiene
+    assert '((.pull_requests // []) | length) == 0' in queue_hygiene
+    assert '.head_sha == $current_default_sha' in queue_hygiene
+    assert 'sort_by(.created_at, (.id | tostring))' in queue_hygiene
+
+
 def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:
     """Central single-PR dispatch must validate live metadata before cross-repo use."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
