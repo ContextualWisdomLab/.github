@@ -189,7 +189,7 @@ esac
         "number": 1179,
         "state": "open",
         "base": {
-            "ref": "develop",
+            "ref": "feat/stack",
             "repo": {"full_name": "ContextualWisdomLab/naruon"},
         },
         "head": {
@@ -208,7 +208,7 @@ esac
         "DEFAULT_BRANCH": "main",
         "TARGET_REPOSITORY_INPUT": "ContextualWisdomLab/naruon",
         "TARGET_PR_NUMBER": "1179",
-        "TARGET_BASE_BRANCH_INPUT": "develop",
+        "TARGET_BASE_BRANCH_INPUT": "feat/stack",
         "ALLOWED_TARGET_REPOSITORIES": (
             "ContextualWisdomLab/.github, ContextualWisdomLab/naruon"
         ),
@@ -226,7 +226,7 @@ esac
     assert accepted.returncode == 0, accepted.stderr
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
-        "base_branch=develop",
+        "base_branch=feat/stack",
         "repository_default_branch=develop",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
