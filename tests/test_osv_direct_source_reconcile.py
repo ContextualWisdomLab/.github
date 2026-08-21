@@ -528,6 +528,19 @@ class DirectSourceReconcileTests(unittest.TestCase):
             ), self.assertRaises(OSError):
                 OSV.atomic_json_write(destination, {})
 
+            malformed = root / "malformed.json"
+            malformed.write_text('{"results": "bad"}', encoding="utf-8")
+            malformed_argv = [
+                str(SCRIPT), "--results", str(malformed), "--lockfile", str(target),
+                "--audit", str(root / "malformed-audit.json"),
+            ]
+            with (
+                mock.patch.object(OSV.sys, "argv", malformed_argv),
+                mock.patch.object(OSV.sys, "stderr", new_callable=io.StringIO) as stderr,
+            ):
+                self.assertEqual(OSV.main(), 1)
+            self.assertIn("OSV results must contain a results array", stderr.getvalue())
+
             results_path = root / "results.json"
             lock_path = root / "pnpm-lock.yaml"
             audit_path = root / "audit.json"

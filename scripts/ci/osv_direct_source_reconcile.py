@@ -586,7 +586,7 @@ def main() -> int:
                 f"{entry['vulnerability_id']} ({entry['reason']})"
             )
         return 0
-    except ValueError as error:
+    except (TypeError, ValueError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
 
