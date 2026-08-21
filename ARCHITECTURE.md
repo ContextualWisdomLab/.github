@@ -104,13 +104,17 @@ sequenceDiagram
   OC->>SV: PoC command in isolated copy
   SV-->>OC: redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
-  MS->>PR: merge only on current-head approval + green checks
+  MS->>PR: merge only on current-head approval + required Strix evidence
 ```
 
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
+- Merge evidence for Strix is `pull_request_target` and
+  `repository_dispatch` `strix-scan` only. A caller-selected
+  `workflow_dispatch` check run (including Deep) must not park, fail, or
+  satisfy the merge scheduler.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
@@ -145,6 +149,8 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/strix-manual-dispatch-not-merge-evidence.md`](docs/doctoring/strix-manual-dispatch-not-merge-evidence.md)
+  — manual Deep `workflow_dispatch` is not merge evidence.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)

@@ -123,8 +123,9 @@ repeatable compile command.
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
-  base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
-  but does not replace required PR checks. Do not widen a `pull_request_target` job token to
+  base branch catches up; a same-head manual `workflow_dispatch` Strix run may
+  inform a reviewer but must not park, fail, or satisfy merge evidence, and it
+  does not replace required PR checks. Do not widen a `pull_request_target` job token to
   repository-write permission.
 - **Review output must go through the Python normalizer** (`scripts/ci/opencode_review_normalize_output.py`)
   — it escapes `<`, `>`, `&` when embedding JSON in HTML comments to prevent Markdown-comment
