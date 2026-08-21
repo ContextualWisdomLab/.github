@@ -195,7 +195,8 @@ jobs:
         with:
           persist-credentials: false
           # GitHub can omit the synthetic merge ref for stacked/non-default-base PRs;
-          # the event's merge SHA is the exact merge-result identity we must analyze.
+          # materialize the exact merge-result SHA locally while retaining the
+          # documented pull-request ref shape for CodeQL result publication.
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Initialize CodeQL
@@ -210,7 +211,7 @@ jobs:
           category: "/language:${{ matrix.language }}-merge"
           upload: false
           output: codeql-results-merge
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
           sha: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Enforce CodeQL Medium+ SARIF gate
