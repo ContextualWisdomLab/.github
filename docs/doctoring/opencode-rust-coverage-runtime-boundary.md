@@ -9,24 +9,28 @@ The trusted OpenCode coverage sandbox binds Rust coverage to the reviewed LLVM
 - `LLVM_PROFDATA=/usr/bin/llvm-profdata-19`
 
 These are compatibility and trust-boundary constants, not caller-selectable
-configuration. The reviewed helper `scripts/ci/ensure_rust_llvm19.sh` binds both
-exact paths and fails closed unless the live `LLVM_COV` / `LLVM_PROFDATA`
+configuration. The reviewed helper `scripts/ci/ensure_rust_llvm19.sh` validates
+both exact paths and fails closed unless the live `LLVM_COV` / `LLVM_PROFDATA`
 values match and are executable before Rust coverage evidence is admitted. The
-independent OpenCode review-dispatch workflow stays byte-for-byte so the
-review-agent key system is not rewritten to carry this runtime check.
+actual environment binding is owned by
+`.github/workflows/opencode-review-dispatch.yml`, through its Dockerfile `ENV`
+declarations and the isolated container's `docker run --env` arguments. If that
+workflow changes, its `REVIEW_DISPATCH_BLOB_SHA` pin must change with it; this
+does not rewrite the review-agent key system.
 
 The runtime MUST NOT fall back to unversioned `llvm-cov` or `llvm-profdata`, a
 host-runner tool, a pull-request-selected path, or a dynamically downloaded LLVM
 binary. Missing, changed, or non-executable reviewed paths are coverage-evidence
 failures rather than reasons to measure a different toolchain.
 
-NIST SP 800-218 PW.4.1 requires third-party software to come from expected,
-trusted sources with integrity verification (Souppaya et al., 2022). The exact
+NIST SP 800-218 PW.4.1 covers acquiring and maintaining third-party software
+from expected, trusted sources and reviewing its provenance (Souppaya et al.,
+2022). PW.4.4 covers verifying the integrity of acquired components. The exact
 `/usr/bin/llvm-cov-19` and `/usr/bin/llvm-profdata-19` bindings are
 producer-selection controls: they select reviewed paths and `test -x` verifies
-executability. They do not hash or signature-verify the Debian package or binary.
-Package/image hashes, signatures, repository metadata, and attestations are
-separate integrity controls and must not be inferred from path equality.
+executability. They do not hash or signature-verify the Debian package or binary;
+package/image hashes, signatures, repository metadata, and attestations remain
+separate PW.4.4 integrity controls and must not be inferred from path equality.
 
 ## Why the boundary exists
 

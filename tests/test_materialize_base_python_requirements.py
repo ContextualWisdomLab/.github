@@ -235,7 +235,7 @@ def test_materialized_bounded_include_is_resolvable_by_pip(tmp_path: Path) -> No
         "-r other-hashes.txt\n", encoding="utf-8"
     )
     (repo / "other-hashes.txt").write_text(
-        f"demo==1 --hash=sha256:{digest}\n", encoding="utf-8"
+        f"--require-hashes\ndemo==1 --hash=sha256:{digest}\n", encoding="utf-8"
     )
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
@@ -296,6 +296,11 @@ def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> No
     with pytest.raises(RuntimeError, match="must contain only exact SHA-256 pins"):
         materializer.materialize(repo, nested_sha, tmp_path / "nested-output")
 
+    with pytest.raises(RuntimeError, match="base lock requirements.txt is not valid UTF-8"):
+        materializer._rewrite_materialized_includes(
+            b"\xff", "includes-000", "requirements.txt"
+        )
+
 
 def test_bounded_repair_driver_runs_against_a_staged_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -306,6 +311,7 @@ def test_bounded_repair_driver_runs_against_a_staged_fixture(
         "scripts/ci/repair_pr827_coderabbit_comments.py",
         "scripts/ci/materialize_base_python_requirements.py",
         "tests/test_materialize_base_python_requirements.py",
+        "tests/test_opencode_rust_coverage_toolchain_contract.py",
         "docs/doctoring/opencode-rust-coverage-runtime-boundary.md",
         ".github/workflows/opencode-review-dispatch.yml",
         "CHANGELOG.md",
@@ -380,6 +386,22 @@ def test_bounded_repair_driver_runs_against_a_staged_fixture(
     replace_between(str(between_file), "START", "END", "START new ")  # type: ignore[operator]
     assert between_file.read_text(encoding="utf-8") == "START new END"
     replace_between(str(between_file), "MISSING", "END", "START new ")  # type: ignore[operator]
+    before_file = tmp_path / "before.txt"
+    before_file.write_text("ANCHOR", encoding="utf-8")
+    insert_before = namespace["insert_before"]
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    assert before_file.read_text(encoding="utf-8") == "PREFIX ANCHOR"
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_before(str(before_file), "MISSING", "OTHER ")  # type: ignore[operator]
+    after_file = tmp_path / "after.txt"
+    after_file.write_text("ANCHOR", encoding="utf-8")
+    insert_after = namespace["insert_after"]
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    assert after_file.read_text(encoding="utf-8") == "ANCHOR SUFFIX"
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_after(str(after_file), "MISSING", " OTHER")  # type: ignore[operator]
     between_file.write_text("START old START END", encoding="utf-8")
     with pytest.raises(SystemExit, match="start marker missing or ambiguous"):
         replace_between(str(between_file), "START", "END", "replacement")  # type: ignore[operator]

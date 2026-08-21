@@ -22,6 +22,30 @@ def replace_once(
     file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def insert_before(path: str, anchor: str, addition: str) -> None:
+    """Insert an addition before one unique anchor, at most once."""
+    file_path = Path(path)
+    text = file_path.read_text(encoding="utf-8")
+    if addition in text:
+        return
+    count = text.count(anchor)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one insertion anchor, found {count}")
+    file_path.write_text(text.replace(anchor, addition + anchor, 1), encoding="utf-8")
+
+
+def insert_after(path: str, anchor: str, addition: str) -> None:
+    """Insert an addition after one unique anchor, at most once."""
+    file_path = Path(path)
+    text = file_path.read_text(encoding="utf-8")
+    if addition in text:
+        return
+    count = text.count(anchor)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one insertion anchor, found {count}")
+    file_path.write_text(text.replace(anchor, anchor + addition, 1), encoding="utf-8")
+
+
 def replace_between(path: str, start: str, end: str, replacement: str) -> None:
     """Replace a uniquely delimited source section idempotently."""
     file_path = Path(path)
@@ -118,7 +142,7 @@ helpers = '''def _included_base_lock_blobs(
                 f"bounded include {target} from {source_path} is not a regular base blob"
             )
         included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
-        if not _is_fully_hash_pinned_export(included_content):
+        if not _is_flat_materializable_lock(included_content):
             raise RuntimeError(
                 f"bounded include {resolved_path} must contain only exact SHA-256 pins"
             )
@@ -126,9 +150,14 @@ helpers = '''def _included_base_lock_blobs(
     return sorted(included.items(), key=lambda item: item[0].as_posix())
 
 
-def _rewrite_materialized_includes(content: bytes, include_directory: str) -> bytes:
+def _rewrite_materialized_includes(
+    content: bytes, include_directory: str, source_path: str = ""
+) -> bytes:
     """Rewrite root include targets to their preserved generated subtree."""
-    text = content.decode("utf-8", errors="strict")
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"base lock {source_path} is not valid UTF-8") from exc
     rewritten: list[str] = []
     for raw_line in text.splitlines(keepends=True):
         body = raw_line.rstrip("\\r\\n")
@@ -147,7 +176,7 @@ def _rewrite_materialized_includes(content: bytes, include_directory: str) -> by
 
 
 '''
-replace_once(SCRIPT, "def materialize(\n", helpers + "def materialize(\n")
+insert_before(SCRIPT, "def materialize(\n", helpers)
 
 replace_between(
     SCRIPT,
@@ -187,7 +216,7 @@ replace_between(
             destination.write_bytes(included_content)
         destination = output_dir / generated_name
         destination.write_bytes(
-            _rewrite_materialized_includes(content, include_directory)
+            _rewrite_materialized_includes(content, include_directory, source_path)
         )
         manifest.append({"file": generated_name, "source": source_path})
 
@@ -205,16 +234,15 @@ replace_between(
 ''',
 )
 
-replace_once(TEST, "import tarfile\n", "import tarfile\nimport zipfile\n")
+insert_before(TEST, "from pathlib import Path\n", "import zipfile\n")
 replace_once(
     TEST,
     '    assert not materializer._is_hash_pinned(b"-r other-hashes.txt\\n")\n',
     '    assert materializer._is_hash_pinned(b"-r other-hashes.txt\\n")\n',
 )
-replace_once(
+insert_after(
     TEST,
     '    assert not materializer._is_candidate_lock_name("pyproject.toml")\n',
-    '    assert not materializer._is_candidate_lock_name("pyproject.toml")\n'
     '    assert materializer._is_candidate_lock_path(\n'
     '        materializer.pathlib.PurePosixPath("requirements/ci.txt")\n'
     '    )\n'
@@ -225,16 +253,12 @@ replace_once(
     '        materializer.pathlib.PurePosixPath("service/config/ci.txt")\n'
     '    )\n',
 )
-replace_once(
+insert_after(
     TEST,
     '    (repo / "requirements-test.txt").write_text(\n'
     '        "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\\n",\n'
     '        encoding="utf-8",\n'
     '    )\n',
-    '    (repo / "requirements-test.txt").write_text(\n'
-    '        "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\\n",\n'
-    '        encoding="utf-8",\n'
-    '    )\n'
     '    requirements_dir = repo / "requirements"\n'
     '    requirements_dir.mkdir()\n'
     '    (requirements_dir / "ci.txt").write_text(\n'
@@ -249,6 +273,27 @@ replace_once(
     '        "requirements-test.txt",\n'
     '        "requirements/ci.txt",\n'
     '        "services/account_unification/requirements-dev.txt",\n',
+)
+insert_before(
+    TEST,
+    '    between_file.write_text("START old", encoding="utf-8")\n',
+    '''    before_file = tmp_path / "before.txt"
+    before_file.write_text("ANCHOR", encoding="utf-8")
+    insert_before = namespace["insert_before"]
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    assert before_file.read_text(encoding="utf-8") == "PREFIX ANCHOR"
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_before(str(before_file), "MISSING", "OTHER ")  # type: ignore[operator]
+    after_file = tmp_path / "after.txt"
+    after_file.write_text("ANCHOR", encoding="utf-8")
+    insert_after = namespace["insert_after"]
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    assert after_file.read_text(encoding="utf-8") == "ANCHOR SUFFIX"
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_after(str(after_file), "MISSING", " OTHER")  # type: ignore[operator]
+''',
 )
 
 integration_test = '''def test_materialized_bounded_include_is_resolvable_by_pip(tmp_path: Path) -> None:
@@ -280,7 +325,7 @@ integration_test = '''def test_materialized_bounded_include_is_resolvable_by_pip
         "-r other-hashes.txt\\n", encoding="utf-8"
     )
     (repo / "other-hashes.txt").write_text(
-        f"demo==1 --hash=sha256:{digest}\\n", encoding="utf-8"
+        f"--require-hashes\\ndemo==1 --hash=sha256:{digest}\\n", encoding="utf-8"
     )
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
@@ -341,14 +386,42 @@ def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> No
     with pytest.raises(RuntimeError, match="must contain only exact SHA-256 pins"):
         materializer.materialize(repo, nested_sha, tmp_path / "nested-output")
 
+    with pytest.raises(RuntimeError, match="base lock requirements.txt is not valid UTF-8"):
+        materializer._rewrite_materialized_includes(
+            b"\\xff", "includes-000", "requirements.txt"
+        )
+
 
 '''
-replace_once(TEST, "def test_rejects_invalid_base_sha", integration_test + "def test_rejects_invalid_base_sha")
+insert_before(TEST, "def test_rejects_invalid_base_sha", integration_test)
 replace_once(
     TEST,
     '    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")\n',
     '    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")\n'
     '    assert not materializer._is_bounded_requirement_include("-r pyproject.toml")\n',
+)
+replace_once(
+    "tests/test_opencode_rust_coverage_toolchain_contract.py",
+    """    assert f'"${{LLVM_COV:-}}" != "$LLVM_COV_PATH"' in helper
+    assert f'"${{LLVM_PROFDATA:-}}" != "$LLVM_PROFDATA_PATH"' in helper
+""",
+    """    assert '"${LLVM_COV:-}" != "$LLVM_COV_PATH"' in helper
+    assert '"${LLVM_PROFDATA:-}" != "$LLVM_PROFDATA_PATH"' in helper
+""",
+)
+insert_after(
+    "tests/test_opencode_rust_coverage_toolchain_contract.py",
+    "    for relative_path in watched_paths:\n"
+    "        assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path\n",
+    """    doctoring = (
+        _REPOSITORY_ROOT
+        / "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
+    ).read_text(encoding="utf-8")
+    assert "/usr/bin/llvm-cov-19" in doctoring
+    assert "/usr/bin/llvm-profdata-19" in doctoring
+    assert "unversioned `llvm-cov`" in doctoring
+    assert "fails closed" in doctoring
+""",
 )
 
 replace_once(
@@ -360,8 +433,13 @@ replace_once(
 
 replace_once(
     DOC,
+    "These are compatibility and trust-boundary constants, not caller-selectable\nconfiguration. The reviewed helper `scripts/ci/ensure_rust_llvm19.sh` binds both\nexact paths and fails closed unless the live `LLVM_COV` / `LLVM_PROFDATA`\nvalues match and are executable before Rust coverage evidence is admitted. The\nindependent OpenCode review-dispatch workflow stays byte-for-byte so the\nreview-agent key system is not rewritten to carry this runtime check.\n",
+    "These are compatibility and trust-boundary constants, not caller-selectable\nconfiguration. The reviewed helper `scripts/ci/ensure_rust_llvm19.sh` validates\nboth exact paths and fails closed unless the live `LLVM_COV` / `LLVM_PROFDATA`\nvalues match and are executable before Rust coverage evidence is admitted. The\nactual environment binding is owned by\n`.github/workflows/opencode-review-dispatch.yml`, through its Dockerfile `ENV`\ndeclarations and the isolated container's `docker run --env` arguments. If that\nworkflow changes, its `REVIEW_DISPATCH_BLOB_SHA` pin must change with it; this\ndoes not rewrite the review-agent key system.\n",
+)
+replace_once(
+    DOC,
     "NIST SP 800-218 PW.4.1 requires third-party software to come from expected,\ntrusted sources with integrity verification (Souppaya et al., 2022). Binding\ncoverage to the reviewed `/usr/bin/llvm-cov-19` and\n`/usr/bin/llvm-profdata-19` executables is that verification; an ambient\n`PATH` lookup would treat a runner-image change as a new producer.\n",
-    "NIST SP 800-218 PW.4.1 requires third-party software to come from expected,\ntrusted sources with integrity verification (Souppaya et al., 2022). The exact\n`/usr/bin/llvm-cov-19` and `/usr/bin/llvm-profdata-19` bindings are\nproducer-selection controls: they select reviewed paths and `test -x` verifies\nexecutability. They do not hash or signature-verify the Debian package or binary.\nPackage/image hashes, signatures, repository metadata, and attestations are\nseparate integrity controls and must not be inferred from path equality.\n",
+    "NIST SP 800-218 PW.4.1 covers acquiring and maintaining third-party software\nfrom expected, trusted sources and reviewing its provenance (Souppaya et al.,\n2022). PW.4.4 covers verifying the integrity of acquired components. The exact\n`/usr/bin/llvm-cov-19` and `/usr/bin/llvm-profdata-19` bindings are\nproducer-selection controls: they select reviewed paths and `test -x` verifies\nexecutability. They do not hash or signature-verify the Debian package or binary;\npackage/image hashes, signatures, repository metadata, and attestations remain\nseparate PW.4.4 integrity controls and must not be inferred from path equality.\n",
 )
 replace_once(
     DOC,
@@ -376,6 +454,7 @@ replace_once(
 
 replace_once(
     WORKFLOW,
-    "              r-cran-testthat \\\n              llvm-19 \\\n",
-    "              r-cran-testthat \\\n              # llvm-19 / llvm-toolchain-19: Apache-2.0 WITH LLVM-exception. \\\n              # See docs/doctoring/opencode-rust-coverage-runtime-boundary.md. \\\n              llvm-19 \\\n",
+    "          RUN apt-get update \\\n            && apt-get install --no-install-recommends -y \\\n",
+    "          # llvm-19 / llvm-toolchain-19: Apache-2.0 WITH LLVM-exception. See docs/doctoring/opencode-rust-coverage-runtime-boundary.md.\n"
+    "          RUN apt-get update \\\n            && apt-get install --no-install-recommends -y \\\n",
 )

@@ -613,7 +613,7 @@ def _included_base_lock_blobs(
                 f"bounded include {target} from {source_path} is not a regular base blob"
             )
         included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
-        if not _is_fully_hash_pinned_export(included_content):
+        if not _is_flat_materializable_lock(included_content):
             raise RuntimeError(
                 f"bounded include {resolved_path} must contain only exact SHA-256 pins"
             )
@@ -621,9 +621,14 @@ def _included_base_lock_blobs(
     return sorted(included.items(), key=lambda item: item[0].as_posix())
 
 
-def _rewrite_materialized_includes(content: bytes, include_directory: str) -> bytes:
+def _rewrite_materialized_includes(
+    content: bytes, include_directory: str, source_path: str = ""
+) -> bytes:
     """Rewrite root include targets to their preserved generated subtree."""
-    text = content.decode("utf-8", errors="strict")
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"base lock {source_path} is not valid UTF-8") from exc
     rewritten: list[str] = []
     for raw_line in text.splitlines(keepends=True):
         body = raw_line.rstrip("\r\n")
@@ -675,7 +680,7 @@ def materialize(
             destination.write_bytes(included_content)
         destination = output_dir / generated_name
         destination.write_bytes(
-            _rewrite_materialized_includes(content, include_directory)
+            _rewrite_materialized_includes(content, include_directory, source_path)
         )
         manifest.append({"file": generated_name, "source": source_path})
 

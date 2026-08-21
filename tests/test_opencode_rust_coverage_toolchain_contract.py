@@ -93,8 +93,8 @@ def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
     assert "networkless coverage runtime did not preserve the reviewed LLVM 19" in dispatch
     assert f'LLVM_COV_PATH="{_LLVM_COV_PATH}"' in helper
     assert f'LLVM_PROFDATA_PATH="{_LLVM_PROFDATA_PATH}"' in helper
-    assert f'"${{LLVM_COV:-}}" != "$LLVM_COV_PATH"' in helper
-    assert f'"${{LLVM_PROFDATA:-}}" != "$LLVM_PROFDATA_PATH"' in helper
+    assert '"${LLVM_COV:-}" != "$LLVM_COV_PATH"' in helper
+    assert '"${LLVM_PROFDATA:-}" != "$LLVM_PROFDATA_PATH"' in helper
     assert "exit 1" in helper
 
 
@@ -127,7 +127,7 @@ def test_review_dispatch_blob_sha_stays_paired_with_trusted_workflow() -> None:
 
 
 def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
-    """Every exact-path trigger in the permanent quality workflow must exist."""
+    """Every watched path and its documented runtime contract must exist."""
 
     quality_workflow = _QUALITY_WORKFLOW_PATH.read_text(encoding="utf-8")
     watched_section = quality_workflow.split("    paths:\n", 1)[1].split(
@@ -144,6 +144,14 @@ def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
     assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in watched_paths
     for relative_path in watched_paths:
         assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path
+    doctoring = (
+        _REPOSITORY_ROOT
+        / "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
+    ).read_text(encoding="utf-8")
+    assert "/usr/bin/llvm-cov-19" in doctoring
+    assert "/usr/bin/llvm-profdata-19" in doctoring
+    assert "unversioned `llvm-cov`" in doctoring
+    assert "fails closed" in doctoring
 
 
 def test_helper_fails_closed_when_reviewed_paths_are_unbound() -> None:

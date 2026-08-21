@@ -16,7 +16,8 @@ jobs:
     if: >-
       github.event.pull_request.number == 827 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/opencode-rust-coverage-runtime-boundary-main'
+      github.event.pull_request.head.ref == 'fix/opencode-rust-coverage-runtime-boundary-main' &&
+      github.event.pull_request.head.user.login != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -96,5 +97,9 @@ jobs:
             CHANGELOG.md \
             docs/doctoring/opencode-rust-coverage-runtime-boundary.md
           git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No non-workflow repair changes remain; the rerun is complete.'
+            exit 0
+          fi
           git commit -m 'fix(coverage): preserve bounded requirement includes'
           git push origin HEAD:fix/opencode-rust-coverage-runtime-boundary-main
