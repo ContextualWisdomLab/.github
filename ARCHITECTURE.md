@@ -94,6 +94,25 @@ flowchart TD
 An explicit port, userinfo, query, or fragment is not the default npm
 registry origin. Publication uses no-follow, descriptor-relative opens.
 
+## Exact-artifact SBOM attestation
+
+```mermaid
+flowchart TD
+  Seal["Six-file sealed artifact"]
+  Read["verify-evidence-artifact: actions/contents read"]
+  Sign["attest-exact-artifacts after verify"]
+  Offline["SHA256SUMS + README + bundles"]
+  Fail["Fail closed; no OIDC token"]
+
+  Seal --> Read
+  Read -->|"invalid JSON, digest, or identity"| Fail
+  Read -->|"valid"| Sign
+  Sign --> Offline
+```
+
+Caller inputs enter shell steps only as named environment variables. This
+workflow does not claim SLSA Build L3.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -127,6 +146,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Downloaded SBOM and distribution bytes are inert. The signing job does
+  not import, install, or unpack them.
 
 ## Quality gates
 
@@ -152,3 +173,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/npm-nested-metadata-canonical-pins.md`](docs/doctoring/npm-nested-metadata-canonical-pins.md)
   — current increment's lockfile decision and APA 7th citations.
+- [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
+  — current increment's attestation decision and APA 7th citations.
