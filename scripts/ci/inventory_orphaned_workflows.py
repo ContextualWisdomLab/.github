@@ -101,7 +101,7 @@ def parse_link_has_next(link_header: object) -> bool:
 
 
 def decode_registry_path(path: object) -> str:
-    """Validate a canonical workflow path and reject traversal disguises."""
+    """Validate a workflow path and reject traversal disguises."""
     if not isinstance(path, str) or not path or "\x00" in path:
         raise InventoryError("workflow path is missing or NUL-bearing")
     if "\\" in path:
