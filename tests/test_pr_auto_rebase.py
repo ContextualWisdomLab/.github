@@ -1,7 +1,9 @@
 import json
 import runpy
 import sys
+import urllib.parse
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -112,10 +114,11 @@ def test_recent_bot_commit_is_a_candidate():
     assert skip_reason(pr) is None
 
 
-def test_zero_human_window_disables_guard():
-    """A zero human window means recent human commits are still rebased."""
+def test_non_positive_human_window_cannot_disable_guard():
+    """A non-positive human window is rejected instead of disabling protection."""
     pr = make_pr(commits={"nodes": [{"commit": {"committedDate": "2026-07-08T11:59:00Z", **HUMAN_COMMIT}}]})
-    assert skip_reason(pr, human_window_minutes=0) is None
+    with pytest.raises(ValueError, match="positive"):
+        rebase.head_commit_by_recent_human(pr, now=NOW, window_minutes=0)
 
 
 def test_has_manual_rebase_label_detects_label():
@@ -382,13 +385,14 @@ def test_authenticated_remote_url_uses_app_token():
 
 
 def test_parse_args_validates_inputs(monkeypatch):
-    """CLI parsing rejects malformed repositories and negative bounds."""
+    """CLI parsing rejects malformed repositories and unsafe bounds."""
     for bad_args in (
         ["--base-branch", "main"],
         ["--repo", "bad repo", "--base-branch", "main"],
         ["--repo", "owner/repo"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-prs", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-per-run", "-1"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--human-window-minutes", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--human-window-minutes", "-1"],
     ):
         monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
@@ -452,6 +456,228 @@ def test_fetch_open_prs_paginates(monkeypatch):
     prs = rebase.fetch_open_prs("owner/repo", 100)
     assert [pr["number"] for pr in prs] == [1, 2]
     assert seen_cursors == [None, "c1"]
+
+
+def test_fetch_open_prs_stops_when_max_prs_is_reached(monkeypatch):
+    """A first GraphQL page larger than max_prs ends the loop without another request."""
+
+    def fake_graphql(query, **fields):
+        return {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        "nodes": [make_pr(number=1), make_pr(number=2)],
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(rebase, "gh_graphql", fake_graphql)
+    prs = rebase.fetch_open_prs("owner/repo", 1)
+    assert [pr["number"] for pr in prs] == [1]
+
+
+def _rest_list_pr(number: int, *, mergeable_state: str = "unknown", sha: str | None = None) -> dict:
+    """Return a GitHub REST list payload shaped like ContextualWisdomLab/.github#934's queue."""
+    head_sha = sha or (f"{number:x}" * 40)[:40]
+    return {
+        "number": number,
+        "title": f"fix queue {number}",
+        "draft": False,
+        "mergeable": None,
+        "mergeable_state": mergeable_state,
+        "labels": [{"name": "needs-manual-rebase"}] if number == 942 else [],
+        "head": {
+            "ref": f"fix/pr-{number}",
+            "sha": head_sha,
+            "repo": {"full_name": "ContextualWisdomLab/.github"},
+        },
+        "base": {"ref": "main", "sha": "b" * 40},
+        "maintainer_can_modify": False,
+    }
+
+
+def test_graphql_utf8_errors_fall_back_to_rest(monkeypatch):
+    """Unicode GraphQL transport failures must not stall the auto-rebase org queue."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError("Command failed (1): gh api graphql\ngh: invalid UTF-8 string")
+
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        if path.startswith("repos/ContextualWisdomLab/.github/pulls?"):
+            return [_rest_list_pr(934, mergeable_state="behind", sha="c" * 40)]
+        if path == "repos/ContextualWisdomLab/.github/commits/" + ("c" * 40):
+            return {
+                "sha": "c" * 40,
+                "commit": {"author": {"name": "opencode-agent", "date": "2026-08-16T19:00:00Z"}},
+                "author": {"login": "opencode-agent"},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(rebase, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(rebase, "gh_api_json", fake_api)
+
+    observed = RuntimeError("invalid UTF-8 string")
+    assert rebase.is_graphql_transport_failure(observed)
+    prs = rebase.fetch_open_prs("ContextualWisdomLab/.github", 1)
+    assert len(prs) == 1
+    assert prs[0]["number"] == 934
+    assert prs[0]["mergeStateStatus"] == "BEHIND"
+    assert prs[0]["headRefName"] == "fix/pr-934"
+    assert prs[0]["commits"]["nodes"][0]["commit"]["author"]["user"]["login"] == "opencode-agent"
+    assert rebase.candidate_skip_reason(
+        "ContextualWisdomLab/.github",
+        prs[0],
+        base_branch="main",
+        now=NOW,
+        human_window_minutes=30,
+    ) is None
+    assert any(path.startswith("repos/ContextualWisdomLab/.github/pulls?") for path in calls)
+
+
+def test_graphql_json_decode_errors_fall_back_to_rest(monkeypatch):
+    """A malformed GraphQL response uses the bounded REST fallback."""
+
+    fallback = [make_pr(number=934)]
+
+    def fail_graphql(*args, **kwargs):
+        raise json.JSONDecodeError("invalid JSON", "{", 0)
+
+    monkeypatch.setattr(rebase, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(rebase, "fetch_open_prs_rest", lambda repo, max_prs: fallback)
+
+    assert rebase.fetch_open_prs("owner/repo", 1) == fallback
+
+
+def test_rest_node_unknown_head_is_cross_repository_without_commit_lookup(monkeypatch):
+    """Missing REST head ownership is unknown and never authorizes commit reads."""
+
+    payload = _rest_list_pr(934, mergeable_state="behind", sha="c" * 40)
+    payload["head"].pop("repo")
+    monkeypatch.setattr(
+        rebase,
+        "gh_api_json",
+        lambda path: pytest.fail(f"unknown head must not fetch commit metadata: {path}"),
+    )
+
+    node = rebase.rest_auto_rebase_pr_node("owner/repo", payload)
+
+    assert node["isCrossRepository"] is True
+    assert node["headRepository"] is None
+
+
+def test_rest_node_normalizes_case_variant_same_repository_head(monkeypatch):
+    """Case-only REST repository spelling must remain an internal pushable head."""
+    payload = _rest_list_pr(934, mergeable_state="behind", sha="c" * 40)
+    payload["head"]["repo"]["full_name"] = "contextualwisdomlab/.GITHUB"
+    monkeypatch.setattr(rebase, "gh_api_json", lambda path: {})
+
+    node = rebase.rest_auto_rebase_pr_node("ContextualWisdomLab/.github", payload)
+
+    assert node["isCrossRepository"] is False
+    assert node["headRepository"] == {"nameWithOwner": "ContextualWisdomLab/.github"}
+    assert rebase.same_repository_head("ContextualWisdomLab/.github", node)
+
+
+def test_graphql_resource_limit_falls_back_to_rest(monkeypatch):
+    """A 58-PR GraphQL list that exceeds GitHub query cost uses REST instead of aborting."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError(
+            "GraphQL: Resource limits for this query exceeded. "
+            "(repository.pullRequests.nodes.0.url), "
+            "Resource limits for this query exceeded. "
+            "(repository.pullRequests.nodes.1.number)"
+        )
+
+    def fake_api(path):
+        if path.startswith("repos/ContextualWisdomLab/.github/pulls?"):
+            return [
+                _rest_list_pr(934, mergeable_state="unknown", sha="d" * 40),
+                _rest_list_pr(961, mergeable_state="behind", sha="e" * 40),
+            ]
+        if path == "repos/ContextualWisdomLab/.github/pulls/934":
+            detail = _rest_list_pr(934, mergeable_state="behind", sha="d" * 40)
+            detail["mergeable"] = False
+            return detail
+        if path.endswith("/commits/" + ("d" * 40)) or path.endswith("/commits/" + ("e" * 40)):
+            sha = path.rsplit("/", 1)[-1]
+            return {
+                "sha": sha,
+                "commit": {"author": {"name": "seonghobae", "date": "2026-08-01T00:00:00Z"}},
+                "author": {"login": "seonghobae"},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(rebase, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(rebase, "gh_api_json", fake_api)
+
+    observed = RuntimeError("GraphQL: Resource limits for this query exceeded. (repository.pullRequests.nodes.0.url)")
+    assert rebase.is_graphql_transport_failure(observed)
+    prs = rebase.fetch_open_prs("ContextualWisdomLab/.github", 58)
+    assert [pr["number"] for pr in prs] == [934, 961]
+    assert prs[0]["mergeStateStatus"] == "BEHIND"
+    assert prs[1]["mergeStateStatus"] == "BEHIND"
+    assert prs[0]["labels"]["nodes"] == []
+
+
+def test_graphql_schema_errors_do_not_fall_back_to_rest(monkeypatch):
+    """GraphQL field errors stay fail-closed so a broken query cannot hide behind REST."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError("gh: Field 'unknown' doesn't exist on type 'PullRequest'")
+
+    monkeypatch.setattr(rebase, "gh_graphql", fail_graphql)
+    monkeypatch.setattr(
+        rebase,
+        "fetch_open_prs_rest",
+        lambda repo, max_prs: pytest.fail("schema errors must not use REST"),
+    )
+    with pytest.raises(RuntimeError, match="Field 'unknown'"):
+        rebase.fetch_open_prs("ContextualWisdomLab/.github", 1)
+
+
+def test_rest_open_pr_list_stops_on_empty_page(monkeypatch):
+    """An empty REST page ends the fallback instead of requesting page 2."""
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        return []
+
+    monkeypatch.setattr(rebase, "gh_api_json", fake_api)
+    assert rebase.fetch_open_prs_rest("ContextualWisdomLab/.github", 10) == []
+    assert len(calls) == 1
+    assert "page=1" in calls[0]
+
+
+def test_rest_open_pr_list_keeps_fixed_page_size_across_large_pages(monkeypatch):
+    """Large REST queues use stable offsets and preserve PR order across pages."""
+    calls: list[str] = []
+
+    def fake_api(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        page = int(query["page"][0])
+        per_page = int(query["per_page"][0])
+        assert per_page == 100
+        if page == 1:
+            return [_rest_list_pr(number, mergeable_state="behind") for number in range(1, 101)]
+        if page == 2:
+            return [_rest_list_pr(number, mergeable_state="behind") for number in range(101, 161)]
+        raise AssertionError(f"unexpected page: {page}")
+
+    monkeypatch.setattr(rebase, "gh_api_json", fake_api)
+    monkeypatch.setattr(rebase, "rest_auto_rebase_pr_node", lambda repo, pr: {"number": pr["number"]})
+
+    prs = rebase.fetch_open_prs_rest("ContextualWisdomLab/.github", 150)
+
+    assert [pr["number"] for pr in prs] == list(range(1, 151))
+    assert [urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)["page"][0] for path in calls] == ["1", "2"]
 
 
 def test_git_runs_with_and_without_env(monkeypatch):
@@ -602,3 +828,17 @@ def test_write_actions_summary_noop_without_path(monkeypatch):
     """No step summary file means no summary write."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     rebase.write_actions_summary([], counts={}, dry_run=True, base_branch="main")
+
+
+def test_strix_gate_uses_medium_threshold_and_neutral_scope_signal():
+    """Low/INFO reports do not block, while medium-or-higher findings do."""
+    strix = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
+
+    assert (
+        "reported_vulnerability_signal='(^|[^A-Za-z0-9_])severity[[:space:]]*:[[:space:]]*"
+        "(critical|high|medium)([^A-Za-z0-9_]|$)'"
+        in strix
+    )
+    assert "reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]" not in strix
+    assert "non_assessable_scope_signal='No Assessable Application Code Found in Scope'" in strix
+    assert "produced no medium-or-higher vulnerability evidence" in strix
