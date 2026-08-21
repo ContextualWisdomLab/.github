@@ -3374,6 +3374,12 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "configured workflow credential" in rest_behind_decision.reason
     assert called == [("owner/repo", 1, True)]
     called.clear()
+    with monkeypatch.context() as github_token_context:
+        github_token_context.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+        withheld_rest_behind = inspect(rest_behind)
+    assert withheld_rest_behind.action == "wait"
+    assert "never start new workflow runs" in withheld_rest_behind.reason
+    assert called == []
     blocked_failed_behind_auto = make_pr(
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",

@@ -81,6 +81,8 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
         "token:   ": "token:   ",
         't-o-k-e-n="secret value"': f"t-o-k-e-n={redactor.REDACTED}",
         "'p-a-s-s-w-o-r-d': 'secret value'": f"'p-a-s-s-w-o-r-d': {redactor.REDACTED}",
+        "api key=secret": f"api key={redactor.REDACTED}",
+        "t o k e n=secret": f"t o k e n={redactor.REDACTED}",
     }
 
     for source, expected in cases.items():
@@ -91,6 +93,25 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
+
+
+def test_sensitive_log_redaction_does_not_rescan_long_invalid_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid long key prefixes are evaluated at bounded candidate positions."""
+    calls = 0
+    consume = redactor._consume_sensitive_assignment
+
+    def counted(text: str, start: int):
+        nonlocal calls
+        calls += 1
+        return consume(text, start)
+
+    monkeypatch.setattr(redactor, "_consume_sensitive_assignment", counted)
+    source = "x" * 10_000 + "token without an assignment"
+
+    assert redactor.redact_text(source) == source
+    assert calls <= 2
 
 
 def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:

@@ -448,7 +448,10 @@ def test_run_gh_redacts_credentials_from_failures(monkeypatch):
             args=["gh", "api"],
             returncode=1,
             stdout="",
-            stderr="authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+            stderr=(
+                "authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456; "
+                "api key=opaque-api-key"
+            ),
         )
 
     monkeypatch.setattr(handoff.subprocess, "run", fake_run)
@@ -457,6 +460,7 @@ def test_run_gh_redacts_credentials_from_failures(monkeypatch):
         handoff.run_gh(["api", "repos/ContextualWisdomLab/example"])
 
     assert "ghp_" not in str(error.value)
+    assert "opaque-api-key" not in str(error.value)
     assert "[REDACTED]" in str(error.value)
 
 

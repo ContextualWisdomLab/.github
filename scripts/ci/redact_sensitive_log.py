@@ -63,7 +63,9 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
     key_start = cursor
     if cursor >= len(text) or text[cursor] not in KEY_CHARS or text[cursor].isdigit():
         return None
-    while cursor < len(text) and text[cursor] in KEY_CHARS:
+    while cursor < len(text) and (
+        text[cursor] in KEY_CHARS or text[cursor] in " \t"
+    ):
         cursor += 1
     key = text[key_start:cursor]
     if key_quote:
@@ -126,12 +128,15 @@ def _redact_assignments(text: str) -> str:
         if eval_start > cursor and text[eval_start - 1] in "\"\'":
             eval_start -= 1
 
-        consume_match = None
-        for i in range(eval_start, match.start() + 1):
-            consume_match = _consume_sensitive_assignment(text, i)
+        consume_match = _consume_sensitive_assignment(text, eval_start)
+        if consume_match is None and text[eval_start : eval_start + 1] in {"'", '"'}:
+            # An unmatched key quote is retained for compatibility with diagnostic text.
+            # Retry only the unquoted position; scanning every position in a long key
+            # prefix would turn this linear pass into a quadratic one.
+            unquoted_start = eval_start + 1
+            consume_match = _consume_sensitive_assignment(text, unquoted_start)
             if consume_match:
-                eval_start = i
-                break
+                eval_start = unquoted_start
 
         if consume_match:
             output.append(text[last_append:eval_start])
