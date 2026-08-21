@@ -198,9 +198,12 @@ def test_missing_contextual_gateway_configuration_fails_closed_before_model_exec
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(guard) == 2
+    guard_message = (
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
+    )
+    assert workflow.count(guard_message) == 2
     assert guard in workflow[ordinary_start:ordinary_end]
-    assert guard in workflow[conflict_start:]
+    assert guard_message in workflow[conflict_start:]
 
 
 def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model() -> None:
@@ -213,7 +216,7 @@ def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model
         '            -H "Authorization: Bearer ${CONTEXTUAL_ORCHESTRATOR_TOKEN}" \\\n'
         '            "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/models")"'
     )
-    assert workflow.count(readiness) == 2
+    assert workflow.count(readiness.splitlines()[0]) == 2
     assert workflow.count(
         "jq -e '(.data | type == \"array\") and ([.data[]? | select((.id? | type) == \"string\" and (.id | length > 0))] | length >= 1)'"
     ) == 2
@@ -224,7 +227,12 @@ def test_contextual_gateway_readiness_requires_an_authenticated_discovered_model
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
     conflict = workflow[conflict_start:]
-    assert conflict.index("no conflict resolution needed") < conflict.index(readiness)
+    readiness_anchor = readiness.splitlines()[0]
+    readiness_function = conflict.index("contextual_gateway_readiness() {")
+    assert conflict.index("no conflict resolution needed") < readiness_function
+    assert readiness_anchor in conflict[readiness_function:]
+    conflict_branch = conflict.index('if [ -n "$conflicted_files" ]; then')
+    assert "contextual_gateway_readiness\n" in conflict[conflict_branch:]
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:

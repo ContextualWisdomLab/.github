@@ -604,6 +604,7 @@ jobs:
             exit 1
           fi
 
+          contextual_gateway_readiness() {
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] ||
             [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
             echo "::error::CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required for scheduled OpenCode autofix."
@@ -634,8 +635,10 @@ jobs:
             echo "::error::Contextual Orchestrator gateway returned no discovered models."
             exit 1
           fi
+          }
 
           if [ -n "$conflicted_files" ]; then
+            contextual_gateway_readiness
             conflicted_paths_file="${RUNNER_TEMP}/opencode-conflicted-files.zlist"
             conflict_scope_snapshot="${RUNNER_TEMP}/opencode-conflict-workspace-before.json"
             git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"
