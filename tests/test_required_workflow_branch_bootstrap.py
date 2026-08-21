@@ -35,7 +35,19 @@ def test_push_bootstrap_never_executes_pr_or_provider_mutations() -> None:
     noema = (
         REPO_ROOT / ".github" / "workflows" / "noema-review.yml"
     ).read_text(encoding="utf-8")
+    semgrep = (
+        REPO_ROOT / ".github" / "workflows" / "sast-semgrep.yml"
+    ).read_text(encoding="utf-8")
 
     assert "github.event_name == 'pull_request_target' && github.event.action != 'closed'" in close_empty
     assert security_scan.count("github.event_name == 'pull_request' && github.event.action != 'closed'") == 4
     assert "github.event_name != 'push' && (" in noema
+    assert (
+        "github.event.action != 'closed' &&\n"
+        "      (\n"
+        "        github.event_name != 'push' ||\n"
+        "        github.ref_name == 'main' ||\n"
+        "        github.ref_name == 'master' ||\n"
+        "        github.ref_name == 'develop'\n"
+        "      )"
+    ) in semgrep

@@ -47,10 +47,13 @@ jobs:
   semgrep:
     name: Semgrep (multi-language SAST)
     if: >-
-      github.event_name != 'push' ||
-      github.ref_name == 'main' ||
-      github.ref_name == 'master' ||
-      github.ref_name == 'develop'
+      github.event.action != 'closed' &&
+      (
+        github.event_name != 'push' ||
+        github.ref_name == 'main' ||
+        github.ref_name == 'master' ||
+        github.ref_name == 'develop'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
