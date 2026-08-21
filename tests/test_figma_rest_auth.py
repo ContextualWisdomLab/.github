@@ -343,12 +343,16 @@ def test_live_unauthenticated_whoami_is_rejected_by_figma() -> None:
 
 
 def test_helper_pins_https_origin_instead_of_dynamic_urllib() -> None:
-    """Semgrep ``dynamic-urllib-use-detected`` must not apply to this helper."""
+    """The fixed TLS sink has one scoped Semgrep false-positive suppression."""
     source = Path(auth.__file__).read_text(encoding="utf-8")
     assert "urlopen(" not in source
     assert "http.client.HTTPSConnection" in source
     assert '"api.figma.com"' in source
     assert '"/v1/me"' in source
+    assert source.count(
+        "# nosemgrep: "
+        "python.lang.security.audit.httpsconnection-detected.httpsconnection-detected"
+    ) == 1
 
 
 def test_main_writes_identity_and_error_channels() -> None:

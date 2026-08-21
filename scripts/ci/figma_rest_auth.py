@@ -118,7 +118,7 @@ def default_opener(url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
             "/v1/me endpoint.",
             EXIT_TRANSPORT,
         )
-    connection = http.client.HTTPSConnection(
+    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
         "api.figma.com",
         timeout=REQUEST_TIMEOUT_SECONDS,
         context=ssl.create_default_context(),
