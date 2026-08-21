@@ -89,6 +89,8 @@ def _single_pull_request(repo: str, number: int) -> dict[str, Any]:
     for field in ("baseRefOid", "headRefOid"):
         if not isinstance(record.get(field), str) or not SHA_RE.fullmatch(record[field]):
             raise RuntimeError(f"pull request response has an invalid {field}")
+    if record.get("state") != "OPEN":
+        raise RuntimeError(f"pull request #{number} is not open")
     return record
 
 

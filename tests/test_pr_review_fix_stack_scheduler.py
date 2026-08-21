@@ -19,6 +19,7 @@ def make_pr(
     base_oid: str,
     head_name: str,
     head_oid: str,
+    state: str = "OPEN",
 ) -> dict:
     """Return one minimal scheduler-shaped pull request."""
 
@@ -28,6 +29,7 @@ def make_pr(
         "baseRefOid": base_oid,
         "headRefName": head_name,
         "headRefOid": head_oid,
+        "state": state,
     }
 
 
@@ -274,6 +276,58 @@ def test_stack_refreshes_parent_before_child_validation(monkeypatch, capsys) -> 
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["decisions"][-1]["action"] == "wait"
     assert "head moved" in payload["decisions"][-1]["reasons"][0]
+
+
+def test_stack_fails_closed_when_same_head_parent_is_no_longer_open(
+    monkeypatch, capsys
+) -> None:
+    """A closed same-head parent cannot authorize descendant repair."""
+
+    root = make_pr(
+        258,
+        base_name="main",
+        base_oid="0" * 40,
+        head_name="feat/root",
+        head_oid="1" * 40,
+    )
+    closed_root = make_pr(
+        258,
+        base_name="main",
+        base_oid="0" * 40,
+        head_name="feat/root",
+        head_oid="1" * 40,
+        state="CLOSED",
+    )
+    child = make_pr(
+        260,
+        base_name="feat/root",
+        base_oid="1" * 40,
+        head_name="feat/child",
+        head_oid="2" * 40,
+    )
+    fetch_counts = {258: 0, 260: 0}
+
+    def fake_fetch(_repo: str, number: int) -> list[dict]:
+        fetch_counts[number] += 1
+        if number == 258:
+            return [root if fetch_counts[number] == 1 else closed_root]
+        return [child]
+
+    inspected: list[int] = []
+    monkeypatch.setattr(stack, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(
+        stack,
+        "inspect_pr",
+        lambda _repo, pr, _args: inspected.append(pr["number"])
+        or ("skip", (stack.NO_REPAIR_REASON,)),
+    )
+
+    assert stack.process_stack(arguments((258, 260))) == 1
+    assert inspected == [258]
+    assert fetch_counts == {258: 2, 260: 0}
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["decisions"][-1]["action"] == "error"
+    assert "not open" in payload["decisions"][-1]["reasons"][0]
 
 
 def test_stack_fails_when_parent_refresh_is_invalid(monkeypatch, capsys) -> None:

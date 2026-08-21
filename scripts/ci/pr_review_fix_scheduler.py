@@ -207,7 +207,7 @@ def create_fix_marker(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
         [
             f"{FIX_MARKER} head_sha={head_sha} epoch={int(time.time())} -->",
             "",
-            "Scheduled review-feedback autofix for this PR head.",
+            "Claimed scheduled review-feedback autofix for this PR head.",
             "",
             f"- Head SHA: `{head_sha}`",
         ]
@@ -343,8 +343,8 @@ def inspect_pr(
     }
     if repair_mode == "rca":
         dispatch_kwargs["repair_mode"] = "rca"
-    dispatch_autofix(repo, pr, **dispatch_kwargs)
     create_fix_marker(repo, pr, dry_run=args.dry_run)
+    dispatch_autofix(repo, pr, **dispatch_kwargs)
     return "dispatch", reasons
 
 

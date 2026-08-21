@@ -24,6 +24,7 @@ PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
   title
+  state
   isDraft
   mergeable
   mergeStateStatus
@@ -807,6 +808,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": number,
         "title": pr.get("title"),
+        "state": str(pr.get("state") or "").upper(),
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
         "mergeStateStatus": rest_merge_state,

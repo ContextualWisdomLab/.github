@@ -156,11 +156,40 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
 
     assert calls == [
-        ("dispatch", "owner/repo", 7, "pr-review-autofix.yml", "ContextualWisdomLab/.github", True, False),
         ("marker", "owner/repo", 7, True),
+        ("dispatch", "owner/repo", 7, "pr-review-autofix.yml", "ContextualWisdomLab/.github", True, False),
     ]
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["autofix_dispatches"] == 1
+
+
+def test_marker_failure_prevents_untracked_dispatch(monkeypatch) -> None:
+    """A failed deduplication marker must stop the external dispatch."""
+
+    pr = make_pr()
+    dispatched: list[int] = []
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "needs_autofix", lambda item: (True, ("repair",)))
+    monkeypatch.setattr(
+        fix,
+        "create_fix_marker",
+        lambda repo, item, dry_run: (_ for _ in ()).throw(
+            RuntimeError("marker unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, item, **kwargs: dispatched.append(item["number"]),
+    )
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main"]
+    )
+
+    with pytest.raises(RuntimeError, match="marker unavailable"):
+        fix.inspect_pr("owner/repo", pr, args)
+
+    assert dispatched == []
 
 
 def test_autofix_context_filters_outdated_threads_and_renders_checks():
