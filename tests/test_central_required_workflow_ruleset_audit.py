@@ -303,7 +303,12 @@ def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results(
         )
         == 1
     )
-    assert '"${SEMGREP_IMAGE}"' in workflow
+    semgrep_job = workflow.split("\n  semgrep:\n", 1)[1]
+    job_header, steps = semgrep_job.split("\n    steps:\n", 1)
+    assert 'SEMGREP_IMAGE: "semgrep/semgrep@sha256:' in job_header
+    assert 'echo "Using ${SEMGREP_IMAGE}"' in steps
+    assert 'docker manifest inspect "${SEMGREP_IMAGE}"' in steps
+    assert '--entrypoint semgrep \\\n            "${SEMGREP_IMAGE}" \\\n' in steps
     assert "Verify pinned Semgrep manifest" in workflow
     assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
     assert ".suppressions // []" in workflow
