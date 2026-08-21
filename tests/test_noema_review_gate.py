@@ -221,6 +221,23 @@ def test_review_state_helpers_reject_explicit_previous_head_evidence():
     )
 
 
+def test_review_matches_current_head_rejects_missing_or_stale_identity():
+    """Noema accepts only a review whose commit and optional body head match."""
+    assert not noema.review_matches_current_head(review(), "")
+    assert not noema.review_matches_current_head(review(commit="stale"), "head")
+    assert noema.review_matches_current_head(review(), "head")
+    current_head = "a" * 40
+    previous_head = "b" * 40
+    assert noema.review_matches_current_head(
+        review(commit=current_head, body=f"Result: APPROVE\nHead SHA: `{current_head}`"),
+        current_head,
+    )
+    assert not noema.review_matches_current_head(
+        review(commit=current_head, body=f"Result: APPROVE\nHead SHA: `{previous_head}`"),
+        current_head,
+    )
+
+
 def test_check_helpers_and_existing_noema_review():
     status_context = {"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}
     check_run = {
@@ -667,6 +684,11 @@ def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys)
         noema.require_nim_runtime()
 
     monkeypatch.setenv("NOEMA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https:///v1/chat/completions")
+    with pytest.raises(RuntimeError, match="hostname"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://api.openai.com/v1/chat/completions")
     with pytest.raises(RuntimeError, match="integrate.api.nvidia.com"):
         noema.require_nim_runtime()
 
