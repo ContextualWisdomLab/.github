@@ -8,6 +8,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+PIP_AUDIT_INPUT = ROOT / "requirements-pip-audit-ci.txt"
+PIP_AUDIT_LOCK = ROOT / "requirements-pip-audit-ci-hashes.txt"
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -72,3 +74,13 @@ def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
     assert '      - "scripts/ci/test_strix_quick_gate.sh"' in workflow
     assert "bash scripts/ci/test_strix_quick_gate.sh" in workflow
     assert "bash -n scripts/ci/strix_quick_gate.sh" in workflow
+
+
+def test_pip_audit_runner_excludes_the_vulnerable_pip_release() -> None:
+    """Keep the audited, hash-pinned pip implementation above its security floor."""
+    requirements = PIP_AUDIT_INPUT.read_text(encoding="utf-8")
+    lock = PIP_AUDIT_LOCK.read_text(encoding="utf-8")
+
+    assert "pip>=26.2" in requirements
+    assert re.search(r"^pip==26\.2\.1 \\", lock, re.MULTILINE)
+    assert "pip==26.1.2" not in lock
