@@ -77,9 +77,12 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
+    assert 'gh api "repos/${TARGET_REPOSITORY_INPUT}"' in validation
+    assert "live_default_branch=" in validation
+    assert "printf 'default_branch=%s\\n' \"$live_default_branch\"" in validation
     assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
     assert (
-        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}"
+        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.default_branch }}"
         in inspect
     )
     assert '--repo "$TARGET_REPOSITORY"' in inspect
