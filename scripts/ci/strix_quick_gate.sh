@@ -2822,11 +2822,6 @@ is_github_models_unavailable_model_error() {
 		return 0
 	fi
 
-	if grep -Eiq '(github_models_retirement_brownout|Error code:[[:space:]]*410|(^|[^0-9])410([^0-9]|$))' "$STRIX_LOG" &&
-		grep -Eiq '(LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
-		return 0
-	fi
-
 	if grep -Eiq '(UnsupportedToolUse|tool use\. Using tool is not supported by this model|Using tool is not supported by this model)' "$STRIX_LOG" &&
 		strix_log_has_github_models_context; then
 		return 0
