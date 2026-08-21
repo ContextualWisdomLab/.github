@@ -9,3 +9,4 @@ OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/d
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 The Inkspan hourly repair caller runs at minute 47; the naruon caller runs at minute 11. See [`docs/doctoring/inkspan-hourly-review-caller.md`](docs/doctoring/inkspan-hourly-review-caller.md) and [`docs/doctoring/naruon-hourly-review-caller.md`](docs/doctoring/naruon-hourly-review-caller.md).
 The naruon caller targets protected `develop`.
+The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
