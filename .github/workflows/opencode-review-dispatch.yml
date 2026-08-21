@@ -2298,7 +2298,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/contextual-orchestrator
-          ref: d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc
+          ref: 8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914
           path: trusted-contextual-orchestrator
           fetch-depth: 1
           persist-credentials: false

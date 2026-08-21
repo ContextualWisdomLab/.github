@@ -1,8 +1,9 @@
 # Contextual Orchestrator OpenCode gateway
 
 The trusted OpenCode review job starts `contextual-orchestrator` from the
-pinned predecessor commit `d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc` from
-contextual-orchestrator#790. After that predecessor merges, this pin must be
+pinned predecessor commit `8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914` from
+contextual-orchestrator#790, which includes the provider-diverse discovery
+repair from #770. After that predecessor merges, this pin must be
 replaced with the resulting protected `main` SHA. The sidecar binds only
 to `127.0.0.1:18080`, registers any available provider keys in its process-local
 KV bootstrap, discovers models across Bytez, both NVIDIA NIM credentials,

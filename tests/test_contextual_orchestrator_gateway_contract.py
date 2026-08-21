@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
 OPENCODE_CONFIG = ROOT / "opencode.jsonc"
-GATEWAY_COMMIT = "d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc"
+GATEWAY_COMMIT = "8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914"
 GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
 
 
