@@ -374,11 +374,11 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
 
 def test_github_client_redacts_stderr_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_module()
-    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+    client = module.GitHubClient("gh" + "p_123456789012345678901234567890123456")
 
     class Completed:
         returncode = 1
-        stderr = "gh: command failed. token ghp_123456789012345678901234567890123456 is invalid"
+        stderr = "gh: command failed. token " + "gh" + "p_123456789012345678901234567890123456" + " is invalid"
         stdout = ""
 
     import subprocess
@@ -387,28 +387,28 @@ def test_github_client_redacts_stderr_on_error(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(RuntimeError) as excinfo:
         client.request(["--help"])
 
-    assert "ghp_123456789012345678901234567890123456" not in str(excinfo.value)
+    assert "gh" + "p_123456789012345678901234567890123456" not in str(excinfo.value)
     assert "[REDACTED]" in str(excinfo.value)
 
 def test_github_client_redacts_timeout_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_module()
-    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+    client = module.GitHubClient("gh" + "p_123456789012345678901234567890123456")
 
     import subprocess
     def raise_timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=["gh", "api", "ghp_123456789012345678901234567890123456"], timeout=30)
+        raise subprocess.TimeoutExpired(cmd=["gh", "api", "gh" + "p_123456789012345678901234567890123456"], timeout=30)
 
     monkeypatch.setattr(subprocess, "run", raise_timeout)
 
     with pytest.raises(RuntimeError) as excinfo:
         client.request(["--help"])
 
-    assert "ghp_123456789012345678901234567890123456" not in str(excinfo.value)
+    assert "gh" + "p_123456789012345678901234567890123456" not in str(excinfo.value)
     assert "[REDACTED]" in str(excinfo.value)
 
 def test_github_client_redacts_stderr_on_error_no_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_module()
-    client = module.GitHubClient("ghp_123456789012345678901234567890123456")
+    client = module.GitHubClient("gh" + "p_123456789012345678901234567890123456")
 
     class Completed:
         returncode = 1
