@@ -287,15 +287,27 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
           fi
-          if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
-            export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
-            export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
-            export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY}"
-          fi
-          if [ -z "${NVIDIA_NIM_API_KEY:-}" ] || [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
-            echo "::error::Noema LLM is unconfigured: NVIDIA_NIM_API_KEY is required so a green Noema check is a real NIM review."
-            exit 1
-          fi
+          case "$TARGET_REPOSITORY_PRIVATE" in
+            false)
+              if [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+                echo "::error::Noema LLM is unconfigured: NVIDIA_NIM_API_KEY is required so a green public-repository Noema check is a real NIM review."
+                exit 1
+              fi
+              export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
+              export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
+              export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY}"
+              ;;
+            true)
+              if [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
+                echo "::error::Noema LLM is unconfigured: a private repository requires an explicitly configured trusted NOEMA_LLM_API_URL, NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY. Private diff evidence is not sent to the hosted NVIDIA NIM endpoint."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Noema target repository visibility was missing or invalid; failing closed."
+              exit 1
+              ;;
+          esac
           python3 scripts/ci/noema_review_gate.py \
             --repo "$TARGET_REPOSITORY" \
             --pr-number "$PR_NUMBER"
