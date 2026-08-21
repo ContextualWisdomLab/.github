@@ -132,6 +132,7 @@ def run_hook(
     ):
         env.pop(name, None)
     env["OPENCODE_MODEL_CANDIDATES"] = candidates
+    env["OPENCODE_TRUSTED_SOURCE_DIR"] = str(REPO)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
