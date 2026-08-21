@@ -10,9 +10,10 @@ required check, so incomplete security evidence looked like a pass.
 
 ## Decision
 
-1. Download uv from the literal GitHub Releases HTTPS URL, allow only the
-   documented GitHub asset redirect, and retain size, checksum, and executable
-   version checks. Repository or user data cannot select the network origin.
+1. Download uv from the literal GitHub Releases HTTPS URL with a fixed
+   `User-Agent`, disable proxies, reject redirects, and retain size, checksum,
+   and executable-version checks. Repository or user data cannot select the
+   network origin.
 2. Before skipping cross-repository status publication, prove an exact-head
    formal OpenCode review (`APPROVED` or `CHANGES_REQUESTED`). Missing proof
    fails closed.

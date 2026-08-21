@@ -2046,6 +2046,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
     assert "exact-head formal review remains authoritative" in cross_repository_guard
     assert 'formal_review_file="$(mktemp)"' in cross_repository_guard
     assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in cross_repository_guard
+    assert 'gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp' in cross_repository_guard
     assert '(.commit_id // "") == $head' in cross_repository_guard
     assert 'opencode-agent[bot]' in cross_repository_guard
     assert "APPROVED" in cross_repository_guard

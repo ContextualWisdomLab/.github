@@ -1507,7 +1507,19 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.run_id" "scheduler keeps manual queue scans isolated per run"
-	assert_file_contains "$workflow_file" "cancel-in-progress: false" "scheduler does not cancel in-progress required scan-pr-queue runs"
+	local scheduler_concurrency_block
+	scheduler_concurrency_block="$(
+		awk '
+			/^concurrency:/ { in_block = 1 }
+			in_block && /^permissions:/ { exit }
+			in_block { print }
+		' "$workflow_file"
+	)"
+	if [[ "$scheduler_concurrency_block" != *"group:"* ||
+		"$scheduler_concurrency_block" != *"central-pr-review-merge-scheduler-"* ||
+		"$scheduler_concurrency_block" != *"cancel-in-progress: false"* ]]; then
+		record_failure "scheduler concurrency block must keep the scan-pr-queue group and cancel-in-progress: false together"
+	fi
 	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
