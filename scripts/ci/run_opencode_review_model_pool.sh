@@ -604,6 +604,11 @@ main() {
 		deadline=$((SECONDS + budget_seconds))
 	fi
 	: >"$OPENCODE_OUTPUT_FILE"
+	if [ -f "$(dirname -- "${BASH_SOURCE[0]}")/opencode_private_free_model_hook.sh" ]; then
+		# shellcheck disable=SC1091
+		. "$(dirname -- "${BASH_SOURCE[0]}")/opencode_private_free_model_hook.sh"
+		apply_private_free_model_policy
+	fi
 	cd "$OPENCODE_REVIEW_WORKDIR"
 	read -r -a model_candidates <<<"${OPENCODE_MODEL_CANDIDATES:-}"
 	if [ "${#model_candidates[@]}" -eq 0 ]; then

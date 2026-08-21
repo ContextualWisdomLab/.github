@@ -1,5 +1,6 @@
 * @seonghobae
 .github/workflows/* @seonghobae
+.github/opencode-private-free-models.json @seonghobae
 scripts/ci/* @seonghobae
 SECURITY.md @seonghobae
 docs/scorecard-governance.md @seonghobae

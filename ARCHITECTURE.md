@@ -125,8 +125,45 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+
+- Private repositories send source to `opencode-free/*` only after an
+  unchanged trusted-base policy at
+  `.github/opencode-private-free-models.json` classifies the tree as
+  `public_equivalent`. The live runner passes
+  `OPENCODE_REPOSITORY_IS_PRIVATE` from validated PR metadata; a head
+  cannot opt itself in.
+
+## Private free-model opt-in
+
+```mermaid
+flowchart TD
+  Candidates["OPENCODE_MODEL_CANDIDATES"]
+  Visibility{"Trusted OPENCODE_REPOSITORY_IS_PRIVATE?"}
+  Public["Keep governed zero-cost aliases only"]
+  Strip["Remove every opencode-free alias"]
+  Policy{"Unchanged base policy eligible?"}
+  Enable["Prepend governed free aliases"]
+  Keyed["Keep keyed fallbacks only"]
+  Guard["Provider-scoped credential guard"]
+
+  Candidates --> Visibility
+  Visibility -->|"false"| Public
+  Visibility -->|"true / unknown"| Strip
+  Strip --> Policy
+  Policy -->|"yes"| Enable
+  Policy -->|"no"| Keyed
+  Public --> Guard
+  Enable --> Guard
+  Keyed --> Guard
+```
+
+The policy file is read from the immutable base tree. Adding or editing it
+on the current head is a denial, not an activation. See
+[`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md).
+
 - Downloaded SBOM and distribution bytes are inert. The signing job does
   not import, install, or unpack them.
+
 
 ## Quality gates
 
@@ -152,5 +189,9 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — LLM probe publication without inventing observed proof.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+- [`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md)
+  — trusted-base private free-model opt-in and APA 7th citations.
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.

@@ -1362,6 +1362,7 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
 
     assert "* @seonghobae" in codeowners
     assert ".github/workflows/* @seonghobae" in codeowners
+    assert ".github/opencode-private-free-models.json @seonghobae" in codeowners
     assert "scripts/ci/* @seonghobae" in codeowners
 
     for alert_id in ("BranchProtectionID", "MaintainedID", "SASTID", "CodeReviewID"):

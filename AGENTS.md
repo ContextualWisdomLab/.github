@@ -8,6 +8,7 @@ Conflict-scope roots fail closed when the immediate parent directory is a symbol
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 
+Private OpenCode free-model egress requires an unchanged trusted-base `.github/opencode-private-free-models.json`; the live runner must pass `OPENCODE_REPOSITORY_IS_PRIVATE` from validated PR metadata. See [`docs/doctoring/opencode-private-free-model-policy.md`](docs/doctoring/opencode-private-free-model-policy.md).
 OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
 
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
