@@ -39,11 +39,11 @@ EXCLUDED_PARTS = frozenset(
 ORCHESTRATOR_MARKERS = ("contextual-orchestrator", "contextual_orchestrator")
 CHAT_ENDPOINT_MARKERS = ("/v1/chat/completions", "/chat/completions", "chat/completions")
 FORCED_ROUTE_PATTERN = re.compile(
-    r"(?:orchestration_mode|mode)(?:\s*:\s*str)?\s*[:=]\s*[\"']route[\"']",
+    r"(?:orchestration_mode|mode)(?:\s*:\s*str)?\s*[:=]\s*[\"']?\broute\b[\"']?",
     re.IGNORECASE,
 )
 AUTO_PATTERN = re.compile(
-    r"(?:orchestration_mode|mode)(?:\s*:\s*str)?\s*[:=]\s*[\"']auto[\"']",
+    r"(?:orchestration_mode|mode)(?:\s*:\s*str)?\s*[:=]\s*[\"']?\bauto\b[\"']?",
     re.IGNORECASE,
 )
 

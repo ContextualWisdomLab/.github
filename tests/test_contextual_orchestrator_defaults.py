@@ -82,6 +82,40 @@ def test_policy_exceptions_are_path_scoped(tmp_path: Path) -> None:
     assert policy.inspect_repository(tmp_path) == []
 
 
+def test_unquoted_modes_are_detected_without_partial_matches(tmp_path: Path) -> None:
+    """Detect equivalent unquoted assignments while rejecting longer values."""
+
+    _write(
+        tmp_path,
+        "src/forced.py",
+        'endpoint = "/v1/chat/completions"\n'
+        'model = "contextual-orchestrator"\n'
+        "orchestration_mode = route\n",
+    )
+    _write(
+        tmp_path,
+        "src/partial.py",
+        'endpoint = "/v1/chat/completions"\n'
+        'model = "contextual-orchestrator"\n'
+        'mode = "router"\n',
+    )
+    _write(
+        tmp_path,
+        "src/auto.py",
+        'endpoint = "/v1/chat/completions"\n'
+        'model = "contextual-orchestrator"\n'
+        "mode = auto\n",
+    )
+
+    findings = policy.inspect_repository(tmp_path)
+
+    assert [(item.finding_code, item.source_path) for item in findings] == [
+        ("forced_single_route", "src/forced.py"),
+        ("implicit_orchestration_mode", "src/forced.py"),
+        ("implicit_orchestration_mode", "src/partial.py"),
+    ]
+
+
 def test_malformed_policy_fails_closed(tmp_path: Path) -> None:
     """Malformed exception configuration raises instead of weakening the scan."""
 
