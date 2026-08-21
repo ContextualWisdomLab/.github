@@ -15,10 +15,9 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 SCHEMA_VERSION = "1"
 CAPABILITY = "workflow_lifecycle_inventory"

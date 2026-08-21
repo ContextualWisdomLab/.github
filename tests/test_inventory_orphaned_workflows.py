@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from scripts.ci import inventory_orphaned_workflows as inventory
-
 
 SHA = "a" * 40
 SHA_B = "b" * 40
