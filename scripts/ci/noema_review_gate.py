@@ -166,7 +166,7 @@ def allowed_noema_llm_hosts() -> set[str]:
 
 
 def require_nim_runtime() -> None:
-    """Fail closed unless Noema is pointed at NVIDIA NIM or the optional orchestrator."""
+    """Fail closed unless Noema uses the visibility-governed review provider."""
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip()
@@ -180,8 +180,25 @@ def require_nim_runtime() -> None:
         raise RuntimeError(
             f"Noema must not use GitHub Models, Copilot, or gpt-5.6; observed model {model!r}."
         )
+    visibility = os.environ.get("TARGET_REPOSITORY_PRIVATE", "").strip().casefold()
+    if visibility not in {"true", "false"}:
+        raise RuntimeError(
+            "Noema target repository visibility is missing or invalid; failing closed."
+        )
     parsed = urllib.parse.urlparse(api_url)
     hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise RuntimeError("Noema LLM URL must include a hostname.")
+    if visibility == "true":
+        if hostname == NIM_CHAT_HOST:
+            raise RuntimeError(
+                "A private repository must not send review evidence to hosted NVIDIA NIM."
+            )
+        if parsed.scheme.casefold() != "https":
+            raise RuntimeError(
+                "A private repository requires an explicitly configured HTTPS Noema LLM endpoint."
+            )
+        return
     if hostname not in allowed_noema_llm_hosts():
         raise RuntimeError(
             "Noema LLM URL must target integrate.api.nvidia.com or the optional "
