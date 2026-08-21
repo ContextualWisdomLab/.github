@@ -2,7 +2,8 @@ name: Contextual Orchestrator Hourly Review Repair
 
 on:
   schedule:
-    # Minute 17 is reserved for this gateway repository in the CWL hourly loop.
+    # Run at minute 17 each hour; the slot is shared with the three-hourly
+    # pr-auto-rebase workflow, so both workflows use independent concurrency groups.
     - cron: "17 * * * *"
 
 concurrency:
