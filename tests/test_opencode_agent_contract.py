@@ -1159,6 +1159,13 @@ def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
     assert select("src/main.rs\n") == ["./Cargo.toml"]
     assert select("README.md\n") == []
 
+    # Deleting the root lockfile still changes the whole workspace dependency graph.
+    subprocess.run(["git", "rm", "-q", "Cargo.lock"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "delete root lock"], cwd=repo, check=True
+    )
+    assert select("Cargo.lock\n") == ["Cargo.toml"]
+
 
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
