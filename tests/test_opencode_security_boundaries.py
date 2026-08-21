@@ -79,11 +79,15 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
         "9safe=value": "9safe=value",
         '"token: value': f'"token: {redactor.REDACTED}',
         "token:   ": "token:   ",
+        't-o-k-e-n="secret value"': f"t-o-k-e-n={redactor.REDACTED}",
+        "'p-a-s-s-w-o-r-d': 'secret value'": f"'p-a-s-s-w-o-r-d': {redactor.REDACTED}",
     }
 
     for source, expected in cases.items():
         assert redactor.redact_text(source) == expected
 
+    assert redactor._consume_sensitive_assignment("=password=value", 0) is None
+    assert redactor._consume_sensitive_assignment("visible=value", 0) is None
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
