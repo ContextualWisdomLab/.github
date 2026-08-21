@@ -123,6 +123,16 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
 
         log = "the model behavior error was logged by the scanned service\n"
         self.assertFalse(_classifies_as_model_behavior_error(log))
+        self.assertFalse(_classifies_as_model_behavior_error("ModelBehaviorError\n"))
+
+    def test_agents_sdk_tool_protocol_failure_is_retryable(self) -> None:
+        """Recognize the OpenAI Agents SDK exception observed in required CI."""
+
+        log = (
+            "agents.exceptions.ModelBehaviorError: Tool ls not found in agent strix\n"
+            "Vulnerabilities 0\n"
+        )
+        self.assertTrue(_classifies_as_model_behavior_error(log))
 
     def test_behavior_error_skips_same_model_and_enters_fallback(self) -> None:
         """Wire the classifier into infrastructure and cross-model fallback."""
@@ -150,6 +160,9 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
                 "strix.agents.base.ModelBehaviorError: tool protocol mismatch\n"
                 "Vulnerabilities 0\n"
             )
+        )
+        self.assertFalse(
+            _workflow_neutralizes("ModelBehaviorError\nVulnerabilities 0\n")
         )
 
     def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:

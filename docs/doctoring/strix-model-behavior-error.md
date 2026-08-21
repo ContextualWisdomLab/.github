@@ -12,8 +12,9 @@ current-head progress on otherwise empty scans.
 
 ## Decision
 
-`scripts/ci/strix_quick_gate.sh` recognizes the exact PascalCase runtime
-identifier `ModelBehaviorError` as retryable model evidence. The gate moves to
+`scripts/ci/strix_quick_gate.sh` recognizes a **module-qualified**
+`ModelBehaviorError` from `agents`, `pydantic_ai`, or `strix` as retryable
+model evidence. A bare source-file mention is not enough. The gate moves to
 the configured fallback sequence and does not retry the same model. The outer
 `.github/workflows/strix.yml` neutralization path may skip only when that
 signal is present **and** the log contains no vulnerability evidence.
@@ -28,10 +29,11 @@ are unchanged.
 and the outer workflow neutralization condition against bounded synthetic
 logs. It proves:
 
-1. `ModelBehaviorError` plus `Vulnerabilities 0` is retryable and may
-   neutralize;
-2. `ModelBehaviorError` plus `Vulnerabilities 1` stays fail-closed;
-3. lowercase application prose is not classified as the runtime exception;
+1. a module-qualified `agents`/`pydantic_ai`/`strix` `ModelBehaviorError`
+   plus `Vulnerabilities 0` is retryable and may neutralize;
+2. the same exception plus `Vulnerabilities 1` stays fail-closed;
+3. lowercase application prose or a bare `ModelBehaviorError` token is not
+   classified as the runtime exception;
 4. the identifier is wired into infrastructure detection and cross-model
    fallback, never same-model retry.
 

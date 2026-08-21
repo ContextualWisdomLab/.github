@@ -2661,12 +2661,10 @@ is_nvidia_nim_not_found_error() {
 }
 
 is_model_behavior_error() {
-	# Classify only Strix's exact agent-protocol exception. The PascalCase
-	# identifier is the runtime class name; lowercase application prose is
-	# not retryable. Cross-model fallback may continue; same-model retry
-	# does not, because repeating the same protocol failure is not a
-	# transient transport flake.
-	if grep -Eq '(^|[^A-Za-z])ModelBehaviorError([^A-Za-z]|$)' "$STRIX_LOG"; then
+	# Classify only a module-qualified Strix/Agents SDK protocol exception.
+	# A bare source-file mention of ModelBehaviorError is not retryable.
+	# Cross-model fallback may continue; same-model retry does not.
+	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
 
