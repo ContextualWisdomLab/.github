@@ -39,11 +39,11 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Stable branch-protection job names: `required-workflow-bootstrap`, `coverage-source-tree`, `coverage-evidence`, and `opencode-review`; these jobs are data-only sentinels, while approval remains a separate current-head PR-review requirement
 - Trusted source: `ContextualWisdomLab/.github`
 - PR-head handling: authenticated current-head `repository_dispatch` runs `.github/workflows/opencode-review-dispatch.yml` from the protected default branch; that workflow owns metadata validation, bounded coverage, source-as-data inspection, model review, and publication
-- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted repository, a fork head, or any live metadata mismatch
+- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted repository, a closed or malformed PR, or any live metadata mismatch. External/fork heads are accepted only as read-only review data after exact target-base and SHA validation.
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
 - Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
 - Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; the dispatch workflow runs bounded low-privilege coverage only after exact live metadata and scheduler identity validation
-- Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context
+- Fork posture: PR heads are fetched through `refs/pull/<number>/head` when direct head-SHA fetch is not available, so review can inspect fork PR source as data without executing it in the trusted workflow context. External heads remain excluded from scheduler direct merge and auto-merge; branch updates require GitHub-reported maintainer write capability.
 - Runtime posture: pre-model failed-check evidence waits are capped at about five minutes; the later approval gate rechecks current-head peer checks and extends its bounded wait only while image-validation checks remain pending, logging the reason before approval
 - Model-exhaustion posture: command exit codes and deterministic checks cannot synthesize an approval. Exhaustion remains `MODEL_OUTPUT_UNAVAILABLE`; only a prior real-model approval bound to the exact current head can satisfy the review gate after all checks, alerts, and threads are revalidated.
 - Adversarial-evidence posture: every probe must cite its exact changed path and positive in-range line in the materialized current-head source tree. Unrelated paths, nonexistent lines, circular claims, and missing observed results fail closed with a concrete rejection reason.
@@ -52,8 +52,10 @@ For a bounded current-head retry in one repository, dispatch `merge-scheduler`
 to the central repository with `target_repository`, `pr_number`, and the live
 `base_branch`. The target must exactly match
 `OPENCODE_REPOSITORY_DISPATCH_TARGETS`; the scheduler then re-reads the open PR
-and rejects a noncanonical repository name, fork head, base mismatch, malformed
-head SHA, or changed/closed PR before using cross-repository credentials:
+and rejects a noncanonical repository name, base mismatch, malformed head SHA,
+or changed/closed PR before using cross-repository credentials. A fork head is
+reviewable as untrusted read-only data, but remains ineligible for automated
+branch updates and merges:
 
 ```bash
 jq -n '{

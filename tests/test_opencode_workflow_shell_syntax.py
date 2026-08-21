@@ -148,7 +148,7 @@ def test_merge_scheduler_targeted_dispatch_run_block_is_valid_bash():
 
 
 def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
-    """Only an allowlisted same-repository open PR reaches scheduler outputs."""
+    """Only an allowlisted open PR with a target base reaches scheduler outputs."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -260,6 +260,9 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         env=cross_repo_env,
     )
 
-    assert cross_repo.returncode == 1
-    assert "cross-repository" in cross_repo.stdout
-    assert not output.exists()
+    assert cross_repo.returncode == 0, cross_repo.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "repository=ContextualWisdomLab/naruon",
+        "base_branch=develop",
+        "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+    ]
