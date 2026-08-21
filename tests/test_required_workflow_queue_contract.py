@@ -75,7 +75,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
     assert '[ "$live_state" != "open" ]' in validation
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
-    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert '! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in validation
+    assert "this dispatch is review-only for external heads" in validation
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
     assert 'gh api "repos/${TARGET_REPOSITORY_INPUT}"' in validation
     assert "live_default_branch=" in validation
@@ -99,6 +100,23 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
         "github.event.client_payload.target_repository, "
         "github.event.client_payload.pr_number)"
     ) in workflow
+
+
+def test_fork_heads_reach_read_only_opencode_review_dispatch() -> None:
+    """External heads are reviewable but never become trusted merge inputs."""
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    metadata = workflow_step(
+        workflow, "Bind workflow inputs to live organization pull request metadata"
+    )
+    privileged = workflow_step(workflow, "Validate pull request head repository trust")
+    scheduler = (REPO_ROOT / "scripts/ci/pr_review_merge_scheduler.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in metadata
+    assert '! [[ "$head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]' in privileged
+    assert "this path is review-only for external heads" in privileged
+    assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in scheduler
 
 
 def test_privileged_review_retries_use_default_branch_repository_dispatch() -> None:
