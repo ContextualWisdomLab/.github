@@ -5,6 +5,11 @@ run-name: >-
   github.event.pull_request.head.sha || github.sha }}
 
 on:
+  # The central ruleset applies this required workflow to every branch. A
+  # push-triggered bootstrap keeps new stacked branches pushable without
+  # checking out or executing untrusted content.
+  push:
+    branches: ['**']
   # This required-workflow entrypoint never checks out or executes pull-request
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.

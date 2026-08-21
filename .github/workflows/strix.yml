@@ -7,7 +7,7 @@ run-name: >-
 
 on:
   push:
-    branches: [main, develop, master]
+    branches: ['**']
     # Skip scans for changes that touch ONLY non-executable documentation and
     # image assets. A change whose entire diff is these paths has no source,
     # build, config, or workflow logic for a code security scanner to analyze,
@@ -91,7 +91,14 @@ jobs:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
   strix:
-    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    if: >-
+      (
+        github.event_name != 'push' ||
+        github.ref_name == 'main' ||
+        github.ref_name == 'develop' ||
+        github.ref_name == 'master'
+      ) &&
+      (github.event_name != 'pull_request_target' || github.event.action != 'closed')
     # Large repositories can require a legitimate full-hour review. The scanner
     # gets a 90-minute process budget and a 95-minute total retry budget; the
     # 100-minute step and 120-minute job leave deterministic time to preserve

@@ -28,6 +28,8 @@
 name: Security Scan
 
 on:
+  push:
+    branches: ['**']
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [main, master, develop]
@@ -55,7 +57,7 @@ jobs:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
   osv-scan:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -251,7 +253,7 @@ jobs:
           retention-days: 5
 
   dependency-review:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -304,7 +306,7 @@ jobs:
           comment-summary-in-pr: on-failure
 
   trivy-fs:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -394,7 +396,7 @@ jobs:
           echo "::warning::Trivy SARIF upload to code scanning failed after the filesystem scan. The Trivy finding log above remains the hard gate, so upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings."
 
   scorecard:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true

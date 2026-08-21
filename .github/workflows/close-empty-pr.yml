@@ -9,6 +9,8 @@
 name: Close Empty PR
 
 on:
+  push:
+    branches: ['**']
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
 
@@ -31,7 +33,7 @@ jobs:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
   close-empty:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Close PR when it has no net changes

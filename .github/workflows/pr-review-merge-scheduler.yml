@@ -2,7 +2,7 @@ name: Required PR Review Merge Scheduler
 
 on:
   push:
-    branches: [main, develop, master]
+    branches: ['**']
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
   pull_request_review:
@@ -121,6 +121,12 @@ jobs:
     # The org-sweep cron and org_sweep dispatches are handled by org-queue-sweep
     # below; skipping them here avoids a duplicate same-repository scan.
     if: >-
+      (
+        github.event_name != 'push' ||
+        github.ref_name == 'main' ||
+        github.ref_name == 'develop' ||
+        github.ref_name == 'master'
+      ) &&
       (
         github.event_name != 'pull_request_target' ||
         github.event.action != 'closed'
@@ -558,6 +564,12 @@ jobs:
     # log. It never bypasses policy: all mutations go through the same guarded
     # scheduler contract as the per-repository runs.
     if: >-
+      (
+        github.event_name != 'push' ||
+        github.ref_name == 'main' ||
+        github.ref_name == 'develop' ||
+        github.ref_name == 'master'
+      ) &&
       github.repository == 'ContextualWisdomLab/.github' &&
       (
         (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||

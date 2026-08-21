@@ -24,7 +24,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [main, master, develop]
   push:
-    branches: [main, master, develop]
+    branches: ['**']
   schedule:
     - cron: "23 3 * * 1"
   repository_dispatch:
@@ -46,7 +46,11 @@ jobs:
 
   semgrep:
     name: Semgrep (multi-language SAST)
-    if: github.event.action != 'closed'
+    if: >-
+      github.event_name != 'push' ||
+      github.ref_name == 'main' ||
+      github.ref_name == 'master' ||
+      github.ref_name == 'develop'
     runs-on: ubuntu-latest
     permissions:
       contents: read
