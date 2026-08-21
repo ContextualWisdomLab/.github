@@ -77,20 +77,23 @@ pool that the provider still serves:
 
 | Role | Pool variable | Default order |
 | --- | --- | --- |
-| primary | `NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES` | `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `nvidia/nemotron-3-super-120b-a12b`, `nvidia/llama-3.1-nemotron-ultra-253b-v1`, `meta/llama-3.3-70b-instruct` |
-| small | `NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES` | `nvidia/nemotron-3-nano-30b-a3b`, `nvidia/llama-3.1-nemotron-nano-8b-v1`, `meta/llama-3.1-8b-instruct` |
+| primary | `NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES` | `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `nvidia/nemotron-3-super-120b-a12b`, `nvidia/llama-3.1-nemotron-ultra-253b-v1` |
+| small | `NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES` | `nvidia/nemotron-3-nano-30b-a3b`, `nvidia/llama-3.1-nemotron-nano-8b-v1` |
 
-To change the preference order, set the matching Actions variable on this
-repository; no workflow edit is required. Resolution is fail-closed: an
-unreachable or unparsable catalog, and a pool whose every entry is retired, both
-stop the run with an actionable annotation instead of silently substituting an
-arbitrary model. The resolved ids are exported once as `AUTOFIX_MODEL_ID` and
-`AUTOFIX_SMALL_MODEL_ID` and are the only model identifiers the generated
-OpenCode configuration and both `opencode run` invocations use, so the writer
-agent and its provider entry cannot drift apart.
+Both default pools contain only reasoning-capable NVIDIA NIM models, because
+the generated provider entries deliberately request high reasoning. Operator
+overrides must preserve that contract; a non-reasoning instruct model must not
+be added to either pool. To change the preference order, set the matching
+Actions variable on this repository; no workflow edit is required. Resolution
+is fail-closed: an unreachable or unparsable catalog, and a pool whose every
+entry is retired, both stop the run with an actionable annotation instead of
+silently substituting an arbitrary model. The resolved ids are exported once
+as `AUTOFIX_MODEL_ID` and `AUTOFIX_SMALL_MODEL_ID` and are the only model
+identifiers the generated OpenCode configuration and both `opencode run`
+invocations use, so the writer agent and its provider entry cannot drift apart.
 
-The `ci-autofix` agent and its model configuration both request high reasoning
-through OpenCode's provider-option contract (`reasoningEffort: "high"`). NVIDIA's
+Each resolved model entry requests high reasoning through OpenCode's
+provider-option contract (`reasoningEffort: "high"`). NVIDIA's
 NIM LLM API documents the corresponding request behavior as
 `reasoning_effort: "high"`, which enables the model's reasoning mode. The small
 model is used for bounded helper work only and is not a fallback provider.

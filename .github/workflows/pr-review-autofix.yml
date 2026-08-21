@@ -257,11 +257,9 @@ jobs:
           AUTOFIX_MODEL_CANDIDATES: >-
             ${{ vars.NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES ||
             'nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia/nemotron-3-super-120b-a12b
-            nvidia/llama-3.1-nemotron-ultra-253b-v1 meta/llama-3.3-70b-instruct' }}
+            nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
           AUTOFIX_SMALL_MODEL_CANDIDATES: >-
-            ${{ vars.NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES ||
-            'nvidia/nemotron-3-nano-30b-a3b nvidia/llama-3.1-nemotron-nano-8b-v1
-            meta/llama-3.1-8b-instruct' }}
+            ${{ vars.NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES || 'nvidia/nemotron-3-nano-30b-a3b nvidia/llama-3.1-nemotron-nano-8b-v1' }}
         run: |
           set -euo pipefail
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
@@ -345,7 +343,6 @@ jobs:
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
                 "model": "nvidia-nim/\($model_id)",
-                "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
                 "permission": {

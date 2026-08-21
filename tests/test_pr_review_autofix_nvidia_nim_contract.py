@@ -55,9 +55,14 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
+    agent_start = workflow.index('"ci-autofix": {')
+    provider_start = workflow.index('"provider":', agent_start)
+    assert '"reasoningEffort": "high"' not in workflow[agent_start:provider_start]
     forbidden_fragments = (
         'mistralai/mistral-small-4-119b-2603',
         'mistralai/mistral-nemotron',
+        'meta/llama-3.3-70b-instruct',
+        'meta/llama-3.1-8b-instruct',
         'STRIX_GITHUB_MODELS_TOKEN:',
         'MODEL: github-models/',
         'USE_GITHUB_TOKEN:',
@@ -146,6 +151,8 @@ def test_model_ids_are_resolved_from_an_ordered_live_candidate_pool() -> None:
     assert "--role small" in resolve
     assert "vars.NVIDIA_NIM_AUTOFIX_MODEL_CANDIDATES" in resolve
     assert "vars.NVIDIA_NIM_AUTOFIX_SMALL_MODEL_CANDIDATES" in resolve
+    assert "meta/llama-3.3-70b-instruct" not in resolve
+    assert "meta/llama-3.1-8b-instruct" not in resolve
     assert "AUTOFIX_MODEL_ID=%s" in resolve
     assert "AUTOFIX_SMALL_MODEL_ID=%s" in resolve
     assert resolve_end < workflow.index('--arg model_id "$AUTOFIX_MODEL_ID"')
@@ -274,6 +281,7 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "Git Project. (2026). *githooks*" in doctoring
     assert "OpenCode. (2026a). *Permissions*" in doctoring
     assert "resolves the primary and small model ids" in doctoring
+    assert "reasoning-capable NVIDIA NIM models" in doctoring
     assert "the exact Mistral Small 4 writer" not in doctoring
     assert "the exact NVIDIA Mistral Small 4 writer" not in doctoring
     assert "contracts asserted a fixed writer-model identity" in doctoring
