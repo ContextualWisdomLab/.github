@@ -613,6 +613,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "nim-key")
+    monkeypatch.setenv("TARGET_REPOSITORY_PRIVATE", "false")
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -650,9 +651,11 @@ def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys)
     monkeypatch.delenv("NOEMA_LLM_MODEL", raising=False)
     monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_URL", raising=False)
+    monkeypatch.delenv("TARGET_REPOSITORY_PRIVATE", raising=False)
     with pytest.raises(RuntimeError, match="unconfigured"):
         noema.require_nim_runtime()
 
+    monkeypatch.setenv("TARGET_REPOSITORY_PRIVATE", "false")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://api.openai.com/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "gpt-5.6-sol")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "sk-test")
@@ -674,6 +677,24 @@ def test_require_nim_runtime_and_failure_emission(tmp_path, monkeypatch, capsys)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://orchestrator.example.test/v1/chat")
     noema.require_nim_runtime()
     assert "orchestrator.example.test" in noema.allowed_noema_llm_hosts()
+
+    monkeypatch.setenv("TARGET_REPOSITORY_PRIVATE", "true")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://trusted-private-reviewer.example.test/v1/chat")
+    monkeypatch.setenv("NOEMA_LLM_MODEL", "trusted-private-reviewer")
+    noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+    with pytest.raises(RuntimeError, match="private repository.*hosted NVIDIA NIM"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://trusted-private-reviewer.example.test/v1/chat")
+    with pytest.raises(RuntimeError, match="private repository.*HTTPS"):
+        noema.require_nim_runtime()
+
+    monkeypatch.setenv("TARGET_REPOSITORY_PRIVATE", "unknown")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://trusted-private-reviewer.example.test/v1/chat")
+    with pytest.raises(RuntimeError, match="visibility"):
+        noema.require_nim_runtime()
 
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
