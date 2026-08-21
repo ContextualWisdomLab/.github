@@ -1,3 +1,0 @@
-Strix scan failed after provider infrastructure or failure-signal output; failing closed.
-Vulnerabilities 0
-RuntimeError: loginAsGuest failed after 10 attempts: curl exit 7

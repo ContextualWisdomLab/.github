@@ -1785,8 +1785,6 @@ if not raw_location:
 scan_target_root = Path(scan_target_root_raw).resolve(strict=True) if scan_target_root_raw else None
 
 def normalize_within(base: Path, location: str) -> Path:
-    if ".." in Path(location).parts:
-        raise SystemExit(1)
     candidate = (base / location).resolve(strict=False)
     try:
         candidate.relative_to(base)
