@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `orgmetra-hourly-review-repair.yml` owns Orgmetra's heartbeat at minute 58
+  of every hour against protected `develop`.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
@@ -12,6 +14,12 @@ engine**.
 - `pr-review-autofix.yml` is the bounded write-capable worker. It uses OpenCode
   through contextual-orchestrator's KV-backed gateway and does not approve or
   merge pull requests.
+
+Orgmetra's caller remains provider-neutral. The intended model boundary is the
+contextual-orchestrator gateway: provider keys stay in its KV registry and
+automatic model discovery selects upstream models. A caller schedule is not
+evidence that gateway credentials, discovery, or a live OpenCode tool loop are
+available; those facts require exact worker-run evidence.
 
 Merge eligibility remains owned by the separate merge scheduler, branch
 protection, required checks, independent review, and unresolved-thread policy.
@@ -40,6 +48,24 @@ The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `CONTEXTUAL_ORCHESTRATOR_TOKEN`; gateway URL/token values are scoped
 exclusively to the two OpenCode execution steps in the separately reviewed
 autofix worker, while upstream provider keys remain in the gateway KV.
+
+## Orgmetra execution contract
+
+The Orgmetra caller provides the following immutable operating parameters:
+
+```yaml
+target_repository: ContextualWisdomLab/Orgmetra
+base_branch: develop
+max_prs: "50"
+max_dispatches: "1"
+retry_hours: "2"
+```
+
+Its heartbeat is `58 * * * *` with non-cancelling concurrency. It passes only
+the established scheduler credentials and does not receive provider model
+secrets. Orgmetra's HCM checks, PostgreSQL evidence, Rust/GPU psychometric
+evidence, browser evidence, independent approval, and protected merge gates
+remain target-repository responsibilities.
 
 ## Reusable target-selection contract
 
