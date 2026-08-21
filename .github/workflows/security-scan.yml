@@ -156,7 +156,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -198,7 +198,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=old-results.json
+            --output-file=old-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -257,7 +257,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
             --no-resolve
             --allow-no-lockfiles
@@ -299,7 +299,7 @@ jobs:
         with:
           scan-args: |
             --format=json
-            --output=new-results.json
+            --output-file=new-results.json
             --no-resolve
             --allow-no-lockfiles
             -r
@@ -428,7 +428,7 @@ jobs:
         uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
         with:
           scan-args: |
-            --output=results.sarif
+            --output-files=sarif:results.sarif
             --old=old-results.json
             --new=new-results.json
             --gh-annotations=true
