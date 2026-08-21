@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
+import runpy
 
 import pytest
 
@@ -44,6 +46,35 @@ def arguments(numbers: tuple[int, ...]) -> argparse.Namespace:
         autofix_repository="ContextualWisdomLab/.github",
         dry_run=False,
     )
+
+
+def test_stack_driver_falls_back_to_package_scheduler(monkeypatch) -> None:
+    """The stack driver remains importable without its script directory."""
+
+    real_import = builtins.__import__
+
+    def import_without_script_directory(
+        name,
+        globals_=None,
+        locals_=None,
+        fromlist=(),
+        level=0,
+    ):
+        """Reject the flat scheduler import and delegate every other import."""
+
+        if name == "pr_review_fix_scheduler":
+            raise ModuleNotFoundError(name)
+        return real_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_script_directory)
+    namespace = runpy.run_path(
+        "scripts/ci/pr_review_fix_stack_scheduler.py",
+        run_name="pr_review_fix_stack_scheduler_package_fallback_test",
+    )
+
+    loaded = namespace["fetch_pr"]
+    assert loaded.__name__ == stack.fetch_pr.__name__
+    assert loaded.__code__.co_filename == stack.fetch_pr.__code__.co_filename
 
 
 def test_parse_pull_request_numbers_preserves_order_and_rejects_ambiguity() -> None:
