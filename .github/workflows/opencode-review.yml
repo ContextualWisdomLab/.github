@@ -75,7 +75,7 @@ jobs:
             exit 1
           fi
           reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
-          verdict="$(printf '%s\n' "$reviews" | jq -s --arg sha "$HEAD_SHA" '
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
                 .[]
