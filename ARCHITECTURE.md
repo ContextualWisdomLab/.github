@@ -70,6 +70,25 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Exact-artifact SBOM attestation
+
+```mermaid
+flowchart TD
+  Seal["Six-file sealed artifact"]
+  Read["verify-evidence-artifact: actions/contents read"]
+  Sign["attest-exact-artifacts after verify"]
+  Offline["SHA256SUMS + README + bundles"]
+  Fail["Fail closed; no OIDC token"]
+
+  Seal --> Read
+  Read -->|"invalid JSON, digest, or identity"| Fail
+  Read -->|"valid"| Sign
+  Sign --> Offline
+```
+
+Caller inputs enter shell steps only as named environment variables. This
+workflow does not claim SLSA Build L3.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -107,6 +126,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Downloaded SBOM and distribution bytes are inert. The signing job does
+  not import, install, or unpack them.
 
 ## Quality gates
 
@@ -122,6 +143,8 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   ecosystem.
 - [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
   — Project #1 operation.
+- [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md)
+  — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
@@ -130,3 +153,5 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — manual Deep `workflow_dispatch` is not merge evidence.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
+  — current increment's attestation decision and APA 7th citations.
