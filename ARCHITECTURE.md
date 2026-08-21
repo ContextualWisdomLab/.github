@@ -39,7 +39,7 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
-## Hourly NVIDIA NIM repair gate
+## Contextual-orchestrator hourly repair gate
 
 ```mermaid
 flowchart TD
@@ -47,7 +47,7 @@ flowchart TD
   Sched["Central reusable scheduler"]
   Bind{"Exact-head, same-repo, writer authority, sealed paths?"}
   Worker["repository_dispatch worker at github.sha"]
-  NIM["NVIDIA NIM repair model"]
+  Gateway["Contextual-orchestrator KV gateway\nautomatic model discovery"]
   Recheck{"Post-edit exact-head revalidation?"}
   Push["Push same-repository head"]
   Hold["Leave the tree unchanged"]
@@ -56,15 +56,17 @@ flowchart TD
   Sched --> Bind
   Bind -->|"no"| Hold
   Bind -->|"yes"| Worker
-  Worker --> NIM
-  NIM --> Recheck
+  Worker --> Gateway
+  Gateway --> Recheck
   Recheck -->|"no"| Hold
   Recheck -->|"yes"| Push
 ```
 
 The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
-`NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
+only the gateway URL and token for the two OpenCode execution steps; upstream
+provider credentials remain in the gateway KV, and `COPILOT_GITHUB_TOKEN` is
+never used.
 
 Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
@@ -96,14 +98,21 @@ sequenceDiagram
   participant PR as Pull request
   participant RW as Required workflows
   participant OC as OpenCode reviewer
+  participant AF as Write-capable autofix worker
+  participant GW as contextual-orchestrator gateway
   participant SV as sandboxed_verify / web E2E
   participant MS as Merge scheduler
 
   PR->>RW: pull_request_target on trusted base
-  RW->>OC: bounded evidence + NVIDIA NIM / OpenCode
+  RW->>OC: bounded evidence + independent reviewer credential
   OC->>SV: PoC command in isolated copy
   SV-->>OC: redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
+  RW->>AF: exact-head repair context after changes requested
+  AF->>GW: bounded repair prompt with scoped gateway URL/token
+  GW-->>AF: bounded model output
+  AF->>SV: verify candidate edit in isolated copy
+  SV-->>AF: tests and changed-path evidence
   MS->>PR: merge only on current-head approval + green checks
 ```
 
@@ -117,9 +126,10 @@ sequenceDiagram
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
-- LLM and scheduled agents bind `NVIDIA_NIM_API_KEY` (env may be
-  `NVIDIA_API_KEY`). They never use `COPILOT_GITHUB_TOKEN`. Existing
-  review-agent key schemes stay unchanged.
+- The write-capable LLM path binds only the contextual-orchestrator gateway
+  URL/token; provider keys remain in the gateway KV. It never uses
+  `COPILOT_GITHUB_TOKEN`, and the existing independent review-agent key scheme
+  stays unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 - Downloaded SBOM and distribution bytes are inert. The signing job does
@@ -143,8 +153,9 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
-- [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
-  — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/contextual-orchestrator-autofix.md`](docs/doctoring/contextual-orchestrator-autofix.md)
+  — current repair-worker decision and APA 7th citations; the NVIDIA NIM record
+  is historical provenance only.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
