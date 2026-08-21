@@ -152,7 +152,7 @@ def test_opencode_repository_dispatch_allows_orgmetra_pr26_exact_head_and_reject
         check=False,
     )
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-    assert f"Authorized repository_dispatch actor=" in accepted.stdout
+    assert "Authorized repository_dispatch actor=" in accepted.stdout
     assert f"target={ORGMETRA}" in accepted.stdout
     assert f"Validated current live metadata for {ORGMETRA}#26" in accepted.stdout
     assert ORGMETRA_26_HEAD in accepted.stdout

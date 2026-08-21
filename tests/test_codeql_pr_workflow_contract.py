@@ -35,10 +35,10 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "CodeQL merge preview" in workflow
     assert workflow.count("Wait for GitHub API before CodeQL init") == 2
     assert "GitHub API stayed unavailable; CodeQL init cannot determine feature enablement." in workflow
-    assert "id: codeql_init" in workflow
-    assert "Wait after CodeQL feature-enablement outage" in workflow
-    assert "Retry Initialize CodeQL" in workflow
-    assert "steps.codeql_init.outcome == 'failure'" in workflow
+    assert workflow.count("id: codeql_init") == 2
+    assert workflow.count("Wait after CodeQL feature-enablement outage") == 2
+    assert workflow.count("Retry Initialize CodeQL") == 2
+    assert workflow.count("steps.codeql_init.outcome == 'failure'") == 4
     assert "github.event.pull_request.head.sha" in workflow
     assert "github.event.pull_request.merge_commit_sha" in workflow
     assert "refs/pull/{0}/head" in workflow
