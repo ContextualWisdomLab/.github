@@ -36,18 +36,38 @@ def resolve_minimum_lines(document: dict[str, Any]) -> float | None:
             break
     if selected_path is None:
         return None
+    return _validate_minimum_lines(selected_path, value)
+
+
+def _validate_minimum_lines(path: str, value: Any) -> float:
+    """Validate one repository-owned coverage baseline and normalize it."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{selected_path} must be a number from 0 to 100")
+        raise ValueError(f"{path} must be a number from 0 to 100")
     threshold = float(value)
     if not 0 <= threshold <= 100:
-        raise ValueError(f"{selected_path} must be between 0 and 100")
+        raise ValueError(f"{path} must be between 0 and 100")
     return threshold
 
 
 def read_minimum_lines(manifest: Path) -> float | None:
-    """Read and resolve one Cargo manifest's line-coverage baseline."""
+    """Read a package baseline, falling back to its nearest workspace baseline."""
+    manifest = manifest.resolve()
     document = tomllib.loads(manifest.read_text(encoding="utf-8"))
-    return resolve_minimum_lines(document)
+    threshold = resolve_minimum_lines(document)
+    if threshold is not None:
+        return threshold
+
+    for parent in manifest.parents:
+        workspace_manifest = parent / "Cargo.toml"
+        if not workspace_manifest.is_file():
+            continue
+        workspace_document = tomllib.loads(workspace_manifest.read_text(encoding="utf-8"))
+        if "workspace" not in workspace_document:
+            continue
+        workspace_value = _nested_value(workspace_document, METADATA_PATHS[1])
+        if workspace_value is not None:
+            return _validate_minimum_lines(METADATA_PATHS[1], workspace_value)
+    return None
 
 
 def main() -> int:

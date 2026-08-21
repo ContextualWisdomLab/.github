@@ -31,6 +31,56 @@ def test_virtual_workspace_metadata_is_supported(tmp_path: Path) -> None:
     assert threshold.read_minimum_lines(manifest) == 90.0
 
 
+def test_nested_package_inherits_nearest_workspace_baseline(tmp_path: Path) -> None:
+    """A crate without a local override must use the workspace baseline."""
+    workspace = tmp_path / "Cargo.toml"
+    workspace.write_text(
+        '[workspace]\nmembers = ["crates/core"]\n\n'
+        "[workspace.metadata.opencode.coverage]\nminimum_lines = 87\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "crates" / "core" / "Cargo.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('[package]\nname = "core"\nversion = "0.1.0"\n', encoding="utf-8")
+
+    assert threshold.read_minimum_lines(manifest) == 87.0
+
+
+def test_nested_package_override_beats_workspace_baseline(tmp_path: Path) -> None:
+    """A crate-specific baseline remains stronger than inherited metadata."""
+    workspace = tmp_path / "Cargo.toml"
+    workspace.write_text(
+        '[workspace]\nmembers = ["crates/core"]\n\n'
+        "[workspace.metadata.opencode.coverage]\nminimum_lines = 87\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "crates" / "core" / "Cargo.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        '[package]\nname = "core"\nversion = "0.1.0"\n\n'
+        "[package.metadata.opencode.coverage]\nminimum_lines = 93\n",
+        encoding="utf-8",
+    )
+
+    assert threshold.read_minimum_lines(manifest) == 93.0
+
+
+def test_nested_package_rejects_invalid_workspace_baseline(tmp_path: Path) -> None:
+    """An inherited malformed baseline cannot silently restore the central default."""
+    workspace = tmp_path / "Cargo.toml"
+    workspace.write_text(
+        '[workspace]\nmembers = ["crates/core"]\n\n'
+        '[workspace.metadata.opencode.coverage]\nminimum_lines = "high"\n',
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "crates" / "core" / "Cargo.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('[package]\nname = "core"\nversion = "0.1.0"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="workspace.metadata.opencode.coverage.minimum_lines"):
+        threshold.read_minimum_lines(manifest)
+
+
 @pytest.mark.parametrize("value", [True, "90", -1, 101])
 def test_invalid_thresholds_fail_closed(value: object) -> None:
     """Non-numeric and out-of-range baselines cannot weaken the coverage gate."""
