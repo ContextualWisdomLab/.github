@@ -84,6 +84,9 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     for source, expected in cases.items():
         assert redactor.redact_text(source) == expected
 
+    assert redactor.redact_text("api key: visible") == (
+        f"api key: {redactor.REDACTED}"
+    )
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
