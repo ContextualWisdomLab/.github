@@ -6,14 +6,18 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    """Replace one exact fragment and accept an already-applied repair."""
+def replace_once(
+    path: str, old: str, new: str, *, allow_repeated: bool = False
+) -> None:
+    """Replace one exact fragment, optionally tolerating repeated history markers."""
     file_path = Path(path)
     text = file_path.read_text(encoding="utf-8")
     count = text.count(old)
-    if count == 0 and text.count(new) == 1:
+    if count == 0 and (
+        text.count(new) == 1 or (allow_repeated and text.count(new) > 0)
+    ):
         return
-    if count != 1:
+    if count == 0 or (count != 1 and not allow_repeated):
         raise SystemExit(f"{path}: expected one replacement marker, found {count}")
     file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
@@ -351,6 +355,7 @@ replace_once(
     "CHANGELOG.md",
     "- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.\n",
     "- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. Includes such as `-r other-hashes.txt` remain allowed when the exact base-tree target is a regular, complete SHA-256-pinned closure; a lone `--require-hashes` directive, dotted `./lock.txt`, traversal, absolute, URL, and option-like targets fail closed.\n",
+    allow_repeated=True,
 )
 
 replace_once(

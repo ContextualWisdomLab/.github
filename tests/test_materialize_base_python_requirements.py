@@ -368,6 +368,12 @@ def test_bounded_repair_driver_runs_against_a_staged_fixture(
     assert once_file.read_text(encoding="utf-8") == "new"
     with pytest.raises(SystemExit, match="expected one replacement marker"):
         replace_once(str(once_file), "missing", "other")  # type: ignore[operator]
+    repeated_file = tmp_path / "repeated.txt"
+    repeated_file.write_text("oldold", encoding="utf-8")
+    replace_once(  # type: ignore[operator]
+        str(repeated_file), "old", "new", allow_repeated=True
+    )
+    assert repeated_file.read_text(encoding="utf-8") == "newold"
 
     between_file = tmp_path / "between.txt"
     between_file.write_text("START old END", encoding="utf-8")
