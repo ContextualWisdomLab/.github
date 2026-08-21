@@ -357,10 +357,16 @@ require_positive_integer() {
 
 require_safe_scan_mode() {
 	local scan_mode="$1"
-	if [ -z "$scan_mode" ] || [[ ! "$scan_mode" =~ ^[[:alnum:]_.-]+$ ]]; then
-		echo "ERROR: STRIX_SCAN_MODE contains unsupported characters: '$scan_mode'." >&2
+	# Official Strix CLI modes only. There is no `normal` alias.
+	case "$scan_mode" in
+	quick | standard | deep)
+		return 0
+		;;
+	*)
+		echo "ERROR: STRIX_SCAN_MODE must be one of quick, standard, or deep; got '$scan_mode'." >&2
 		exit 2
-	fi
+		;;
+	esac
 }
 
 validate_raw_target_path_input() {

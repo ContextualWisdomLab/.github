@@ -61,8 +61,18 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
+    # Official Strix standard mode: 30–60 min; current 120/100/90/95 budget
+    # is honest. CWL has no consistent RC-tag or prerelease convention, so
+    # this weekly pass is the scheduled pre-release depth. Do not invent a
+    # GitHub release event or RC tag pattern to compensate.
     - cron: '0 3 * * 1'
   # Default-branch-only retry entrypoint; no caller-selected workflow ref.
+  # Remains PR-metadata-bound same-head evidence (quick). It cannot scan a
+  # branch or tag release candidate. Do not restore workflow_dispatch here:
+  # GitHub's manual UI/API lets the caller select a branch, and that revision
+  # supplies the workflow YAML (id-token + statuses:write) before any in-job
+  # trusted-source checkout can run. Deep stays unwired on this privileged
+  # file until a separately reviewed default-branch-only dispatcher exists.
   repository_dispatch:
     types: [strix-scan]
 
@@ -92,11 +102,9 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # Large repositories can require a legitimate full-hour review. The scanner
-    # gets a 90-minute process budget and a 95-minute total retry budget; the
-    # 100-minute step and 120-minute job leave deterministic time to preserve
-    # partial reports and publish a concrete failure reason. Hitting any cap is
-    # fail-closed and never turns an incomplete scan into an approval.
+    # Quick and standard share the honest 120/100/90/95 budget (standard is
+    # 30–60 min). Deep is not selected on this privileged workflow. Do not
+    # raise the required pull_request_target / repository_dispatch path to 360.
     timeout-minutes: 120
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
@@ -110,6 +118,13 @@ jobs:
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # Official CLI modes only (quick|standard|deep). Dual-flow mapping:
+      # required PR / repository_dispatch / push develop → quick;
+      # push main|master and weekly schedule → standard.
+      # repository_dispatch must not inherit standard from github.ref
+      # (dispatch SHA is the default branch, often main). This privileged
+      # workflow never selects deep and never exposes workflow_dispatch.
+      STRIX_SCAN_MODE: ${{ github.event_name == 'schedule' && 'standard' || github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && 'standard' || 'quick' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -781,7 +796,7 @@ jobs:
           esac
           echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
-      - name: Run Strix (quick)
+      - name: Run Strix
         if: steps.gate.outputs.enabled == 'true'
         timeout-minutes: 100
         # Security invariant for pull_request_target: execute only from the
@@ -835,10 +850,13 @@ jobs:
         run: |
           budget_suffix="TIME""OUT"
           process_budget_seconds="5400"
+          total_budget_seconds="5700"
+          printf 'Using official Strix scan mode %s with process budget %ss.\n' \
+            "${STRIX_SCAN_MODE}" "$process_budget_seconds"
           export "LLM_${budget_suffix}=900"
           export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=300"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
+          export "STRIX_TOTAL_${budget_suffix}_SECONDS=$total_budget_seconds"
 
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for
