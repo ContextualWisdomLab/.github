@@ -4075,14 +4075,14 @@ EOS
 			;;
 		esac
 		;;
-	pr-stale-single-line-snippet-fallback-success)
+	pr-low-single-line-below-threshold)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/stale-single-line-primary)
 			mkdir -p "$STRIX_REPORTS_DIR/fake-stale-single-line/vulnerabilities"
 			cat >"$STRIX_REPORTS_DIR/fake-stale-single-line/vulnerabilities/vuln-0001.md" <<'EOS'
 # Hardcoded test credential in workflow
 
-**Severity:** HIGH
+**Severity:** LOW
 **Target:** .github/workflows/hourly-nvidia-nim-review-repair.yml
 
 ## Code Analysis
@@ -4104,6 +4104,37 @@ EOS
 			echo "Error: stale-single-line scenario unexpected model (${STRIX_LLM:-})" >&2
 			exit 39
 		;;
+		esac
+		;;
+	pr-stale-single-line-high-blocks)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/stale-single-line-high-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-stale-single-line-high/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-stale-single-line-high/vulnerabilities/vuln-0001.md" <<'EOS'
+# Hardcoded test credential in workflow
+
+**Severity:** HIGH
+**Target:** .github/workflows/hourly-nvidia-nim-review-repair.yml
+
+## Code Analysis
+
+**Location 1:** `.github/workflows/hourly-nvidia-nim-review-repair.yml` (line 30)
+  Hardcoded credential
+  ```yaml
+  LOB_API_KEY: stale_model_claim
+  ```
+EOS
+			echo "Penetration test failed: high stale single-line workflow snippet"
+			exit 1
+			;;
+		vertex_ai/fallback-one|vertex_ai/fallback-two)
+			echo "Error: high stale single-line findings must remain blocking" >&2
+			exit 40
+			;;
+		*)
+			echo "Error: high stale-single-line scenario unexpected model (${STRIX_LLM:-})" >&2
+			exit 41
+			;;
 		esac
 		;;
 	pr-stale-source-plus-real-finding-blocks)
@@ -5271,7 +5302,7 @@ async def get_snapshot(schema_snapshot_uuid, user, session):
     data = await session.get("SchemaSnapshotData", schema_snapshot_uuid)
     return {"status": snap.status, "snapshot_json": data.snapshot_json if data else None}
 EOS
-	elif [ "$scenario" = "pr-stale-single-line-snippet-fallback-success" ]; then
+	elif [ "$scenario" = "pr-low-single-line-below-threshold" ] || [ "$scenario" = "pr-stale-single-line-high-blocks" ]; then
 		mkdir -p "$repo_root_dir/.github/workflows"
 		cat >"$repo_root_dir/.github/workflows/hourly-nvidia-nim-review-repair.yml" <<'EOS'
 name: hourly review repair
@@ -6272,15 +6303,37 @@ run_filtered_gate_case_if_requested() {
 			"pull_request" \
 			"backend/app/api/snapshots.py"
 		;;
-	pr-stale-single-line-snippet-fallback-success)
-		run_gate_case "pr-stale-single-line-snippet-fallback-success" \
+	pr-low-single-line-below-threshold)
+		run_gate_case "pr-low-single-line-below-threshold" \
 			"vertex_ai/stale-single-line-primary" \
 			"vertex_ai/fallback-one vertex_ai/fallback-two" \
 			"0" \
-			"scan ok after stale single-line snippet fallback" \
-			"2" \
-			"vertex_ai/stale-single-line-primary|vertex_ai/fallback-one" \
-			"<unset>|<unset>" \
+			"Strix findings are below configured fail threshold 'HIGH'; allowing pipeline continuation." \
+			"1" \
+			"vertex_ai/stale-single-line-primary" \
+			"<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"HIGH" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			".github/workflows/hourly-nvidia-nim-review-repair.yml"
+		;;
+	pr-stale-single-line-high-blocks)
+		run_gate_case "pr-stale-single-line-high-blocks" \
+			"vertex_ai/stale-single-line-high-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix finding intersects files changed in this pull request." \
+			"1" \
+			"vertex_ai/stale-single-line-high-primary" \
+			"<unset>" \
 			"vertex_ai" \
 			"__DEFAULT__" \
 			"" \
@@ -10224,14 +10277,35 @@ run_gate_case "pr-stale-snapshot-snippet-fallback-success" \
 	"pull_request" \
 	"backend/app/api/snapshots.py"
 
-run_gate_case "pr-stale-single-line-snippet-fallback-success" \
+run_gate_case "pr-low-single-line-below-threshold" \
 	"vertex_ai/stale-single-line-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"0" \
-	"scan ok after stale single-line snippet fallback" \
-	"2" \
-	"vertex_ai/stale-single-line-primary|vertex_ai/fallback-one" \
-	"<unset>|<unset>" \
+	"Strix findings are below configured fail threshold 'HIGH'; allowing pipeline continuation." \
+	"1" \
+	"vertex_ai/stale-single-line-primary" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"HIGH" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	".github/workflows/hourly-nvidia-nim-review-repair.yml"
+
+run_gate_case "pr-stale-single-line-high-blocks" \
+	"vertex_ai/stale-single-line-high-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"vertex_ai/stale-single-line-high-primary" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \

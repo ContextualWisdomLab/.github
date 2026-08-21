@@ -3787,11 +3787,11 @@ vulnerability_file_reports_generic_github_actions_workflow_insecurity() {
 
 vulnerability_file_is_retryable_model_inconsistency() {
 	local vuln_file="$1"
-	if vulnerability_file_has_absent_single_line_source_snippets "$vuln_file"; then
-		return 0
-	fi
 	if ! vulnerability_file_is_below_threshold "$vuln_file"; then
 		return 1
+	fi
+	if vulnerability_file_has_absent_single_line_source_snippets "$vuln_file"; then
+		return 0
 	fi
 	if vulnerability_file_has_absent_endpoint_finding "$vuln_file"; then
 		return 0
