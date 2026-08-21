@@ -575,6 +575,27 @@ def test_write_ledger_and_main(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert "JSON object" in capsys.readouterr().err
 
 
+def test_main_reports_ledger_output_failures_separately(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI identifies an unwritable ledger path as an output failure."""
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps(_payload([_repo("naruon", [], [])])), encoding="utf-8"
+    )
+    output = tmp_path / "missing" / "ledger.json"
+
+    assert (
+        inventory.main(
+            ["--payload", str(payload_path), "--output", str(output)]
+        )
+        == 2
+    )
+    error = capsys.readouterr().err
+    assert "unable to write ledger" in error
+    assert "unable to read payload" not in error
+
+
 def test_example_fixture_classifies_without_masking_identities() -> None:
     """The committed example ledger fixture is executable and unredacted."""
     raw = Path("schemas/examples/cwl-workflow-lifecycle-ledger-v1.example.json").read_bytes()

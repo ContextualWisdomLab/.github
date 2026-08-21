@@ -412,7 +412,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw = Path(args.payload).read_bytes()
         payload = load_payload_bytes(raw)
         ledger = inventory_organization(payload)
-        text = write_ledger(ledger, Path(args.output) if args.output else None)
     except FileNotFoundError as exc:
         print(f"ERROR: payload not found: {exc}", file=sys.stderr)
         return 2
@@ -421,6 +420,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except InventoryError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        text = write_ledger(ledger, Path(args.output) if args.output else None)
+    except (FileNotFoundError, OSError) as exc:
+        print(f"ERROR: unable to write ledger: {exc}", file=sys.stderr)
         return 2
     if args.output is None:
         sys.stdout.write(text)
