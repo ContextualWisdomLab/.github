@@ -903,13 +903,16 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
-def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
-    """Allow manifestless repositories while still requiring scan artifacts."""
+def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
+    """Limit cross-fork replacement to a child checkout directory."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert workflow.count("path: source") == 2
+    assert workflow.count("--output=old-results.json") == 2
+    assert workflow.count("--output=new-results.json") == 2
+    assert workflow.count("source/") == 4
+    assert "clean: false" not in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
