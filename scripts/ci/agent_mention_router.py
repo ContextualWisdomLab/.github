@@ -35,11 +35,14 @@ ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
+SOURCE_KIND_ISSUE_COMMENT = "issue_comment"
+SOURCE_KIND_REVIEW_COMMENT = "review_comment"
+SOURCE_KIND_REVIEW = "review"
 
 
 @dataclass(frozen=True)
 class MentionRequest:
-    """Validated agent-mention request extracted from one issue comment event."""
+    """Validated agent-mention request from a PR comment, review comment, or review."""
 
     repository: str
     pull_request_number: int
@@ -49,6 +52,8 @@ class MentionRequest:
     actor: str
     agents: tuple[str, ...]
     pull_request_base_sha: str = ""
+    source_kind: str = SOURCE_KIND_ISSUE_COMMENT
+    review_node_id: str | None = None
 
 
 class GitHubClient:
@@ -143,33 +148,71 @@ def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
     return frozenset(processed)
 
 
-def parse_event(event: dict[str, Any]) -> MentionRequest | None:
-    """Return a validated mention request, or ``None`` for an ignored event."""
+def mention_source(event: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Return the mention-bearing GitHub object and its source kind.
 
+    Issue comments and review comments both arrive as ``comment``. A top-level
+    ``issue`` object selects the issue-comment kind; its absence selects the
+    pull-request review-comment kind. Submitted reviews use the ``review``
+    object when no comment is present.
+    """
+
+    comment = event.get("comment")
+    if isinstance(comment, dict) and (
+        comment.get("id") is not None or str(comment.get("body") or "")
+    ):
+        if "issue" in event:
+            return comment, SOURCE_KIND_ISSUE_COMMENT
+        return comment, SOURCE_KIND_REVIEW_COMMENT
+    review = event.get("review")
+    if isinstance(review, dict) and (
+        review.get("id") is not None or str(review.get("body") or "")
+    ):
+        return review, SOURCE_KIND_REVIEW
+    return None
+
+
+def parse_event(event: dict[str, Any]) -> MentionRequest | None:
+    """Return a validated mention request, or ``None`` for an ignored event.
+
+    Plain issue comments (an ``issue`` object without a ``pull_request``
+    marker) stay ignored. Review comments and submitted reviews have no
+    ``issue`` object; they bind through the top-level ``pull_request``.
+    """
+
+    source_pair = mention_source(event)
+    if source_pair is None:
+        return None
+    source, source_kind = source_pair
+    if source_kind == SOURCE_KIND_REVIEW:
+        state = str(source.get("state") or "").casefold()
+        if state in {"pending", "dismissed"}:
+            return None
     issue = event.get("issue") or {}
-    comment = event.get("comment") or {}
     repository = event.get("repository") or {}
     pull_request = event.get("pull_request") or {}
-    if not issue.get("pull_request"):
+    if "issue" in event and not issue.get("pull_request"):
         return None
     if pull_request.get("state") != "open":
         return None
-    if str(comment.get("user", {}).get("type", "")).casefold() == "bot":
+    if str(source.get("user", {}).get("type", "")).casefold() == "bot":
         return None
-    if str(comment.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
+    if str(source.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
         return None
-    agents = exact_mentions(str(comment.get("body") or ""))
+    agents = exact_mentions(str(source.get("body") or ""))
     if not agents:
         return None
 
     repository_name = str(repository.get("full_name") or "").strip()
-    actor = str(comment.get("user", {}).get("login") or "").strip()
+    actor = str(source.get("user", {}).get("login") or "").strip()
     head_sha = str(pull_request.get("head", {}).get("sha") or "").strip()
     base = pull_request.get("base") or {}
     base_branch = str(base.get("ref") or "").strip()
     base_sha = str(base.get("sha") or "").strip()
     number = issue.get("number")
-    comment_id = comment.get("id")
+    if not isinstance(number, int):
+        number = pull_request.get("number")
+    comment_id = source.get("id")
     if not REPOSITORY_RE.fullmatch(repository_name):
         raise ValueError(
             "agent mentions are limited to ContextualWisdomLab repositories"
@@ -188,6 +231,11 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         raise ValueError("pull request base SHA is missing or invalid")
     if not ACTOR_RE.fullmatch(actor):
         raise ValueError("comment actor is missing or invalid")
+    review_node_id = None
+    if source_kind == SOURCE_KIND_REVIEW:
+        raw_node_id = source.get("node_id")
+        if isinstance(raw_node_id, str) and raw_node_id.strip():
+            review_node_id = raw_node_id.strip()
     return MentionRequest(
         repository_name,
         number,
@@ -197,6 +245,8 @@ def parse_event(event: dict[str, Any]) -> MentionRequest | None:
         actor,
         agents,
         pull_request_base_sha=base_sha.lower(),
+        source_kind=source_kind,
+        review_node_id=review_node_id,
     )
 
 
@@ -447,6 +497,132 @@ def opencode_payload(request: MentionRequest) -> dict[str, Any]:
     )
 
 
+ADD_REVIEW_REACTION_MUTATION = """
+mutation AddMentionEyes($id: ID!) {
+  addReaction(input: {subjectId: $id, content: EYES}) {
+    reaction { content }
+  }
+}
+""".strip()
+
+
+def mention_reaction_path(request: MentionRequest) -> str | None:
+    """Return the REST path for an optional eyes reaction, if one exists."""
+    if request.source_kind == SOURCE_KIND_ISSUE_COMMENT:
+        return (
+            f"repos/{request.repository}/issues/comments/"
+            f"{request.comment_id}/reactions"
+        )
+    if request.source_kind == SOURCE_KIND_REVIEW_COMMENT:
+        return (
+            f"repos/{request.repository}/pulls/comments/"
+            f"{request.comment_id}/reactions"
+        )
+    return None
+
+
+def review_reaction_node_id(client: GitHubClient, request: MentionRequest) -> str | None:
+    """Return the GraphQL node ID for a submitted pull-request review."""
+    if request.review_node_id:
+        return request.review_node_id
+    payload = client.request(
+        [
+            f"repos/{request.repository}/pulls/"
+            f"{request.pull_request_number}/reviews/{request.comment_id}"
+        ]
+    )
+    if not isinstance(payload, dict):
+        return None
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id.strip():
+        return None
+    return node_id.strip()
+
+
+def graphql_error_already_reacted(item: object) -> bool:
+    """Return whether one GraphQL error is an idempotent already-reacted reply."""
+    if not isinstance(item, dict):
+        return False
+    message = item.get("message")
+    if not isinstance(message, str):
+        return False
+    lowered = message.casefold()
+    return "already" in lowered and "react" in lowered
+
+
+def graphql_eyes_reaction_succeeded(payload: object) -> bool:
+    """Return whether GraphQL ``addReaction`` produced or already had eyes.
+
+    An empty or non-object payload is not success. A HTTP 200 body that
+    only reports ``errors`` is success only when every error is the
+    already-reacted reply; mixed or unrelated errors stay failures.
+    """
+    if not isinstance(payload, dict):
+        return False
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        return all(graphql_error_already_reacted(item) for item in errors)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    added = data.get("addReaction")
+    if not isinstance(added, dict):
+        return False
+    reaction = added.get("reaction")
+    if not isinstance(reaction, dict):
+        return False
+    content = reaction.get("content")
+    return isinstance(content, str) and content.casefold() == "eyes"
+
+
+def add_mention_reaction(client: GitHubClient, request: MentionRequest) -> bool:
+    """Add the optional eyes reaction on a mention surface.
+
+    GitHub App installation tokens and job ``GITHUB_TOKEN`` often receive
+    ``403 Resource not accessible by integration`` for comment reactions
+    on pull requests. The reaction is user-experience only; dispatch has
+    already been queued, so a reaction failure must not look like a missed
+    mention. Submitted review bodies have no REST reaction endpoint, so
+    they use GraphQL ``addReaction`` on the review node. A second mention
+    on the same review may receive the already-reacted GraphQL error; that
+    is still eyes on the review, not a missed dispatch.
+    """
+
+    path = mention_reaction_path(request)
+    try:
+        if path is not None:
+            client.request(
+                [path, "-X", "POST"],
+                input_payload={"content": "eyes"},
+            )
+            return True
+        if request.source_kind != SOURCE_KIND_REVIEW:
+            return False
+        node_id = review_reaction_node_id(client, request)
+        if node_id is None:
+            return False
+        payload = client.request(
+            ["graphql"],
+            input_payload={
+                "query": ADD_REVIEW_REACTION_MUTATION,
+                "variables": {"id": node_id},
+            },
+        )
+    except RuntimeError as exc:
+        print(
+            "::warning::Could not add mention reaction on "
+            f"comment {request.comment_id}: {exc}"
+        )
+        return False
+    if graphql_eyes_reaction_succeeded(payload):
+        return True
+    print(
+        "::warning::Could not add mention reaction on "
+        f"comment {request.comment_id}: GraphQL errors"
+    )
+    return False
+
+
 def dispatch_request(
     request: MentionRequest,
     *,
@@ -523,21 +699,7 @@ def dispatch_request(
             ledger_artifact_cache[agent_ledger_artifact_name(request, agent)] = True
 
     target_api = f"repos/{request.repository}"
-    try:
-        target_client.request(
-            [
-                f"{target_api}/issues/comments/{request.comment_id}/reactions",
-                "-X",
-                "POST",
-            ],
-            input_payload={"content": "eyes"},
-        )
-    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
-        message = " ".join(str(exc).split()) or exc.__class__.__name__
-        print(
-            "::warning::Agent mention acknowledgement reaction failed; "
-            f"durable dispatch state is preserved: {message[:1000]}"
-        )
+    add_mention_reaction(target_client, request)
     status_parts: list[str] = []
     if handles:
         status_parts.append(f"Queued {' and '.join(handles)}")
@@ -590,7 +752,7 @@ def load_event(path: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the mention router for one enriched GitHub issue-comment event."""
+    """Run the mention router for one enriched GitHub mention event."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--event-path", default=os.environ.get("GITHUB_EVENT_PATH", ""))

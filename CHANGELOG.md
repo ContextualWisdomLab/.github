@@ -22,6 +22,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Keep the local and scheduled agent-mention queues independently schedulable by removing the workflow-wide concurrency group; job-scoped non-cancelling concurrency now protects each surface without relying on the unsupported Actions `queue` key.
 - Require the hourly repair worker to establish an exact-head root cause, enumerate the smallest remediation candidates, and prove writer authority, sealed-path scope, credentials, dependency order, verifiability, and causal effect before editing; infeasible or external blockers leave the tree unchanged while the broader loop continues with another eligible PR or buyer-visible product gap.
 - Run the bounded Quarantine Sandbox Runtime heartbeat at minute 14 without granting the caller model secrets, repository mutation permissions, approval, merge, release, artifact-execution, or final security-verdict authority.
 - Run the bounded Clearfolio PR review-feedback repair caller at minute 23 of every hour while keeping the shared scheduler free of product-specific timers and repository names for modular reuse by naruon, contextual-orchestrator, Inkspan, and other CWL services.
@@ -42,7 +43,24 @@ Semantic Versioning where the repository publishes a release.
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).
 - Excluded relative `-r` and `--requirement` referrers from generated flat base-lock publication while retaining bounded include syntax diagnostics and discovering independently complete direct `.txt` children of `requirements` directories.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
+
+- Central OpenCode and Noema review prompts now require a per-changed-file walk with an explicit disposition for every path, and they allocate review compute by workflow stage, role, and inference-level ablation (Fugu / Conductor / TRINITY) rather than wall-clock speed.
+
+### Fixed
+
+- Dropped the invalid `reactions: write` `GITHUB_TOKEN` permission from the local mention-router job. Optional eyes reactions use `issues: write` (issue comments) and `pull-requests: write` (review comments); a leftover 403 remains a warning after dispatch, not a missed mention.
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
+- GraphQL `addReaction` on a submitted review body treats the already-reacted error as success and refuses an empty or missing `data.addReaction` payload, so a second mention on the same review is not a missed dispatch and a blank 200 is not eyes.
+- Submitted review-body mention reactions reuse the webhook or sweep `node_id` when GitHub already provided it, so the router does not make an extra review GET before GraphQL `addReaction`.
+- `@cwl-noema-review` and `@opencode-agent` mentions in submitted review bodies now receive the optional eyes reaction through GraphQL `addReaction` on the review node. A 403 or GraphQL error is a warning after dispatch, not a missed mention.
+- `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments now receive the optional eyes reaction on `POST /pulls/comments/{id}/reactions`. A 403 there is still a warning, not a missed dispatch. Submitted review bodies still have no REST reaction endpoint.
+- Pending and dismissed pull-request reviews no longer dispatch `@cwl-noema-review` / `@opencode-agent` mentions; only submitted non-dismissed review bodies in the sweep lookback are requests.
+- Trusted `@cwl-noema-review` and `@opencode-agent` mentions on pull-request review comments and submitted review bodies now reach the mention router and organization sweep, including mixed-case handles; the local workflow hydrates the live PR from `issue.number` or `pull_request.number` and no longer depends on a case-sensitive conversation-comment body filter.
+- A 403 on the optional eyes reaction after a successful agent dispatch no longer fails the mention job; the local router now has `pull-requests: write` so pull-request receipt comments can be posted. The decision record now cites CWE-755 so an exceptional reaction response cannot be treated as a missed dispatch.
+- Recorded the org control-plane architecture, including the three mention surfaces, so agents reconstruct the review-dispatch trust boundary from the repo instead of private memory.
+
+- Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
+
 - Bounded the Strix quality self-test's deterministic timeout fixtures to 3-second process and 5-second fake-sleep budgets so exact-head policy evidence completes inside the existing job limit without changing production Strix scanner timeouts, providers, credentials, or review semantics.
 - Allowed commas and ASCII parentheses in the bounded Strix changed-file path policy so legal tracked Packrat fixtures can receive exact-head security analysis, while rejecting raw `..` components before normalization and keeping controls, backslashes, whitespace ambiguity, and shell punctuation fail-closed.
 - Bound each review-agent invocation key to the wrapper's complete canonical payload, including the base branch and requesting actor; altered fields with a valid-format key now fail before durable-leader election or forwarding, and wrapper write permission is job-scoped.

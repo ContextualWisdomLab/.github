@@ -371,3 +371,480 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+
+def review_comment_event(
+    body: str = "@CWL-Noema-Review look at this line",
+    *,
+    association: str = "OWNER",
+) -> dict:
+    """Build a GitHub pull_request_review_comment webhook payload."""
+
+    return {
+        "action": "created",
+        "comment": {
+            "id": 224849228,
+            "pull_request_review_id": 49019778,
+            "body": body,
+            "path": "scripts/ci/agent_mention_router.py",
+            "line": 143,
+            "commit_id": "a" * 40,
+            "author_association": association,
+            "user": {"login": "seonghobae", "type": "User"},
+        },
+        "pull_request": {
+            "number": 953,
+            "state": "open",
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main", "sha": "b" * 40},
+        },
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+    }
+
+
+def submitted_review_event(
+    body: str = "@opencode-agent review this head",
+    *,
+    association: str = "MEMBER",
+    node_id: str | None = None,
+) -> dict:
+    """Build a GitHub pull_request_review submitted webhook payload."""
+
+    review = {
+        "id": 49019778,
+        "body": body,
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-13T04:12:00Z",
+        "author_association": association,
+        "user": {"login": "maintainer", "type": "User"},
+    }
+    if node_id is not None:
+        review["node_id"] = node_id
+    return {
+        "action": "submitted",
+        "review": review,
+        "pull_request": {
+            "number": 953,
+            "state": "open",
+            "head": {"sha": "a" * 40},
+            "base": {"ref": "main", "sha": "b" * 40},
+        },
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+    }
+
+
+def test_parse_event_accepts_review_comments_and_submitted_reviews() -> None:
+    """Line comments and review bodies dispatch without an issue.pull_request marker."""
+
+    module = load_module()
+    review_comment = module.parse_event(review_comment_event())
+    assert review_comment is not None
+    assert review_comment.agents == ("cwl-noema-review",)
+    assert review_comment.pull_request_number == 953
+    assert review_comment.comment_id == 224849228
+    assert review_comment.source_kind == module.SOURCE_KIND_REVIEW_COMMENT
+    assert review_comment.actor == "seonghobae"
+
+    review = module.parse_event(submitted_review_event())
+    assert review is not None
+    assert review.agents == ("opencode-agent",)
+    assert review.comment_id == 49019778
+    assert review.source_kind == module.SOURCE_KIND_REVIEW
+    assert review.review_node_id is None
+    cached = module.parse_event(
+        submitted_review_event(node_id="PRR_kwDOReviewBody")
+    )
+    assert cached is not None
+    assert cached.review_node_id == "PRR_kwDOReviewBody"
+    blank = submitted_review_event()
+    blank["review"]["node_id"] = "   "
+    assert module.parse_event(blank).review_node_id is None
+
+    assert module.parse_event({}) is None
+    assert module.parse_event({"comment": {"id": 1, "body": "@opencode-agent"}}) is None
+    assert module.mention_source({}) is None
+    assert module.mention_source({"comment": "not-an-object", "review": 1}) is None
+    pending = submitted_review_event()
+    pending["review"]["state"] = "PENDING"
+    assert module.parse_event(pending) is None
+    dismissed = submitted_review_event()
+    dismissed["review"]["state"] = "DISMISSED"
+    assert module.parse_event(dismissed) is None
+
+
+def test_parse_event_still_ignores_plain_issues_without_pull_request_marker() -> None:
+    """An issue object without pull_request remains ignored even if a PR is attached."""
+
+    payload = review_comment_event()
+    payload["issue"] = {"number": 953}
+    assert load_module().parse_event(payload) is None
+
+
+def test_issue_comment_reaction_403_does_not_drop_a_queued_mention(
+    capsys,
+) -> None:
+    """Live run 31670687388 died after dispatch on a 403 eyes reaction."""
+
+    module = load_module()
+    request = module.parse_event(event("@cwl-noema-review"))
+    assert request is not None
+
+    class ReactionForbiddenClient(FakeClient):
+        """Raise the live GitHub App 403 only on the eyes reaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail reactions the same way the installation token failed."""
+
+            if any("reactions" in str(arg) for arg in args):
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    target = ReactionForbiddenClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert repository_dispatch_calls(central)
+    assert any(
+        args[0].endswith("/issues/17/comments") for args, _ in target.calls
+    )
+    assert "Could not add mention reaction" in capsys.readouterr().out
+    assert module.add_mention_reaction(target, request) is False
+
+
+def test_add_mention_reaction_only_targets_issue_comments() -> None:
+    """Issue comments use the issue-comment reaction API."""
+
+    module = load_module()
+    issue_request = module.parse_event(event("@cwl-noema-review"))
+    assert issue_request is not None
+    client = FakeClient()
+    assert module.add_mention_reaction(client, issue_request) is True
+    assert client.calls[0][1] == {"content": "eyes"}
+    assert "/issues/comments/" in client.calls[0][0][0]
+    assert "/pulls/comments/" not in client.calls[0][0][0]
+
+
+def test_add_mention_reaction_targets_review_comments() -> None:
+    """Inline review comments use the pull-request review-comment reaction API."""
+
+    module = load_module()
+    review_request = module.parse_event(review_comment_event())
+    assert review_request is not None
+    client = FakeClient()
+    assert module.add_mention_reaction(client, review_request) is True
+    assert client.calls[0][1] == {"content": "eyes"}
+    assert "/pulls/comments/" in client.calls[0][0][0]
+    assert "/issues/comments/" not in client.calls[0][0][0]
+    review_body = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_body is not None
+    assert module.mention_reaction_path(review_body) is None
+
+
+def test_add_mention_reaction_targets_submitted_review_bodies() -> None:
+    """Submitted review bodies react through GraphQL addReaction, not REST comments."""
+
+    module = load_module()
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+
+    class ReviewReactionClient(FakeClient):
+        """Return a review node ID and record the GraphQL eyes mutation."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then record addReaction."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    client = ReviewReactionClient()
+    assert module.add_mention_reaction(client, review_request) is True
+    lookup, mutation = client.calls
+    assert "/pulls/953/reviews/49019778" in lookup[0][0]
+    assert mutation[0][0] == "graphql"
+    assert mutation[1]["variables"]["id"] == "PRR_kwDOReviewBody"
+    assert "addReaction" in mutation[1]["query"]
+
+    class MissingNodeClient(FakeClient):
+        """Return an empty review lookup so GraphQL is skipped."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return no node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {}
+
+    assert module.add_mention_reaction(MissingNodeClient(), review_request) is False
+    assert module.add_mention_reaction(FakeClient(), review_request) is False
+
+    class EmptyNodeClient(FakeClient):
+        """Return a blank review node ID."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return an unusable node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {"node_id": "   "}
+
+    assert module.add_mention_reaction(EmptyNodeClient(), review_request) is False
+
+    class IntNodeClient(FakeClient):
+        """Return a non-string review node ID."""
+
+        def request(self, args, *, input_payload=None):
+            """Record the lookup and return a numeric node ID."""
+
+            self.calls.append((list(args), input_payload))
+            return {"node_id": 12}
+
+    assert module.add_mention_reaction(IntNodeClient(), review_request) is False
+    unknown = module.MentionRequest(
+        repository="ContextualWisdomLab/.github",
+        pull_request_number=953,
+        pull_request_head_sha="a" * 40,
+        pull_request_base_branch="main",
+        comment_id=1,
+        actor="maintainer",
+        agents=("cwl-noema-review",),
+        source_kind="unknown",
+    )
+    assert module.add_mention_reaction(FakeClient(), unknown) is False
+
+    class ForbiddenGraphqlClient(ReviewReactionClient):
+        """Raise the live GitHub App 403 on GraphQL addReaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail GraphQL the same way the installation token failed."""
+
+            if args and args[0] == "graphql":
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    assert module.add_mention_reaction(ForbiddenGraphqlClient(), review_request) is False
+
+    class GraphqlErrorClient(ReviewReactionClient):
+        """Return a GraphQL error payload with HTTP 200."""
+
+        def request(self, args, *, input_payload=None):
+            """Record GraphQL errors without raising."""
+
+            recorded = super().request(args, input_payload=input_payload)
+            if args and args[0] == "graphql":
+                return {"errors": [{"message": "Resource not accessible by integration"}]}
+            return recorded
+
+    assert module.add_mention_reaction(GraphqlErrorClient(), review_request) is False
+
+
+def test_graphql_eyes_reaction_treats_already_reacted_as_success() -> None:
+    """Already-reacted GraphQL errors are eyes on the review, not a miss."""
+
+    module = load_module()
+    assert module.graphql_error_already_reacted("nope") is False
+    assert module.graphql_error_already_reacted({"code": "UNPROCESSABLE"}) is False
+    assert (
+        module.graphql_error_already_reacted(
+            {"message": "Reaction already exists. You can only react once."}
+        )
+        is True
+    )
+    assert module.graphql_error_already_reacted({"message": "Resource not accessible"}) is False
+    assert module.graphql_eyes_reaction_succeeded(None) is False
+    assert module.graphql_eyes_reaction_succeeded({}) is False
+    assert module.graphql_eyes_reaction_succeeded({"data": None}) is False
+    assert module.graphql_eyes_reaction_succeeded({"data": {"addReaction": None}}) is False
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": None}}}
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": {"content": 1}}}}
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+        )
+        is True
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {
+                "errors": [
+                    {"message": "You've already reacted with this emoji"},
+                ]
+            }
+        )
+        is True
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {
+                "errors": [
+                    {"message": "You've already reacted with this emoji"},
+                    {"message": "Resource not accessible by integration"},
+                ]
+            }
+        )
+        is False
+    )
+    assert (
+        module.graphql_eyes_reaction_succeeded(
+            {"errors": ["not-an-object", {"message": "already reacted"}]}
+        )
+        is False
+    )
+
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+
+    class AlreadyReactedClient(FakeClient):
+        """Return the live already-reacted GraphQL body."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then the already-reacted error."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {
+                    "data": {"addReaction": None},
+                    "errors": [
+                        {"message": "You've already reacted with this emoji"},
+                    ],
+                }
+            return None
+
+    assert module.add_mention_reaction(AlreadyReactedClient(), review_request) is True
+
+    class EmptyGraphqlClient(FakeClient):
+        """Return a 200 GraphQL body with no addReaction payload."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve the review lookup, then an empty GraphQL object."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {}
+            return None
+
+    assert module.add_mention_reaction(EmptyGraphqlClient(), review_request) is False
+
+    class ReactionForbiddenClient(FakeClient):
+        """Raise the live GitHub App 403 only on the eyes reaction."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail reactions the same way the installation token failed."""
+
+            if any("reactions" in str(arg) for arg in args):
+                raise RuntimeError(
+                    "gh api failed with exit code 1: gh: Resource not "
+                    "accessible by integration (HTTP 403)"
+                )
+            return super().request(args, input_payload=input_payload)
+
+    forbidden = ReactionForbiddenClient()
+    assert module.add_mention_reaction(forbidden, review_request) is False
+
+
+def test_review_reaction_reuses_event_node_id_without_extra_get() -> None:
+    """Sweep and webhook review payloads already carry node_id."""
+
+    module = load_module()
+    request = module.parse_event(
+        submitted_review_event("@cwl-noema-review", node_id="PRR_kwDOCached")
+    )
+    assert request is not None
+    assert request.review_node_id == "PRR_kwDOCached"
+
+    class CachedNodeClient(FakeClient):
+        """Record GraphQL only; a GET would prove the cache was ignored."""
+
+        def request(self, args, *, input_payload=None):
+            """Fail if the extra review GET happens."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                raise AssertionError("cached review node_id must skip REST GET")
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    client = CachedNodeClient()
+    assert module.add_mention_reaction(client, request) is True
+    assert [args[0] for args, _ in client.calls] == ["graphql"]
+    assert client.calls[0][1]["variables"]["id"] == "PRR_kwDOCached"
+
+
+def test_dispatch_review_surfaces_skip_issue_comment_reactions() -> None:
+    """Review-comment dispatch reacts on the review-comment endpoint, not issue comments."""
+
+    module = load_module()
+    request = module.parse_event(review_comment_event())
+    assert request is not None
+    target = FakeClient()
+    central = FakeClient()
+    assert module.dispatch_request(
+        request,
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    reaction_calls = [
+        args[0] for args, _ in target.calls if "reactions" in args[0]
+    ]
+    assert reaction_calls
+    assert all("/pulls/comments/" in path for path in reaction_calls)
+    assert all("/issues/comments/" not in path for path in reaction_calls)
+    assert any(
+        args[0].endswith("/issues/953/comments") for args, _ in target.calls
+    )
+
+    review_request = module.parse_event(submitted_review_event("@cwl-noema-review"))
+    assert review_request is not None
+
+    class ReviewDispatchClient(FakeClient):
+        """Return a review node ID so dispatch can post GraphQL eyes."""
+
+        def request(self, args, *, input_payload=None):
+            """Serve review lookup and record later mutations."""
+
+            self.calls.append((list(args), input_payload))
+            if args and "/reviews/" in str(args[0]):
+                return {"node_id": "PRR_kwDOReviewBody"}
+            if args and args[0] == "graphql":
+                return {"data": {"addReaction": {"reaction": {"content": "EYES"}}}}
+            return None
+
+    review_target = ReviewDispatchClient()
+    assert module.dispatch_request(
+        review_request,
+        target_client=review_target,
+        dispatch_client=FakeClient(),
+        opencode_allowlist=frozenset(),
+    ) == ("@cwl-noema-review",)
+    assert any(args[0] == "graphql" for args, _ in review_target.calls)
+    assert all("/issues/comments/" not in args[0] for args, _ in review_target.calls)
+    assert any(
+        args[0].endswith("/issues/953/comments") for args, _ in review_target.calls
+    )

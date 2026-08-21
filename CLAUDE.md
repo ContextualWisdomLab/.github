@@ -69,8 +69,13 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
   `scorecard-governance.md`, SBOM inventory. Doctoring records live under
   `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
+
+  diagram for review-agent mentions, hourly NVIDIA NIM repair, and merge trust
+  boundaries.
+
   diagram for review, hourly NVIDIA NIM repair, exact-artifact SBOM attestation,
   and merge trust boundaries.
+
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
@@ -135,3 +140,8 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+
+Pending and dismissed reviews do not dispatch mention agents. The local
+mention job grants `issues: write` and `pull-requests: write` for optional
+eyes reactions; `reactions: write` is not a `GITHUB_TOKEN` permission. See
+`ARCHITECTURE.md` and `docs/doctoring/review-agent-mention-surfaces.md`.

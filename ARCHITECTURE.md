@@ -70,6 +70,32 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+
+## Review-agent mention surfaces
+
+```mermaid
+flowchart TD
+  Surfaces["issue comment · review comment · submitted review body"]
+  Trust{"OWNER/MEMBER/COLLABORATOR, non-bot, exact handle, open PR?"}
+  Dispatch["Queue exact-head review dispatch"]
+  Eyes{"Optional eyes reaction 403?"}
+  Receipt["Post conversation receipt"]
+  Drop["Ignore the mention"]
+
+  Surfaces --> Trust
+  Trust -->|"no"| Drop
+  Trust -->|"yes"| Dispatch
+  Dispatch --> Eyes
+  Eyes -->|"yes"| Receipt
+  Eyes -->|"no"| Receipt
+```
+
+The local job grants `issues: write` (issue-comment reactions) and
+`pull-requests: write` (review-comment reactions and receipts).
+`reactions: write` is not a `GITHUB_TOKEN` permission (GitHub, n.d.).
+CWE-755: a leftover 403 must not look like a missed dispatch. Review
+agents stay `edit: deny` and bind `NVIDIA_NIM_API_KEY`.
+
 ## Exact-artifact SBOM attestation
 
 ```mermaid
@@ -88,6 +114,7 @@ flowchart TD
 
 Caller inputs enter shell steps only as named environment variables. This
 workflow does not claim SLSA Build L3.
+
 
 ## Control-plane data flow
 
@@ -147,5 +174,9 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+- [`docs/doctoring/review-agent-mention-surfaces.md`](docs/doctoring/review-agent-mention-surfaces.md)
+  — current increment's mention-surface decision and APA 7th citations.
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.

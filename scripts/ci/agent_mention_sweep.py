@@ -263,6 +263,66 @@ def list_recent_comments(
     return flatten_pages(response)
 
 
+def list_recent_review_comments(
+    client: GitHubClient,
+    *,
+    repository: str,
+    pull_request_number: int,
+    since: str,
+) -> list[dict[str, Any]]:
+    """List recent pull-request review comments for one pull request."""
+
+    response = client.request(
+        [
+            f"repos/{repository}/pulls/{pull_request_number}/comments",
+            "-X",
+            "GET",
+            "-f",
+            f"since={since}",
+            "-f",
+            "per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    return flatten_pages(response)
+
+
+def list_recent_reviews(
+    client: GitHubClient,
+    *,
+    repository: str,
+    pull_request_number: int,
+    since: str,
+) -> list[dict[str, Any]]:
+    """List submitted reviews in the lookback window for one pull request."""
+
+    response = client.request(
+        [
+            f"repos/{repository}/pulls/{pull_request_number}/reviews",
+            "-X",
+            "GET",
+            "-f",
+            "per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    cutoff = parse_timestamp(since)
+    recent: list[dict[str, Any]] = []
+    for review in flatten_pages(response):
+        state = str(review.get("state") or "").casefold()
+        if state in {"pending", "dismissed"}:
+            continue
+        submitted = review.get("submitted_at")
+        if not submitted:
+            continue
+        if parse_timestamp(str(submitted)) < cutoff:
+            continue
+        recent.append(review)
+    return recent
+
+
 def build_requests_for_pull_request(
     client: GitHubClient,
     *,
@@ -277,27 +337,59 @@ def build_requests_for_pull_request(
     number = issue.get("number")
     if not isinstance(number, int) or number < 1:
         raise ValueError("pull request candidate has an invalid number")
-    comments = list_recent_comments(
+    live_pull = client.request([f"repos/{repository}/pulls/{number}"])
+    if not isinstance(live_pull, dict) or live_pull.get("state") != "open":
+        return ()
+    bound_pull = dict(live_pull)
+    bound_pull["number"] = number
+    requests: list[MentionRequest] = []
+    for comment in list_recent_comments(
         client,
         repository=repository,
         pull_request_number=number,
         since=since,
-    )
-    live_pull = client.request([f"repos/{repository}/pulls/{number}"])
-    if not isinstance(live_pull, dict) or live_pull.get("state") != "open":
-        return ()
-    requests: list[MentionRequest] = []
-    for comment in comments:
-        event = {
-            "repository": {"full_name": repository},
-            "issue": {
-                "number": number,
-                "pull_request": issue.get("pull_request"),
-            },
-            "comment": comment,
-            "pull_request": live_pull,
-        }
-        request = parse_event(event)
+    ):
+        request = parse_event(
+            {
+                "repository": {"full_name": repository},
+                "issue": {
+                    "number": number,
+                    "pull_request": issue.get("pull_request"),
+                },
+                "comment": comment,
+                "pull_request": bound_pull,
+            }
+        )
+        if request is not None:
+            requests.append(request)
+    for comment in list_recent_review_comments(
+        client,
+        repository=repository,
+        pull_request_number=number,
+        since=since,
+    ):
+        request = parse_event(
+            {
+                "repository": {"full_name": repository},
+                "comment": comment,
+                "pull_request": bound_pull,
+            }
+        )
+        if request is not None:
+            requests.append(request)
+    for review in list_recent_reviews(
+        client,
+        repository=repository,
+        pull_request_number=number,
+        since=since,
+    ):
+        request = parse_event(
+            {
+                "repository": {"full_name": repository},
+                "review": review,
+                "pull_request": bound_pull,
+            }
+        )
         if request is not None:
             requests.append(request)
     return tuple(requests)

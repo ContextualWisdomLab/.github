@@ -16,7 +16,11 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     text = WORKFLOW.read_text(encoding="utf-8")
     header, jobs = text.split("\njobs:\n", 1)
     assert "issue_comment:" in header
+    assert "pull_request_review_comment:" in header
+    assert "pull_request_review:" in header
     assert 'cron: "*/5 * * * *"' in header
+    assert "github.event.issue.number || github.event.pull_request.number" in text
+    assert "contains(github.event.comment.body, '@cwl-noema-review')" not in text
     assert "workflow_dispatch:" not in header
     assert "permissions:\n  contents: read" in header
     assert "contents: write" not in header
@@ -32,9 +36,11 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
         "actions: read",
         "contents: write",
         "issues: write",
-        "pull-requests: read",
+        "pull-requests: write",
     ):
         assert f"      {permission}" in local
+    assert "reactions: write" not in local
+    assert "reactions:" not in local
     assert "ref: ${{ github.event.repository.default_branch }}" in local
     assert "TARGET_REPOSITORY_TOKEN: ${{ github.token }}" in local
     assert "conversation_comments" not in local
@@ -49,6 +55,15 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "TARGET_REPOSITORY_SOURCE" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
     assert "agent_mention_sweep.py" in sweep
+    helper = (ROOT / "scripts" / "ci" / "agent_mention_router.py").read_text(
+        encoding="utf-8"
+    )
+    assert "mention_reaction_path" in helper
+    assert "/pulls/comments/" in helper
+    assert "SOURCE_KIND_REVIEW_COMMENT" in helper
+    assert "ADD_REVIEW_REACTION_MUTATION" in helper
+    assert "addReaction" in helper
+    assert "review_node_id" in helper
 
 
 def test_quality_workflow_measures_exact_files_without_module_name_warnings() -> None:

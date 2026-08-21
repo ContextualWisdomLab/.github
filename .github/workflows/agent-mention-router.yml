@@ -3,12 +3,17 @@ name: Review Agent Mention Router
 on:
   issue_comment:
     types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
   schedule:
     - cron: "*/5 * * * *"
 
-# Organization required-workflow rules do not propagate issue_comment events
-# into sibling repositories. Keep the workflow default read-only; each bounded
-# job declares only the writes it actually needs.
+# Organization required-workflow rules do not propagate issue_comment,
+# pull_request_review_comment, or pull_request_review events into sibling
+# repositories. Keep the workflow default read-only; each bounded job
+# declares only the writes it actually needs.
 permissions:
   contents: read
 
@@ -16,24 +21,36 @@ jobs:
   route-local-agent-mention:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
-      && github.event_name == 'issue_comment'
-      && github.event.issue.pull_request
-      && github.event.comment.user.type != 'Bot'
-      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
       && (
-        contains(github.event.comment.body, '@cwl-noema-review')
-        || contains(github.event.comment.body, '@opencode-agent')
+        (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+        || (
+          github.event_name == 'pull_request_review_comment'
+          && github.event.pull_request.state == 'open'
+          && github.event.comment.user.type != 'Bot'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+        || (
+          github.event_name == 'pull_request_review'
+          && github.event.pull_request.state == 'open'
+          && github.event.review.user.type != 'Bot'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
+        )
       )
     concurrency:
       group: review-agent-mention-router-local-${{ github.repository }}
-      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: read
       contents: write
       issues: write
-      pull-requests: read
+      pull-requests: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
@@ -50,7 +67,7 @@ jobs:
       - name: Resolve immutable pull-request head
         env:
           REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           SOURCE_EVENT_PATH: ${{ github.event_path }}
         run: |
           set -euo pipefail
