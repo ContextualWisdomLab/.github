@@ -51,7 +51,7 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         '"baseURL": "https://integrate.api.nvidia.com/v1"',
         '"apiKey": "{env:NVIDIA_API_KEY}"',
         'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}',
+        'MODEL="nvidia-nim/${AUTOFIX_MODEL_ID}"',
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
@@ -202,6 +202,22 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     assert guard in workflow[resolve_start:resolve_end]
     assert guard in workflow[ordinary_start:ordinary_end]
     assert guard in workflow[conflict_start:]
+
+
+def test_resolved_model_is_read_from_runner_environment() -> None:
+    """Use GITHUB_ENV output in the shell, not the pre-run env context."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+
+    assert "nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}" not in workflow
+    for step_name in (
+        "Run OpenCode review autofix",
+        "Merge base branch and resolve conflicts with OpenCode",
+    ):
+        step_start = workflow.index(f"      - name: {step_name}")
+        step_end = workflow.find("\n      - name: ", step_start + 1)
+        step = workflow[step_start:] if step_end == -1 else workflow[step_start:step_end]
+        assert 'if [ -z "${AUTOFIX_MODEL_ID:-}" ]; then' in step
+        assert 'MODEL="nvidia-nim/${AUTOFIX_MODEL_ID}"' in step
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:

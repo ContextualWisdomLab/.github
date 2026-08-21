@@ -406,7 +406,6 @@ jobs:
         if: env.RESOLVE_CONFLICT != 'true'
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -417,6 +416,11 @@ jobs:
             echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
             exit 1
           fi
+          if [ -z "${AUTOFIX_MODEL_ID:-}" ]; then
+            echo "::error::Resolved NVIDIA NIM autofix model is missing."
+            exit 1
+          fi
+          MODEL="nvidia-nim/${AUTOFIX_MODEL_ID}"
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
           allowed_paths_context="$(
@@ -581,7 +585,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -596,6 +599,11 @@ jobs:
             echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
             exit 1
           fi
+          if [ -z "${AUTOFIX_MODEL_ID:-}" ]; then
+            echo "::error::Resolved NVIDIA NIM autofix model is missing."
+            exit 1
+          fi
+          MODEL="nvidia-nim/${AUTOFIX_MODEL_ID}"
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays

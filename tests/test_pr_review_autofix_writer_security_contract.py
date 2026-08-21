@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
-_TARGET_MODEL = "nvidia-nim/${{ env.AUTOFIX_MODEL_ID }}"
+_TARGET_MODEL = 'MODEL="nvidia-nim/${AUTOFIX_MODEL_ID}"'
 _RETIRED_MODEL = "mistralai/mistral-small-4-119b-2603"
 
 
@@ -42,7 +42,7 @@ def test_writer_resolves_a_live_model_with_high_reasoning() -> None:
 
     assert '"model": "nvidia-nim/\\($model_id)"' in workflow
     assert "($model_id): {" in workflow
-    assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
+    assert workflow.count(_TARGET_MODEL) == 2
     assert '"reasoningEffort": "high"' in workflow
     assert _RETIRED_MODEL not in workflow
     assert "nvidia-nim/mistralai/mistral-nemotron" not in workflow
