@@ -753,6 +753,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "has_changed_tracked_files Cargo.toml Cargo.lock" in measure_step
     assert "changed Rust package(s)" in measure_step
     assert 'candidate_dir="$(dirname "$changed_path")"' in measure_step
+    assert "*/Cargo.toml|*/Cargo.lock|*.rs" in measure_step
     assert "scripts/ci/rust_coverage_threshold.py" in measure_step
     assert '--fail-under-lines "$threshold"' in measure_step
     assert "uv sync --project" not in measure_step

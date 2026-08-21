@@ -1745,7 +1745,7 @@ jobs:
             changed_files_for_coverage \
               | while IFS= read -r changed_path; do
                   case "$changed_path" in
-                    Cargo.toml|Cargo.lock|*.rs) ;;
+                    Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock|*.rs) ;;
                     *) continue ;;
                   esac
                   candidate_dir="$(dirname "$changed_path")"
