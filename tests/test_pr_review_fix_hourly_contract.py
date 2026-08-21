@@ -324,6 +324,8 @@ def test_rca_dispatch_carries_an_explicit_worker_mode(monkeypatch) -> None:
     captured: dict[str, str | None] = {}
 
     def fake_run(args: list[str], *, stdin: str | None = None) -> str:
+        """Capture the dispatch payload without invoking GitHub."""
+        del args
         captured["stdin"] = stdin
         return ""
 
