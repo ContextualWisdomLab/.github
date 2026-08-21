@@ -47,8 +47,25 @@ CLASSIFICATIONS = (
 )
 KNOWN_OWNER_ISSUES = {
     "appguardrail": "ContextualWisdomLab/appguardrail#929",
+    "bandscope": "ContextualWisdomLab/bandscope#847",
     "clearfolio": "ContextualWisdomLab/clearfolio#423",
+    "codec-carver": "ContextualWisdomLab/codec-carver#401",
+    "contextual-orchestrator": "ContextualWisdomLab/contextual-orchestrator#122",
+    "DiagramWeave": "ContextualWisdomLab/DiagramWeave#27",
     "disksage": "ContextualWisdomLab/disksage#191",
+    "EgressWeave": "ContextualWisdomLab/EgressWeave#202",
+    "fast-mlsirm": "ContextualWisdomLab/fast-mlsirm#809",
+    "four-pillars": "ContextualWisdomLab/four-pillars#33",
+    "inkspan": "ContextualWisdomLab/inkspan#278",
+    "keyverse": "ContextualWisdomLab/keyverse#99",
+    "naruon": "ContextualWisdomLab/naruon#1324",
+    "newsdom-api": "ContextualWisdomLab/newsdom-api#604",
+    "noema": "ContextualWisdomLab/noema#226",
+    "OriginWeave": "ContextualWisdomLab/OriginWeave#123",
+    "pg-erd-cloud": "ContextualWisdomLab/pg-erd-cloud#865",
+    "RankWeave": "ContextualWisdomLab/RankWeave#38",
+    "saju-caldav": "ContextualWisdomLab/saju-caldav#33",
+    "ThreadWeave": "ContextualWisdomLab/ThreadWeave#31",
 }
 FORBIDDEN_TOKENS = frozenset({"COPILOT_GITHUB_TOKEN"})
 

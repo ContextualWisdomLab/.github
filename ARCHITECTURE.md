@@ -77,9 +77,9 @@ default-branch tree. `scripts/ci/inventory_orphaned_workflows.py` is a
 read-only classifier: it binds each advertised workflow to one default-branch
 SHA, distinguishes repository YAML from GitHub-owned `dynamic/` identities,
 and fail-closes on incomplete pagination or visibility. It does not disable
-or recreate workflows. Known fleet orphans route to
-ContextualWisdomLab/appguardrail#929, ContextualWisdomLab/clearfolio#423, and
-ContextualWisdomLab/disksage#191.
+or recreate workflows. Confirmed fleet orphans route through the explicit
+linkable owner-issue registry in the inventory module; it never infers issue
+numbers or treats an absent owner route as a passing classification.
 
 ## Exact-artifact SBOM attestation
 

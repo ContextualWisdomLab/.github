@@ -349,7 +349,33 @@ def test_owner_issue_for_known_fleet() -> None:
         inventory.owner_issue_for("appguardrail")
         == "ContextualWisdomLab/appguardrail#929"
     )
-    assert inventory.owner_issue_for("naruon") is None
+    assert inventory.owner_issue_for("naruon") == "ContextualWisdomLab/naruon#1324"
+
+
+def test_owner_issue_registry_covers_confirmed_fleet() -> None:
+    """Every confirmed fleet owner has an explicit, linkable issue route."""
+    assert inventory.KNOWN_OWNER_ISSUES == {
+        "appguardrail": "ContextualWisdomLab/appguardrail#929",
+        "bandscope": "ContextualWisdomLab/bandscope#847",
+        "clearfolio": "ContextualWisdomLab/clearfolio#423",
+        "codec-carver": "ContextualWisdomLab/codec-carver#401",
+        "contextual-orchestrator": "ContextualWisdomLab/contextual-orchestrator#122",
+        "DiagramWeave": "ContextualWisdomLab/DiagramWeave#27",
+        "disksage": "ContextualWisdomLab/disksage#191",
+        "EgressWeave": "ContextualWisdomLab/EgressWeave#202",
+        "fast-mlsirm": "ContextualWisdomLab/fast-mlsirm#809",
+        "four-pillars": "ContextualWisdomLab/four-pillars#33",
+        "inkspan": "ContextualWisdomLab/inkspan#278",
+        "keyverse": "ContextualWisdomLab/keyverse#99",
+        "naruon": "ContextualWisdomLab/naruon#1324",
+        "newsdom-api": "ContextualWisdomLab/newsdom-api#604",
+        "noema": "ContextualWisdomLab/noema#226",
+        "OriginWeave": "ContextualWisdomLab/OriginWeave#123",
+        "pg-erd-cloud": "ContextualWisdomLab/pg-erd-cloud#865",
+        "RankWeave": "ContextualWisdomLab/RankWeave#38",
+        "saju-caldav": "ContextualWisdomLab/saju-caldav#33",
+        "ThreadWeave": "ContextualWisdomLab/ThreadWeave#31",
+    }
 
 
 def test_inventory_repository_classifies_known_shapes() -> None:
@@ -387,6 +413,19 @@ def test_inventory_repository_classifies_known_shapes() -> None:
     assert skipped["records"] == []
 
 
+def test_inventory_routes_inkspan_orphan_to_owner_issue() -> None:
+    """Inkspan orphan evidence reaches its confirmed central owner issue."""
+    result = inventory.inventory_repository(
+        _repo(
+            "inkspan",
+            [_workflow(20, ".github/workflows/apply-preparse-envelope-limits.yml")],
+            [],
+        )
+    )
+    assert result["records"][0]["classification"] == "orphan_active"
+    assert result["records"][0]["owner_issue"] == "ContextualWisdomLab/inkspan#278"
+
+
 def test_inventory_repository_rejects_malformed_records() -> None:
     """Malformed repository fixtures fail closed before classification."""
     with pytest.raises(inventory.InventoryError, match="valid slug"):
@@ -405,7 +444,7 @@ def test_inventory_repository_rejects_malformed_records() -> None:
         inventory.inventory_repository(not_list)
     unnamed_orphan = inventory.inventory_repository(
         _repo(
-            "naruon",
+            "unknown-repo",
             [_workflow(8, ".github/workflows/missing.yml")],
             [],
         )
