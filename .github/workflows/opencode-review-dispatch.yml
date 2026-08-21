@@ -353,7 +353,6 @@ jobs:
                 "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head"; then
                 fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"
                 if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
-                  git -C "$fetch_dir" fetch --no-tags --prune --no-recurse-submodules origin "$fetched_head_sha"
                   head_fetch_succeeded=1
                   break
                 fi
