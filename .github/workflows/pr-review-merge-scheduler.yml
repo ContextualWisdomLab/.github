@@ -244,6 +244,7 @@ jobs:
             {
               printf 'repository=%s\n' "$GITHUB_REPOSITORY"
               printf 'base_branch=%s\n' "$DEFAULT_BRANCH"
+              printf 'repository_default_branch=%s\n' "$DEFAULT_BRANCH"
             } >>"$GITHUB_OUTPUT"
             exit 0
           fi
@@ -281,13 +282,15 @@ jobs:
           live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_json")"
           live_base_branch="$(jq -r '.base.ref // empty' <<<"$pull_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_json")"
+          repository_default_branch="$(gh api "repos/${TARGET_REPOSITORY_INPUT}" --jq '.default_branch // empty')"
           if [ "$live_number" != "$TARGET_PR_NUMBER" ] ||
             [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ] ||
             [ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ] ||
             [ -z "$live_base_branch" ] ||
+            [ -z "$repository_default_branch" ] ||
             ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            printf '::error::Targeted scheduler dispatch rejected closed, cross-repository, or malformed live PR metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${live_head_sha:-<missing>}"
+            printf '::error::Targeted scheduler dispatch rejected closed, cross-repository, or malformed live PR metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s repository_default_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${repository_default_branch:-<missing>}" "${live_head_sha:-<missing>}"
             exit 1
           fi
           if [ -n "$TARGET_BASE_BRANCH_INPUT" ] &&
@@ -299,9 +302,10 @@ jobs:
           {
             printf 'repository=%s\n' "$TARGET_REPOSITORY_INPUT"
             printf 'base_branch=%s\n' "$live_base_branch"
+            printf 'repository_default_branch=%s\n' "$repository_default_branch"
             printf 'head_sha=%s\n' "$live_head_sha"
           } >>"$GITHUB_OUTPUT"
-          printf 'Validated exact targeted scheduler dispatch for %s#%s at %s on base %s.\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "$live_head_sha" "$live_base_branch"
+          printf 'Validated exact targeted scheduler dispatch for %s#%s at %s on base %s; repository default branch is %s.\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "$live_head_sha" "$live_base_branch" "$repository_default_branch"
 
       - name: Resolve trusted scheduler source ref
         id: trusted_source
@@ -482,7 +486,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token || github.token }}
           TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}
-          TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}
+          TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.repository_default_branch }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && (secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token) || github.token }}
           # Same-repository dispatch credential: when this scheduler runs inside
           # ContextualWisdomLab/.github (the repository the required workflows are

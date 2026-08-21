@@ -170,8 +170,17 @@ def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
         """#!/usr/bin/env bash
 set -euo pipefail
 test "$1" = api
-test "$2" = repos/ContextualWisdomLab/naruon/pulls/1179
-printf '%s\\n' "$FAKE_PULL_JSON"
+case "$2" in
+  repos/ContextualWisdomLab/naruon/pulls/1179)
+    printf '%s\\n' "$FAKE_PULL_JSON"
+    ;;
+  repos/ContextualWisdomLab/naruon)
+    printf '%s\\n' 'develop'
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 """,
         encoding="utf-8",
     )
@@ -218,6 +227,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
         "base_branch=develop",
+        "repository_default_branch=develop",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 

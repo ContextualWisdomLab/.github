@@ -66,6 +66,8 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert "TARGET_REPOSITORY_INPUT:" in validation
     assert "TARGET_PR_NUMBER:" in validation
     assert "TARGET_BASE_BRANCH_INPUT:" in validation
+    assert "repository_default_branch=\"$(gh api \"repos/${TARGET_REPOSITORY_INPUT}\" --jq '.default_branch // empty')\"" in validation
+    assert "repository_default_branch=%s\\n" in validation
     assert (
         "ALLOWED_TARGET_REPOSITORIES: ${{ "
         "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}"
@@ -79,7 +81,7 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
     assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
     assert (
-        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}"
+        "TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.repository_default_branch }}"
         in inspect
     )
     assert '--repo "$TARGET_REPOSITORY"' in inspect
