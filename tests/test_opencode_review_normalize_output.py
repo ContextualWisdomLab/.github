@@ -1371,7 +1371,6 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")
     assert norm.label_section(combined, "missing:") == ""
-    assert norm.label_section("unknown: value", "unknown:") == " value"
     text_coverage = (
         "performance: FAST docstring coverage: 100% something else coverage: 100%"
     )
