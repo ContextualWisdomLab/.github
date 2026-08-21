@@ -2798,3 +2798,84 @@ def test_main_logs_the_exact_control_rejection_reason(tmp_path, capsys):
     stderr = capsys.readouterr().err
     assert "CONTROL_REJECTED candidate=1" in stderr
     assert "adversarial probe 1 evidence must state the observed proof result" in stderr
+
+
+def test_valid_control_repairs_trusted_model_probe_source_bindings(
+    tmp_path, monkeypatch
+):
+    """Substantive LLM probes survive formatting drift without weaker evidence."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+    for probe in validation["probes"]:
+        probe["evidence"] = (
+            "Focused regression command passed and disproved the adversarial hypothesis. "
+            + source_line_receipt(f"line {probe['line']}")
+        )
+
+    normalized = norm.valid_control(
+        control(adversarial_validation=validation),
+        expected_head_sha="head",
+        expected_run_id="run",
+        expected_run_attempt="attempt",
+    )
+
+    assert normalized is not None
+    for index, probe in enumerate(normalized["adversarial_validation"]["probes"]):
+        line = 7 + index
+        assert f"scripts/ci/example.py:{line}" in probe["evidence"]
+        assert source_line_receipt(f"line {line}") in probe["evidence"]
+        assert probe["evidence"].count("source-line-sha256=") == 1
+
+
+def test_probe_binding_repair_does_not_invent_independent_observation(
+    tmp_path, monkeypatch
+):
+    """Canonical source binding cannot turn unsupported model prose into approval."""
+    require_adversarial_validation(tmp_path, monkeypatch, "scripts/ci/example.py")
+    validation = adversarial_validation()
+    for index, probe in enumerate(validation["probes"]):
+        probe["evidence"] = (
+            f"Description at scripts/ci/example.py:{7 + index} repeats the hypothesis. "
+            + source_line_receipt(f"line {7 + index}")
+        )
+    reasons = []
+
+    assert (
+        norm.valid_control(
+            control(adversarial_validation=validation),
+            expected_head_sha="head",
+            expected_run_id="run",
+            expected_run_attempt="attempt",
+            rejection_reasons=reasons,
+        )
+        is None
+    )
+    assert any("executed command" in reason for reason in reasons)
+
+
+@pytest.mark.parametrize(
+    "validation",
+    [
+        None,
+        {"probes": None},
+        {"probes": [None]},
+        {"probes": [{"path": 7, "line": 1, "evidence": "command passed"}]},
+        {"probes": [{"path": "scripts/ci/example.py", "line": True, "evidence": "command passed"}]},
+        {"probes": [{"path": "scripts/ci/example.py", "line": 0, "evidence": "command passed"}]},
+        {"probes": [{"path": "scripts/ci/example.py", "line": 7, "evidence": 9}]},
+        {"probes": [{"path": "missing.py", "line": 7, "evidence": "command passed"}]},
+        {
+            "probes": [
+                {
+                    "path": "../secrets/key.py",
+                    "line": 7,
+                    "evidence": "command passed",
+                }
+            ]
+        },
+    ],
+)
+def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
+    """Malformed, unsafe, or unverifiable model evidence remains unchanged."""
+    candidate = control(adversarial_validation=validation)
+    assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
