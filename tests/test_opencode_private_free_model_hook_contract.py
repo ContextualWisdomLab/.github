@@ -36,6 +36,7 @@ def test_live_runner_sources_private_free_model_hook() -> None:
     assert "apply_private_free_model_policy" in runner
     assert "maybe_enable_private_free_models" in hook
     assert "install_provider_guard" in hook
+    assert "OPENCODE_TRUSTED_SOURCE_DIR" in hook
     assert POLICY.is_file()
     assert GUARD.is_file()
     assert "run_opencode_review_model_pool_impl.sh" not in runner
@@ -44,6 +45,7 @@ def test_live_runner_sources_private_free_model_hook() -> None:
         "${{ needs.validate-pr-metadata.outputs.is_private }}"
     ) in workflow
     assert "PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}" in workflow
+    assert "OPENCODE_TRUSTED_SOURCE_DIR: ${{ github.workspace }}" in workflow
 
 
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -124,6 +126,7 @@ def run_hook(
         "HEAD_SHA",
         "OPENCODE_REPOSITORY_IS_PRIVATE",
         "OPENCODE_SOURCE_WORKDIR",
+        "OPENCODE_TRUSTED_SOURCE_DIR",
         "PR_BASE_SHA",
         "PR_HEAD_SHA",
     ):

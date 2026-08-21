@@ -4370,6 +4370,7 @@ jobs:
           OPENCODE_OUTPUT_FILE: ${{ runner.temp }}/opencode-review-model-pool.md
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
+          OPENCODE_TRUSTED_SOURCE_DIR: ${{ github.workspace }}
           OPENCODE_REPOSITORY_IS_PRIVATE: ${{ needs.validate-pr-metadata.outputs.is_private }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}

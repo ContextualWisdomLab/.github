@@ -186,8 +186,15 @@ cleanup_provider_guard() {
 apply_private_free_model_policy() {
   local hook_dir
   hook_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-  policy_checker="$hook_dir/opencode_private_free_model_policy.py"
-  provider_guard="$hook_dir/opencode_provider_guard.sh"
+  local trusted_source_dir="${OPENCODE_TRUSTED_SOURCE_DIR:-}"
+  if [ -z "$trusted_source_dir" ]; then
+    if [ "${CI:-false}" = "true" ]; then
+      die "OPENCODE_TRUSTED_SOURCE_DIR is required in CI."
+    fi
+    trusted_source_dir="$(cd -- "$hook_dir/../.." && pwd)"
+  fi
+  policy_checker="$trusted_source_dir/scripts/ci/opencode_private_free_model_policy.py"
+  provider_guard="$trusted_source_dir/scripts/ci/opencode_provider_guard.sh"
   [ -f "$policy_checker" ] || die "OpenCode private free-model policy checker is missing."
   [ -f "$provider_guard" ] || die "OpenCode provider credential guard is missing."
   # Local model-pool unit tests pass OPENCODE_MODEL_CANDIDATES directly and
