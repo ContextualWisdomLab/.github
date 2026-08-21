@@ -1738,7 +1738,8 @@ jobs:
             # manifest or lockfile changed. Otherwise measure only the
             # changed Rust package(s); building every workspace member at once
             # can exhaust the review runner disk before tests begin.
-            if has_changed_tracked_files Cargo.toml Cargo.lock; then
+            if changed_files_for_coverage \
+              | awk '$0 == "Cargo.toml" || $0 == "Cargo.lock" { found=1 } END { exit found ? 0 : 1 }'; then
               printf '%s\n' Cargo.toml
               return 0
             fi

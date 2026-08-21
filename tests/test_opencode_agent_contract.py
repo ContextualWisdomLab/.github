@@ -750,7 +750,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "rust_coverage_fail_under_lines()" in measure_step
     assert "package.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
-    assert "has_changed_tracked_files Cargo.toml Cargo.lock" in measure_step
+    assert "if changed_files_for_coverage" in measure_step
+    assert '$0 == "Cargo.toml" || $0 == "Cargo.lock"' in measure_step
     assert "changed Rust package(s)" in measure_step
     assert 'candidate_dir="$(dirname "$changed_path")"' in measure_step
     assert "*/Cargo.toml|*/Cargo.lock|*.rs" in measure_step
