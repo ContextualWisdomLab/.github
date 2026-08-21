@@ -264,6 +264,20 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertEqual(audit[0]["status"], "AFFECTED")
 
+    def test_inclusive_affected_bound_is_respected(self) -> None:
+        """Treat an OSV ``<=`` upper bound as affected at the boundary."""
+        for affected_range, expected_ids, expected_status in (
+            ("<= 0.20.3", ["GHSA-inclusive"], "AFFECTED"),
+            ("<= 0.20.2", [], "RECONCILED"),
+        ):
+            with self.subTest(affected_range=affected_range):
+                payload = results(
+                    "0.20.3", [vulnerability("GHSA-inclusive", affected_range)]
+                )
+                reconciled, audit = self.run_case(payload, direct_lock("0.20.3"))
+                self.assertEqual(remaining_ids(reconciled), expected_ids)
+                self.assertEqual(audit[0]["status"], expected_status)
+
     def test_low_level_semver_integrity_and_source_validation_boundaries(self) -> None:
         """Exercise malformed SemVer, digest, URL, and package-source boundaries."""
         self.assertEqual(OSV.parse_semver("0.20.3"), (0, 20, 3))
@@ -308,6 +322,22 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertEqual(len(sources), 2)
         self.assertFalse(sources[0].valid)
         self.assertFalse(sources[1].valid)
+
+    def test_direct_source_parser_ignores_pnpm_snapshot_duplicates(self) -> None:
+        """Read one package provenance record when pnpm repeats it in snapshots."""
+        valid_url = OFFICIAL_URL.format(version="0.20.3")
+        lock = direct_lock("0.20.3") + (
+            "\nsnapshots:\n\n"
+            f"  xlsx@{valid_url}:\n"
+            "    dependencies: {}\n"
+        )
+        sources = OSV.parse_direct_sources(lock)
+        self.assertEqual(len(sources), 1)
+        self.assertTrue(sources[0].valid)
+        payload = results("0.20.3", [vulnerability("GHSA-snapshot", "< 0.20.2")])
+        reconciled, audit = OSV.reconcile_payload(payload, lock, label="snapshot")
+        self.assertEqual(remaining_ids(reconciled), [])
+        self.assertEqual(audit[0]["status"], "RECONCILED")
 
     def test_malformed_osv_container_evidence_fails_closed(self) -> None:
         """Reject malformed OSV containers while accepting an empty result set."""

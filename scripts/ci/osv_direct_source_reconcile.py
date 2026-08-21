@@ -21,11 +21,15 @@ SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 DIRECT_HEADER_RE = re.compile(
     r"(?m)^  (?P<name>(?:@[^/\s]+/)?[^@\s]+)@(?P<url>https://[^\s]+):[ \t]*$"
 )
+PACKAGES_SECTION_RE = re.compile(r"(?m)^packages:[ \t]*\n")
+TOP_LEVEL_SECTION_RE = re.compile(r"(?m)^[^ \t\r\n#][^:\r\n]*:[^\r\n]*$")
 ENTRY_BOUNDARY_RE = re.compile(r"(?m)^  \S")
 VERSION_LINE_RE = re.compile(r"(?m)^    version:[ \t]*['\"]?([^'\"\s]+)['\"]?[ \t]*$")
 TARBALL_RE = re.compile(r"(?:^|[, {])[ \t]*tarball:[ \t]*([^, }]+)")
 INTEGRITY_RE = re.compile(r"(?:^|[, {])[ \t]*integrity:[ \t]*(sha512-[A-Za-z0-9+/=]+)")
-AFFECTED_RANGE_RE = re.compile(r"^[ \t]*<[ \t]*(\d+\.\d+\.\d+)[ \t]*$")
+AFFECTED_RANGE_RE = re.compile(
+    r"^[ \t]*(?P<operator><=|<)[ \t]*(?P<version>\d+\.\d+\.\d+)[ \t]*$"
+)
 SHEETJS_EXCEPTION_VERSION = "0.20.3"
 SHEETJS_URL_RE = re.compile(
     r"^/xlsx-(?P<version>\d+\.\d+\.\d+)/xlsx-(?P=version)\.tgz$"
@@ -102,34 +106,45 @@ def validate_sheetjs_source(
 
 
 def parse_direct_sources(lock_text: str) -> list[DirectSource]:
-    """Parse conservative direct HTTPS package records from a pnpm lockfile."""
+    """Parse direct HTTPS package records from pnpm's ``packages`` map.
+
+    pnpm v9 repeats direct-tarball keys in ``snapshots``.  Snapshot entries
+    describe dependency edges and do not carry resolution provenance, so
+    parsing only the ``packages`` map prevents a false duplicate-source
+    conflict while retaining conflicting package metadata as a finding.
+    """
 
     sources: list[DirectSource] = []
-    matches = list(DIRECT_HEADER_RE.finditer(lock_text))
-    for match in matches:
-        start = match.end()
-        boundary = ENTRY_BOUNDARY_RE.search(lock_text, start)
-        end = boundary.start() if boundary else len(lock_text)
-        block = lock_text[start:end]
-        version_match = VERSION_LINE_RE.search(block)
-        tarball_match = TARBALL_RE.search(block)
-        integrity_match = INTEGRITY_RE.search(block)
-        version = version_match.group(1) if version_match else ""
-        tarball = tarball_match.group(1) if tarball_match else ""
-        integrity = integrity_match.group(1) if integrity_match else ""
-        valid, reason = validate_sheetjs_source(
-            match.group("name"), match.group("url"), tarball, version, integrity
-        )
-        sources.append(
-            DirectSource(
-                package_name=match.group("name"),
-                version=version,
-                source_url=match.group("url"),
-                integrity=integrity,
-                valid=valid,
-                reason=reason,
+    for packages_section in PACKAGES_SECTION_RE.finditer(lock_text):
+        section_start = packages_section.end()
+        next_section = TOP_LEVEL_SECTION_RE.search(lock_text, section_start)
+        section_end = next_section.start() if next_section else len(lock_text)
+        package_text = lock_text[section_start:section_end]
+        matches = list(DIRECT_HEADER_RE.finditer(package_text))
+        for match in matches:
+            start = match.end()
+            boundary = ENTRY_BOUNDARY_RE.search(package_text, start)
+            end = boundary.start() if boundary else len(package_text)
+            block = package_text[start:end]
+            version_match = VERSION_LINE_RE.search(block)
+            tarball_match = TARBALL_RE.search(block)
+            integrity_match = INTEGRITY_RE.search(block)
+            version = version_match.group(1) if version_match else ""
+            tarball = tarball_match.group(1) if tarball_match else ""
+            integrity = integrity_match.group(1) if integrity_match else ""
+            valid, reason = validate_sheetjs_source(
+                match.group("name"), match.group("url"), tarball, version, integrity
             )
-        )
+            sources.append(
+                DirectSource(
+                    package_name=match.group("name"),
+                    version=version,
+                    source_url=match.group("url"),
+                    integrity=integrity,
+                    valid=valid,
+                    reason=reason,
+                )
+            )
     return sources
 
 
@@ -311,7 +326,9 @@ def reconcile_payload(
                 continue
             range_match = AFFECTED_RANGE_RE.fullmatch(affected_range or "")
             version_key = parse_semver(package_version)
-            upper_key = parse_semver(range_match.group(1)) if range_match else None
+            upper_key = (
+                parse_semver(range_match.group("version")) if range_match else None
+            )
             if version_key is None or upper_key is None:
                 retained.append(vulnerability)
                 audit.append(
@@ -323,13 +340,18 @@ def reconcile_payload(
                         vulnerability=vulnerability,
                         affected_range=affected_range,
                         status="SCANNER_METADATA_CONFLICT",
-                        reason="advisory lacks one machine-checkable exclusive affected upper bound",
+                        reason="advisory lacks one machine-checkable affected upper bound",
                     )
                 )
                 continue
+            inside_affected_range = (
+                version_key <= upper_key
+                if range_match.group("operator") == "<="
+                else version_key < upper_key
+            )
             if package_version != SHEETJS_EXCEPTION_VERSION:
                 retained.append(vulnerability)
-                if version_key < upper_key:
+                if inside_affected_range:
                     status = "AFFECTED"
                     reason = "exact direct-source version remains inside the affected range"
                 else:
@@ -351,7 +373,7 @@ def reconcile_payload(
                     )
                 )
                 continue
-            if version_key < upper_key:
+            if inside_affected_range:
                 retained.append(vulnerability)
                 status = "AFFECTED"
                 reason = "exact direct-source version remains inside the affected range"
