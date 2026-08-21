@@ -87,6 +87,17 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     assert redactor.redact_text("api key: visible") == (
         f"api key: {redactor.REDACTED}"
     )
+    assert redactor.redact_text('"api key": "secret value"') == (
+        f'"api key": {redactor.REDACTED}'
+    )
+    assert redactor.redact_text('"api key": "secret\\"value"') == (
+        f'"api key": {redactor.REDACTED}'
+    )
+    assert redactor.redact_text('"api key": "unterminated') == (
+        f'"api key": {redactor.REDACTED}'
+    )
+    assert redactor.redact_text('api key: ,') == "api key: ,"
+    assert redactor._consume_sensitive_assignment("9token=value", 0) is None
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
