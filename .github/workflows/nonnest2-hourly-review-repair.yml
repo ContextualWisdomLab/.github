@@ -6,9 +6,9 @@ on:
     # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
     # psychometrics-commons (9), OriginWeave (10), naruon (11),
     # DiagramWeave (12), pg-erd-cloud (13), mhtml-etl-gateway (14),
-    # html4tree (15), orchestrator (17), noema (19), Clearfolio (23),
-    # Keyverse (29), Scopeweave (31), DiskSage (37), Appguardrail (41),
-    # newsdom-api (18), Inkspan (47), fast-mlsirm (49), BandScope (53),
+    # html4tree (15), orchestrator (17), newsdom-api (18), noema (19),
+    # Clearfolio (23), Keyverse (29), Scopeweave (31), DiskSage (37),
+    # Appguardrail (41), Inkspan (47), fast-mlsirm (49), BandScope (53),
     # and semantic-data-portal (59).
     - cron: "16 * * * *"
 

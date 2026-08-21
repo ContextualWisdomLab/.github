@@ -76,6 +76,13 @@ def test_sibling_slot_registry_uses_newsdom_api_minute_eighteen() -> None:
         assert "newsdom-api (43)" not in content
 
 
+def test_nonnest2_slot_registry_remains_numeric() -> None:
+    """Keep the shared occupancy comment easy to audit by minute order."""
+    content = _read(Path(".github/workflows/nonnest2-hourly-review-repair.yml"))
+    assert content.index("orchestrator (17)") < content.index("newsdom-api (18)")
+    assert content.index("newsdom-api (18)") < content.index("noema (19)")
+
+
 def test_newsdom_api_caller_preserves_oidc_and_explicit_secret_scope() -> None:
     """The queue scanner maps established credentials without model secrets."""
     caller = _read(CALLER)
