@@ -54,7 +54,7 @@ def test_mhtml_etl_gateway_caller_is_hourly_bounded_and_non_cancelling() -> None
     """mhtml-etl-gateway receives one realistic ingest repair without cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "14 * * * *"' in caller
+    assert 'cron: "15 * * * *"' in caller
     assert "group: mhtml-etl-gateway-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller

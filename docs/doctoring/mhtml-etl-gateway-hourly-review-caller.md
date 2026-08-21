@@ -7,7 +7,7 @@
 ContextualWisdomLab operates one protected hourly caller for
 `ContextualWisdomLab/mhtml-etl-gateway` (enterprise MHTML ingestion
 gateway that converts browser, SAP ALV, and Excel Web Archive exports
-into governed PostgreSQL data assets). The caller runs at minute 14,
+into governed PostgreSQL data assets). The caller runs at minute 15,
 delegates to the product-neutral central review-fix scheduler, inspects
 at most 50 open pull requests targeting protected `main`, and dispatches
 at most one bounded repair per heartbeat.
@@ -92,7 +92,7 @@ weaken its exact-head, approval, or security gates.
 
 ## Verification and rollback
 
-Machine-checkable contracts require the exact target/base, minute 14
+Machine-checkable contracts require the exact target/base, minute 15
 cadence, non-cancelling single-flight group, one dispatch, two-hour
 retry floor, explicit secret mapping, read-only contents plus job-scoped
 `id-token: write`, focused path-filter coverage, and absence of model or
