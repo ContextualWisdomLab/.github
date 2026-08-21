@@ -270,6 +270,19 @@ def require_workflow_starting_mutation_credential(action: str) -> None:
         raise RuntimeError(non_triggering_head_mutation_reason(action))
 
 
+def head_mutation_credential_guidance_text() -> tuple[str, str]:
+    """Return operator-facing summary and limit text for a withheld head mutation."""
+    if mutation_token_source() == "github-token":
+        return (
+            "The scheduler withheld a head mutation because the workflow GITHUB_TOKEN cannot start the required current-head workflow runs.",
+            "Moving the head with the workflow GITHUB_TOKEN would leave the PR permanently BLOCKED, so the scheduler waits instead.",
+        )
+    return (
+        f"The scheduler withheld a head mutation because {mutation_token_label()} is not allowlisted as workflow-starting.",
+        "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
+    )
+
+
 def mutation_actor_label() -> str:
     """Return the expected GitHub actor class for scheduler mutations."""
     source = mutation_token_source()
@@ -416,11 +429,12 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
             ],
         }
     if parse_non_triggering_head_mutation_reason(decision.reason):
+        summary, automation_limit = head_mutation_credential_guidance_text()
         return {
             "type": "head_mutation_credential_upgrade",
             "token": mutation_token_label(),
-            "summary": "The scheduler withheld a head mutation because the workflow GITHUB_TOKEN cannot start the required current-head workflow runs.",
-            "automation_limit": "Moving the head with the workflow GITHUB_TOKEN would leave the PR permanently BLOCKED, so the scheduler waits instead.",
+            "summary": summary,
+            "automation_limit": automation_limit,
             "steps": [
                 "Configure PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app credential for the scheduler job.",
                 "Rerun PR Review Merge Scheduler so the head mutation runs with a workflow-starting credential.",
@@ -2912,6 +2926,7 @@ def write_actions_summary(
     lines.extend(conflict_repair_summary(decisions))
     lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
+    lines.extend(head_mutation_credential_upgrade_summary(decisions))
     lines.extend(last_push_approval_restamp_summary(decisions))
     lines.extend(external_head_update_summary(decisions))
     lines.extend(external_head_merge_summary(decisions))
@@ -3058,6 +3073,25 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
     if followups:
         lines.extend(["", "Follow-up evidence:"])
         lines.extend(f"- PR #{decision.pr}: {note}" for decision, note in followups)
+    return lines
+
+
+def head_mutation_credential_upgrade_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section for withheld head mutations."""
+    waits = [decision for decision in decisions if parse_non_triggering_head_mutation_reason(decision.reason)]
+    if not waits:
+        return []
+    summary, automation_limit = head_mutation_credential_guidance_text()
+    lines = ["", "### Head mutation withheld", "", summary, automation_limit]
+    lines.extend(
+        [
+            "Configure `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the OpenCode app credential, then rerun the scheduler.",
+            "Alternatively, let the PR author push the branch so required checks start from the owning actor.",
+            "",
+            "Withheld decisions:",
+        ]
+    )
+    lines.extend(f"- PR #{decision.pr}: {decision.reason}" for decision in waits)
     return lines
 
 

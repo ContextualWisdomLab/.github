@@ -1831,6 +1831,16 @@ def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
     assert sched.decision_guidance(
         sched.Decision(7, "wait", str(exc_info.value))
     )["type"] == "head_mutation_credential_upgrade"
+    guidance = sched.decision_guidance(sched.Decision(7, "wait", str(exc_info.value)))
+    assert "not allowlisted as workflow-starting" in guidance["summary"]
+    assert "GITHUB_TOKEN" not in guidance["summary"]
+    summary = "\n".join(
+        sched.head_mutation_credential_upgrade_summary(
+            [sched.Decision(7, "wait", str(exc_info.value))]
+        )
+    )
+    assert "Head mutation withheld" in summary
+    assert "not allowlisted as workflow-starting" in summary
 
 
 def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
@@ -2931,6 +2941,7 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
     wait_decisions = [sched.Decision(1, "wait", "nothing to do")]
     assert sched.conflict_repair_summary(wait_decisions) == []
     assert sched.update_branch_summary(wait_decisions) == []
+    assert sched.head_mutation_credential_upgrade_summary(wait_decisions) == []
     assert sched.external_head_update_summary(wait_decisions) == []
     assert sched.external_head_merge_summary(wait_decisions) == []
     assert sched.workflow_action_required_summary(wait_decisions) == []
