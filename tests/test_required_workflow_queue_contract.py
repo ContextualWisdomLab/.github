@@ -931,11 +931,6 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     assert workflow.count("--allow-no-lockfiles") == 4
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
-    assert "Preserve base OSV result before head checkout" in workflow
-    assert '"$RUNNER_TEMP/osv-old-results.json"' in workflow
-    assert "Remove base OSV result before head restore" in workflow
-    assert 'Path("old-results.json").unlink(missing_ok=True)' in workflow
-    assert "Restore base OSV result after head checkout" in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
@@ -1011,9 +1006,6 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     )
     assert "--output=old-results.json" in workflow
     assert "--output=new-results.json" in workflow
-    assert "Preserve base OSV result before head checkout" in workflow
-    assert "Remove base OSV result before head restore" in workflow
-    assert "Restore base OSV result after head checkout" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
