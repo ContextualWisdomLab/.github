@@ -10,9 +10,16 @@ import pytest
 from scripts.ci import opencode_dispatch_status as dispatch_status
 
 
-def _review(*, login: str, state: str, commit_id: str) -> dict[str, object]:
+def _review(
+    *, login: str, state: str, commit_id: str, body: str = ""
+) -> dict[str, object]:
     """Return one GitHub Reviews API object."""
-    return {"user": {"login": login}, "state": state, "commit_id": commit_id}
+    return {
+        "user": {"login": login},
+        "state": state,
+        "commit_id": commit_id,
+        "body": body,
+    }
 
 
 def test_current_head_opencode_verdict_reads_latest_matching_state() -> None:
@@ -44,6 +51,26 @@ def test_current_head_opencode_verdict_ignores_other_actors_and_heads() -> None:
     head = "a" * 40
     assert (
         dispatch_status.current_head_opencode_verdict(
+            [_review(login="coderabbitai[bot]", state="APPROVED", commit_id=head)],
+            head,
+        )
+        is None
+    )
+    assert (
+        dispatch_status.current_head_opencode_verdict(
+            [
+                _review(
+                    login="opencode-agent[bot]",
+                    state="APPROVED",
+                    commit_id="b" * 40,
+                )
+            ],
+            head,
+        )
+        is None
+    )
+    assert (
+        dispatch_status.current_head_opencode_verdict(
             [
                 _review(login="coderabbitai[bot]", state="APPROVED", commit_id=head),
                 _review(login="opencode-agent[bot]", state="APPROVED", commit_id="b" * 40),
@@ -54,6 +81,80 @@ def test_current_head_opencode_verdict_ignores_other_actors_and_heads() -> None:
         is None
     )
     assert dispatch_status.current_head_opencode_verdict([], "") is None
+
+
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "deterministic current-head evidence",
+        "deterministic fallback approval",
+        "model-unavailable evidence fallback",
+        "did not emit a usable current-head control block",
+        "scope: `unsupported`",
+        "model-pool outcome: `unknown`",
+    ),
+)
+def test_current_head_opencode_verdict_rejects_fallback_approval(marker: str) -> None:
+    """Model-unavailable or deterministic approvals are not formal evidence."""
+    head = "a" * 40
+    reviews = [
+        _review(login="opencode-agent[bot]", state="APPROVED", commit_id=head),
+        _review(
+            login="opencode-agent[bot]",
+            state="APPROVED",
+            commit_id=head,
+            body=f"OpenCode {marker}",
+        ),
+    ]
+
+    assert dispatch_status.current_head_opencode_verdict(reviews, head) is None
+
+    reviews[-1]["state"] = "CHANGES_REQUESTED"
+    assert (
+        dispatch_status.current_head_opencode_verdict(reviews, head)
+        == "CHANGES_REQUESTED"
+    )
+
+
+def test_current_head_opencode_verdict_uses_latest_current_head_review() -> None:
+    """A later non-verdict cannot expose an older decision as the latest one."""
+    head = "a" * 40
+    assert (
+        dispatch_status.current_head_opencode_verdict(
+            [
+                _review(
+                    login="opencode-agent[bot]",
+                    state="APPROVED",
+                    commit_id=head,
+                ),
+                _review(
+                    login="opencode-agent[bot]",
+                    state="COMMENTED",
+                    commit_id=head,
+                ),
+            ],
+            head,
+        )
+        is None
+    )
+
+
+def test_required_workflow_rejects_fallback_approvals() -> None:
+    """The checkout-free jq twin enforces the same fallback boundary."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "| (last // {}) as $review" in workflow
+    for marker in (
+        "deterministic current-head evidence",
+        "deterministic fallback approval",
+        "model-unavailable evidence fallback",
+        "did not emit a usable current-head control block",
+        "scope: `unsupported`",
+        "model-pool outcome: `unknown`",
+    ):
+        assert marker in workflow
 
 
 def test_decide_required_verdict_check_fails_closed_without_verdict() -> None:

@@ -84,10 +84,23 @@ jobs:
                     | $user == "opencode-agent" or $user == "opencode-agent[bot]"
                   )
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | .state
               ]
-            | map(select(. == "APPROVED" or . == "CHANGES_REQUESTED"))
-            | first // empty
+            | (last // {}) as $review
+            | ($review.body // "" | ascii_downcase) as $body
+            | if $review.state == "CHANGES_REQUESTED" then
+                "CHANGES_REQUESTED"
+              elif $review.state == "APPROVED"
+                and ($body | contains("deterministic current-head evidence") | not)
+                and ($body | contains("deterministic fallback approval") | not)
+                and ($body | contains("model-unavailable evidence fallback") | not)
+                and ($body | contains("did not emit a usable current-head control block") | not)
+                and ($body | contains("scope: `unsupported`") | not)
+                and ($body | contains("model-pool outcome: `unknown`") | not)
+              then
+                "APPROVED"
+              else
+                empty
+              end
           ')"
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."

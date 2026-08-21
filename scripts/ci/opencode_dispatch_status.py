@@ -10,11 +10,13 @@ from typing import Any, Sequence
 
 try:
     from opencode_existing_approval_gate import (
+        FALLBACK_MARKERS,
         OPENCODE_APP_APPROVAL_AUTHORS,
         review_rejection_reason,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from scripts.ci.opencode_existing_approval_gate import (
+        FALLBACK_MARKERS,
         OPENCODE_APP_APPROVAL_AUTHORS,
         review_rejection_reason,
     )
@@ -31,7 +33,7 @@ MISSING_VERDICT_MESSAGE = (
 def current_head_opencode_verdict(
     reviews: Sequence[dict[str, Any]], head_sha: str
 ) -> str | None:
-    """Return the latest current-head OpenCode APPROVED or CHANGES_REQUESTED state."""
+    """Return the latest substantive current-head OpenCode verdict, if any."""
     expected = (head_sha or "").lower()
     if not expected:
         return None
@@ -42,8 +44,12 @@ def current_head_opencode_verdict(
         if str(review.get("commit_id") or "").lower() != expected:
             continue
         state = str(review.get("state") or "").upper()
-        if state in OPENCODE_VERDICT_STATES:
-            return state
+        if state not in OPENCODE_VERDICT_STATES:
+            return None
+        body = str(review.get("body") or "").casefold()
+        if state == "APPROVED" and any(marker in body for marker in FALLBACK_MARKERS):
+            return None
+        return state
     return None
 
 
@@ -166,5 +172,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
     raise SystemExit(main())
