@@ -112,9 +112,6 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
-- OpenCode remains the review reasoner. Deterministic code may repair only
-  trusted `path:line` source-line digest bindings on LLM probes; it never
-  invents a hypothesis, observed result, or verdict.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
 - Logs and review receipts redact credential shapes (tokens, bearer values,
@@ -148,8 +145,6 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
-- [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md)
-  — LLM probe publication without inventing observed proof.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
