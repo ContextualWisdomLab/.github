@@ -53,44 +53,8 @@ def _redact_json(value: Any) -> Any:
     return value
 
 
-def _consume_sensitive_assignment(
-    text: str, start: int, *, key_end: int | None = None
-) -> tuple[str, int] | None:
+def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | None:
     """Return a redacted key/value assignment parsed in linear time."""
-    if key_end is not None:
-        cursor = key_end
-        if cursor < len(text) and text[cursor] in "\"'":
-            cursor += 1
-        while cursor < len(text) and text[cursor].isspace():
-            cursor += 1
-        if cursor >= len(text) or text[cursor] not in ":=":
-            return None
-        cursor += 1
-        while cursor < len(text) and text[cursor].isspace():
-            cursor += 1
-        if cursor >= len(text):
-            return None
-        value_start = cursor
-        if text[cursor] in "\"'":
-            value_quote = text[cursor]
-            cursor += 1
-            escaped = False
-            while cursor < len(text):
-                char = text[cursor]
-                cursor += 1
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == value_quote:
-                    break
-        else:
-            while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
-                cursor += 1
-        if cursor == value_start:
-            return None
-        return text[start:value_start] + REDACTED, cursor
-
     cursor = start
     key_quote = ""
     if cursor < len(text) and text[cursor] in "\"'":
@@ -168,10 +132,6 @@ def _redact_assignments(text: str) -> str:
             if consume_match:
                 eval_start = i
                 break
-        if consume_match is None:
-            consume_match = _consume_sensitive_assignment(
-                text, eval_start, key_end=match.end()
-            )
 
         if consume_match:
             output.append(text[last_append:eval_start])
