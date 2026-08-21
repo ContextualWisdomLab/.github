@@ -2299,7 +2299,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/contextual-orchestrator
-          ref: 8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914
+          ref: d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc
           path: trusted-contextual-orchestrator
           fetch-depth: 1
           persist-credentials: false
@@ -4436,10 +4436,13 @@ jobs:
           if [ "$REPOSITORY_IS_PRIVATE" = "false" ]; then
             gateway_license_allowed=false
             license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"
+            # SPDX-License-Identifier: MIT
+            spdx_license_id=MIT
+            spdx_mit_license_blob_sha=591bbf197b355e60604618c8a8a50bc5a839b204
             if [ "$CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED" = "true" ] &&
               [ -f "$license_file" ] &&
-              grep -Fq "MIT License" "$license_file" &&
-              grep -Fq "Permission is hereby granted, free of charge" "$license_file"; then
+              [ "$spdx_license_id" = "MIT" ] &&
+              [ "$(git hash-object --no-filters "$license_file" 2>/dev/null)" = "$spdx_mit_license_blob_sha" ]; then
               gateway_license_allowed=true
             else
               printf 'Pinned contextual-orchestrator gateway license is unavailable or not an allowed MIT license; preserving the existing provider pool.\n'

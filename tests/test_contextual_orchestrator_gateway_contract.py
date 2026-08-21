@@ -13,7 +13,8 @@ WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
 OPENCODE_CONFIG = ROOT / "opencode.jsonc"
 DOCTORING = ROOT / "docs/doctoring/contextual-orchestrator-opencode-gateway.md"
-GATEWAY_COMMIT = "8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914"
+GATEWAY_COMMIT = "d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc"
+SPDX_MIT_LICENSE_BLOB_SHA = "591bbf197b355e60604618c8a8a50bc5a839b204"
 GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
 
 
@@ -64,8 +65,11 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "/v1/models" in doctoring
     assert "Private repositories never start or select the gateway" in doctoring
     assert 'license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"' in workflow
-    assert 'grep -Fq "MIT License" "$license_file"' in workflow
-    assert 'grep -Fq "Permission is hereby granted, free of charge" "$license_file"' in workflow
+    assert "SPDX-License-Identifier: MIT" in workflow
+    assert "spdx_license_id=MIT" in workflow
+    assert f"spdx_mit_license_blob_sha={SPDX_MIT_LICENSE_BLOB_SHA}" in workflow
+    assert "SPDX-License-Identifier: MIT" in doctoring
+    assert SPDX_MIT_LICENSE_BLOB_SHA in doctoring
 
     gateway_launch = workflow.rsplit("            env -i \\\n", 1)[1].split(
         "              python3 -m contextual_orchestrator.review_gateway \\\n", 1

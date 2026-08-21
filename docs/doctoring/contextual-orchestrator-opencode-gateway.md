@@ -1,10 +1,7 @@
 # Contextual Orchestrator OpenCode gateway
 
 The trusted OpenCode review job starts `contextual-orchestrator` from the
-pinned predecessor commit `8d31fa50cc6de8ddc3e6b91576e7251c5aa7d914` from
-contextual-orchestrator#790, which includes the provider-diverse discovery
-repair from #770. After that predecessor merges, this pin must be
-replaced with the resulting protected `main` SHA. The sidecar binds only
+pinned commit `d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc`. The sidecar binds only
 to `127.0.0.1:18080`, registers any available provider keys in its process-local
 KV bootstrap, discovers models across Bytez, both NVIDIA NIM credentials,
 OpenRouter, and OpenAI, then serves the existing OpenAI-compatible review
@@ -23,8 +20,9 @@ The gateway candidate is first in the model pool only for public repositories,
 after the pinned checkout succeeds, the sidecar reaches the unauthenticated
 `/healthz` liveness check, and an authenticated `/v1/models` response contains
 at least one non-empty model id. `/healthz` is liveness only. A missing or
-unreadable pinned revision, missing `LICENSE`, or a license other than the
-allowed MIT declaration is non-fatal:
+unreadable pinned revision, missing `LICENSE`, or a license whose SPDX identity
+(`SPDX-License-Identifier: MIT`) is not the allowlisted `MIT` blob
+(`591bbf197b355e60604618c8a8a50bc5a839b204`) is non-fatal:
 the gateway candidate is skipped and the established provider-qualified pool
 remains available. Private repositories never start or select the gateway,
 because its auto-discovered catalog includes providers excluded by the review
