@@ -2,10 +2,10 @@
 
 검토 기준일: **2026-08-21 (Asia/Seoul)**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계  
-현재 보호된 `main`: `6479989bbff475404cc2cccc468d5fb1d6c632e5`
-현재 열린 PR 수: **100** (아래 표에 이 스냅샷의 전체 목록 포함)
+현재 보호된 `main`: `55a8b576725451dfe0a21a57d36a2f1a41619b24`
+현재 열린 PR 수: **90** (아래 표에 이 스냅샷의 전체 목록 포함)
 
-이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다.
+이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다.
 
 ## 1. 근거와 범위
 
@@ -74,7 +74,7 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR 100개 중 현재 main 기준 PR과 behind/dirty PR이 섞여 있고, 대부분 formal current-head approval이 없다 | “merge-ready”라고 믿은 변경이 실제 보호 규칙을 통과했는지 판단할 수 없다 | exact-head queue를 PR 단위로 재수집하고, stale approval/check를 폐기하며, 독립 approval + terminal required Checks 없이는 merge하지 않는다 |
+| G-01 | 열린 PR은 90개이고 metadata상 mergeable인 PR도 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
 | G-02 | #1162는 review credential route를 고치지만 current Checks가 queued/cancelled로 반복되며 router의 403 경로가 선행 main에 남아 있다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | #1162 current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
 | G-03 | #1153의 Strix run은 `loginAsGuest`/Caido `127.0.0.1:48080` bootstrap 실패를 provider signal로 분류하지 않았다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다 |
 | G-04 | 100개 live PR 중 많은 항목이 BEHIND 또는 CHANGES_REQUESTED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
@@ -89,120 +89,104 @@ flowchart LR
 | G-13 | hourly scheduler는 존재하지만 no-op/credential unavailable/queued Checks의 customer next action을 모든 caller가 동일한 receipt로 내는지 미확인이다. Main run `32359911521`은 `PR_REVIEW_MERGE_TOKEN` 미설정 시 즉시 실패하고 receipt artifact도 만들지 못했다 | 자동화가 실패해도 운영자가 무엇을 고쳐야 하는지 알 수 없다 | #1161의 `skipped_credential_unavailable` receipt와 다음 행동 문구를 exact-head Checks로 검증한 뒤 병합하고, bounded receipt schema, retry floor, single-flight, no secret fallback을 모든 caller contract test로 고정한다 |
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 구매자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 
-## 4. 현재 PR inventory (live snapshot)
+## 4. 열린 PR live inventory
 
-다음 표는 기준선 PR의 live update 직전 `gh pr list --state open --limit 100`으로 얻은 값이다. 기준선 자체인 #1163과 이후 이 루프에서 새로 검증한 head는 별도 행으로 갱신했다. merge 판단에는 사용하지 말고, 각 루프에서 `gh pr view <number>`로 다시 확인한다.
+아래는 GitHub PR search가 2026-08-21 13:xx KST에 반환한 90개 열린 PR의 number/title/head/base metadata다. MERGEABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
 
-| PR | title | head SHA | base | merge state | review decision |
+| PR | title | head SHA | base | metadata | mode |
 |---|---|---|---|---|---|
-| #1173 | fix(strix): include Rust workspace context for CI scans | `a6764368c634e9ea3a49d162a560d771d518e37e` | main | BLOCKED | — |
-| #1172 | fix(autofix): resolve live NVIDIA NIM models instead of a retired pin | `fddd6ee51d70891e41424ba78801a1871a303d4e` | main | BLOCKED | — |
-| #1171 | fix: refuse scheduler head mutations that cannot start required checks | `fd9305869e133b9aaec9b0ecdafeb0ac1953f4d2` | main | BLOCKED | — |
-| #1170 | feat: route OpenCode reviews through contextual gateway | `0bd7630912937ce4274ed207a7a35ecf24bfee17` | main | BLOCKED | — |
-| #1169 | fix(security): keep baseline-only Strix outages non-blocking | `24893cee8fbb33791fe77629efa35ce2d8fb7076` | main | BLOCKED | — |
-| #1167 | feat: add Orgmetra hourly review repair caller | `17ad155cad325cd159cb88a661e356ddcc5372cc` | develop | BLOCKED | — |
-| #1166 | fix(ci): recognize replacement tests in existing files | `9e6063dc0d7298e394de87fc8f28aa3e0a6dced8` | main | BLOCKED | — |
-| #1165 | fix(automation): yield completed mention repositories fairly | `38aef069b2d9f8148a5e479125585ae408306d86` | main | BLOCKED | — |
-| #1162 | fix: use review credentials for agent dispatch | `e530ef197bab1a3f4a4b3331c0504f9f0bd6a1cc` | main | BLOCKED | — |
-| #1163 | docs: establish live product and technical gap baseline | `ac0650f1ffe92e355ca3e41531787456988ed628` | main | BLOCKED | — |
-| #1161 | fix: make hourly coordinator credential absence auditable | `dbc3eca51444e46ce7a3a07ea818c72ad8bf124a` | main | BLOCKED | — |
-| #1159 | fix(coverage): classify Storybook development evidence | `5775073735360250ba5ef7bfaaf30b8f50d6dc1d` | main | BLOCKED | — |
-| #1158 | fix(osv): preserve immutable direct-source provenance | `f285fd790ba12161ad6385a46d9e3e60371103b4` | main | BLOCKED | — |
-| #1157 | fix(coverage): discover hash-pinned requirements lock files | `8c8c70ae506e777b3a21885173f8c86b2e5f2a31` | main | BLOCKED | — |
-| #1156 | 🛡️ Sentinel: [MEDIUM] sandboxed_web_e2e.py의 subprocess 호출에 shell=False 명시 | `6aee33e2c07f8c16cea9ebf52f466196c5e38ce5` | main | BLOCKED | — |
-| #1155 | Fix duplicate repository dispatch scheduler runs | `6ce2fe8339571637708752568d008a43c2277dbd` | main | BLOCKED | — |
-| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `ded4d1ae4f8578f0c4eaad090be97dadc4ae4697` | main | BLOCKED | — |
-| #1153 | fix(strix): fail closed on incomplete provider scans | `9a4d1e1439bbafa8781971fbf22ab695ae126271` | main | BLOCKED | — |
-| #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `77165e64aea6e448632100c366680f98a9e46152` | main | BLOCKED | — |
-| #1150 | feat: add read-only Actions queue health evidence | `4467d5a6e45d301ce83fcce8461ab17e2ff49122` | main | BLOCKED | — |
-| #1147 | feat(integration): add ecosystem capability catalogue | `db5e704203a7b005ebaa35688c268209670fd969` | main | BLOCKED | — |
-| #1146 | fix(figma): retain style references and component sets | `54cb0220ca95603831dc8defeedd766d47cf4a62` | main | BLOCKED | — |
-| #1145 | feat: enforce adaptive orchestration defaults | `f8dd01dafd2c91f842a74677f2124528f3bce881` | main | BLOCKED | — |
-| #1143 | ci: schedule naruon hourly review repair | `361f9eb34f3297a68d7ea1f327f98538aded9199` | main | BLOCKED | — |
-| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `2bc3f627999569cd057f33e1ef510a0c621b429f` | main | BLOCKED | — |
-| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `cd9f0256c0e5d3c30f380e1473aa6966f0406f42` | main | BLOCKED | — |
-| #1114 | fix(strix): retry transient visibility API failures | `21beb66a98e30168146ee48c6593f58dd954d180` | main | BLOCKED | — |
-| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `3068296010c9b8debd107652039cea175ea4db5a` | main | BLOCKED | — |
-| #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `5ae4bd244cccc69bdbe8b23eef32504e33026cf5` | main | BLOCKED | — |
-| #1107 | chore(deps): bump github/codeql-action/init from 4.37.0 to 4.37.7 | `705b854214d4624c3276c62f92a105278ebec199` | main | BLOCKED | CHANGES_REQUESTED |
-| #1106 | chore(deps): bump typing-inspection from 0.4.2 to 0.4.4 | `ed7c4b2314f7acb3c1821fdd476e6078cbaad9fb` | main | BEHIND | CHANGES_REQUESTED |
-| #1105 | chore(deps): bump openai from 2.54.0 to 3.1.0 | `4f6e3f63e72111c29329b9bc0a767127a1315e9d` | main | BEHIND | — |
-| #1104 | chore(deps): bump charset-normalizer from 3.4.7 to 3.5.1 | `97ffca37a169e41c15da8976fcb3484a3ee526ff` | main | BEHIND | — |
-| #1103 | chore(deps): bump google-cloud-resource-manager from 1.17.0 to 1.18.0 | `d76211d0038afe90b8374dfa1fa6e1dae680ced5` | main | BEHIND | — |
-| #1101 | feat(automation): run EmbedRelay hourly NVIDIA NIM review repair | `2429d1f4e8471874749dafcf43ac21d09d04226b` | main | BLOCKED | — |
-| #1100 | feat(automation): run RankWeave hourly NVIDIA NIM review repair | `4b62883a455589aa90e2604b171bdc08451aafa0` | main | BLOCKED | — |
-| #1097 | feat(automation): run html4tree hourly NVIDIA NIM review repair | `22c3e8874238ac2196657823860e7673d0f8676e` | main | BEHIND | — |
-| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `ee4357f845a9d29a20f6265dc795a94c63aacf2f` | main | BLOCKED | — |
-| #1094 | feat(automation): run DiagramWeave hourly NVIDIA NIM review repair | `c2e164621755cd275c9b4aef78ff511fc6eb7ca2` | main | BEHIND | — |
-| #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `cebc2c1a75b32c0daa786756da6f6212bf4b2aa4` | main | BLOCKED | — |
-| #1089 | fix(opencode): system llvm for cargo-llvm-cov (v3 concurrency) | `cd7d72c64443572c77343f1456a52b54f956240e` | main | BEHIND | — |
-| #1088 | feat(automation): run mightyETL hourly NVIDIA NIM review repair | `38e9d80c908f060f738a7e890ae509a66cf7b2a5` | main | BEHIND | — |
-| #1087 | feat(automation): run life-os hourly NVIDIA NIM review repair | `cdb5d773c93628a6f22450fc9dafbc0d7495e40c` | main | BEHIND | — |
-| #1086 | feat(automation): repair the LineageWeave buyer-surface stack hourly | `1759b47ecb8f0bde886e90e1cb9b734c305cefc8` | main | BLOCKED | — |
-| #1085 | feat(automation): run kaefa hourly NVIDIA NIM review repair | `49596268d4a2ebf9979c893ad883f9ae47472d17` | main | BEHIND | CHANGES_REQUESTED |
-| #1084 | feat(automation): run aFIPC hourly NVIDIA NIM review repair | `9448d1d79abc00c80736b3bd0f69e928e331ca19` | main | BEHIND | — |
-| #1083 | feat(automation): run pg-llm-batch hourly NVIDIA NIM review repair | `ce713d98ec556abf29cde32100268642160344a2` | main | BEHIND | CHANGES_REQUESTED |
-| #1082 | feat(automation): run semantic-data-portal hourly NVIDIA NIM review repair | `ddc024ffa5b5af0f2ed8d5d5a84b615093abcbad` | main | BEHIND | CHANGES_REQUESTED |
-| #1080 | feat(automation): run newsdom-api hourly NVIDIA NIM review repair | `6f3e279cd47c5c4e694ef94ea5d86c613a7ee2d3` | main | BEHIND | CHANGES_REQUESTED |
-| #1079 | feat(automation): run Appguardrail hourly NVIDIA NIM review repair | `6dfe18379c325ce866b223b43e7a7a3729a57025` | main | BEHIND | — |
-| #1078 | feat(automation): run Scopeweave hourly NVIDIA NIM review repair | `d078d62f03dba8f4caaa6971096c053ac2b317d4` | main | BEHIND | — |
-| #1077 | feat(automation): run noema hourly NVIDIA NIM review repair | `3fe974dbedd91d118ec446aa3927386d33f2dba0` | main | BEHIND | CHANGES_REQUESTED |
-| #1076 | feat(automation): run pg-erd-cloud hourly NVIDIA NIM review repair | `3eb45141bd4792bec83d8a719c233c47aa814d9d` | main | BEHIND | CHANGES_REQUESTED |
-| #1075 | feat(automation): run codec-carver hourly NVIDIA NIM review repair | `65113968dd0c703e8e879b08bdfb533b6b6dc79f` | main | BEHIND | CHANGES_REQUESTED |
-| #1074 | feat(automation): run Keyverse hourly NVIDIA NIM review repair | `4e880101d8a78c11fcd4555bf21bd0e53bebca4f` | main | BEHIND | CHANGES_REQUESTED |
-| #1070 | feat(automation): run Wardnet hourly NVIDIA NIM review repair | `b1cbe69d60a22f33fa3aaff82c4cd7efccf888ce` | main | BLOCKED | CHANGES_REQUESTED |
-| #1068 | feat(automation): run contextual-orchestrator hourly NVIDIA NIM review repair | `e1307c37d177b1efa297bdd6871d958ba03d9731` | main | BEHIND | — |
-| #1065 | fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails | `d080c09161c92ffad7b9cf630ab774b6262eeba6` | main | BEHIND | — |
-| #1062 | fix(strix): map official modes without branch-selected dispatch | `74079e5bddd69bf7eac6d3b2492f25d598517905` | main | BEHIND | — |
-| #1061 | fix(scheduler): ignore manual Strix dispatch as merge evidence | `3865b1fccb3d5325b35f3bcf837613cb9ee6a1fd` | main | DIRTY | — |
-| #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `8edf65f1021c885c446da3aad2d892f3b248c603` | main | BEHIND | — |
-| #1058 | fix(operability): reject impossible control-plane SLI counts | `c2240af1e6e1d701c3a795ae60f0d89bc0ee738c` | main | BEHIND | — |
-| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `d51496ddb0f33de836e6b1ecb1b8339d8cca5cd5` | main | BLOCKED | — |
-| #1053 | fix(redaction): skip gh run view job/step prefixes | `cd4b30e560e651f3d2d3c4e418d8f51ee650f9a2` | main | BEHIND | — |
-| #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `030af95f78e2910191d5e7f53a771e26f87f4dee` | main | BEHIND | CHANGES_REQUESTED |
-| #1051 | fix(pip-audit): keep index-url locks hashed and reject symlink parents | `4deb1376d3bb661e9d9934511f46bbf52d9b5b1c` | main | BEHIND | CHANGES_REQUESTED |
-| #1050 | fix(security): reject dot path components before dependency-review compare | `948de32e869e1656e7ae1ba770b16c0b652f4c29` | main | BEHIND | — |
-| #1046 | fix(opencode): pass trusted visibility into the private free-model hook | `b78f361780bbddfb54d63f78ffa13a56c8f76ab0` | main | BEHIND | — |
-| #1036 | fix(ci): bind stub-scan evidence and cap hourly fleet work at 12 | `1ac4d90af45f3106afd92fc81a0ec43cb43881bd` | main | BEHIND | — |
-| #1035 | docs(automation): retarget closed-unmerged #840 and #906 lineage | `271fc60592b9eb02cf81ff5281f9c2d0b36b9067` | main | DIRTY | — |
-| #1027 | fix(automation): stop mention sweep on already-exceeded rate limits | `2cd701fdb4a59cd4ebc28107bce5c3c13e1889e9` | main | BEHIND | — |
-| #1026 | feat(actions): inventory orphaned workflow identities | `1e84d65f38b2112c56d9ce7828a041ad3c198b07` | main | BLOCKED | — |
-| #1024 | docs(ai): standardize adaptive contextual-orchestrator consumers | `4fbe9961e92748e88bf129d435ed69682fb49a34` | main | BLOCKED | — |
-| #1015 | fix(coverage): defer interpreter-specific wheel gaps | `53f05d3d6f55ab1eeba730851439fd1d31db8e41` | main | BLOCKED | — |
-| #1009 | fix(strix): bind evidence to exact workflow artifacts | `805f4d32463aeef1b7557eb416fc5eb809874368` | main | BLOCKED | CHANGES_REQUESTED |
-| #1002 | fix(review): fail closed when required check is not a verdict | `5fe83ff0d3c8d6c8d645190076aad0271f75b78d` | main | BEHIND | — |
-| #991 | fix(automation): reuse review node_id for mention eyes | `ac496b0cf993f0bd7a058cb297566c6da63d77d3` | main | BEHIND | — |
-| #949 | fix(opencode-review): discover multi-line run: blocks in safe_pytest_command | `de073535569b7e4904cac699df9f159ee8f93dd7` | main | BLOCKED | CHANGES_REQUESTED |
-| #946 | fix(review): publish substantive OpenCode LLM evidence | `efc069b56abf142312aa4f3bb7b5b98e3698b9c9` | main | BLOCKED | CHANGES_REQUESTED |
-| #941 | fix(semgrep): make the pinned image digest authoritative | `84b2b924547502db72856c657a171814e64142fb` | main | BLOCKED | — |
-| #939 | fix: keep cross-repo OpenCode evidence healthy | `663b53d025424b32625d7a935fbbbe09d33b78c5` | main | BEHIND | CHANGES_REQUESTED |
-| #935 | fix(strix): gate dependency manifest updates | `5392334fed731e3652b7bc9362fe8fa3c8332876` | main | BLOCKED | CHANGES_REQUESTED |
-| #933 | fix: retry Strix provider tool protocol failures | `c95197bab04c940a1e9ddfd621b044689df88c50` | main | BLOCKED | CHANGES_REQUESTED |
-| #932 | fix(sbom): preserve Markdown report integrity | `509690b9edac82b4ca1e2f6689526796a4f50838` | main | BLOCKED | — |
-| #931 | fix(security): contain sandbox paths and output | `c2f28e0a85f03b38739eac7cc827e280a4db1dab` | main | BLOCKED | — |
-| #930 | fix(noema): fail closed on unsafe model endpoints | `43940c128bbe00b721cf8589039df04d15769576` | main | BLOCKED | CHANGES_REQUESTED |
-| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `9315e4ae87074549f0147627fa3ff55f673091ae` | main | BLOCKED | — |
-| #921 | chore(deps): bump google/osv-scanner-action/osv-scanner-action from a82132c0bd6c7261ffcb78e754c46c70ab57ad9a to f4cfcc01edc9c8b756a9b873b7a623ca674da51e | `60c708cc084d738ced9747792b3243e926663304` | main | BLOCKED | — |
-| #920 | chore(deps): bump ossf/scorecard-action from 2.4.3 to 2.4.4 | `ed08a94ba3eaeb217b2b0e3cc4745483b18a162d` | main | BLOCKED | — |
-| #919 | chore(deps): bump step-security/harden-runner from 2.20.0 to 2.20.1 | `1c5a38eaa193dd3482b729ec7e9cd1a61bbe6e5f` | main | BLOCKED | — |
-| #918 | chore(security): align all CodeQL actions to v4.37.6 | `c143b495c94159125961a65ec484fa2c6918d360` | main | BLOCKED | — |
-| #904 | fix(opencode): include adversarial gate in fallback scope | `40565c9299d64c256caa63df1d9febff2092e516` | main | BLOCKED | CHANGES_REQUESTED |
-| #901 | security(deploy-pages): declare minimal secret contract | `b0379e5961db85b92eee2263d2f8db1b59f05c2f` | main | BLOCKED | — |
-| #899 | fix(scheduler): fail after summarized action errors | `41e2e6bd236cdba988cb2cae23b4cb5b66783951` | main | BLOCKED | CHANGES_REQUESTED |
-| #897 | fix(security): fail closed on unavailable dependency review | `d52b13075f614ee0da8f61571f2c8ed02430ff34` | main | BLOCKED | CHANGES_REQUESTED |
-| #896 | docs: establish authoritative automation control-plane specifications | `784bc9ff36b12b3d476d9caf5daaea415a58c847` | main | DIRTY | CHANGES_REQUESTED |
-| #882 | feat: eradicate production-only demo stubs across the organization | `4e9dc54762845fc7742a375bbe0e9197a4d40b14` | main | BLOCKED | CHANGES_REQUESTED |
-| #834 | fix(noema): replay OIDC envelope repair on current main | `93d3102ea1b96f2aae3ac1f0e6c5d83c664ce7c1` | main | BLOCKED | CHANGES_REQUESTED |
-| #831 | feat(opencode): add head-matched gold corpus tooling | `16f9ec8b49b7bae8c51f4fb27e373f53eb94bb05` | main | BLOCKED | CHANGES_REQUESTED |
-| #828 | fix(scheduler): require independent exact-head approval | `7e15d2ffc288ba447d95c4e43f776be03d06dd22` | main | BLOCKED | CHANGES_REQUESTED |
-| #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `5a099cd7a4ce8bb5724401da901a63236980c284` | main | BLOCKED | — |
-| #807 | fix(coverage): validate nested npm metadata through canonical pins | `362479dfa8f675dec59cf86d220736c651e3d83e` | main | BLOCKED | CHANGES_REQUESTED |
-| #797 | release: attest exact sealed SBOM evidence | `bbf5519bd676e666869d5292b744245255345e8f` | main | BLOCKED | — |
-| #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `8c0e6b3823b3e595a08512616e3bcc10dd8e328d` | main | BLOCKED | CHANGES_REQUESTED |
-| #790 | fix(coverage): retry transient trusted uv downloads | `afad81361377f1fe2e651018f1008a590f5344a5` | main | BEHIND | — |
-| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `6146bb99f7e4ffc2ce6ddc9d5d7f2b934ad26f2f` | main | BEHIND | CHANGES_REQUESTED |
-| #785 | fix(coverage): materialize requirements-directory locks | `efd2ae85538bdb389da99f0fed6d1799ead5b343` | main | BEHIND | — |
+| #1192 | fix(strix): include contextual-orchestrator import context | `e6f3b3f76e67582a7408e29aab5fcd537f1ebbc1` | fix/strix-pr-head-python-context | MERGEABLE | ready |
+| #1190 | fix(coverage): bind Rust materializer to exact base SHA | `1a330c9e6e176a1f3ab57bda67e780673cc4ec7b` | cursor/opencode-review-surfaces-1bda | MERGEABLE | draft |
+| #1189 | docs: complete coordinator client docstring | `f05c9b218d4032ed11f9f393f013f316b7967c70` | main | MERGEABLE | ready |
+| #1188 | fix: grant hourly callers reusable workflow OIDC scope | `82cd117d279a9b870f185b136984d82bb3ac5236` | main | MERGEABLE | ready |
+| #1187 | fix(coverage): scope Rust evidence to changed packages | `e960321389d1b5858464ed7781fe5954c5f99624` | main | MERGEABLE | ready |
+| #1179 | ⚡ Bolt: [성능 개선] 레이블 스캔 시 O(N) 서브스트링 검증 선행 | `8a7944ab4bfde7fdc07c79adaa494898627d7ce3` | main | MERGEABLE | ready |
+| #1178 | chore: schedule contextual-orchestrator hourly review repair | `97b084ac28b5ccf6de7f68fd2e019d8da6f80143` | main | MERGEABLE | ready |
+| #1177 | fix(strix): retry exact model-quality warnings | `843ee9aa6d54053e4d32e700e71ccc120e102cdd` | main | MERGEABLE | ready |
+| #1176 | fix(governance): require central reviews for stacked PRs | `33b85a8cf48d5b6e0880d5071b360ffa46f83457` | main | MERGEABLE | ready |
+| #1175 | 🛡️ [보안 강화] sandboxed_web_e2e.py 내 subprocess 호출 시 명시적 shell=False 추가 | `5c8589e26ef94c7f78af3d62bd6ac4630b6deb56` | main | MERGEABLE | ready |
+| #1174 | fix(router): preserve dispatch when acknowledgement fails | `11f397988f871b7566e6e1c5dcf5fd82be905dc0` | main | MERGEABLE | ready |
+| #1173 | fix(strix): include Rust workspace context for CI scans | `eceb30ab7b0002254d618c81e47d04a63b6c24fe` | main | MERGEABLE | ready |
+| #1170 | feat: route OpenCode reviews through contextual gateway | `1f2b93ead7205b33712de1865d84c004d93be7ed` | main | MERGEABLE | ready |
+| #1168 | feat: route autofix through contextual orchestrator | `4888370952b6c2d14f71a52a47027b6ad8b48fcb` | main | MERGEABLE | ready |
+| #1167 | feat: add Orgmetra hourly review repair caller | `60934436cf7bdcb46754d6d13c4f0ac41e21f5f6` | main | MERGEABLE | ready |
+| #1166 | fix(ci): recognize replacement tests in existing files | `7234b6946940a0122cf07951e2be32df07988d9d` | main | MERGEABLE | ready |
+| #1165 | fix(automation): yield completed mention repositories fairly | `e6838a033a91e7c1a2a22287d5f9922df5a30977` | main | MERGEABLE | ready |
+| #1163 | docs: establish live product and technical gap baseline | `567f5bd1616708cddac85ec8a9ad0a7ed318a1d0` | main | MERGEABLE | ready |
+| #1162 | fix: use review credentials for agent dispatch | `908e9232057bcbe5458a57e183402146eeba7ec9` | main | MERGEABLE | ready |
+| #1161 | fix: make hourly coordinator credential absence auditable | `0958a512bd1b2642dd0c9bf9096efc312f9cca31` | main | MERGEABLE | ready |
+| #1159 | fix(coverage): classify Storybook development evidence | `7fbee6f482ec745b117f0d916a8de8dbb998e9e1` | main | MERGEABLE | ready |
+| #1158 | fix(osv): preserve immutable direct-source provenance | `75d7f5ffd25649b5da84dd267f8b3458996e031f` | main | MERGEABLE | ready |
+| #1157 | fix(coverage): discover hash-pinned requirements lock files | `afe42767562feff69e488a1034c9b5631541426d` | main | MERGEABLE | ready |
+| #1155 | Fix duplicate repository dispatch scheduler runs | `4b9a933d77a1d68459bf2c51abfbdba9e2d03d8b` | main | MERGEABLE | ready |
+| #1154 | ⚡ Bolt: 민감한 데이터 스크러버(Redaction) 루프 O(N) 성능 최적화 | `7dbcc388dde66e6f8194182e73ca3be1edda164e` | main | MERGEABLE | ready |
+| #1153 | fix(strix): fail closed on incomplete provider scans | `945d5d56ff826b8642c634e6cf0d14a8ec9be38a` | main | MERGEABLE | ready |
+| #1152 | fix(opencode): retry OpenCode after coverage blockers clear | `11491068712859e936e7ce4ed7f204f5c1157f0c` | main | MERGEABLE | ready |
+| #1150 | feat: add read-only Actions queue health evidence | `af65a69eb7308604a4fded9707ff987fcb9d0e80` | main | MERGEABLE | ready |
+| #1147 | feat(integration): add ecosystem capability catalogue | `390af196aac5ffea55d2d0198dffa999bd3be182` | main | MERGEABLE | ready |
+| #1146 | fix(figma): retain style references and component sets | `f661a8e0524742048c33cb0e90b81d446dbeabd4` | main | MERGEABLE | ready |
+| #1145 | feat: enforce adaptive orchestration defaults | `2451889cc80afa9101275e1356f8757fabc69b44` | main | MERGEABLE | ready |
+| #1143 | ci: schedule naruon hourly review repair | `d26e0cf320d87f7c11292afb894b475d84080451` | main | MERGEABLE | ready |
+| #1123 | feat(edge): standardize organization runtimes on Cloudflare Pingora | `58ee96cc3886164cff89e427ce927326bf8d2b03` | main | MERGEABLE | ready |
+| #1120 | Wire Noema to a same-job contextual-orchestrator sidecar | `101e6906cc3568beb99c19c28eaffb526bac335b` | main | MERGEABLE | draft |
+| #1114 | fix(strix): retry transient visibility API failures | `b44b198f0c254d099583ff63a6f8700b284c944f` | main | MERGEABLE | ready |
+| #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `dc7e39cf7dff80c2e2ed8d348090394ddc643142` | main | MERGEABLE | draft |
+| #1108 | feat(automation): run free-router hourly NVIDIA NIM review repair | `fc889cee69c405417263bc4db156ab3b663ac43f` | main | MERGEABLE | ready |
+| #1101 | feat(automation): run EmbedRelay hourly NVIDIA NIM review repair | `33a403561cba252e8611333fe4c026ac3df5e68d` | main | MERGEABLE | ready |
+| #1100 | feat(automation): run RankWeave hourly NVIDIA NIM review repair | `1628c2e561262fb84af658c6e857868628733dc6` | main | MERGEABLE | ready |
+| #1097 | feat(automation): run html4tree hourly NVIDIA NIM review repair | `3366bb7dcc571fe36edde359430dc18ff77b7ca3` | main | MERGEABLE | ready |
+| #1095 | feat(automation): run mhtml-etl-gateway hourly NVIDIA NIM review repair | `6bb2634b69cdb8e68cdcfff3c6f1100bf4947e5b` | main | MERGEABLE | ready |
+| #1094 | feat(automation): run DiagramWeave hourly NVIDIA NIM review repair | `f1ac850f46b0abec627182ca88c3437151455ee3` | main | MERGEABLE | ready |
+| #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `949c737e29f4c4ccde64da69631b82c30923e005` | main | MERGEABLE | ready |
+| #1088 | feat(automation): run mightyETL hourly NVIDIA NIM review repair | `ac7f1ce8e0b2d356670091cb2a7b8e3cef5c06bd` | main | MERGEABLE | ready |
+| #1087 | feat(automation): run life-os hourly NVIDIA NIM review repair | `f7d386c9222ed3f073aaf232df0dde86e9d49899` | main | MERGEABLE | ready |
+| #1086 | feat(automation): repair the LineageWeave buyer-surface stack hourly | `f1b172e1a64b6cdf83a320f1e5172e54b0e0e787` | main | MERGEABLE | ready |
+| #1085 | feat(automation): run kaefa hourly NVIDIA NIM review repair | `1c5fbb66510254de7bc3adc81590382e8f261acb` | main | MERGEABLE | ready |
+| #1084 | feat(automation): run aFIPC hourly NVIDIA NIM review repair | `9e6fbdd3e86e807c7ef18f1b1016dce3325ea5cd` | main | MERGEABLE | ready |
+| #1083 | feat(automation): run pg-llm-batch hourly NVIDIA NIM review repair | `584141341346b7882fded053b459a7d4c16477a2` | main | MERGEABLE | ready |
+| #1082 | feat(automation): run semantic-data-portal hourly NVIDIA NIM review repair | `571bc1fc4dac2479075dec4c0812bd8fed68b520` | main | MERGEABLE | ready |
+| #1080 | feat(automation): run newsdom-api hourly NVIDIA NIM review repair | `631a66342eef64a7b93363db61be64a186668919` | main | MERGEABLE | ready |
+| #1079 | feat(automation): run Appguardrail hourly NVIDIA NIM review repair | `bb93fa5604f072af5941546ed2a900060e3ed047` | main | MERGEABLE | ready |
+| #1078 | feat(automation): run Scopeweave hourly NVIDIA NIM review repair | `b48509ef9dc0e0861c714998264597dc10e7c95a` | main | MERGEABLE | ready |
+| #1077 | feat(automation): run noema hourly NVIDIA NIM review repair | `e97130f4df7200a9550180407c3d2273a3872880` | main | MERGEABLE | ready |
+| #1076 | feat(automation): run pg-erd-cloud hourly NVIDIA NIM review repair | `479e52fb4db85e3223083ea8f60382b33c4c29b4` | main | MERGEABLE | ready |
+| #1075 | feat(automation): run codec-carver hourly NVIDIA NIM review repair | `471f9888616fabfa6ca3f1642d38e260786aaaf6` | main | MERGEABLE | ready |
+| #1074 | feat(automation): run Keyverse hourly NVIDIA NIM review repair | `298b6b8eef50ab4f096b9e5778403fad2f908e20` | main | MERGEABLE | ready |
+| #1070 | feat(automation): run Wardnet hourly NVIDIA NIM review repair | `5f899a472001f3cdaa22b20ada8d84d2cf314a00` | main | MERGEABLE | ready |
+| #1065 | fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails | `44e098154f37108508b573cb5f7dfeff3fd246a3` | main | MERGEABLE | ready |
+| #1057 | fix(coverage): restore trusted LLVM 19 producer pin | `cbda28b701a2b6067c6d9e14cbb049307e7f0d94` | main | MERGEABLE | ready |
+| #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `fe83dc0c2fe472d068477bb6a17c0820dee82aaa` | main | MERGEABLE | ready |
+| #1026 | feat(actions): inventory orphaned workflow identities | `ab51f489374764f25721e335321d55a7fae5a964` | main | MERGEABLE | ready |
+| #1024 | docs(ai): standardize adaptive contextual-orchestrator consumers | `a8e7e13592a4e98c4ecd70731afe878780032f07` | main | MERGEABLE | ready |
+| #1015 | fix(coverage): defer interpreter-specific wheel gaps | `1fe4e8887caab2213df91e15630fe3c48d6c0556` | main | MERGEABLE | ready |
+| #1009 | fix(strix): bind evidence to exact workflow artifacts | `99fee8b1b4ff4fc2219b98561cc4fea851c2f03a` | main | MERGEABLE | ready |
+| #1002 | fix(review): fail closed when required check is not a verdict | `23618c60d8eccb3a957fa3b9d7f61e1d4b648c28` | main | MERGEABLE | ready |
+| #991 | fix(automation): reuse review node_id for mention eyes | `8f0d57815c380c24f6c277c74e9172f2ea7d4324` | main | MERGEABLE | draft |
+| #949 | fix(opencode-review): discover multi-line run: blocks in safe_pytest_command | `811c0321f661b85c9270a85f36fc20fc0da13b42` | main | MERGEABLE | ready |
+| #946 | fix(review): publish substantive OpenCode LLM evidence | `9a756e89d123a33756edcd0289233b8bdc9fe906` | main | MERGEABLE | ready |
+| #941 | fix(semgrep): make the pinned image digest authoritative | `b88fe70691e49b4f1317890884c46852dd8eab7b` | main | MERGEABLE | ready |
+| #939 | fix: keep cross-repo OpenCode evidence healthy | `2c4c6c63c99cfe2f191acf55c3345f58ab9130ad` | main | MERGEABLE | ready |
+| #935 | fix(strix): gate dependency manifest updates | `374ffb75fa74cd95dc70d6b3c6998d548dc52e0b` | main | MERGEABLE | ready |
+| #933 | fix: retry Strix provider tool protocol failures | `d1c86904ba4f4adf99a44a3ebec9c02e123ac986` | main | MERGEABLE | ready |
+| #932 | fix(sbom): preserve Markdown report integrity | `1b2da1cef214cefb6eb58250e92c2849514ba548` | main | MERGEABLE | ready |
+| #931 | fix(security): contain sandbox paths and output | `c2f28e0a85f03b38739eac7cc827e280a4db1dab` | main | MERGEABLE | ready |
+| #930 | fix(noema): fail closed on unsafe model endpoints | `3d7ae8c37079a6692721dfd49b535f1fbf4216bd` | main | MERGEABLE | ready |
+| #928 | fix(opencode): bind coverage artifacts to workflow attempts | `33934d0ef2b98ba2e6d9abf6887e22c21680519a` | main | MERGEABLE | ready |
+| #904 | fix(opencode): include adversarial gate in fallback scope | `8398eec607b006eb576b00e9a19cca840b37c4af` | main | MERGEABLE | ready |
+| #901 | security(deploy-pages): declare minimal secret contract | `e1c99776a1c1c04b6b941799912b0e5c39dd8a0e` | main | MERGEABLE | ready |
+| #899 | fix(scheduler): fail after summarized action errors | `56ffdd1cc1bc235a39b0373a58430fb8c7b00afb` | main | MERGEABLE | ready |
+| #897 | fix(security): fail closed on unavailable dependency review | `1b29064aef7ca428303fb562d250a9698447e952` | main | MERGEABLE | ready |
+| #834 | fix(noema): replay OIDC envelope repair on current main | `7b64d26c157df3b0da13d8ed0e1cd8365ae47d1e` | main | MERGEABLE | ready |
+| #831 | feat(opencode): add head-matched gold corpus tooling | `958645f9326a8053cb03b291db5feb11cd87824b` | main | MERGEABLE | ready |
+| #828 | fix(scheduler): require independent exact-head approval | `ba270684dc1431af94dc44f48816ab1c44437369` | main | MERGEABLE | ready |
+| #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `5f250b0966d21a893ebcae223a5531562cb09062` | main | CONFLICTING | ready |
+| #807 | fix(coverage): validate nested npm metadata through canonical pins | `cf4abba7086273743ce12e8c15a78e9623509fe6` | main | CONFLICTING | ready |
+| #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `fa7c32c6fc2de53c8739a03be32cd19c62a02ac9` | main | CONFLICTING | ready |
+| #790 | fix(coverage): retry transient trusted uv downloads | `afad81361377f1fe2e651018f1008a590f5344a5` | main | CONFLICTING | draft |
+| #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `6146bb991ed041985233eefa33985b2e40a00721` | main | CONFLICTING | draft |
+| #785 | fix(coverage): materialize requirements-directory locks | `efd2ae85538bdb389da99f0fed6d1799ead5b343` | main | CONFLICTING | draft |
 
+#1191은 같은 시각에 closed/unmerged로 확인되었고, #1192의 base SHA는 닫힌 PR의 head d9479cf486f731e8efe582e7b029234e05b36cae를 사용한다. 이는 stacked descendant의 live metadata이지 parent가 main에 들어갔다는 뜻이 아니다.
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

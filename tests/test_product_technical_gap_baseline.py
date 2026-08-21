@@ -5,10 +5,11 @@ from pathlib import Path
 
 
 BASELINE = Path("docs/product-technical-gap-baseline.md")
+ADR = Path("docs/adr/0002-product-technical-gap-baseline.md")
 
 
 def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
-    """The baseline must point agents to live product and governance evidence."""
+    """The baseline must point agents to product, governance, and buyer evidence."""
     source = BASELINE.read_text(encoding="utf-8")
 
     for marker in (
@@ -22,7 +23,7 @@ def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
         "APA 7th references",
         "G-01",
         "G-14",
-        "exact-head",
+        "exact HEAD",
         "independent current-head approval",
         "COPILOT_GITHUB_TOKEN",
     ):
@@ -30,20 +31,18 @@ def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
 
 
 def test_baseline_inventory_contains_sha_bound_open_pr_rows() -> None:
-    """The captured inventory must include a SHA and disposition for each row."""
+    """The captured inventory must include SHA and merge metadata for every row."""
     source = BASELINE.read_text(encoding="utf-8")
     rows = [line for line in source.splitlines() if line.startswith("| #")]
 
-    assert len(rows) >= 90
+    assert len(rows) == 90
     for row in rows:
-        assert re.search(r"`[0-9a-f]{40}`", row), row
-        assert any(state in row for state in ("BLOCKED", "BEHIND", "DIRTY")), row
+        assert re.search(r"[0-9a-f]{40}", row), row
+        assert any(state in row for state in ("MERGEABLE", "CONFLICTING")), row
 
 
-def test_baseline_links_existing_local_evidence() -> None:
-    """Every local evidence link in the baseline resolves from the docs folder."""
-    for relative_path in (
-        "CWL-MASTER-CONTEXT.md",
-        "doctoring/organization-commercial-readiness-loop.md",
-    ):
-        assert (BASELINE.parent / relative_path).is_file(), relative_path
+def test_baseline_records_the_ui_adr_boundary() -> None:
+    """The ADR states why a central UI file is not applicable."""
+    adr = ADR.read_text(encoding="utf-8")
+    assert "Figma File ID: N/A" in adr
+    assert "Storybook" in adr
