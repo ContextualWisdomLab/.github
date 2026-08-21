@@ -38,6 +38,9 @@ def test_push_bootstrap_never_executes_pr_or_provider_mutations() -> None:
     semgrep = (
         REPO_ROOT / ".github" / "workflows" / "sast-semgrep.yml"
     ).read_text(encoding="utf-8")
+    doctoring = (
+        REPO_ROOT / "docs" / "doctoring" / "required-workflow-branch-bootstrap.md"
+    ).read_text(encoding="utf-8")
 
     assert "github.event_name == 'pull_request_target' && github.event.action != 'closed'" in close_empty
     assert security_scan.count("github.event_name == 'pull_request' && github.event.action != 'closed'") == 4
@@ -51,3 +54,5 @@ def test_push_bootstrap_never_executes_pr_or_provider_mutations() -> None:
         "        github.ref_name == 'develop'\n"
         "      )"
     ) in semgrep
+    assert "an unprotected\nstacked-branch push cannot close a PR" in doctoring
+    assert "Protected `main`, `master`, and\n`develop` pushes continue to run" in doctoring
