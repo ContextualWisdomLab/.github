@@ -273,6 +273,8 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "Git Project. (2026). *git-ls-files*" in doctoring
     assert "Git Project. (2026). *githooks*" in doctoring
     assert "OpenCode. (2026a). *Permissions*" in doctoring
+    assert "resolves the primary and small model ids" in doctoring
+    assert "exact Mistral Small 4 writer" not in doctoring
     assert "ignored-path inventory" in changelog
     assert "model-mutable Git metadata" in changelog
 

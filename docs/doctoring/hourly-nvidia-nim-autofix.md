@@ -313,8 +313,9 @@ quality, security, review, and protection gate again.
 Automated tests prove:
 
 1. the caller retains its approved one-hour cadence;
-2. OpenCode enables only NVIDIA NIM, uses the exact Mistral Small 4 writer with
-   high reasoning, and receives the model key only in its two execution steps;
+2. OpenCode enables only NVIDIA NIM, resolves the primary and small model ids
+   from the live ordered candidate pools, requests high reasoning, and receives
+   those ids only in its two execution steps;
 3. missing model credentials fail closed and model children receive no GitHub or
    OIDC write credential;
 4. mutation-capable ordinary and conflict paths accept only established explicit
