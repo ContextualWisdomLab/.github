@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Reconcile OSV registry findings with exact immutable direct-source evidence."""
 
 from __future__ import annotations
@@ -6,17 +5,17 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import sys
 import tempfile
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
-
 
 SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 DIRECT_HEADER_RE = re.compile(
@@ -139,16 +138,16 @@ def iter_packages(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
     results = payload.get("results")
     if not isinstance(results, list):
-        raise ValueError("OSV results must contain a results array")
+        raise TypeError("OSV results must contain a results array")
     for result in results:
         if not isinstance(result, dict):
-            raise ValueError("OSV result entries must be objects")
+            raise TypeError("OSV result entries must be objects")
         packages = result.get("packages") or []
         if not isinstance(packages, list):
-            raise ValueError("OSV result packages must be an array")
+            raise TypeError("OSV result packages must be an array")
         for package in packages:
             if not isinstance(package, dict):
-                raise ValueError("OSV package entries must be objects")
+                raise TypeError("OSV package entries must be objects")
             yield package
 
 
@@ -239,7 +238,7 @@ def reconcile_payload(
         package_info = package.get("package")
         vulnerabilities = package.get("vulnerabilities") or []
         if not isinstance(package_info, dict) or not isinstance(vulnerabilities, list):
-            raise ValueError("OSV package evidence is malformed")
+            raise TypeError("OSV package evidence is malformed")
         package_name = str(package_info.get("name") or "")
         package_version = str(package_info.get("version") or "")
         candidates = [
@@ -269,7 +268,7 @@ def reconcile_payload(
             retained = []
             for vulnerability in vulnerabilities:
                 if not isinstance(vulnerability, dict):
-                    raise ValueError("OSV vulnerability entries must be objects")
+                    raise TypeError("OSV vulnerability entries must be objects")
                 retained.append(vulnerability)
                 audit.append(
                     audit_entry(
@@ -291,7 +290,7 @@ def reconcile_payload(
         retained: list[dict[str, Any]] = []
         for vulnerability in vulnerabilities:
             if not isinstance(vulnerability, dict):
-                raise ValueError("OSV vulnerability entries must be objects")
+                raise TypeError("OSV vulnerability entries must be objects")
             affected_range = authoritative_affected_range(
                 vulnerability, package_name
             )
@@ -397,7 +396,7 @@ def load_json_object(path: Path) -> dict[str, Any]:
 
     value = json.loads(read_utf8_text(path, "required JSON input"))
     if not isinstance(value, dict):
-        raise ValueError(f"required JSON input is not an object: {path}")
+        raise TypeError(f"required JSON input is not an object: {path}")
     return value
 
 

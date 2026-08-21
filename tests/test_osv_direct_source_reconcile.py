@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import copy
+import importlib.util
 import io
 import json
-from pathlib import Path
 import runpy
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "osv_direct_source_reconcile.py"
@@ -251,7 +250,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertIn("multiple direct-source", audit[0]["reason"])
 
         payload["results"][0]["packages"][0]["vulnerabilities"] = ["bad"]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             OSV.reconcile_payload(payload, lock_text, label="bad")
 
     def test_exact_exception_version_inside_range_remains_affected(self) -> None:
@@ -319,7 +318,7 @@ class DirectSourceReconcileTests(unittest.TestCase):
             {"results": [{"packages": ["bad"]}]},
         )
         for payload in malformed:
-            with self.subTest(payload=payload), self.assertRaises(ValueError):
+            with self.subTest(payload=payload), self.assertRaises(TypeError):
                 list(OSV.iter_packages(payload))
         self.assertEqual(list(OSV.iter_packages({"results": [{"packages": []}]})), [])
 
@@ -386,11 +385,11 @@ class DirectSourceReconcileTests(unittest.TestCase):
             {"results": [{"packages": [{"package": {}, "vulnerabilities": "bad"}]}]},
         )
         for payload in bad_packages:
-            with self.subTest(payload=payload), self.assertRaises(ValueError):
+            with self.subTest(payload=payload), self.assertRaises(TypeError):
                 OSV.reconcile_payload(payload, direct_lock("0.20.3"), label="bad")
         bad_vulnerability = results("0.20.3", [])
         bad_vulnerability["results"][0]["packages"][0]["vulnerabilities"] = ["bad"]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             OSV.reconcile_payload(bad_vulnerability, direct_lock("0.20.3"), label="bad")
         untouched, audit = OSV.reconcile_payload(
             results("0.20.3", [vulnerability("GHSA-registry", "< 0.20.2")]),
@@ -421,12 +420,13 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 OSV.read_utf8_text(directory, "required JSON input")
             array_path = root / "array.json"
             array_path.write_text("[]", encoding="utf-8")
-            with self.assertRaises(ValueError):
+            with self.assertRaises(TypeError):
                 OSV.load_json_object(array_path)
             destination = root / "atomic.json"
-            with mock.patch.object(OSV.os, "replace", side_effect=OSError("replace failed")):
-                with self.assertRaises(OSError):
-                    OSV.atomic_json_write(destination, {})
+            with mock.patch.object(
+                OSV.os, "replace", side_effect=OSError("replace failed")
+            ), self.assertRaises(OSError):
+                OSV.atomic_json_write(destination, {})
 
             results_path = root / "results.json"
             lock_path = root / "pnpm-lock.yaml"
