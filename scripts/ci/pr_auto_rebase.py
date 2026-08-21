@@ -10,10 +10,11 @@ For each OPEN PR that is behind (or dirty against) its base branch and whose
 head branch lives in the SAME repository (so the scheduler credential can push
 it), the scheduler shallow-fetches the head and base refs, runs
 ``git rebase origin/<base>`` and, when the rebase applies with no conflicts,
-force-pushes the rewritten branch with ``--force-with-lease``. When the rebase
-conflicts it aborts, adds a ``needs-manual-rebase`` label (creating it if
-missing), and posts a single hand-off comment -- it never force-pushes a
-conflicted branch.
+publishes the rewritten branch with ``--force-with-lease`` or, when an
+all-branch rule requires a pull request, through a fork-backed stacked pull
+request. When the rebase conflicts it aborts, adds a ``needs-manual-rebase``
+label (creating it if missing), and posts a single hand-off comment -- it never
+publishes a conflicted branch.
 
 CI-cost tradeoff and guards
 ---------------------------
@@ -56,7 +57,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-try:
+try:  # pragma: no cover - direct script invocation resolves sibling modules
+    from pr_head_publisher import publish_head
     from pr_review_merge_scheduler import (
         gh_graphql,
         parse_github_datetime,
@@ -68,6 +70,7 @@ try:
         validate_git_sha,
     )
 except ModuleNotFoundError:  # pragma: no cover - exercised only via package import
+    from scripts.ci.pr_head_publisher import publish_head
     from scripts.ci.pr_review_merge_scheduler import (
         gh_graphql,
         parse_github_datetime,
@@ -353,29 +356,6 @@ def try_rebase(workdir: str, base_ref: str) -> bool:
     return True
 
 
-def push_force_with_lease(
-    workdir: str,
-    repo: str,
-    head_ref: str,
-    expected_head_sha: str,
-    *,
-    token: str,
-) -> None:
-    """Force-push the rebased branch, leased against the previously observed head."""
-    url = authenticated_remote_url(repo, token)
-    env = {"GIT_TERMINAL_PROMPT": "0"}
-    git(
-        workdir,
-        [
-            "push",
-            f"--force-with-lease=refs/heads/{head_ref}:{expected_head_sha}",
-            url,
-            f"HEAD:refs/heads/{head_ref}",
-        ],
-        env=env,
-    )
-
-
 def ensure_manual_rebase_label(repo: str, *, dry_run: bool) -> None:
     """Create the manual-rebase label if it does not already exist."""
     if dry_run:
@@ -476,7 +456,7 @@ def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_r
             f"- `gh pr checkout {number}`",
             f"- `git fetch origin {base_ref}`",
             f"- `git rebase origin/{base_ref}`  (resolve conflicts, then `git rebase --continue`)",
-            "- `git push --force-with-lease`",
+            "- Publish the resolved head through the repository's protected pull-request path.",
         ]
     )
     run(
@@ -505,7 +485,7 @@ def label_conflicted_pr(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run
 
 
 def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
-    """Rebase one candidate PR, force-pushing on success or labeling on conflict."""
+    """Rebase one PR, publishing clean output or labeling a conflict."""
     number = int(pr["number"])
     head_ref = validate_git_ref(pr["headRefName"])
     base_ref = validate_git_ref(pr["baseRefName"])
@@ -529,7 +509,27 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
                 f"rebase onto {base_ref} conflicts; aborted and left branch unchanged",
                 stale_label_notes + notes,
             )
-        push_force_with_lease(workdir, repo, head_ref, expected_head_sha, token=token)
+        publication = publish_head(
+            workdir,
+            repo,
+            number,
+            head_ref,
+            expected_head_sha,
+            token=token,
+            kind="rebase",
+            force_with_lease=True,
+        )
+    if publication.mode == "stacked":
+        return Decision(
+            number,
+            "stacked",
+            f"clean rebase onto {base_ref}; protected publication requires stacked PR #{publication.pull_number}",
+            stale_label_notes
+            + (
+                f"previous head {expected_head_sha[:12]}",
+                f"stack {publication.url}",
+            ),
+        )
     return Decision(
         number,
         "rebased",
@@ -758,5 +758,5 @@ def main(argv: list[str]) -> int:
     return process_queue(args)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by runpy entrypoint test
     raise SystemExit(main(sys.argv[1:]))

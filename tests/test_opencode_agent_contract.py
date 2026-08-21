@@ -1119,13 +1119,12 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
         r'grep -qi "conflict marker"[\s\S]{0,200}refusing to push[\s\S]{0,200}exit 1',
         worker,
     )
-    assert 'expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"' in worker
-    assert (
-        'git -c core.hooksPath=/dev/null push "$expected_origin" '
-        '"HEAD:${PR_HEAD_REF}"'
-        in worker
-    )
-    assert 'git push origin "HEAD:${PR_HEAD_REF}"' not in worker
+    assert "trusted-autofix-source/scripts/ci/pr_head_publisher.py" in worker
+    assert "--kind conflict" in worker
+    publisher = Path("scripts/ci/pr_head_publisher.py").read_text(encoding="utf-8")
+    assert 'f"{server_url}/{repository}.git"' in publisher
+    assert '"-c", "core.hooksPath=/dev/null", "push"' in publisher
+    assert '"push", "origin"' not in publisher
 
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(

@@ -191,6 +191,7 @@ def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -
 def test_model_cannot_edit_git_control_files_or_execute_repository_hooks() -> None:
     """Deny Git metadata edits and disable hooks in every privileged Git write."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    publisher = Path("scripts/ci/pr_head_publisher.py").read_text(encoding="utf-8")
     edit_rules = re.compile(
         r'"edit":\s*\{\s*"\*":\s*"allow",\s*'
         r'"\.git":\s*"deny",\s*"\.git/\*":\s*"deny"\s*\}',
@@ -200,18 +201,19 @@ def test_model_cannot_edit_git_control_files_or_execute_repository_hooks() -> No
     assert len(edit_rules.findall(workflow)) == 2
     assert '"edit": "allow"' not in workflow
     assert workflow.count("git -c core.hooksPath=/dev/null commit") == 2
-    assert workflow.count("git -c core.hooksPath=/dev/null push") == 2
+    assert workflow.count("trusted-autofix-source/scripts/ci/pr_head_publisher.py") == 2
+    assert '"-c", "core.hooksPath=/dev/null", "push"' in publisher
 
 
 def test_privileged_pushes_ignore_mutable_origin_configuration() -> None:
     """Push only to the revalidated target URL rather than model-mutable origin."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    expected_origin = 'expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"'
-    explicit_push = 'git -c core.hooksPath=/dev/null push "$expected_origin"'
+    publisher = Path("scripts/ci/pr_head_publisher.py").read_text(encoding="utf-8")
 
-    assert workflow.count(expected_origin) == 2
-    assert workflow.count(explicit_push) == 2
-    assert 'push origin "HEAD:${PR_HEAD_REF}"' not in workflow
+    assert workflow.count("trusted-autofix-source/scripts/ci/pr_head_publisher.py") == 2
+    assert 'f"{server_url}/{repository}.git"' in publisher
+    assert "remote.origin.url" not in publisher
+    assert '"push", "origin"' not in publisher
 
 
 def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:

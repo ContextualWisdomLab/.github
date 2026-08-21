@@ -2,6 +2,7 @@ import json
 import runpy
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,6 +43,15 @@ def skip_reason(pr, *, base_branch="main", human_window_minutes=30):
     return rebase.candidate_skip_reason(
         "owner/repo", pr, base_branch=base_branch, now=NOW, human_window_minutes=human_window_minutes
     )
+
+
+def test_fetch_open_prs_zero_limit_avoids_graphql(monkeypatch):
+    """A zero internal bound returns immediately without a transport call."""
+
+    monkeypatch.setattr(
+        rebase, "gh_graphql", lambda *a, **k: pytest.fail("must not query")
+    )
+    assert rebase.fetch_open_prs("owner/repo", 0) == []
 
 
 # --- candidate selection -------------------------------------------------
@@ -152,22 +162,27 @@ def test_commit_author_bot_detection():
 
 
 def test_perform_rebase_clean_force_pushes(monkeypatch):
-    """A conflict-free rebase force-pushes the branch with a lease."""
+    """A conflict-free rebase uses the shared leased publication boundary."""
     calls = []
     monkeypatch.setattr(rebase, "scheduler_token", lambda: "tok")
     monkeypatch.setattr(rebase, "fetch_pr_refs", lambda *a, **k: calls.append(("fetch", a[2], a[3])))
     monkeypatch.setattr(rebase, "try_rebase", lambda workdir, base_ref: True)
     monkeypatch.setattr(
         rebase,
-        "push_force_with_lease",
-        lambda workdir, repo, head_ref, expected, token: calls.append(("push", head_ref, expected)),
+        "publish_head",
+        lambda workdir, repo, number, head_ref, expected, **kwargs: calls.append(
+            ("publish", number, head_ref, expected, kwargs)
+        )
+        or SimpleNamespace(mode="direct", pull_number=None, url=None),
     )
     monkeypatch.setattr(rebase, "label_conflicted_pr", lambda *a, **k: pytest.fail("should not label a clean rebase"))
 
     decision = rebase.perform_rebase("owner/repo", make_pr(), dry_run=False)
 
     assert decision.action == "rebased"
-    assert ("push", "feature", "a" * 40) in calls
+    publication = next(call for call in calls if call[0] == "publish")
+    assert publication[1:4] == (1, "feature", "a" * 40)
+    assert publication[4] == {"token": "tok", "kind": "rebase", "force_with_lease": True}
     assert calls[0] == ("fetch", "feature", "main")
 
 
@@ -177,9 +192,7 @@ def test_perform_rebase_conflict_labels_without_push(monkeypatch):
     monkeypatch.setattr(rebase, "scheduler_token", lambda: "tok")
     monkeypatch.setattr(rebase, "fetch_pr_refs", lambda *a, **k: None)
     monkeypatch.setattr(rebase, "try_rebase", lambda workdir, base_ref: False)
-    monkeypatch.setattr(
-        rebase, "push_force_with_lease", lambda *a, **k: pytest.fail("must not push a conflicted branch")
-    )
+    monkeypatch.setattr(rebase, "publish_head", lambda *a, **k: pytest.fail("must not publish a conflicted branch"))
     monkeypatch.setattr(
         rebase,
         "label_conflicted_pr",
@@ -200,7 +213,11 @@ def test_perform_rebase_removes_stale_label_then_rebases(monkeypatch):
     monkeypatch.setattr(rebase, "scheduler_token", lambda: "tok")
     monkeypatch.setattr(rebase, "fetch_pr_refs", lambda *a, **k: None)
     monkeypatch.setattr(rebase, "try_rebase", lambda workdir, base_ref: True)
-    monkeypatch.setattr(rebase, "push_force_with_lease", lambda *a, **k: None)
+    monkeypatch.setattr(
+        rebase,
+        "publish_head",
+        lambda *a, **k: SimpleNamespace(mode="direct", pull_number=None, url=None),
+    )
     monkeypatch.setattr(
         rebase,
         "remove_manual_rebase_label",
@@ -503,15 +520,27 @@ def test_try_rebase_success_and_conflict(monkeypatch):
     assert rebase.try_rebase("/w", "main") is False
 
 
-def test_push_force_with_lease_argv(monkeypatch):
-    """Force-push leases against the previously observed head SHA."""
-    captured = {}
-    monkeypatch.setattr(rebase, "git", lambda workdir, args, env=None: captured.setdefault("args", args))
-    rebase.push_force_with_lease("/w", "owner/repo", "feature", "a" * 40, token="tok")
-    args = captured["args"]
-    assert args[0] == "push"
-    assert args[1] == f"--force-with-lease=refs/heads/feature:{'a' * 40}"
-    assert args[-1] == "HEAD:refs/heads/feature"
+def test_perform_rebase_reports_protected_stacked_publication(monkeypatch):
+    """A PR-only rule returns an explicit stack rather than a false rebase success."""
+
+    monkeypatch.setattr(rebase, "scheduler_token", lambda: "tok")
+    monkeypatch.setattr(rebase, "fetch_pr_refs", lambda *a, **k: None)
+    monkeypatch.setattr(rebase, "try_rebase", lambda workdir, base_ref: True)
+    monkeypatch.setattr(
+        rebase,
+        "publish_head",
+        lambda *a, **k: SimpleNamespace(
+            mode="stacked",
+            pull_number=44,
+            url="https://github.com/owner/repo/pull/44",
+        ),
+    )
+
+    decision = rebase.perform_rebase("owner/repo", make_pr(), dry_run=False)
+
+    assert decision.action == "stacked"
+    assert "stacked PR #44" in decision.reason
+    assert "stack https://github.com/owner/repo/pull/44" in decision.notes
 
 
 def test_label_helpers_dry_run_short_circuit(monkeypatch):

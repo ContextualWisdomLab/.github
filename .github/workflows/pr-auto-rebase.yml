@@ -165,8 +165,9 @@ jobs:
         env:
           # Prefer a dedicated PR-write token, then the OpenCode app token, then
           # the workflow-exchanged app token. The chosen credential is used both
-          # for the GitHub API and for the git force-push (via x-access-token),
-          # so it must be able to write PR head branches in TARGET_REPOSITORY.
+          # for the GitHub API and for protected head publication, so a user
+          # credential must also be able to own a fork when an all-branch rule
+          # requires the repair to arrive through a stacked pull request.
           # Do not fall back to github.token: this workflow keeps GITHUB_TOKEN
           # read-only for Scorecard Token-Permissions, and pr_auto_rebase.py
           # reports a clear GH_TOKEN-required error when no write credential is

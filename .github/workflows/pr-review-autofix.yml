@@ -534,10 +534,15 @@ jobs:
             echo "::error::PR head moved during autofix; refusing to push."
             exit 1
           fi
-          expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
           git add -A
           git -c core.hooksPath=/dev/null commit -m "fix(pr-${PR_NUMBER}): address review feedback"
-          git -c core.hooksPath=/dev/null push "$expected_origin" "HEAD:${PR_HEAD_REF}"
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_head_publisher.py" \
+            --workdir "$TARGET_WORKSPACE" \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-ref "$PR_HEAD_REF" \
+            --expected-head-sha "$PR_HEAD_SHA" \
+            --kind review
 
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
@@ -664,7 +669,12 @@ jobs:
             echo "::error::PR head moved during conflict resolution; refusing to push."
             exit 1
           fi
-          expected_origin="${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
           git -c core.hooksPath=/dev/null commit --no-edit -m "merge(pr-${PR_NUMBER}): resolve conflicts with ${PR_BASE_REF}"
-          git -c core.hooksPath=/dev/null push "$expected_origin" "HEAD:${PR_HEAD_REF}"
-          echo "Pushed conflict resolution; the new head will be re-reviewed and re-checked before merge."
+          python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_head_publisher.py" \
+            --workdir "$TARGET_WORKSPACE" \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-ref "$PR_HEAD_REF" \
+            --expected-head-sha "$PR_HEAD_SHA" \
+            --kind conflict
+          echo "Published conflict resolution; its resulting head will be re-reviewed and re-checked before merge."

@@ -4,6 +4,34 @@
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
+Organization ruleset `18156473` now requires pull requests and blocks
+non-fast-forward updates on every branch in the repositories it covers. The
+repair worker therefore keeps its existing exact-head normal push as the first
+publication attempt, but treats the specific GitHub `GH013` rejection containing
+`Changes must be made through a pull request` as a change in publication mode,
+not as permission to bypass the rule. It publishes the already validated commit
+to a user-owned fork and opens an upstream stacked pull request whose base is the
+original pull-request head branch. Any other push failure remains fatal.
+
+The protected publication boundary is shared by ordinary review repair,
+conflict repair, and clean auto-rebase. It re-reads the original open pull
+request at the expected head before the direct attempt, after a rejected direct
+attempt, and after creating the stacked pull request. Fork branches and stack
+identities are deterministic and idempotent for one original PR head. Existing
+fork repositories must be real forks of the target repository; an installation
+token without a user-owned fork identity fails closed. Fork pull requests set
+`maintainer_can_modify=false`, because GitHub warns that maintainer edits to a
+fork branch containing Actions workflows can expose secrets. The stack still
+requires ordinary checks, current-head reviews, independent approvals, resolved
+threads, and a normal protected merge before it can update the original branch.
+
+This decision was triggered by the observed `GH013` rejection on
+`ContextualWisdomLab/contextual-orchestrator#765`; the compliant manual recovery
+was `ContextualWisdomLab/contextual-orchestrator#810`. It replaces neither the
+original PR nor its evidence. It only makes the repository rule itself the
+publication mechanism, as GitHub documents for rulesets that require every
+change to be associated with a pull request (GitHub, Inc., 2026a).
+
 The write-capable scheduled pull-request autofix agent uses OpenCode with the
 NVIDIA NIM API and the organization Actions secret `NVIDIA_NIM_API_KEY`. The
 independent read-only review agent remains unchanged and continues to use its
@@ -219,6 +247,14 @@ directly to `git push` instead of trusting model-mutable Git metadata such as
 `remote.origin.url` or a push URL. The branch ref and exact head are validated
 again immediately before publication.
 
+When that explicit push receives the exact PR-required `GH013` response, the
+same trusted helper uses GitHub CLI's documented user-fork and explicit
+`owner:branch` pull-request semantics (GitHub CLI, 2026a, 2026b). The Git token
+is supplied to Git through an environment-only HTTP authorization header rather
+than a remote URL or command argument. The fork branch is never force-pushed;
+closed or divergent prior publication branches receive a new exact-output
+suffix. A live matching stacked pull request is reused rather than duplicated.
+
 The repair worker cannot approve its own changes, lower branch protection,
 reinterpret queued or failed checks, manufacture independent review, merge a PR,
 or publish a release. Those decisions remain with separate protected workflows
@@ -300,6 +336,9 @@ Automated tests prove:
     public docstrings; and
 14. exact-current-head security, automated review, independent approval,
     unresolved-thread, and branch-protection gates pass before merge.
+15. only the exact PR-required `GH013` response can activate fork-backed
+    publication; unrelated failures, head drift, repository-name collisions,
+    unavailable user identity, and malformed GitHub responses fail closed.
 
 ## Scheduling and activation
 
@@ -325,6 +364,20 @@ available. Rollback is not permission to bypass independent approval or release
 gates.
 
 ## References
+
+GitHub CLI. (2026a). *gh pr create*. Retrieved August 21, 2026, from
+https://cli.github.com/manual/gh_pr_create
+
+GitHub CLI. (2026b). *gh repo fork*. Retrieved August 21, 2026, from
+https://cli.github.com/manual/gh_repo_fork
+
+GitHub, Inc. (2026a). *Available rules for rulesets*. Retrieved August 21,
+2026, from
+https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
+
+GitHub, Inc. (2026b). *Creating a pull request from a fork*. Retrieved August
+21, 2026, from
+https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request-from-a-fork
 
 Git Project. (2026). *git-ls-files*. Retrieved August 7, 2026, from
 https://git-scm.com/docs/git-ls-files

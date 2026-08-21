@@ -74,6 +74,21 @@ def test_mutation_steps_fail_closed_before_any_git_write() -> None:
         assert step.index(guard) < step.index("git ")
 
 
+def test_mutation_steps_publish_through_one_protected_head_boundary() -> None:
+    """Route ordinary and conflict commits through the same exact-head publisher."""
+    workflow = _workflow_text()
+    publisher = "trusted-autofix-source/scripts/ci/pr_head_publisher.py"
+
+    ordinary = _step(workflow, "Commit and push autofix")
+    conflict = _step(workflow, "Merge base branch and resolve conflicts with OpenCode")
+    assert publisher in ordinary
+    assert publisher in conflict
+    assert "--kind review" in ordinary
+    assert "--kind conflict" in conflict
+    assert 'push "$expected_origin"' not in ordinary
+    assert 'push "$expected_origin"' not in conflict
+
+
 def test_read_only_fetch_may_use_workflow_token_without_expanding_write_scope() -> None:
     """Keep workflow-token fallback confined to demonstrably read-only steps."""
     workflow = _workflow_text()
