@@ -908,8 +908,10 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
@@ -983,8 +985,10 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
 
