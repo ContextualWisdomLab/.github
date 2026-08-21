@@ -243,7 +243,7 @@ def _ensure_fork(repo: str, actor: str) -> str:
 def _fork_ref_sha(fork_repo: str, branch: str) -> str | None:
     """Return a fork branch SHA, using None only when the ref is absent."""
 
-    endpoint = f"repos/{fork_repo}/git/ref/heads/{quote(branch, safe='')}"
+    endpoint = f"repos/{fork_repo}/git/ref/heads/{quote(branch, safe='/')}"
     try:
         payload = _json(["gh", "api", endpoint])
     except RuntimeError as exc:

@@ -400,6 +400,24 @@ def test_fork_ref_rejects_non404_and_malformed_responses(monkeypatch):
         publisher._fork_ref_sha("actor/repo", "branch")
 
 
+def test_fork_ref_keeps_branch_slashes_as_path_segments(monkeypatch):
+    """GitHub ref lookups preserve slash-separated branch path segments."""
+    calls = []
+
+    def fake_json(args, **kwargs):
+        calls.append(args)
+        return {"object": {"sha": LOCAL_HEAD}}
+
+    monkeypatch.setattr(publisher, "_json", fake_json)
+
+    assert publisher._fork_ref_sha("actor/repo", "cwl-autofix/pr-7-head") == LOCAL_HEAD
+    assert calls == [[
+        "gh",
+        "api",
+        "repos/actor/repo/git/ref/heads/cwl-autofix/pr-7-head",
+    ]]
+
+
 def _stack_result(payload):
     """Validate one test stack through the production identity contract."""
 
