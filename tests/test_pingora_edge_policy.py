@@ -101,6 +101,9 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert policy._needs_content_scan(changed("infra/nginx/default.yaml", "modified", "+server: edge"))
     assert policy._needs_content_scan(changed("infra/deployment.yaml", "modified", "+image: app"))
     assert policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream nginx"))
+    assert policy._needs_content_scan(
+        changed("config/runtime.conf", "modified", "", patch_available=False)
+    )
     assert not policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream app"))
     assert policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec nginx"))
     assert not policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec pingora"))
@@ -261,6 +264,18 @@ def test_file_content_loader_quotes_paths() -> None:
     assert "dir/a%20b.conf" in seen[0]
 
 
+def test_file_content_loader_accepts_wrapped_base64_content() -> None:
+    """GitHub's line-wrapped Contents API base64 remains valid evidence."""
+
+    payload = encoded_file("FROM scratch\n")
+    encoded = str(payload["content"])
+    payload["content"] = "\n".join(encoded[index : index + 4] for index in range(0, len(encoded), 4))
+
+    assert policy._load_file_content(
+        "api", "a/b", "Dockerfile", "a" * 40, "x", lambda _url, _token: payload
+    ) == "FROM scratch\n"
+
+
 class FakeResponse:
     """Context-managed bounded response for direct opener tests."""
 
@@ -280,7 +295,7 @@ class FakeResponse:
 def test_github_open_json_accepts_valid_bounded_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """The default opener parses bounded GitHub JSON."""
 
-    monkeypatch.setattr(policy, "urlopen", lambda _request, timeout: FakeResponse(b'{"ok": true}'))
+    monkeypatch.setattr(policy.github_opener, "open", lambda _request, timeout: FakeResponse(b'{"ok": true}'))
     assert policy._github_open_json("https://api.github.com/repos/a/b", "token") == {"ok": True}
 
 
@@ -292,7 +307,7 @@ def test_github_open_json_sanitizes_transport_failures(monkeypatch: pytest.Monke
         assert timeout == 30
         raise exc
 
-    monkeypatch.setattr(policy, "urlopen", fail)
+    monkeypatch.setattr(policy.github_opener, "open", fail)
     with pytest.raises(policy.PolicyError, match=type(exc).__name__):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
 
@@ -300,10 +315,10 @@ def test_github_open_json_sanitizes_transport_failures(monkeypatch: pytest.Monke
 def test_github_open_json_rejects_oversized_and_malformed_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     """REST evidence must remain one bounded valid JSON document."""
 
-    monkeypatch.setattr(policy, "urlopen", lambda _request, timeout: FakeResponse(b"x" * (policy.MAX_FILE_BYTES + 1)))
-    with pytest.raises(policy.PolicyError, match="one-megabyte"):
+    monkeypatch.setattr(policy.github_opener, "open", lambda _request, timeout: FakeResponse(b"x" * (policy.MAX_RESPONSE_BYTES + 1)))
+    with pytest.raises(policy.PolicyError, match="bounded response size"):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
-    monkeypatch.setattr(policy, "urlopen", lambda _request, timeout: FakeResponse(b"not-json"))
+    monkeypatch.setattr(policy.github_opener, "open", lambda _request, timeout: FakeResponse(b"not-json"))
     with pytest.raises(policy.PolicyError, match="malformed JSON"):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
 
@@ -324,6 +339,12 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 
     with pytest.raises(policy.PolicyError, match="approved origin"):
         policy._github_open_json(url, "token")
+
+
+def test_github_opener_never_constructs_redirect_requests() -> None:
+    """The policy opener refuses redirects rather than changing API origins."""
+
+    assert policy.NoRedirectHandler().redirect_request(None, None, 302, "Found", {}, "https://evil.example") is None
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

@@ -20,9 +20,10 @@ from pathlib import PurePosixPath
 from typing import Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
+MAX_RESPONSE_BYTES = 16_777_216
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
@@ -86,6 +87,7 @@ class ChangedFile:
     path: str
     status: str
     patch: str
+    patch_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,17 @@ class PolicyError(RuntimeError):
 
 
 OpenJson = Callable[[str, str], object]
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects so validated GitHub API requests keep one origin."""
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        """Return no follow-up request for any HTTP redirect response."""
+        return None
+
+
+github_opener = build_opener(NoRedirectHandler())
 
 
 def _is_documentation_or_source_fixture(path: str) -> bool:
@@ -174,7 +187,7 @@ def _github_open_json(url: str, token: str) -> object:
     """Read one bounded GitHub REST JSON document using bearer authentication."""
 
     _validate_github_api_url(url)
-    request = Request(
+    request = Request(  # noqa: S310 - URL is validated immediately above
         url,
         headers={
             "Accept": "application/vnd.github+json",
@@ -184,14 +197,12 @@ def _github_open_json(url: str, token: str) -> object:
         },
     )
     try:
-        with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310 - URL is validated immediately above
-            request, timeout=30
-        ) as response:
-            payload = response.read(MAX_FILE_BYTES + 1)
+        with github_opener.open(request, timeout=30) as response:
+            payload = response.read(MAX_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
         raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
-    if len(payload) > MAX_FILE_BYTES:
-        raise PolicyError("GitHub API policy response exceeded the one-megabyte bound")
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise PolicyError("GitHub API policy response exceeded the bounded response size")
     try:
         return json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -212,10 +223,23 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file entry is not an object")
             path = item.get("filename")
             status = item.get("status")
-            patch = item.get("patch", "")
-            if not isinstance(path, str) or not path or not isinstance(status, str) or not isinstance(patch, str):
+            raw_patch = item.get("patch")
+            patch = "" if raw_patch is None else raw_patch
+            if (
+                not isinstance(path, str)
+                or not path
+                or not isinstance(status, str)
+                or not isinstance(patch, str)
+            ):
                 raise PolicyError("GitHub changed-file entry has invalid bounded fields")
-            files.append(ChangedFile(path=path, status=status, patch=patch))
+            files.append(
+                ChangedFile(
+                    path=path,
+                    status=status,
+                    patch=patch,
+                    patch_available=raw_patch is not None,
+                )
+            )
         if len(payload) < 100:
             return tuple(files)
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
@@ -236,7 +260,7 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
     if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0 or declared_size > MAX_FILE_BYTES:
         raise PolicyError(f"GitHub content evidence for {path} exceeds or violates the size contract")
     try:
-        raw = base64.b64decode(encoded, validate=True)
+        raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
         raise PolicyError(f"GitHub content evidence for {path} is invalid base64") from exc
     if len(raw) != declared_size:
@@ -252,6 +276,8 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
+    if not changed.patch_available:
+        return True
     if _runtime_path_rule(changed.path) is not None:
         return True
     lower_path = changed.path.lower()

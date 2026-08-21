@@ -13,8 +13,10 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull-requests: read" in text
     assert "JOB_CONTEXT_JSON: ${{ toJSON(job) }}" in text
-    assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in text
-    assert 'job_context.get("workflow_sha") or github_context.get("workflow_sha")' in text
+    assert "WORKFLOW_SHA: ${{ github.workflow_sha }}" in text
+    assert "WORKFLOW_REF: ${{ github.workflow_ref }}" in text
+    assert "GITHUB_CONTEXT_JSON" not in text
+    assert 'job_context.get("workflow_sha") or os.environ.get("WORKFLOW_SHA")' in text
     assert "job.workflow_repository" not in text
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.sha }}" in text
     assert "repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}" in text

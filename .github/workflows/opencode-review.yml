@@ -36,7 +36,8 @@ jobs:
         id: trusted_source
         env:
           JOB_CONTEXT_JSON: ${{ toJSON(job) }}
-          GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
           python3 <<'PY' >>"$GITHUB_OUTPUT"
@@ -47,7 +48,6 @@ jobs:
 
           try:
               job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
-              github_context = json.loads(os.environ.get("GITHUB_CONTEXT_JSON") or "{}")
           except json.JSONDecodeError as exc:
               print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
               raise SystemExit(1)
@@ -58,10 +58,10 @@ jobs:
               job_context.get("workflow_repository") or expected_repository
           ).strip()
           workflow_sha = str(
-              job_context.get("workflow_sha") or github_context.get("workflow_sha") or ""
+              job_context.get("workflow_sha") or os.environ.get("WORKFLOW_SHA") or ""
           ).strip()
           workflow_ref = str(
-              job_context.get("workflow_ref") or github_context.get("workflow_ref") or ""
+              job_context.get("workflow_ref") or os.environ.get("WORKFLOW_REF") or ""
           ).strip()
           workflow_file_path = str(job_context.get("workflow_file_path") or "").strip()
 
