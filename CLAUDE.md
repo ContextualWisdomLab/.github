@@ -26,10 +26,10 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    Strix, OpenCode Review, and the PR Review Merge Scheduler from this repo in each target
    repository's context. Repository-local copies of these workflows are drift sources, not
    repo-specific contracts. Central Semgrep binds one job-level `SEMGREP_IMAGE`
-   digest for log evidence and `docker run`. See `README.md` (policy summary) and `PR_GOVERNANCE_AUDIT.md`
-   (live audit + per-repo DX/UX transfer decisions).
-   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
-   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
+   digest for log evidence, `docker manifest inspect`, and `docker run`. See
+   `README.md` (policy summary), `docs/pr-review-and-merge-procedure.md`
+   (bot/agent procedure), and `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo
+   DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
