@@ -102,10 +102,29 @@ sequenceDiagram
   PR->>RW: pull_request_target on trusted base
   RW->>OC: bounded evidence + NVIDIA NIM / OpenCode
   OC->>SV: PoC command in isolated copy
-  SV-->>OC: redacted stdout/stderr + command metadata
+  SV-->>OC: layout-preserving redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
   MS->>PR: merge only on current-head approval + green checks
 ```
+
+## Sandbox evidence redaction
+
+```mermaid
+flowchart TD
+  Cap["Captured stdout / stderr / service tail"]
+  Span["Bounded JSON span rewriter"]
+  Line["Line-oriented fallback"]
+  Pub["CI / review evidence"]
+
+  Cap --> Span
+  Span -->|"complete JSON span"| Pub
+  Span -->|"no complete span"| Line
+  Line --> Pub
+```
+
+Operators reading a pretty-printed job log should still see the original
+layout, duplicate keys, and scalar categories. Only credential leaves are
+replaced. See [`docs/doctoring/sandbox-log-redaction.md`](docs/doctoring/sandbox-log-redaction.md).
 
 ## Trust boundaries
 
@@ -117,6 +136,25 @@ sequenceDiagram
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
+- Raw JSON evidence is rewritten as source spans before any line split.
+  Duplicate member names keep order and count because RFC 8259 §4 treats
+  receiver behavior as unpredictable, while ECMA-404 / ISO/IEC 21778 leave
+  uniqueness to the processor (Bray, 2017; Ecma International, 2017;
+  International Organization for Standardization, 2017). A dictionary
+  collapse would drop the first secret of a duplicate `token` pair. A
+  failed opener is scored only until the next plausible start, so
+  `##[group]` and prose `[timeout]` cannot erase a later complete object.
+  Downloaded Actions job logs prefix every line with an RFC 3339
+  runner timestamp. `gh run view --log-failed` also prefixes
+  `job<HTAB>step<HTAB>` (`UNKNOWN STEP` when unassociated) before that
+  timestamp. The span parser skips those collector prefixes plus `Z`
+  and `time-numoffset` and a following SPACE or HTAB the same way it
+  skips JSON whitespace, so a pretty-printed password object remains
+  one span. A `[` opens an array
+  only when the next significant token can start a JSON value
+  (`true` / `false` / `null` / number / string / container / `]`), so
+  line-start `[INFO]` diagnostics stay visible (Klyne & Newman, 2002;
+  Bray, 2017).
 - LLM and scheduled agents bind `NVIDIA_NIM_API_KEY` (env may be
   `NVIDIA_API_KEY`). They never use `COPILOT_GITHUB_TOKEN`. Existing
   review-agent key schemes stay unchanged.
@@ -143,6 +181,8 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
+- [`docs/doctoring/sandbox-log-redaction.md`](docs/doctoring/sandbox-log-redaction.md)
+  — atomic JSON evidence redaction, RFC 8259 / ECMA-404 / ISO/IEC 21778.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)

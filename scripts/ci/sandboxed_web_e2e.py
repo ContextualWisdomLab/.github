@@ -22,6 +22,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
+from scripts.ci.redact_sensitive_log import (
+    REDACTED,
+    redact_command_text,
+    redact_json_value,
+    redact_text,
+)
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
@@ -68,7 +74,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         metavar="NAME",
-        help="Pass one named environment variable into the sandbox. Values are never printed.",
+        help=(
+            "Pass one named environment variable into the sandbox. Nonempty values "
+            "must be at least 8 characters and must not collide with fixed "
+            "redaction evidence."
+        ),
     )
     parser.add_argument(
         "--network",
@@ -101,18 +111,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs_dir: Path) -> Service:
     """Start a service command in its own process group."""
     log_path = logs_dir / f"{label}.log"
-    log_file = log_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(
-        shlex.split(command),
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    log_file.close()
+    with log_path.open("w", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            shlex.split(command),
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     return Service(label=label, command=command, process=process, log_path=log_path)
+
+
+def _monotonic() -> float:
+    """Return the monotonic clock value through an isolated test seam."""
+    return time.monotonic()
+
+
+def _build_url_opener() -> urllib.request.OpenerDirector:
+    """Build the bounded readiness opener through an isolated test seam."""
+    return urllib.request.build_opener(NoRedirectHandler())
 
 
 def wait_for_url(url: str, timeout: int, service: Service) -> bool:
@@ -121,9 +140,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
-    deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(NoRedirectHandler())
-    while time.monotonic() < deadline:
+    deadline = _monotonic() + timeout
+    opener = _build_url_opener()
+    while _monotonic() < deadline:
         if service.process.poll() is not None:
             return False
         try:
@@ -156,20 +175,32 @@ def stop_service(service: Service) -> None:
     try:
         os.killpg(service.process.pid, signal.SIGTERM)
         service.process.wait(timeout=10)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         try:
             os.killpg(service.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except OSError:
             return
-        service.process.wait(timeout=10)
+        try:
+            service.process.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return
 
 
-def tail_text(path: Path, max_lines: int = 80) -> str:
-    """Return the final lines of a service log."""
+def tail_text(
+    path: Path,
+    max_lines: int = 80,
+    *,
+    sensitive_values: Sequence[str] = (),
+) -> str:
+    """Return redacted final lines of a service log."""
     if not path.exists():
         return ""
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-max_lines:])
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return REDACTED
+    cleaned = redact_text(text, sensitive_values=sensitive_values)
+    return "\n".join(cleaned.splitlines()[-max_lines:])
 
 
 def emit_result(
@@ -181,24 +212,39 @@ def emit_result(
     frontend_ready: bool,
     exit_code: int,
     elapsed_seconds: float,
+    sensitive_values: Sequence[str] = (),
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
-        "backend_cmd": args.backend_cmd,
+        "backend_cmd": redact_command_text(
+            args.backend_cmd,
+            sensitive_values=sensitive_values,
+        ),
         "backend_ready": backend_ready,
         "allowed_env": sorted(set(args.allow_env)),
         "cwd": str(copied_repo),
-        "e2e_cmd": args.e2e_cmd,
+        "e2e_cmd": redact_command_text(
+            args.e2e_cmd,
+            sensitive_values=sensitive_values,
+        ),
         "elapsed_seconds": round(elapsed_seconds, 3),
         "evidence_note": args.evidence_note,
         "exit_code": exit_code,
-        "frontend_cmd": args.frontend_cmd,
+        "frontend_cmd": redact_command_text(
+            args.frontend_cmd,
+            sensitive_values=sensitive_values,
+        ),
         "frontend_ready": frontend_ready,
         "network": args.network,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
     }
-    print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
+    redacted_payload = redact_json_value(
+        payload,
+        sensitive_values=sensitive_values,
+        redact_literal_keys=False,
+    )
+    print(f"{RESULT_MARKER} {json.dumps(redacted_payload, sort_keys=True)}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -212,10 +258,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     backend_ready = False
     frontend_ready = False
     exit_code = 1
+    sensitive_values = sandboxed_verify.allowed_env_values(args.allow_env)
     start = time.monotonic()
     try:
+        sandboxed_verify.validate_allowed_env_values(args.allow_env)
         copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
+        sandboxed_verify.validate_allowed_env_values(args.allow_env, env)
+        sensitive_values = tuple(
+            dict.fromkeys(
+                (
+                    *sensitive_values,
+                    *sandboxed_verify.allowed_env_values(args.allow_env, env),
+                )
+            )
+        )
         print(f"sandboxed-web-e2e: cwd={copied_repo}")
         if args.allow_env:
             print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
@@ -232,14 +289,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
             if completed.stdout:
-                print(completed.stdout, end="")
+                print(
+                    redact_text(completed.stdout, sensitive_values=sensitive_values),
+                    end="",
+                )
             if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
+                print(
+                    redact_text(completed.stderr, sensitive_values=sensitive_values),
+                    end="",
+                    file=sys.stderr,
+                )
             exit_code = completed.returncode
             return exit_code
         except subprocess.TimeoutExpired as exc:
-            stdout = sandboxed_verify.timeout_output_text(exc.stdout)
-            stderr = sandboxed_verify.timeout_output_text(exc.stderr)
+            stdout = sandboxed_verify.timeout_output_text(
+                exc.stdout,
+                sensitive_values=sensitive_values,
+            )
+            stderr = sandboxed_verify.timeout_output_text(
+                exc.stderr,
+                sensitive_values=sensitive_values,
+            )
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
@@ -247,10 +317,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
             exit_code = 124
             return exit_code
+    except sandboxed_verify.UnsafeAllowedEnvValueError as exc:
+        print(f"sandboxed-web-e2e: execution failed: {exc}", file=sys.stderr)
+        exit_code = 126
+        return exit_code
+    except Exception as exc:
+        detail = redact_text(str(exc), sensitive_values=sensitive_values).strip()
+        suffix = f": {detail}" if detail else ""
+        print(f"sandboxed-web-e2e: execution failed{suffix}", file=sys.stderr)
+        exit_code = 126
+        return exit_code
     finally:
         for service in reversed(services):
             stop_service(service)
-            log_tail = tail_text(service.log_path)
+            log_tail = tail_text(
+                service.log_path,
+                sensitive_values=sensitive_values,
+            )
             if log_tail:
                 print(f"--- {service.label} log tail ---")
                 print(log_tail)
@@ -262,6 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             frontend_ready=frontend_ready,
             exit_code=exit_code,
             elapsed_seconds=time.monotonic() - start,
+            sensitive_values=sensitive_values,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
