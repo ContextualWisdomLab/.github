@@ -362,6 +362,9 @@ jobs:
                 else
                   echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; no retries remain."
                 fi
+              elif [ "$pr_head_fetch_attempt" -lt 6 ]; then
+                echo "PR head ref fetch failed on attempt $pr_head_fetch_attempt; retrying after propagation delay."
+                sleep 10
               fi
             done
           fi
