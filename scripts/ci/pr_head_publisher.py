@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import quote
@@ -498,7 +499,14 @@ def publish_head(
             token=token,
             server_url=server_url,
         )
-    _original_pr(repo, pr_number, head_ref, local_head_sha)
+    for attempt in range(5):  # pragma: no branch - every path breaks or raises
+        try:
+            _original_pr(repo, pr_number, head_ref, local_head_sha)
+            break
+        except RuntimeError as exc:
+            if exc.args != ("original pull request head moved",) or attempt == 4:
+                raise
+            time.sleep(1)
     return PublicationResult("direct", repo, head_ref)
 
 

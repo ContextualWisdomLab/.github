@@ -99,6 +99,101 @@ def test_direct_publication_verifies_the_new_live_head(monkeypatch):
     assert len(git_calls) == 2
 
 
+def test_direct_publication_retries_a_stale_pull_request_head(monkeypatch):
+    """A successful push tolerates bounded GitHub pull-request API lag."""
+
+    live_heads = iter((EXPECTED_HEAD, EXPECTED_HEAD, LOCAL_HEAD))
+    sleeps = []
+
+    def fake_run(args, *, stdin=None):
+        assert args[:2] == ["gh", "api"]
+        return json.dumps(original_pr(head_sha=next(live_heads)))
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        if args[-2:] == ["rev-parse", "HEAD"]:
+            return LOCAL_HEAD
+        return ""
+
+    monkeypatch.setattr(publisher, "run", fake_run)
+    monkeypatch.setattr(publisher, "run_with_env", fake_run_with_env)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    result = publisher.publish_head(
+        "/work",
+        "owner/repo",
+        7,
+        "feature/topic",
+        EXPECTED_HEAD,
+        token="secret-token",
+        kind="review",
+    )
+
+    assert result.mode == "direct"
+    assert sleeps == [1]
+
+
+def test_direct_publication_fails_after_bounded_head_lag(monkeypatch):
+    """Persistent post-push head disagreement remains fatal."""
+
+    live_heads = iter((EXPECTED_HEAD, *(EXPECTED_HEAD for _ in range(5))))
+    sleeps = []
+
+    monkeypatch.setattr(
+        publisher,
+        "run",
+        lambda *a, **k: json.dumps(original_pr(head_sha=next(live_heads))),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "run_with_env",
+        lambda args, **k: LOCAL_HEAD if args[-2:] == ["rev-parse", "HEAD"] else "",
+    )
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="head moved"):
+        publisher.publish_head(
+            "/work",
+            "owner/repo",
+            7,
+            "feature/topic",
+            EXPECTED_HEAD,
+            token="secret-token",
+            kind="review",
+        )
+
+    assert sleeps == [1, 1, 1, 1]
+
+
+def test_direct_publication_does_not_retry_identity_drift(monkeypatch):
+    """Post-push PR identity changes fail immediately instead of being hidden as lag."""
+
+    payloads = iter(
+        (original_pr(), {**original_pr(head_sha=LOCAL_HEAD), "state": "closed"})
+    )
+    sleeps = []
+
+    monkeypatch.setattr(publisher, "run", lambda *a, **k: json.dumps(next(payloads)))
+    monkeypatch.setattr(
+        publisher,
+        "run_with_env",
+        lambda args, **k: LOCAL_HEAD if args[-2:] == ["rev-parse", "HEAD"] else "",
+    )
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="no longer open"):
+        publisher.publish_head(
+            "/work",
+            "owner/repo",
+            7,
+            "feature/topic",
+            EXPECTED_HEAD,
+            token="secret-token",
+            kind="review",
+        )
+
+    assert sleeps == []
+
+
 def test_only_exact_pull_request_gh013_enters_fork_fallback(monkeypatch):
     """An unrelated push failure stays fatal and never asks GitHub for a user fork."""
 

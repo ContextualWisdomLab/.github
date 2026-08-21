@@ -247,6 +247,14 @@ directly to `git push` instead of trusting model-mutable Git metadata such as
 `remote.origin.url` or a push URL. The branch ref and exact head are validated
 again immediately before publication.
 
+After a successful Git transport push, the PR API can briefly retain the old
+head even though the live branch already points at the new commit. The helper
+retries only that exact head-mismatch result five times at one-second intervals;
+closed PRs, changed repositories/branches, malformed responses, and a mismatch
+that survives the bound still fail closed. This contract was added after a
+successful exact-head push to `contextual-orchestrator#773` was initially
+reported as failed by the stale PR response.
+
 When that explicit push receives the exact PR-required `GH013` response, the
 same trusted helper uses GitHub CLI's documented user-fork and explicit
 `owner:branch` pull-request semantics (GitHub CLI, 2026a, 2026b). The Git token
@@ -339,6 +347,8 @@ Automated tests prove:
 15. only the exact PR-required `GH013` response can activate fork-backed
     publication; unrelated failures, head drift, repository-name collisions,
     unavailable user identity, and malformed GitHub responses fail closed.
+16. a successful direct push tolerates only bounded old-head PR API lag and
+    never treats another identity or a persistent mismatch as publication.
 
 ## Scheduling and activation
 
