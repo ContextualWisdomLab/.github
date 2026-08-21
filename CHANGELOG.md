@@ -40,10 +40,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Raised the hash-pinned pip-audit runner to pip 26.2.1, above the published
-  pip URL-handling vulnerability fixed in pip 26.2, and made the security
-  floor explicit in the lock input.
-
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
