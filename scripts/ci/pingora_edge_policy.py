@@ -31,6 +31,8 @@ GITHUB_API_ORIGIN = "https://api.github.com"
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
+DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
+DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
 RUNTIME_PATH_NAMES = frozenset({
     "dockerfile",
@@ -123,7 +125,14 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
 
     pure = PurePosixPath(path)
     lower_name = pure.name.lower()
-    if lower_name in LICENSE_NAMES or pure.suffix.lower() in DOCUMENT_SUFFIXES:
+    stem = pure.stem.lower()
+    is_known_documentation_path = pure.parts and (
+        pure.parts[0].lower() in DOCUMENTATION_DIRECTORIES
+        or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
+    )
+    if lower_name in LICENSE_NAMES or (
+        is_known_documentation_path and pure.suffix.lower() in DOCUMENT_SUFFIXES
+    ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
         return True

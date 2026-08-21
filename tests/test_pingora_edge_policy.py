@@ -99,6 +99,7 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert not policy._needs_content_scan(changed("Dockerfile", "removed", "+FROM nginx"))
     assert not policy._needs_content_scan(changed("README.md", "modified", "+nginx"))
     assert policy._needs_content_scan(changed("Dockerfile", "modified", "-FROM nginx\n+FROM scratch"))
+    assert policy._needs_content_scan(changed("config/runtime.txt", "modified", "+FROM nginx"))
     assert policy._needs_content_scan(changed("infra/nginx/default.yaml", "modified", "+server: edge"))
     assert policy._needs_content_scan(changed("infra/deployment.yaml", "modified", "+image: app"))
     assert policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream nginx"))
@@ -108,6 +109,13 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert not policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream app"))
     assert policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec nginx"))
     assert not policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec pingora"))
+
+
+def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:
+    """A runtime-looking file cannot evade policy checks by using a prose suffix."""
+
+    violations = policy.scan_content("config/runtime.txt", "FROM nginx:1.27-alpine\n")
+    assert [item.rule for item in violations] == ["nginx_container_image"]
 
 
 def test_evaluate_pull_request_reads_pagination_and_final_content() -> None:
