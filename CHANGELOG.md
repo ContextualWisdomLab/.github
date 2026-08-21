@@ -19,7 +19,7 @@ Semantic Versioning where the repository publishes a release.
 - Added a dedicated DiskSage hourly caller that invokes the same product-neutral RCA and remediation-feasibility scheduler with an exact repository target, one-dispatch budget, two-hour same-head retry floor, non-cancelling single-flight heartbeat, and explicit established scheduler credentials.
 - Added a dedicated fast-mlsirm hourly caller that preserves Rust-owned psychometric arithmetic while dispatching at most one exact-head, root-cause-driven repair with a two-hour same-head retry floor.
 - Added a dedicated Orgmetra hourly caller at minute 58 that targets protected `develop`, dispatches at most one exact-head repair, preserves a two-hour same-head retry floor and non-cancelling single-flight execution, and maps only the established scheduler credentials.
-- Added a public-only, MIT-licensed, loopback contextual-orchestrator gateway candidate for OpenCode review, with provider-diverse auto-discovery, exact pinned source, readiness checks, and a safe fallback to the established provider pool (ContextualWisdomLab/.github#1170).
+- Added a public-only, MIT-licensed, loopback contextual-orchestrator gateway candidate for OpenCode review, with provider-diverse auto-discovery, exact pinned source, readiness checks, a 900-second per-attempt failover cap, and a safe fallback to the established provider pool (ContextualWisdomLab/.github#1170).
 
 ### Changed
 

@@ -32,6 +32,12 @@ workflow's private-source retention policy. Review publication, current-head
 binding, independent approval, Strix, and branch protection are unchanged.
 `COPILOT_GITHUB_TOKEN` is not used.
 
+The gateway candidate uses a 900-second per-attempt runtime cap by default
+(`OPENCODE_CONTEXTUAL_ORCHESTRATOR_RUN_TIMEOUT_SECONDS`). This preserves the
+existing provider-qualified fallback window when the sidecar or its selected
+provider stalls; the surrounding retry budget and outer workflow timeout still
+bound the complete review step.
+
 The sidecar receives the five provider credentials only in the model-execution
 step, plus the existing `NVIDIA_API_KEY` alias required by the NIM adapter. Its
 child process starts under an `env -i` allowlist containing only those provider

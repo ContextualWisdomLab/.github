@@ -818,6 +818,29 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     ) in result.stdout
 
 
+def test_contextual_orchestrator_runtime_cap_preserves_queue_budget(
+    tmp_path: Path,
+) -> None:
+    """The gateway candidate cannot consume the whole fallback window."""
+    result = run_failed_model(
+        tmp_path,
+        extra_env={
+            "CONTEXTUAL_ORCHESTRATOR_ENABLED": "true",
+            "CONTEXTUAL_ORCHESTRATOR_BASE_URL": "http://127.0.0.1:18080",
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN": "test-token",
+            "OPENCODE_CONTEXTUAL_ORCHESTRATOR_RUN_TIMEOUT_SECONDS": "3",
+            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
+        },
+        model_candidates="contextual-orchestrator/contextual-orchestrator",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "OpenCode contextual-orchestrator/contextual-orchestrator runtime cap "
+        "selected 3s instead of 9s because this provider has a bounded failover window."
+    ) in result.stdout
+
+
 def test_nvidia_nim_candidate_requires_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

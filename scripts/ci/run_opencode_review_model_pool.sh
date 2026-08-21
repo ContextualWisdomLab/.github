@@ -440,6 +440,9 @@ cap_model_run_timeout() {
 	local cap_seconds
 
 	case "$model_candidate" in
+	contextual-orchestrator/contextual-orchestrator)
+		cap_seconds="$(env_integer_or_default OPENCODE_CONTEXTUAL_ORCHESTRATOR_RUN_TIMEOUT_SECONDS 900)"
+		;;
 	nvidia-nim/*)
 		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180)"
 		;;
