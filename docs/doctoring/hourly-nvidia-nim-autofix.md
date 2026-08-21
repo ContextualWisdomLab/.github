@@ -301,12 +301,13 @@ That exact-head evidence is historical after any later documentation commit and
 must be re-established on the new current head.
 
 The later writer-model and mutation-authority hardening was likewise captured by
-permanent RED contracts before the implementation changed. Those contracts pin
-the exact NVIDIA Mistral Small 4 writer, high reasoning, absence of the obsolete
-Mistral Nemotron identifier, explicit mutation credentials, and guards that run
-before any Git write. Predecessor-head successes are historical TDD evidence,
-not merge evidence. The final integrated head must establish every required
-quality, security, review, and protection gate again.
+permanent RED contracts before the implementation changed. Those predecessor
+contracts asserted a fixed writer-model identity, high reasoning, absence of the
+obsolete Mistral Nemotron identifier, explicit mutation credentials, and guards
+that run before any Git write. The current implementation resolves the writer at
+run time, so those predecessor assertions are historical TDD evidence rather
+than a live model pin or merge evidence. The final integrated head must establish
+every required quality, security, review, and protection gate again.
 
 ## Verification contract
 
