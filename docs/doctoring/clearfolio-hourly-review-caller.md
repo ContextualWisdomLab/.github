@@ -29,10 +29,12 @@ max_dispatches: "1"
 retry_hours: "1"
 ```
 
-The caller and reusable engine both use `cancel-in-progress: true`. This keeps
-queue inspection single-flight at the product and engine boundaries. At most one
-autofix dispatch is issued during an invocation, and the same exact PR head is
-not retried more than once per hour.
+The caller uses `cancel-in-progress: false`, while the reusable engine applies
+its own event-specific concurrency policy. This preserves each hourly handoff
+long enough for the reusable scheduler to inspect the queue, while the engine
+still prevents duplicate work for the same target event. At most one autofix
+dispatch is issued during an invocation, and the same exact PR head is not
+retried more than once per hour.
 
 ## Modular MSA contract
 
