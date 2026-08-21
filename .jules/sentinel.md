@@ -35,11 +35,3 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
-## 2026-08-21 - Prevent Directory Traversal via Path Component Validation
-**Vulnerability:** Directory Traversal / Path Traversal
-**Learning:** Checking `candidate.relative_to(base)` after using `resolve()` is not sufficient to prevent path traversal. An attacker can construct a path like `../../../tmp/secret_file` which escapes the directory structure but then re-enters the `base` directory, bypassing the `relative_to` check while potentially allowing arbitrary file access.
-**Prevention:** Implement strict path validation by explicitly rejecting traversal sequences. Before resolving, check if `..` exists in the path components (`if ".." in Path(location).parts:`) to block any directory traversal attempts entirely.
-## 2026-08-21 - Prevent ReDoS via Input Length Limits
-**Vulnerability:** Regular Expression Denial of Service (ReDoS)
-**Learning:** Complex regular expressions (e.g., `CHANGED_FILE_EVIDENCE_PATTERN` or `RUNTIME_ASSERTION_PATTERN`) are vulnerable to catastrophic backtracking when processing overly long, attacker-controlled strings (like JSON payload fields). Even if the regexes are somewhat optimized, evaluating them against large payloads (e.g., 1MB+) can exhaust CPU resources and stall CI pipelines.
-**Prevention:** Always implement strict input length limits (e.g., 5000 characters) on user-controlled text fields before passing them to any complex regex evaluation.
