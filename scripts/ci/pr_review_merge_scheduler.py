@@ -2059,6 +2059,16 @@ def active_review_run_refs(
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
             display_title = str(run_data.get("display_title") or "")
+            # Required-workflow pull_request_target runs materialize the protected
+            # check only; they never execute the authenticated reviewer. Ignore
+            # that placeholder even in the legacy same-repository mode so it
+            # cannot suppress the real repository_dispatch review.
+            if run_data.get("event") == "pull_request_target" and (
+                run_name == run_title
+                or display_title == run_title
+                or display_title.startswith(f"{run_title} ")
+            ):
+                continue
             if not workflow_run_name_matches(
                 run_name, workflow, workflow_aliases
             ) and not workflow_run_name_matches(
