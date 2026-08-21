@@ -73,6 +73,33 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     return completed.returncode == 0
 
 
+def _classifies_as_model_quality_warning(log_text: str) -> bool:
+    """Execute the production model-quality classifier against a bounded log."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    function_source = _function_block(gate_source, "is_model_quality_warning")
+    with tempfile.TemporaryDirectory(prefix="strix-quality-warning-") as temp_dir:
+        log_path = Path(temp_dir) / "strix.log"
+        log_path.write_text(log_text, encoding="utf-8")
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail; STRIX_LOG=\"$1\"; "
+                f"{function_source}\n"
+                "is_model_quality_warning",
+                "strix-quality-classifier",
+                str(log_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if completed.returncode not in {0, 1}:
+        raise AssertionError(completed.stderr)
+    return completed.returncode == 0
+
+
 def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     """Extract one single-quoted POSIX ERE assigned in the Strix workflow."""
 
@@ -175,36 +202,26 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Retry a weaker provider model instead of treating its warning as clean evidence."""
 
         gate_source = STRIX_GATE.read_text(encoding="utf-8")
-        quality_warning = _function_block(
-            gate_source,
-            "is_model_quality_warning",
-        )
         retryable = _function_block(gate_source, "is_model_retryable_error")
         self.assertIn("is_model_quality_warning", retryable)
 
-        with tempfile.TemporaryDirectory(prefix="strix-quality-warning-") as temp_dir:
-            log_path = Path(temp_dir) / "strix.log"
-            log_path.write_text(
+        self.assertTrue(
+            _classifies_as_model_quality_warning(
                 "MODEL QUALITY WARNING\n"
-                "'nvidia_nim/example' is not a recommended frontier model for Strix.\n",
-                encoding="utf-8",
+                "'nvidia_nim/example' is not a recommended frontier model for Strix.\n"
             )
-            script = "\n".join(
-                (
-                    "set -euo pipefail",
-                    'STRIX_LOG="$1"',
-                    quality_warning,
-                    "is_model_quality_warning",
-                )
+        )
+        self.assertFalse(
+            _classifies_as_model_quality_warning(
+                "MODEL QUALITY WARNING\n"
+                "target output: the model warning is ordinary application text.\n"
             )
-            completed = subprocess.run(
-                ["bash", "-c", script, "strix-quality-classifier", str(log_path)],
-                check=False,
-                capture_output=True,
-                text=True,
+        )
+        self.assertFalse(
+            _classifies_as_model_quality_warning(
+                "target output: 'nvidia_nim/example' is not a recommended frontier model for Strix.\n"
             )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        )
 
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
         """Prefer a documented hosted NIM and another NIM before GitHub."""

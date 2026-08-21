@@ -2995,7 +2995,10 @@ has_detected_infrastructure_error() {
 }
 
 is_model_quality_warning() {
-	grep -Eiq 'MODEL QUALITY WARNING|is not a recommended[[:space:]]+frontier model for Strix' "$STRIX_LOG"
+	local quality_detail_regex
+	quality_detail_regex="(^|[^[:alnum:]_.-])[[:alnum:]_.-]+(/[[:alnum:]_.:-]+)+['\"]?[[:space:]]+is not a recommended[[:space:]]+frontier model for Strix([.!]|$)"
+	grep -Eiq 'MODEL QUALITY WARNING' "$STRIX_LOG" &&
+		grep -Eiq "$quality_detail_regex" "$STRIX_LOG"
 }
 
 latest_strix_report_dir() {
