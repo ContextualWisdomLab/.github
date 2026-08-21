@@ -119,6 +119,15 @@ jobs:
           fetch-depth: 0
           clean: false
           persist-credentials: false
+      - name: Remove base OSV result before head restore
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          Path("old-results.json").unlink(missing_ok=True)
+          PY
       - name: Restore base OSV result after head checkout
         if: always()
         run: |
