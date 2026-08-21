@@ -916,8 +916,12 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
+    assert "--output-files=sarif:results.sarif" in workflow
+    assert "--output-file=results.sarif" not in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
@@ -999,8 +1003,11 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "        id: osv_head_retry\n        continue-on-error: true"
         in workflow
     )
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
+    assert "--output-files=sarif:results.sarif" in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
     assert "Require authoritative base and head OSV evidence" in workflow
     assert "Require successful base and head OSV scans" not in workflow
     assert "Normalize successful empty OSV result documents" not in workflow
