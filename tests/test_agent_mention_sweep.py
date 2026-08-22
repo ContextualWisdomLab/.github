@@ -371,28 +371,40 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
 def test_sweep_stops_before_its_time_budget_to_exit_cleanly(
     monkeypatch, capsys
 ) -> None:
-    """The sweep stops visiting new repositories once its time budget elapses.
+    """The sweep stops processing new candidates once its time budget elapses.
 
     The sweep-organization-agent-mentions job has a 15-minute GitHub Actions
     timeout; a hard cancellation on that deadline discards the run's log
     tail and metrics. The sweep must instead stop itself with margin to
     spare and report what it completed.
+
+    list_recent_pull_requests submits every repository's fetch to a bounded
+    ThreadPoolExecutor up front (see the comment above the loop in sweep()),
+    so a fake per-candidate generator here does not model which repository
+    fetches actually started — only that this loop stops PROCESSING
+    (building requests for) a candidate once the deadline has passed, even
+    though the candidate itself was already yielded.
     """
 
     sweep = module()
-    yielded = []
+    processed = []
 
     def recording_candidates(*args, **kwargs):
-        """Yield three candidates while recording which ones were reached."""
+        """Yield three already-available candidates."""
 
         del args, kwargs
-        for number in (1, 2, 3):
-            yielded.append(number)
-            yield candidate(number)
+        yield from (candidate(1), candidate(2), candidate(3))
+
+    def recording_build_requests(client, *, issue, since):
+        """Record which candidate reached request-building and return none."""
+
+        del client, since
+        processed.append(issue["number"])
+        return ()
 
     monkeypatch.setattr(sweep, "list_recent_pull_requests", recording_candidates)
     monkeypatch.setattr(
-        sweep, "build_requests_for_pull_request", lambda *args, **kwargs: ()
+        sweep, "build_requests_for_pull_request", recording_build_requests
     )
     # One clock read to compute the deadline, then one read per loop
     # iteration: under budget, under budget, over budget on the third.
@@ -411,7 +423,7 @@ def test_sweep_stops_before_its_time_budget_to_exit_cleanly(
     )
 
     assert result == 0
-    assert yielded == [1, 2]
+    assert processed == [1, 2]
     assert "time budget" in capsys.readouterr().out
 
 

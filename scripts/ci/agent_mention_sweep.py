@@ -350,22 +350,24 @@ def sweep(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
 
-    # A plain `for issue in generator` advances the generator (which itself
-    # makes the potentially slow, potentially rate-limited API call for the
-    # next repository) before the loop body runs. Checking the deadline only
-    # in the loop body would let one more expensive fetch start regardless
-    # of the budget. Iterate manually so the deadline is checked BEFORE each
-    # generator advancement.
-    candidates = list_recent_pull_requests(
+    # list_recent_pull_requests submits every repository's fetch to a bounded
+    # ThreadPoolExecutor up front, on this generator's first advancement, and
+    # yields results via as_completed as they land — a later advancement
+    # starts no new fetch, the work is already running in background
+    # threads. Returning early (from either a `for` or manual loop) still
+    # matters: it closes this generator, whose `finally` block sets
+    # stop_event and cancels every future, so any repository whose fetch
+    # had not yet started (queued behind the worker cap) never begins one
+    # more retry-with-backoff cycle. Already-running fetches (up to
+    # max_workers) still run to completion during that cancellation/wait.
+    for issue in list_recent_pull_requests(
         target_client,
         organization=organization,
         repository_source=repository_source,
         since=since,
         on_error=record_failure,
         rotation_offset=rotation_offset,
-    )
-    _sentinel = object()
-    while True:
+    ):
         if deadline is not None and clock() >= deadline:
             print(
                 "Agent mention sweep stopped before its time budget "
@@ -374,9 +376,6 @@ def sweep(
                 f"{counters.failures} isolated failure(s) so far."
             )
             return dispatched
-        issue = next(candidates, _sentinel)
-        if issue is _sentinel:
-            break
         issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
         try:
             requests = build_requests_for_pull_request(
