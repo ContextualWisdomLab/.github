@@ -601,6 +601,19 @@ def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str
     return run_with_env(args, stdin=stdin, env=env)
 
 
+def run_github_actions_for_repository(
+    repo: str,
+    args: Sequence[str],
+) -> str:
+    """Run an Actions command with the credential scoped to its host repository."""
+    central_repo = (
+        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
+    ).strip()
+    if central_repo and repo == central_repo:
+        return run_github_dispatch(args)
+    return run_github_actions(args)
+
+
 def split_repo(repo: str) -> tuple[str, str]:
     """Split an owner/name repository string into owner and repository name."""
     try:
@@ -1924,17 +1937,10 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
     """Return active workflow runs with the credential scoped to their host."""
     runs: list[dict[str, Any]] = []
-    central_repo = (
-        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
-    ).strip()
-    run_command = (
-        run_github_dispatch
-        if central_repo and repo == central_repo
-        else run_github_actions
-    )
     for status in statuses:
         payload = json.loads(
-            run_command(
+            run_github_actions_for_repository(
+                repo,
                 [
                     "gh",
                     "api",
@@ -2017,9 +2023,6 @@ def active_review_run_refs(
     # must not suppress the central authenticated reviewer.
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
-            run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
-                continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
@@ -2038,6 +2041,9 @@ def active_review_run_refs(
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            run_name = str(run_data.get("name") or "")
+            if run_name != workflow and run_name not in workflow_aliases:
                 continue
             if centralized_dispatch:
                 continue
@@ -2100,19 +2106,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     """Force-cancel workflow runs without blocking current-head decisions."""
     if not run_ids:
         return {}
-    central_repo = (
-        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
-    ).strip()
-    run_command = (
-        run_github_dispatch
-        if central_repo and repo == central_repo
-        else run_github_actions
-    )
 
     def cancel_one(run_id: str) -> tuple[str, str | None]:
         """Return one run id and its bounded GitHub cancellation error, if any."""
         try:
-            run_command(
+            run_github_actions_for_repository(
+                repo,
                 [
                     "gh",
                     "api",

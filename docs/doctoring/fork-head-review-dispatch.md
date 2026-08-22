@@ -76,6 +76,15 @@ cross-repository credential. The regression exercises discovery and
 cancellation on both hosts so a later refactor cannot collapse them back onto
 one rate-limit bucket.
 
+Targeted scheduler run `32569094917` then exposed a second inventory boundary:
+GitHub returned the configured `run-name` in the Actions run `name` field for an
+already-running exact-head OpenCode dispatch. Filtering that field as a workflow
+alias before checking the trusted exact dispatch title missed run `32569021159`
+and created duplicate run `32569106868`, which was cancelled before model work.
+Central dispatch inventory now validates the exact repository, PR, and head SHA
+encoded in the dispatch title before applying the legacy workflow-name filter.
+The regression covers both API shapes so only one exact-head model review runs.
+
 ## APA 7th references
 
 GitHub, Inc. (n.d.-a). *REST API endpoints for pull requests*. GitHub Docs.

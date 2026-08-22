@@ -52,6 +52,9 @@ Semantic Versioning where the repository publishes a release.
   and mutations keep the established explicit credential chain. An exhausted
   organization-wide OpenCode App installation budget can no longer prevent
   either central or cross-repository PRs from dispatching exact-head review.
+  Exact repository-dispatch titles are also matched before GitHub's `name`
+  field is treated as a workflow alias, preventing duplicate exact-head model
+  runs when that field contains the configured `run-name`.
 - Kept independently valid root-level Python lock environments separate during
   trusted base coverage installation. A directory with more than two candidate
   locks no longer collapses unrelated OpenCode, security, and application

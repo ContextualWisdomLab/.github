@@ -2264,10 +2264,11 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("workflow_name", "run_title"),
+    ("workflow_name", "run_title", "configured_run_name"),
     [
-        ("OpenCode Review Dispatch", "OpenCode Review Dispatch"),
-        ("Required OpenCode Review", "Required OpenCode Review"),
+        ("OpenCode Review Dispatch", "OpenCode Review Dispatch", False),
+        ("Required OpenCode Review", "Required OpenCode Review", False),
+        ("OpenCode Review Dispatch", "OpenCode Review Dispatch", True),
     ],
 )
 def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
@@ -2275,15 +2276,17 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     capsys,
     workflow_name,
     run_title,
+    configured_run_name,
 ):
     calls = []
     head_sha = "a" * 40
+    display_title = f"{run_title} owner/repo#1@{head_sha}"
     current_dispatch = {
         "id": 9100,
-        "name": workflow_name,
+        "name": display_title if configured_run_name else workflow_name,
         "event": "repository_dispatch",
         "head_sha": "default-branch-sha",
-        "display_title": f"{run_title} owner/repo#1@{head_sha}",
+        "display_title": display_title,
         "pull_requests": [],
     }
 
