@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import io
+import json
 import runpy
 import shutil
 import subprocess
@@ -100,6 +101,101 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
     assert "requirements.txt" not in (output / "manifest.json").read_text(
         encoding="utf-8"
     )
+    assert (output / "vcs-manifest.json").read_text(encoding="utf-8") == "[]\n"
+
+
+def test_materializes_exact_vcs_sources_in_a_separate_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VCS source pins never enter a pip --require-hashes input file."""
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git(repository, "init")
+    git(repository, "config", "user.name", "Test")
+    git(repository, "config", "user.email", "test@example.invalid")
+    (repository / "tracked.txt").write_text("base\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "base")
+    base_sha = git(repository, "rev-parse", "HEAD")
+    hash_lock = b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    vcs_sources = [
+        {
+            "package": "rankweave",
+            "import_name": "rankweave",
+            "repository": "RankWeave",
+            "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
+            "source": "uv.lock",
+        }
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([("uv.lock", hash_lock)], vcs_sources),
+    )
+
+    output = tmp_path / "output"
+    materializer.materialize(repository, base_sha, output)
+
+    assert (output / "requirements-000.txt").read_bytes() == hash_lock
+    assert (
+        json.loads((output / "vcs-manifest.json").read_text(encoding="utf-8"))
+        == vcs_sources
+    )
+
+
+def test_base_inputs_preserve_a_vcs_only_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source-only uv closure is useful even without registry requirements."""
+    tree = (
+        b"100644 blob " + b"a" * 40 + b"\tpyproject.toml\0"
+        b"100644 blob " + b"b" * 40 + b"\tuv.lock\0"
+    )
+    dependency = {
+        "package": "rankweave",
+        "import_name": "rankweave",
+        "repository": "RankWeave",
+        "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
+    }
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda *_args: (b"", [dependency]),
+    )
+
+    locks, vcs_sources = materializer._base_python_inputs(tmp_path, "a" * 40)
+
+    assert locks == []
+    assert vcs_sources == [{**dependency, "source": "uv.lock"}]
+
+
+def test_base_inputs_reject_conflicting_vcs_revisions_across_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate uv projects cannot select ambiguous revisions of one source."""
+    tree = b"".join(
+        b"100644 blob " + bytes(character, "ascii") * 40 + b"\t" + path + b"\0"
+        for character, path in (
+            ("a", b"first/pyproject.toml"),
+            ("b", b"first/uv.lock"),
+            ("c", b"second/pyproject.toml"),
+            ("d", b"second/uv.lock"),
+        )
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+
+    def export(_repo: Path, _sha: str, lock_path: str):
+        commit = "a" * 40 if lock_path.startswith("first/") else "b" * 40
+        return b"", [{"package": "demo", "repository": "demo", "commit": commit}]
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._base_python_inputs(tmp_path, "a" * 40)
 
 
 def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
@@ -520,7 +616,7 @@ def test_main_reports_when_no_locks_exist(
         == 0
     )
     assert (
-        "No tracked hash-bearing Python requirement candidates exist"
+        "any exact VCS source pins are listed in vcs-manifest.json"
         in capsys.readouterr().out
     )
 
