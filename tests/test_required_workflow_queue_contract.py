@@ -129,6 +129,7 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert (
         "github.event_name == 'repository_dispatch' && "
         "github.event.client_payload.target_repository != '' && "
+        "github.event.client_payload.target_repository != github.repository && "
         "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.scheduler_app_token.outputs.token) || github.token"
     ) in inspect
@@ -1314,7 +1315,8 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "before producing a vulnerability report" in workflow
     assert "genuine findings still fail the check" in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        '&& ! grep -Eiq "$reported_vulnerability_signal" '
+        '"$strix_neutralization_scope_log"' in workflow
     )
 
 

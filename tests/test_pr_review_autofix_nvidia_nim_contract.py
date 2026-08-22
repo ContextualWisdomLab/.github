@@ -1,15 +1,14 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
 import hashlib
-from pathlib import Path
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from scripts.ci import pr_review_autofix_context as context
 from scripts.ci import pr_review_conflict_scope as scope
-
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -20,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "545a2ad7e667220de263805d2c560752a4448347"
+REVIEW_DISPATCH_BLOB_SHA = "3bc1ce6d385bce569e7a7ba037f149a8f18039d4"
 
 
 def _workflow_text(path: Path) -> str:
