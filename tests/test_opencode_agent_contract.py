@@ -679,6 +679,26 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
+    assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
+    assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
+    assert 'rev-parse HEAD)" = "$commit"' in measure_step
+    assert "opencode-base-vcs-dependencies.pth" in measure_step
+    assert 'vcs-manifest.json >"$dependency_list"' in measure_step
+    assert 'done <"$dependency_list"' in measure_step
+    assert 'candidate_count=$((candidate_count + 1))' in measure_step
+    assert '[ "$candidate_count" -ne 1 ]' in measure_step
+    assert "has a missing or ambiguous import root" in measure_step
+    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
+    assert "has a namespace or linked import root" in measure_step
+    assert 'find "$destination" -type l -print -quit' in measure_step
+    assert "contains a symbolic-link layout" in measure_step
+    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
+    assert "contains a compiled extension" in measure_step
+    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
+    assert "contains installed distribution metadata" in measure_step
+    assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
+    assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
@@ -1965,14 +1985,16 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
     assert "secrets.OPENCODE_APPROVE_TOKEN" in workflow
     assert "steps.scheduler_app_token.outputs.token" in workflow
-    assert (
-        "SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' "
-        "&& github.event.client_payload.target_repository != '' && "
-        "(secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.scheduler_app_token.outputs.token) || github.token }}"
-        in workflow
-    )
+    for token_name in ("SCHEDULER_ACTIONS_TOKEN", "SCHEDULER_READ_TOKEN"):
+        assert (
+            f"{token_name}: ${{{{ github.event_name == 'repository_dispatch' "
+            "&& github.event.client_payload.target_repository != '' && "
+            "github.event.client_payload.target_repository != github.repository && "
+            "(secrets.PR_REVIEW_MERGE_TOKEN || "
+            "secrets.OPENCODE_APPROVE_TOKEN || "
+            "steps.scheduler_app_token.outputs.token) || github.token }}"
+            in workflow
+        )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
