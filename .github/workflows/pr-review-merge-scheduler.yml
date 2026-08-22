@@ -875,26 +875,45 @@ jobs:
           #   observable in the run log for whoever holds that token.
           if [ -z "${ORG_SWEEP_ROTATION_INDEX:-}" ]; then
             counter_variable_name="ORG_SWEEP_ROTATION_COUNTER"
-            counter_current="$(
+            # Distinguish a *successful* read (the variable exists; its
+            # value, valid or not, is authoritative) from a *failed* read
+            # (transient error, permissions, or the variable genuinely
+            # doesn't exist yet -- indistinguishable from here). Only a
+            # successful read may PATCH: a transient failure that silently
+            # became "treat as 0" would let the PATCH below clobber an
+            # already-accumulated counter value back down to 1, restarting
+            # the rotation sequence instead of degrading to the wall-clock
+            # fallback the design intends (Devin review finding on #1223).
+            if counter_current="$(
               gh api "repos/${GITHUB_REPOSITORY}/actions/variables/${counter_variable_name}" \
-                --jq '.value' 2>/dev/null || true
-            )"
-            if ! [[ "$counter_current" =~ ^[0-9]+$ ]]; then
-              counter_current=0
-            fi
-            # Force base-10: a manually-seeded value with a leading zero
-            # (e.g. "08") passes the digit-only check above but bash's
-            # unprefixed arithmetic parses a leading-zero literal as octal,
-            # and "08"/"09" are not valid octal digits -- errors under
-            # set -e. $((10#...)) is the same guard already used elsewhere
-            # in this file for the same reason (STALE_OPENCODE_MINUTES).
-            counter_next=$(( 10#$counter_current + 1 ))
-            if gh api "repos/${GITHUB_REPOSITORY}/actions/variables/${counter_variable_name}" \
-                 -X PATCH -f "value=${counter_next}" >/dev/null 2>&1; then
-              ORG_SWEEP_ROTATION_INDEX="$counter_next"
+                --jq '.value' 2>/dev/null
+            )"; then
+              if ! [[ "$counter_current" =~ ^[0-9]+$ ]]; then
+                counter_current=0
+              fi
+              # Force base-10: a manually-seeded value with a leading zero
+              # (e.g. "08") passes the digit-only check above but bash's
+              # unprefixed arithmetic parses a leading-zero literal as
+              # octal, and "08"/"09" are not valid octal digits -- errors
+              # under set -e. $((10#...)) is the same guard already used
+              # elsewhere in this file (STALE_OPENCODE_MINUTES).
+              counter_next=$(( 10#$counter_current + 1 ))
+              if gh api "repos/${GITHUB_REPOSITORY}/actions/variables/${counter_variable_name}" \
+                   -X PATCH -f "value=${counter_next}" >/dev/null 2>&1; then
+                ORG_SWEEP_ROTATION_INDEX="$counter_next"
+              else
+                echo "::warning::read ${counter_variable_name}=${counter_current} but could not PATCH it; falling back to a wall-clock rotation tick for this run only"
+                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+              fi
             elif gh api "repos/${GITHUB_REPOSITORY}/actions/variables" \
-                   -X POST -f "name=${counter_variable_name}" -f "value=${counter_next}" >/dev/null 2>&1; then
-              ORG_SWEEP_ROTATION_INDEX="$counter_next"
+                   -X POST -f "name=${counter_variable_name}" -f "value=1" >/dev/null 2>&1; then
+              # The read failed, so this is only safe as a first-run
+              # create: POST fails on its own if the variable actually
+              # already exists (a real read outage rather than a genuinely
+              # missing variable), which correctly falls through to the
+              # wall-clock branch below instead of resetting a value this
+              # run could not see.
+              ORG_SWEEP_ROTATION_INDEX=1
             else
               echo "::warning::could not read/write ${counter_variable_name}; falling back to a wall-clock rotation tick for this run only"
               ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))

@@ -858,15 +858,20 @@ def _extract_org_sweep_rotation_default_snippet(workflow: str) -> str:
     return textwrap.dedent(workflow[start:end])
 
 
-def _fake_gh_script(*, get_value: str, patch_ok: bool, post_ok: bool) -> str:
+def _fake_gh_script(*, get_ok: bool, get_value: str, patch_ok: bool, post_ok: bool) -> str:
     """A stand-in `gh` executable simulating the repository-variable API.
 
-    ``get_value`` is what `gh api .../variables/NAME --jq .value` prints
-    (empty string simulates the variable not existing yet / a 404).
-    ``patch_ok``/``post_ok`` control whether the corresponding mutation
-    exits zero, so tests can force the PATCH-then-POST-create fallback or
-    the full-failure wall-clock fallback without a real GitHub API call.
+    ``get_ok`` controls whether `gh api .../variables/NAME --jq .value`
+    exits zero at all -- a real "does the variable exist and is it
+    readable" outcome, kept distinct from what value it prints on success
+    (``get_value``), so tests can simulate a *failed* read (transient error
+    or a genuinely missing variable) separately from a *successful* read
+    of an empty/malformed value. ``patch_ok``/``post_ok`` control whether
+    the corresponding mutation exits zero, so tests can force the
+    PATCH-then-POST-create fallback or the full-failure wall-clock
+    fallback without a real GitHub API call.
     """
+    get_exit = "0" if get_ok else "1"
     patch_exit = "0" if patch_ok else "1"
     post_exit = "0" if post_ok else "1"
     return textwrap.dedent(
@@ -885,8 +890,10 @@ def _fake_gh_script(*, get_value: str, patch_ok: bool, post_ok: bool) -> str:
           exit {post_exit}
         fi
         if [[ "$1" == *"/variables/"* ]]; then
-          printf '%s' "{get_value}"
-          exit 0
+          if [ "{get_exit}" = "0" ]; then
+            printf '%s' "{get_value}"
+          fi
+          exit {get_exit}
         fi
         echo "unsupported fake gh api path: $1" >&2
         exit 2
@@ -895,13 +902,19 @@ def _fake_gh_script(*, get_value: str, patch_ok: bool, post_ok: bool) -> str:
 
 
 def _run_rotation_default_snippet(
-    snippet: str, tmp_path: Path, *, get_value: str, patch_ok: bool, post_ok: bool
+    snippet: str,
+    tmp_path: Path,
+    *,
+    get_ok: bool = True,
+    get_value: str,
+    patch_ok: bool,
+    post_ok: bool,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the extracted default/validation block with a fake `gh` on PATH."""
 
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
-        _fake_gh_script(get_value=get_value, patch_ok=patch_ok, post_ok=post_ok),
+        _fake_gh_script(get_ok=get_ok, get_value=get_value, patch_ok=patch_ok, post_ok=post_ok),
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -952,28 +965,28 @@ def test_org_queue_sweep_rotation_index_counter_increment_forces_base_10(
 
 
 def test_org_queue_sweep_rotation_index_creates_counter_on_first_run(tmp_path: Path) -> None:
-    """A PATCH 404 (variable does not exist yet) falls back to creating it."""
+    """A failed read (variable does not exist yet) falls back to creating it."""
 
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     snippet = _extract_org_sweep_rotation_default_snippet(workflow)
 
     result = _run_rotation_default_snippet(
-        snippet, tmp_path, get_value="", patch_ok=False, post_ok=True
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=False, post_ok=True
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
 
 
 def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path) -> None:
-    """If the persistent counter is entirely unavailable, degrade to a
-    wall-clock tick rather than failing the whole sweep over a fairness
-    mechanism."""
+    """If the persistent counter is entirely unavailable (both the read and
+    the create-on-first-run POST fail), degrade to a wall-clock tick rather
+    than failing the whole sweep over a fairness mechanism."""
 
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     snippet = _extract_org_sweep_rotation_default_snippet(workflow)
 
     result = _run_rotation_default_snippet(
-        snippet, tmp_path, get_value="", patch_ok=False, post_ok=False
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=False, post_ok=False
     )
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
@@ -981,6 +994,55 @@ def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path)
     expected_tick = int(time.time()) // 900
     assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
     assert "could not read/write" in result.stdout  # a `::warning::` workflow command
+
+
+def test_org_queue_sweep_rotation_index_transient_read_failure_does_not_reset_counter(
+    tmp_path: Path,
+) -> None:
+    """A *failed* read must never be treated as "the counter is 0 and safe to
+    PATCH": that would silently reset an already-accumulated counter value
+    back down to 1, restarting the rotation sequence instead of degrading to
+    the wall-clock fallback (Devin review finding on #1223). Simulated here
+    as: the read fails, and the create-on-first-run POST also fails (as it
+    should when the variable genuinely already exists and this run simply
+    could not see it) -- landing on the wall-clock fallback rather than a
+    PATCH that would have clobbered the real value."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=True, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1
+    # Critically: never "1" -- that would mean the failed read was treated
+    # as a fresh-start reset rather than an unreadable existing value.
+    assert stdout_lines[-1] != "1"
+
+
+def test_org_queue_sweep_rotation_index_successful_read_but_failed_patch_falls_back(
+    tmp_path: Path,
+) -> None:
+    """A successful read of an existing value, followed by a failed PATCH,
+    must fall back to the wall-clock tick and log the value that could not
+    be written -- not silently drop the accumulated counter."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=True, get_value="41", patch_ok=False, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1
+    assert "read ORG_SWEEP_ROTATION_COUNTER=41 but could not PATCH it" in result.stdout
 
 
 def test_org_queue_sweep_rotation_index_override_is_preserved() -> None:
