@@ -62,7 +62,7 @@ jobs:
 
       - name: Route trusted local agent mention
         run: >-
-          python3 scripts/ci/agent_mention_router.py
+          python3 -u scripts/ci/agent_mention_router.py
           --event-path "${RUNNER_TEMP}/agent-mention-event.json"
 
   sweep-organization-agent-mentions:
