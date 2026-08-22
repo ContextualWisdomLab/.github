@@ -100,6 +100,95 @@ def test_github_client_converts_timeout_to_bounded_diagnostic(monkeypatch) -> No
         )
 
 
+def test_github_client_retries_a_completed_failure_with_backoff(monkeypatch) -> None:
+    """A transient rate limit succeeds after retrying with linear backoff."""
+
+    router = router_module()
+    attempts = []
+    sleeps = []
+
+    def flaky_run(command, **kwargs):
+        """Fail with a rate-limit diagnostic twice, then succeed."""
+        del kwargs
+        attempts.append(command)
+        if len(attempts) < 3:
+            return SimpleNamespace(
+                stdout="",
+                stderr="gh: API rate limit exceeded for installation ID 1",
+                returncode=1,
+            )
+        return SimpleNamespace(stdout='{"ok": true}\n', returncode=0)
+
+    monkeypatch.setattr(router.subprocess, "run", flaky_run)
+    monkeypatch.setattr(router.time, "sleep", lambda seconds: sleeps.append(seconds))
+    result = router.GitHubClient("token").request(["repos/x/y"])
+
+    assert result == {"ok": True}
+    assert len(attempts) == 3
+    assert sleeps == [5, 10]
+
+
+def test_github_client_fails_closed_after_exhausting_retries(monkeypatch) -> None:
+    """A persistent rate limit still fails after all retries, not silently."""
+
+    router = router_module()
+    attempts = []
+    sleeps = []
+
+    def always_fails(command, **kwargs):
+        """Fail every attempt with a stable rate-limit diagnostic."""
+        del kwargs
+        attempts.append(command)
+        return SimpleNamespace(
+            stdout="",
+            stderr="gh: API rate limit exceeded for installation ID 1",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(router.subprocess, "run", always_fails)
+    monkeypatch.setattr(router.time, "sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(
+        RuntimeError,
+        match=r"gh api failed with exit code 1 after 6 attempts: "
+        r"gh: API rate limit exceeded",
+    ):
+        router.GitHubClient("token").request(["repos/x/y"])
+
+    assert len(attempts) == router.GITHUB_API_MAX_ATTEMPTS == 6
+    assert sleeps == [5, 10, 15, 20, 25]
+
+
+def test_github_client_does_not_retry_a_non_rate_limit_failure(monkeypatch) -> None:
+    """A permanent failure (e.g. 404, permission denied) fails on the first attempt.
+
+    Retrying an unknown failure could resend a non-idempotent write (a
+    ``repository_dispatch`` POST or an acknowledgement comment) that may
+    have already applied server-side; only the specific, safe-to-retry
+    rate-limit diagnostic is retried.
+    """
+
+    router = router_module()
+    attempts = []
+    sleeps = []
+
+    def permission_denied(command, **kwargs):
+        """Fail once with a diagnostic that is not a rate limit."""
+        del kwargs
+        attempts.append(command)
+        return SimpleNamespace(stdout="", stderr="permission denied", returncode=1)
+
+    monkeypatch.setattr(router.subprocess, "run", permission_denied)
+    monkeypatch.setattr(router.time, "sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(
+        RuntimeError,
+        match=r"gh api failed with exit code 1: permission denied",
+    ):
+        router.GitHubClient("token").request(["repos/x/y"])
+
+    assert len(attempts) == 1
+    assert sleeps == []
+
+
 def test_repository_fanout_uses_exactly_four_workers_at_scale(monkeypatch) -> None:
     """Five repositories exercise the fixed four-worker production ceiling."""
 
