@@ -4650,7 +4650,7 @@ EOS
 		echo "Penetration test failed: baseline critical finding"
 		exit 1
 		;;
-	pr-baseline-provider-exhausted)
+	pr-baseline-provider-exhausted | pr-baseline-provider-exhausted-no-fallback)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/baseline-primary)
 			mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider/vulnerabilities"
@@ -6307,6 +6307,28 @@ run_filtered_gate_case_if_requested() {
 			"3" \
 			"vertex_ai/baseline-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
 			"<unset>|<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		;;
+	pr-baseline-provider-exhausted-no-fallback)
+		run_gate_case "pr-baseline-provider-exhausted-no-fallback" \
+			"vertex_ai/baseline-primary" \
+			"   " \
+			"3" \
+			"Configured Vertex model was unavailable after unchanged-file findings were excluded." \
+			"1" \
+			"vertex_ai/baseline-primary" \
+			"<unset>" \
 			"vertex_ai" \
 			"__DEFAULT__" \
 			"" \
@@ -10961,6 +10983,27 @@ run_gate_case "pr-baseline-provider-exhausted" \
 	"3" \
 	"vertex_ai/baseline-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
 	"<unset>|<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-baseline-provider-exhausted-no-fallback" \
+	"vertex_ai/baseline-primary" \
+	"   " \
+	"3" \
+	"Configured Vertex model was unavailable after unchanged-file findings were excluded." \
+	"1" \
+	"vertex_ai/baseline-primary" \
+	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \

@@ -3894,7 +3894,7 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+		if is_model_retryable_error "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
@@ -4024,6 +4024,24 @@ run_current_target_scan() {
 		return 1
 	fi
 
+	# The trusted PR-scope mapper has already proved these reports belong only
+	# to unchanged files. Keep that decision distinct from a real changed-file
+	# finding when every configured model path is unavailable.
+	if [ "$PR_FINDINGS_DECISION" = "allow_baseline" ] && [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+		if [ "$fallback_tried" -eq 0 ]; then
+			if is_vertex_model "$PRIMARY_MODEL"; then
+				echo "Configured Vertex model was unavailable after unchanged-file findings were excluded." >&2
+			else
+				echo "Configured model was unavailable after unchanged-file findings were excluded." >&2
+			fi
+		elif is_vertex_model "$PRIMARY_MODEL"; then
+			echo "Configured Vertex model and fallback models were unavailable after unchanged-file findings were excluded." >&2
+		else
+			echo "Configured model and fallback models were unavailable after unchanged-file findings were excluded." >&2
+		fi
+		return 3
+	fi
+
 	if [ "$fallback_tried" -eq 0 ]; then
 		local fallback_config_name
 		fallback_config_name="$(fallback_models_config_name_for_model "$PRIMARY_MODEL")"
@@ -4038,18 +4056,6 @@ run_current_target_scan() {
 			echo "ERROR: All configured fallback models are the same as the primary model" >&2
 		fi
 		return 1
-	fi
-
-	# The trusted PR-scope mapper has already proved these reports belong only
-	# to unchanged files. Keep that decision distinct from a real changed-file
-	# finding when every remaining provider is unavailable.
-	if [ "$PR_FINDINGS_DECISION" = "allow_baseline" ] && [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
-		if is_vertex_model "$PRIMARY_MODEL"; then
-			echo "Configured Vertex model and fallback models were unavailable after unchanged-file findings were excluded." >&2
-		else
-			echo "Configured model and fallback models were unavailable after unchanged-file findings were excluded." >&2
-		fi
-		return 3
 	fi
 
 	local threshold_rank

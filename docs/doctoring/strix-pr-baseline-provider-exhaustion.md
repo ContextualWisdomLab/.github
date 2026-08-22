@@ -18,11 +18,12 @@ bootstrap outage as infrastructure.
 ## Root cause and repair
 
 The quick gate already owns the exact PR-head changed-file mapping decision.
-After it has classified every report as `allow_baseline`, a later provider
-exhaustion now returns the dedicated status 3. The trusted reusable workflow
-maps only that status to a neutral infrastructure warning. Changed, unmapped,
-or manifest findings still return the blocking status, and configuration or
-unexpected statuses still fail closed.
+After it has classified every report as `allow_baseline`, provider exhaustion
+now returns the dedicated status 3, including a deployment with no distinct
+fallback configured. The trusted reusable workflow maps only that status to a
+neutral infrastructure warning. Changed, unmapped, or manifest findings still
+return the blocking status, and configuration or unexpected statuses still
+fail closed.
 
 The outer workflow also recognizes only the observed `loginAsGuest` retry
 exhaustion with curl exit 7 against Strix's fixed local Caido port. It is neutral
@@ -33,6 +34,8 @@ runtime failure remains blocking.
 
 - A three-attempt regression reproduces an unchanged critical report followed
   by two provider failures and requires status 3.
+- A primary-only regression requires the same trusted baseline outcome without
+  treating the absent fallback as a pull-request finding.
 - Existing source tests require changed findings to remain blocking and clean
   unchanged findings to remain admissible.
 - A workflow regression requires the exact Caido bootstrap outage to be neutral

@@ -24,10 +24,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Preserve the trusted PR-scope decision when Strix finds only unchanged-file
   baseline issues and then exhausts every LLM provider, so provider retirement
-  or outage is a neutral infrastructure result; recognize the exact local Caido
-  bootstrap connection failure the same way only when no vulnerability exists,
-  while changed and unmapped findings and all other runtime failures still fail
-  closed. The reproduced incidents and gate boundary are recorded in
+  or outage is a neutral infrastructure result even when no distinct fallback
+  is configured; recognize the exact local Caido bootstrap connection failure
+  the same way only when no vulnerability exists, while changed and unmapped
+  findings and all other runtime failures still fail closed. The reproduced
+  incidents and gate boundary are recorded in
   `docs/doctoring/strix-pr-baseline-provider-exhaustion.md`.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
