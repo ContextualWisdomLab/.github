@@ -368,6 +368,49 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
             )
 
 
+def test_sweep_redacts_credentials_from_isolated_failure_messages(
+    monkeypatch, capsys
+) -> None:
+    """An exception message that embeds a credential is redacted before logging.
+
+    An isolated request/PR failure can wrap the underlying gh api stderr
+    verbatim (e.g. a malformed URL or verbose HTTP dump that happens to
+    include a token). record_failure must not leak that text into the
+    job's public log output.
+    """
+
+    sweep = module()
+    leaked_token = "ghp_" + ("A" * 24)
+    monkeypatch.setattr(
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter([candidate()])
+    )
+
+    def raise_with_token(*args, **kwargs):
+        """Raise an error whose message embeds a credential-shaped token."""
+
+        del args, kwargs
+        raise RuntimeError(f"gh api failed: Authorization: Bearer {leaked_token}")
+
+    monkeypatch.setattr(
+        sweep, "build_requests_for_pull_request", raise_with_token
+    )
+    result = sweep.sweep(
+        target_client=FakeClient(),
+        dispatch_client=FakeClient(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=24,
+        max_dispatches=1,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert leaked_token not in output
+    assert "Agent mention sweep skipped" in output
+
+
 def test_sweep_stops_before_its_time_budget_to_exit_cleanly(
     monkeypatch, capsys
 ) -> None:

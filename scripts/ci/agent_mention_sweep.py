@@ -20,6 +20,7 @@ from agent_mention_router import (
     parse_event,
     parse_repository_allowlist,
 )
+from redact_sensitive_log import redact_text
 
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
@@ -345,7 +346,9 @@ def sweep(
         """Record one isolated error and preserve the remaining sweep."""
 
         counters.failures += 1
-        message = " ".join(str(error).split()) or error.__class__.__name__
+        message = redact_text(" ".join(str(error).split())) or (
+            error.__class__.__name__
+        )
         print(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
