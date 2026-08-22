@@ -372,55 +372,71 @@ def sweep(
     # had not yet started (queued behind the worker cap) never begins one
     # more retry-with-backoff cycle. Already-running fetches (up to
     # max_workers) still run to completion during that cancellation/wait.
-    for issue in list_recent_pull_requests(
-        target_client,
-        organization=organization,
-        repository_source=repository_source,
-        since=since,
-        on_error=record_failure,
-        rotation_offset=rotation_offset,
-    ):
-        if deadline is not None and clock() >= deadline:
-            print(
-                "Agent mention sweep stopped before its time budget "
-                f"({time_budget_seconds:.0f}s) to leave the job margin to "
-                f"exit cleanly; {dispatched} dispatch(es) and "
-                f"{counters.failures} isolated failure(s) so far."
-            )
-            return dispatched
-        issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
-        try:
-            requests = build_requests_for_pull_request(
-                target_client,
-                issue=issue,
-                since=since,
-            )
-        except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
-            record_failure(issue_scope, exc)
-            continue
-        for request in requests:
-            request_scope = f"{issue_scope}/comment-{request.comment_id}"
-            try:
-                queued_agents = dispatch_request(
-                    request,
-                    target_client=target_client,
-                    dispatch_client=dispatch_client,
-                    opencode_allowlist=opencode_allowlist,
-                    dry_run=dry_run,
-                    ledger_artifact_cache=ledger_artifact_cache,
-                )
-            except Exception as exc:  # noqa: BLE001 - request isolation boundary
-                record_failure(request_scope, exc)
-                continue
-            if not queued_agents:
-                continue
-            dispatched += 1
-            if dispatched >= max_dispatches:
+    #
+    # The initial organization repository listing (list_accessible_
+    # repositories, called once at the top of list_recent_pull_requests,
+    # before its first yield) is NOT wrapped in per-repository isolation —
+    # unlike every per-repository fetch inside the executor, it has no
+    # on_error boundary of its own. If it exhausts GitHubClient's rate-limit
+    # retries, the resulting exception surfaces on this loop's first
+    # advancement. Without the try/except below, that would crash this
+    # entire cycle's dispatch (observed live: run 32586893733, 2026-08-22
+    # 17:09 UTC) instead of being treated as one isolated failure like every
+    # other fault in this sweep, wasting the whole cycle rather than
+    # leaving it to the next one 5 minutes later.
+    try:
+        for issue in list_recent_pull_requests(
+            target_client,
+            organization=organization,
+            repository_source=repository_source,
+            since=since,
+            on_error=record_failure,
+            rotation_offset=rotation_offset,
+        ):
+            if deadline is not None and clock() >= deadline:
                 print(
-                    "Agent mention sweep reached dispatch limit "
-                    f"{max_dispatches}; isolated failures={counters.failures}."
+                    "Agent mention sweep stopped before its time budget "
+                    f"({time_budget_seconds:.0f}s) to leave the job margin "
+                    f"to exit cleanly; {dispatched} dispatch(es) and "
+                    f"{counters.failures} isolated failure(s) so far."
                 )
                 return dispatched
+            issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
+            try:
+                requests = build_requests_for_pull_request(
+                    target_client,
+                    issue=issue,
+                    since=since,
+                )
+            except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
+                record_failure(issue_scope, exc)
+                continue
+            for request in requests:
+                request_scope = f"{issue_scope}/comment-{request.comment_id}"
+                try:
+                    queued_agents = dispatch_request(
+                        request,
+                        target_client=target_client,
+                        dispatch_client=dispatch_client,
+                        opencode_allowlist=opencode_allowlist,
+                        dry_run=dry_run,
+                        ledger_artifact_cache=ledger_artifact_cache,
+                    )
+                except Exception as exc:  # noqa: BLE001 - request isolation boundary
+                    record_failure(request_scope, exc)
+                    continue
+                if not queued_agents:
+                    continue
+                dispatched += 1
+                if dispatched >= max_dispatches:
+                    print(
+                        "Agent mention sweep reached dispatch limit "
+                        f"{max_dispatches}; isolated failures={counters.failures}."
+                    )
+                    return dispatched
+    except Exception as exc:  # noqa: BLE001 - repository-listing isolation boundary
+        record_failure(f"{organization} repository listing", exc)
+        return dispatched
     print(
         "Agent mention sweep completed with "
         f"{dispatched} dispatch(es) and {counters.failures} isolated failure(s)."
