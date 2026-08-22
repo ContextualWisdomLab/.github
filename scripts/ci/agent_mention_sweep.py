@@ -8,6 +8,7 @@ import concurrent.futures
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Sequence
@@ -24,6 +25,13 @@ ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
+# The sweep-organization-agent-mentions job has a 15-minute GitHub Actions
+# timeout; a forced cancellation on that deadline loses the run's log tail
+# and metrics. Stop dispatching new work with margin to spare so the sweep
+# exits cleanly and reports what it completed. GitHubClient's rate-limit
+# retry can now cost up to ~75s of backoff per failing repository, so this
+# margin must absorb several such retries, not just normal per-call latency.
+DEFAULT_TIME_BUDGET_SECONDS = 600.0
 
 
 @dataclass
@@ -316,17 +324,22 @@ def sweep(
     dry_run: bool = False,
     now: datetime | None = None,
     metrics: SweepMetrics | None = None,
+    time_budget_seconds: float | None = DEFAULT_TIME_BUDGET_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Queue bounded new work while isolating candidate-local failures."""
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
+    if time_budget_seconds is not None and time_budget_seconds <= 0:
+        raise ValueError("time budget must be positive when set")
     current = now or datetime.now(timezone.utc)
     since = cutoff_timestamp(lookback_hours, now=current)
     rotation_offset = int(current.timestamp() // REPOSITORY_ROTATION_SECONDS)
     counters = metrics if metrics is not None else SweepMetrics()
     ledger_artifact_cache: dict[str, bool] = {}
     dispatched = 0
+    deadline = None if time_budget_seconds is None else clock() + time_budget_seconds
 
     def record_failure(scope: str, error: Exception) -> None:
         """Record one isolated error and preserve the remaining sweep."""
@@ -337,14 +350,33 @@ def sweep(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
 
-    for issue in list_recent_pull_requests(
+    # A plain `for issue in generator` advances the generator (which itself
+    # makes the potentially slow, potentially rate-limited API call for the
+    # next repository) before the loop body runs. Checking the deadline only
+    # in the loop body would let one more expensive fetch start regardless
+    # of the budget. Iterate manually so the deadline is checked BEFORE each
+    # generator advancement.
+    candidates = list_recent_pull_requests(
         target_client,
         organization=organization,
         repository_source=repository_source,
         since=since,
         on_error=record_failure,
         rotation_offset=rotation_offset,
-    ):
+    )
+    _sentinel = object()
+    while True:
+        if deadline is not None and clock() >= deadline:
+            print(
+                "Agent mention sweep stopped before its time budget "
+                f"({time_budget_seconds:.0f}s) to leave the job margin to "
+                f"exit cleanly; {dispatched} dispatch(es) and "
+                f"{counters.failures} isolated failure(s) so far."
+            )
+            return dispatched
+        issue = next(candidates, _sentinel)
+        if issue is _sentinel:
+            break
         issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
         try:
             requests = build_requests_for_pull_request(
@@ -397,6 +429,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--lookback-hours", type=int, default=168)
     parser.add_argument("--max-dispatches", type=int, default=20)
+    parser.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        default=DEFAULT_TIME_BUDGET_SECONDS,
+        help=(
+            "Stop dispatching new work after this many seconds so the job "
+            "exits cleanly instead of hitting its GitHub Actions timeout. "
+            "Pass a value <= 0 to disable (unbounded)."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     allowlist = parse_repository_allowlist(
@@ -415,6 +457,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         opencode_allowlist=allowlist,
         dry_run=args.dry_run,
         metrics=metrics,
+        time_budget_seconds=(
+            None if args.time_budget_seconds <= 0 else args.time_budget_seconds
+        ),
     )
     return 1 if metrics.failures else 0
 
