@@ -1,0 +1,523 @@
+name: One-shot organization label triage v2
+
+on:
+  push:
+    branches:
+      - ops/one-shot-label-triage-v2-20260822
+    paths:
+      - .github/workflows/one-shot-org-label-triage-v2.yml
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  label-open-items:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      ORG_NAME: ContextualWisdomLab
+      CLEANUP_BRANCH: ops/one-shot-label-triage-v2-20260822
+    steps:
+      - name: Resolve organization-scoped triage credential
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          triage_token=""
+          token_source=""
+          if [ -n "${PR_REVIEW_MERGE_TOKEN:-}" ]; then
+            triage_token="$PR_REVIEW_MERGE_TOKEN"
+            token_source="PR_REVIEW_MERGE_TOKEN"
+          elif [ -n "${OPENCODE_APPROVE_TOKEN:-}" ]; then
+            triage_token="$OPENCODE_APPROVE_TOKEN"
+            token_source="OPENCODE_APPROVE_TOKEN"
+          else
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              echo "::error::No direct organization credential and no OIDC token-exchange environment are available."
+              exit 1
+            fi
+
+            request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+            separator="&"
+            case "$request_url" in
+              *\?*) ;;
+              *) separator="?" ;;
+            esac
+            oidc_response="$(
+              curl -fsS --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+            )"
+            oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+            if [ -z "$oidc_token" ]; then
+              echo "::error::OIDC token response did not contain a token."
+              exit 1
+            fi
+            token_response="$(
+              curl -fsS --connect-timeout 10 --max-time 30 \
+                -X POST \
+                -H "Authorization: Bearer ${oidc_token}" \
+                "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+            )"
+            triage_token="$(jq -r '.token // empty' <<<"$token_response")"
+            token_source="OpenCode GitHub App token exchange"
+          fi
+
+          if [ -z "$triage_token" ]; then
+            echo "::error::Organization-scoped triage credential resolution returned an empty token."
+            exit 1
+          fi
+          echo "::add-mask::$triage_token"
+          echo "TRIAGE_TOKEN=$triage_token" >>"$GITHUB_ENV"
+          echo "Resolved organization label authority through ${token_source}."
+
+      - name: Create taxonomy and triage every open issue and pull request
+        env:
+          GH_TOKEN: ${{ env.TRIAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from dataclasses import dataclass
+          from typing import Any, Iterable
+
+          API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+          ORG = os.environ["ORG_NAME"]
+          TOKEN = os.environ["GH_TOKEN"]
+
+          LABELS: dict[str, tuple[str, str]] = {
+              "type: bug": ("d73a4a", "Defect or incorrect behavior"),
+              "type: feature": ("0e8a16", "New or expanded product capability"),
+              "type: docs": ("0075ca", "Documentation, ADR, PRD, or technical writing"),
+              "type: maintenance": ("cfd3d7", "Maintenance, build, dependency, or operational upkeep"),
+              "type: security": ("b60205", "Security vulnerability or security-specific remediation"),
+              "type: test": ("5319e7", "Test coverage, fixtures, fuzzing, or validation"),
+              "type: refactor": ("1d76db", "Internal refactoring without intended product behavior change"),
+              "area: ci-cd": ("0366d6", "CI, GitHub Actions, checks, release, or supply chain"),
+              "area: dependencies": ("6f42c1", "Dependency or lockfile maintenance"),
+              "area: accessibility": ("7057ff", "Accessibility and assistive-technology support"),
+              "area: api": ("fbca04", "API, protocol, event, or external contract"),
+              "area: data": ("c2e0c6", "Database, schema, migration, ETL, or lineage"),
+              "area: ui-ux": ("d4c5f9", "Frontend, interaction, design, or user experience"),
+              "area: operations": ("0052cc", "Operability, observability, readiness, SLO, backup, or retention"),
+              "area: auth": ("e99695", "Authentication, authorization, identity, or tenant isolation"),
+              "area: security": ("b60205", "Security boundary, hardening, or vulnerability prevention"),
+              "area: performance": ("2cbe4e", "Performance, resource use, scalability, or benchmarking"),
+              "priority: critical": ("b60205", "Immediate blocker, P0, urgent deadlock, or critical incident"),
+              "priority: high": ("d93f0b", "High-priority or P1 work"),
+              "priority: medium": ("fbca04", "Normal-priority or P2 work"),
+              "priority: low": ("c5def5", "Low-priority or P3 work"),
+              "status: blocked": ("000000", "Blocked by conflict, dependency, or required prerequisite"),
+              "status: needs-review": ("5319e7", "Open pull request requiring current-head review or checks"),
+              "status: needs-update": ("f9d0c4", "Pull-request branch is behind its current base"),
+              "status: mergeable": ("0e8a16", "GitHub reports a mechanically clean merge state; policy gates may remain"),
+              "status: draft": ("cfd3d7", "Draft pull request"),
+              "status: triaged": ("bfdadc", "Open issue has an organization taxonomy assignment"),
+              "scope: product-gap": ("9c27b0", "Customer-visible product gap"),
+              "scope: commercial-readiness": ("006b75", "Production, enterprise, release, or commercial readiness"),
+              "scope: research": ("1d76db", "Research, statistical validation, or scientific evidence"),
+              "merge: urgent-review": ("b60205", "Central or critical pull request requiring immediate review attention"),
+          }
+          MANAGED_LABELS = frozenset(LABELS)
+
+
+          class ApiError(RuntimeError):
+              def __init__(self, status: int, payload: str, path: str) -> None:
+                  super().__init__(f"GitHub API {status} for {path}: {payload[:500]}")
+                  self.status = status
+                  self.payload = payload
+                  self.path = path
+
+
+          def api(
+              method: str,
+              path: str,
+              payload: dict[str, Any] | list[Any] | None = None,
+              *,
+              retries: int = 6,
+          ) -> Any:
+              url = path if path.startswith("http") else f"{API_URL}{path}"
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {TOKEN}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "cwl-one-shot-label-triage/2.0",
+              }
+              if data is not None:
+                  headers["Content-Type"] = "application/json"
+              request = urllib.request.Request(url, data=data, headers=headers, method=method)
+              for attempt in range(retries):
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          raw = response.read()
+                          return None if not raw else json.loads(raw.decode("utf-8"))
+                  except urllib.error.HTTPError as exc:
+                      raw = exc.read().decode("utf-8", errors="replace")
+                      if exc.code in {429, 500, 502, 503, 504} and attempt + 1 < retries:
+                          retry_after = int(exc.headers.get("Retry-After", "0") or 0)
+                          time.sleep(min(retry_after or 2**attempt, 30))
+                          continue
+                      if exc.code == 403 and attempt + 1 < retries:
+                          remaining = exc.headers.get("X-RateLimit-Remaining")
+                          reset = exc.headers.get("X-RateLimit-Reset")
+                          if remaining == "0" and reset and reset.isdigit():
+                              wait = max(1, int(reset) - int(time.time()) + 1)
+                              time.sleep(min(wait, 60))
+                              continue
+                      raise ApiError(exc.code, raw, path) from exc
+                  except urllib.error.URLError as exc:
+                      if attempt + 1 >= retries:
+                          raise RuntimeError(f"GitHub API network failure for {path}: {exc}") from exc
+                      time.sleep(min(2**attempt, 30))
+              raise AssertionError("unreachable")
+
+
+          def paginate(path: str) -> Iterable[dict[str, Any]]:
+              separator = "&" if "?" in path else "?"
+              page = 1
+              while True:
+                  values = api("GET", f"{path}{separator}per_page=100&page={page}")
+                  if not isinstance(values, list):
+                      raise RuntimeError(f"Expected list from {path}, got {type(values).__name__}")
+                  yield from values
+                  if len(values) < 100:
+                      return
+                  page += 1
+
+
+          def contains_any(text: str, values: Iterable[str]) -> bool:
+              return any(value in text for value in values)
+
+
+          def conventional_prefix(title: str) -> str:
+              match = re.match(r"^\s*(?:\[[^\]]+\]\s*)?([a-zA-Z]+)(?:\([^)]*\))?[!]?\s*:", title)
+              return "" if match is None else match.group(1).lower()
+
+
+          @dataclass(frozen=True)
+          class ClassifiedItem:
+              number: int
+              title: str
+              is_pull_request: bool
+              labels: tuple[str, ...]
+
+
+          def classify(
+              repo_full_name: str,
+              item: dict[str, Any],
+              pull: dict[str, Any] | None,
+          ) -> ClassifiedItem:
+              title = str(item.get("title") or "").strip()
+              body = str(item.get("body") or "")
+              title_l = title.lower()
+              body_l = body.lower()
+              existing_names = {
+                  str(label.get("name") or "").lower()
+                  for label in item.get("labels") or []
+                  if isinstance(label, dict)
+              }
+              existing_text = " ".join(sorted(existing_names))
+              combined = f"{title_l}\n{body_l}\n{existing_text}"
+              area_text = title_l if pull is not None else combined[:5000]
+              prefix = conventional_prefix(title)
+              labels: set[str] = set()
+
+              dependency_work = prefix in {"deps", "dependabot"} or contains_any(
+                  title_l,
+                  ("dependabot", "dependency", "dependencies", "bump ", "(deps)", "lockfile", "package-lock", "pnpm-lock", "의존성"),
+              )
+              security_work = prefix in {"security", "sec"} or contains_any(
+                  title_l,
+                  ("cve-", "vulnerability", "zero-day", "secret leak", "credential exposure", "취약점", "보안"),
+              )
+
+              if security_work:
+                  labels.add("type: security")
+              elif dependency_work:
+                  labels.add("type: maintenance")
+              elif prefix in {"docs", "doc"} or contains_any(title_l, ("documentation", "문서", " adr ", " prd ", " trd ")):
+                  labels.add("type: docs")
+              elif prefix in {"test", "tests"} or contains_any(title_l, ("fuzz", "test coverage", "fixture", "테스트", "검증")):
+                  labels.add("type: test")
+              elif prefix == "refactor" or "리팩터" in title_l:
+                  labels.add("type: refactor")
+              elif prefix in {"fix", "bug", "hotfix"} or contains_any(title_l, ("[bug]", " defect", "regression", "버그", "오류 수정")) or "bug" in existing_names:
+                  labels.add("type: bug")
+              elif prefix in {"feat", "feature"} or contains_any(
+                  title_l,
+                  ("[product gap]", "implement ", "add ", "support ", "enable ", "deliver ", "create ", "기능", "추가", "구현", "지원"),
+              ) or "enhancement" in existing_names:
+                  labels.add("type: feature")
+              elif prefix in {"ci", "build", "chore", "perf", "reliability"}:
+                  labels.add("type: maintenance")
+              else:
+                  labels.add("type: maintenance" if pull is not None else "type: feature")
+
+              area_rules: tuple[tuple[str, tuple[str, ...]], ...] = (
+                  ("area: dependencies", ("dependabot", "dependency", "dependencies", "bump ", "lockfile", "package-lock", "pnpm-lock", "의존성")),
+                  ("area: ci-cd", ("github actions", "workflow", " ci", "checks", "release", "build", "coverage", "semgrep", "codeql", "sast", "sbom", "provenance", "attestation", "워크플로", "릴리스")),
+                  ("area: auth", (" auth", "oidc", "oauth", "jwt", "tenant isolation", "permission", "access control", "identity", "scim", "인증", "인가", "권한")),
+                  ("area: security", ("security", "vulnerability", "cve-", "ssrf", "xss", "cors", "secret", "encryption", "kms", "malware", "hardening", "harden", "hostile", "보안", "취약점")),
+                  ("area: accessibility", ("accessibility", "wcag", "a11y", "screen reader", "keyboard", "aria", "접근성", "키보드")),
+                  ("area: api", (" api", "openapi", "endpoint", "http", "webhook", "event schema", "contract", "sdk", "프로토콜")),
+                  ("area: data", ("postgres", "sql", "database", "schema", "migration", "etl", "data model", "lineage", "record store", "데이터베이스", "스키마", "마이그레이션", "계보")),
+                  ("area: ui-ux", (" ui", " ux", "frontend", "figma", "storybook", "dashboard", "workspace", "navigation", "design", "프론트", "디자인", "화면")),
+                  ("area: performance", ("performance", "latency", "memory", "gpu", "cpu", "scal", "benchmark", "optimiz", "pool", "hot partition", "성능", "메모리")),
+                  ("area: operations", ("observability", "telemetry", "slo", "alert", "readiness", "health", "operational", "retention", "legal hold", "backup", "restore", "heartbeat", "운영", "관측", "백업", "복구")),
+              )
+              for label, needles in area_rules:
+                  if contains_any(area_text, needles):
+                      labels.add(label)
+                  if sum(name.startswith("area: ") for name in labels) >= 4:
+                      break
+
+              first_body = body_l[:1200]
+              if contains_any(title_l, ("product gap", "customer-visible", "buyer-visible", "제품 gap")) or contains_any(
+                  first_body,
+                  ("buyer-visible gap", "customer-visible gap", "buyer outcome", "customer outcome", "구매자 체감"),
+              ):
+                  labels.add("scope: product-gap")
+              if contains_any(
+                  title_l,
+                  ("commercial", "production readiness", "release candidate", "ga ", "상용", "운영 준비", "릴리스"),
+              ) or contains_any(first_body, ("commercial readiness", "production readiness", "enterprise readiness")):
+                  labels.add("scope: commercial-readiness")
+              if contains_any(
+                  title_l,
+                  ("research", "psychometric", "statistical", "simulation", "true-parameter", "recovery", "연구", "심리측정", "통계"),
+              ):
+                  labels.add("scope: research")
+
+              priority_text = f"{title_l} {existing_text}"
+              explicit_critical = bool(
+                  re.search(r"(?:^|\W)(?:p0|critical|urgent|blocker|zero-day|긴급|교착)(?:\W|$)", priority_text)
+              )
+              explicit_high = bool(re.search(r"(?:^|\W)(?:p1|high priority|우선순위 높음)(?:\W|$)", priority_text))
+              explicit_low = bool(re.search(r"(?:^|\W)(?:p3|low priority|nice to have|낮은 우선순위)(?:\W|$)", priority_text))
+              if explicit_critical:
+                  labels.add("priority: critical")
+              elif explicit_high or security_work:
+                  labels.add("priority: high")
+              elif explicit_low:
+                  labels.add("priority: low")
+              else:
+                  labels.add("priority: medium")
+
+              blocking_text = combined[:7000]
+              explicit_blocked = bool(
+                  re.search(r"\b(blocked|blocking|waiting on|depends on #\d+|dependency-blocked)\b", blocking_text)
+                  or contains_any(blocking_text, ("교착", "선행 pr", "의존성 차단"))
+              )
+
+              if pull is not None:
+                  if bool(pull.get("draft")):
+                      labels.add("status: draft")
+                  else:
+                      mergeable_state = str(pull.get("mergeable_state") or "unknown").lower()
+                      if mergeable_state == "dirty" or explicit_blocked:
+                          labels.add("status: blocked")
+                      elif mergeable_state == "behind":
+                          labels.add("status: needs-update")
+                      elif mergeable_state == "clean":
+                          labels.add("status: mergeable")
+                      else:
+                          labels.add("status: needs-review")
+
+                  central_critical = (
+                      repo_full_name == f"{ORG}/.github"
+                      and prefix in {"fix", "security", "ci", "reliability"}
+                      and contains_any(
+                          title_l,
+                          ("review", "workflow", "strix", "opencode", "coverage", "required", "queue", "status credential", "branch protection", "security scan"),
+                      )
+                  )
+                  if not bool(pull.get("draft")) and (explicit_critical or central_critical):
+                      labels.add("merge: urgent-review")
+              else:
+                  labels.add("status: blocked" if explicit_blocked else "status: triaged")
+
+              return ClassifiedItem(
+                  number=int(item["number"]),
+                  title=title,
+                  is_pull_request=pull is not None,
+                  labels=tuple(sorted(labels)),
+              )
+
+
+          summary: dict[str, Any] = {
+              "repositories_scanned": 0,
+              "repositories_with_open_items": 0,
+              "issues_triaged": 0,
+              "pull_requests_triaged": 0,
+              "labels_created": 0,
+              "labels_updated": 0,
+              "labels_added": 0,
+              "labels_removed": 0,
+              "failures": [],
+          }
+          counted_items: set[tuple[str, int]] = set()
+          ensured_labels: set[tuple[str, str]] = set()
+
+
+          def ensure_label(repo_full_name: str, name: str) -> None:
+              identity = (repo_full_name, name)
+              if identity in ensured_labels:
+                  return
+              color, description = LABELS[name]
+              encoded = urllib.parse.quote(name, safe="")
+              try:
+                  current = api("GET", f"/repos/{repo_full_name}/labels/{encoded}")
+              except ApiError as exc:
+                  if exc.status != 404:
+                      raise
+                  api(
+                      "POST",
+                      f"/repos/{repo_full_name}/labels",
+                      {"name": name, "color": color, "description": description},
+                  )
+                  summary["labels_created"] += 1
+              else:
+                  current_color = str(current.get("color") or "").lower()
+                  current_description = str(current.get("description") or "")
+                  if current_color != color or current_description != description:
+                      api(
+                          "PATCH",
+                          f"/repos/{repo_full_name}/labels/{encoded}",
+                          {"new_name": name, "color": color, "description": description},
+                      )
+                      summary["labels_updated"] += 1
+              ensured_labels.add(identity)
+
+
+          def apply_labels(
+              repo_full_name: str,
+              item_snapshot: dict[str, Any],
+              result: ClassifiedItem,
+          ) -> None:
+              existing = {
+                  str(label.get("name"))
+                  for label in item_snapshot.get("labels") or []
+                  if isinstance(label, dict) and label.get("name")
+              }
+              desired = set(result.labels)
+              for name in sorted(desired):
+                  ensure_label(repo_full_name, name)
+
+              stale_managed = sorted((existing & MANAGED_LABELS) - desired)
+              for name in stale_managed:
+                  encoded = urllib.parse.quote(name, safe="")
+                  try:
+                      api("DELETE", f"/repos/{repo_full_name}/issues/{result.number}/labels/{encoded}")
+                  except ApiError as exc:
+                      if exc.status != 404:
+                          raise
+                  else:
+                      summary["labels_removed"] += 1
+
+              missing = sorted(desired - existing)
+              if missing:
+                  api(
+                      "POST",
+                      f"/repos/{repo_full_name}/issues/{result.number}/labels",
+                      {"labels": missing},
+                  )
+                  summary["labels_added"] += len(missing)
+
+
+          repositories = [
+              repo
+              for repo in paginate(f"/orgs/{ORG}/repos?type=all")
+              if not bool(repo.get("archived")) and not bool(repo.get("disabled"))
+          ]
+          summary["repositories_scanned"] = len(repositories)
+
+          # Two passes capture items opened while the first organization sweep is in progress.
+          repositories_with_items: set[str] = set()
+          for pass_number in (1, 2):
+              for repository in repositories:
+                  repo_full_name = str(repository["full_name"])
+                  try:
+                      open_items = list(paginate(f"/repos/{repo_full_name}/issues?state=open&sort=updated&direction=desc"))
+                      if not open_items:
+                          continue
+                      repositories_with_items.add(repo_full_name)
+                      for item in open_items:
+                          pull = None
+                          if item.get("pull_request") is not None:
+                              pull = api("GET", f"/repos/{repo_full_name}/pulls/{int(item['number'])}")
+                              if pull.get("mergeable") is None:
+                                  time.sleep(0.35)
+                                  pull = api("GET", f"/repos/{repo_full_name}/pulls/{int(item['number'])}")
+                          result = classify(repo_full_name, item, pull)
+                          apply_labels(repo_full_name, item, result)
+
+                          identity = (repo_full_name, result.number)
+                          if identity not in counted_items:
+                              counted_items.add(identity)
+                              if result.is_pull_request:
+                                  summary["pull_requests_triaged"] += 1
+                              else:
+                                  summary["issues_triaged"] += 1
+                      print(f"pass {pass_number}: triaged {repo_full_name} ({len(open_items)} open items)")
+                  except Exception as exc:  # Complete the remaining organization inventory before failing.
+                      failure = {"pass": pass_number, "repository": repo_full_name, "error": str(exc)}
+                      summary["failures"].append(failure)
+                      print(f"::error title=Label triage failed for {repo_full_name}::{exc}")
+              if pass_number == 1:
+                  time.sleep(3)
+
+          summary["repositories_with_open_items"] = len(repositories_with_items)
+          print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a", encoding="utf-8") as handle:
+                  handle.write("## Organization issue and pull-request label triage\n\n")
+                  handle.write(f"- Repositories scanned: {summary['repositories_scanned']}\n")
+                  handle.write(f"- Repositories with open items: {summary['repositories_with_open_items']}\n")
+                  handle.write(f"- Open issues triaged: {summary['issues_triaged']}\n")
+                  handle.write(f"- Open pull requests triaged: {summary['pull_requests_triaged']}\n")
+                  handle.write(f"- Labels created: {summary['labels_created']}\n")
+                  handle.write(f"- Labels updated: {summary['labels_updated']}\n")
+                  handle.write(f"- Label assignments added: {summary['labels_added']}\n")
+                  handle.write(f"- Stale managed assignments removed: {summary['labels_removed']}\n")
+                  handle.write(f"- Repository-pass failures: {len(summary['failures'])}\n")
+                  if summary["failures"]:
+                      handle.write("\n### Failures\n")
+                      for failure in summary["failures"]:
+                          handle.write(
+                              f"- pass {failure['pass']} `{failure['repository']}`: {failure['error']}\n"
+                          )
+
+          if summary["failures"]:
+              raise SystemExit(1)
+          PY
+
+      - name: Remove the one-shot branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          import urllib.parse
+          print(urllib.parse.quote(f"heads/{os.environ['CLEANUP_BRANCH']}", safe=""))
+          PY
+          )"
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/${encoded_ref}" || true
