@@ -47,11 +47,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Replaced nonexistent `job.workflow_repository` / `job.workflow_sha` / `job.workflow_ref` / `job.workflow_file_path` context references (actionlint: "property ... is not defined in object type") in `pr-review-fix-scheduler.yml`'s called-workflow source verification and `exact-artifact-sbom-attestation.yml`'s trusted-verifier checkout. Both always failed closed on the missing properties (ContextualWisdomLab/.github#1212) or, for the SBOM attestation checkout, silently resolved an empty repository/ref instead of the pinned trusted source (downstream `gh attestation verify --signer-repo`/`--signer-workflow`, using the separately hardcoded `SIGNER_REPOSITORY` constant rather than any workflow_ref, still failed closed on the resulting empty signer identity). `github.workflow_ref`/`github.workflow_sha` are real, documented properties, but for a `workflow_call` target they reflect the top-level *calling* workflow, not the reusable workflow's own file — a prefix match against the reusable workflow's own path can never succeed. `exact-artifact-sbom-attestation.yml`'s checkout now uses `github.workflow_sha` (correct today: it has no callers yet); `pr-review-fix-scheduler.yml`'s identity check instead validates `github.repository`, since every current caller uses a local, same-repo `uses: ./...` where caller and callee share one commit and `github.workflow_sha` is still the right pin. Tracked follow-up for the SBOM attestation checkout once a real (potentially cross-repo) caller exists: ContextualWisdomLab/.github#1228.
 - Use the repository hosting each workflow run to select scheduler Actions
-  credentials: central required-workflow inventory uses the receiving
-  repository's job token, while target-repository inventory and mutations keep
-  the established explicit credential chain. An exhausted organization-wide
-  OpenCode App installation budget can no longer prevent either central or
-  cross-repository PRs from dispatching exact-head review.
+  credentials: central required-workflow inventory and stale-run cancellation
+  use the receiving repository's job token, while target-repository inventory
+  and mutations keep the established explicit credential chain. An exhausted
+  organization-wide OpenCode App installation budget can no longer prevent
+  either central or cross-repository PRs from dispatching exact-head review.
 - Kept independently valid root-level Python lock environments separate during
   trusted base coverage installation. A directory with more than two candidate
   locks no longer collapses unrelated OpenCode, security, and application

@@ -2100,11 +2100,19 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     """Force-cancel workflow runs without blocking current-head decisions."""
     if not run_ids:
         return {}
+    central_repo = (
+        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
+    ).strip()
+    run_command = (
+        run_github_dispatch
+        if central_repo and repo == central_repo
+        else run_github_actions
+    )
 
     def cancel_one(run_id: str) -> tuple[str, str | None]:
         """Return one run id and its bounded GitHub cancellation error, if any."""
         try:
-            run_github_actions(
+            run_command(
                 [
                     "gh",
                     "api",

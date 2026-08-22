@@ -69,11 +69,12 @@ Targeted cross-repository run `32566396712` later exposed the remaining host
 boundary: while reviewing `contextual-orchestrator#820`, active OpenCode run
 discovery queried the central `.github` Actions inventory with the shared App
 token and exhausted that installation's quota before dispatch. Active-run
-inventory now selects credentials by the repository hosting the run. Central
-required-workflow runs use the receiving repository's job token; target-repo
-run inventory and mutations retain the explicit cross-repository credential.
-The regression exercises both hosts in one call sequence so a later refactor
-cannot collapse them back onto one rate-limit bucket.
+inventory and stale-run cancellation now select credentials by the repository
+hosting the run. Central required-workflow runs use the receiving repository's
+job token; target-repo run inventory and mutations retain the explicit
+cross-repository credential. The regression exercises discovery and
+cancellation on both hosts so a later refactor cannot collapse them back onto
+one rate-limit bucket.
 
 ## APA 7th references
 

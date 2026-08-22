@@ -1967,10 +1967,10 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     ]
 
 
-def test_active_workflow_runs_use_central_runner_token_for_central_dispatch(
+def test_central_workflow_runs_use_central_runner_token_for_central_dispatch(
     monkeypatch,
 ):
-    """Central run discovery must not spend the cross-repository App quota."""
+    """Central run discovery and cancellation must not spend the App quota."""
     calls = []
 
     def fake_run_with_env(args, *, stdin=None, env=None):
@@ -1987,10 +1987,14 @@ def test_active_workflow_runs_use_central_runner_token_for_central_dispatch(
     )
 
     sched.active_workflow_runs("ContextualWisdomLab/.github", statuses=("queued",))
+    sched.force_cancel_workflow_runs("ContextualWisdomLab/.github", ["101"])
     sched.active_workflow_runs("owner/repo", statuses=("queued",))
+    sched.force_cancel_workflow_runs("owner/repo", ["202"])
 
     assert [call[1] for call in calls] == [
         "central-runner-token",
+        "central-runner-token",
+        "cross-repository-actions-token",
         "cross-repository-actions-token",
     ]
 
