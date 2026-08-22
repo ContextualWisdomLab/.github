@@ -1,0 +1,131 @@
+name: One-shot organization label triage PR trigger
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - .github/workflows/one-shot-org-label-triage-pr.yml
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: one-shot-org-label-triage-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  label-open-items:
+    if: github.head_ref == 'ops/one-shot-label-triage-v2-20260822'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      ORG_NAME: ContextualWisdomLab
+      CLEANUP_BRANCH: ops/one-shot-label-triage-v2-20260822
+    steps:
+      - name: Check out the one-shot implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Resolve organization-scoped triage credential
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          triage_token=""
+          token_source=""
+          if [ -n "${PR_REVIEW_MERGE_TOKEN:-}" ]; then
+            triage_token="$PR_REVIEW_MERGE_TOKEN"
+            token_source="PR_REVIEW_MERGE_TOKEN"
+          elif [ -n "${OPENCODE_APPROVE_TOKEN:-}" ]; then
+            triage_token="$OPENCODE_APPROVE_TOKEN"
+            token_source="OPENCODE_APPROVE_TOKEN"
+          else
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              echo "::error::No direct organization credential and no OIDC token-exchange environment are available."
+              exit 1
+            fi
+
+            request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+            separator="&"
+            case "$request_url" in
+              *\?*) ;;
+              *) separator="?" ;;
+            esac
+            oidc_response="$(
+              curl -fsS --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+            )"
+            oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+            if [ -z "$oidc_token" ]; then
+              echo "::error::OIDC token response did not contain a token."
+              exit 1
+            fi
+            token_response="$(
+              curl -fsS --connect-timeout 10 --max-time 30 \
+                -X POST \
+                -H "Authorization: Bearer ${oidc_token}" \
+                "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+            )"
+            triage_token="$(jq -r '.token // empty' <<<"$token_response")"
+            token_source="OpenCode GitHub App token exchange"
+          fi
+
+          if [ -z "$triage_token" ]; then
+            echo "::error::Organization-scoped triage credential resolution returned an empty token."
+            exit 1
+          fi
+          echo "::add-mask::$triage_token"
+          echo "TRIAGE_TOKEN=$triage_token" >>"$GITHUB_ENV"
+          echo "Resolved organization label authority through ${token_source}."
+
+      - name: Extract and execute the reviewed triage implementation
+        env:
+          GH_TOKEN: ${{ env.TRIAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow_path = Path('.github/workflows/one-shot-org-label-triage-v2.yml')
+          workflow_text = workflow_path.read_text(encoding='utf-8')
+          start_marker = "          python3 <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Remove the one-shot branch"
+          start = workflow_text.index(start_marker) + len(start_marker)
+          end = workflow_text.index(end_marker, start)
+          script = textwrap.dedent(workflow_text[start:end])
+          target = Path('/tmp/one-shot-org-label-triage.py')
+          target.write_text(script, encoding='utf-8')
+          compile(script, str(target), 'exec')
+          PY
+          python3 /tmp/one-shot-org-label-triage.py
+
+      - name: Close the trigger PR and remove the one-shot branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "One-shot organization label triage finished; removing the temporary trigger branch."
+          encoded_ref="$(python3 - <<'PY'
+          import os
+          import urllib.parse
+          print(urllib.parse.quote(f"heads/{os.environ['CLEANUP_BRANCH']}", safe=""))
+          PY
+          )"
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/${encoded_ref}"
