@@ -3584,6 +3584,27 @@ def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     assert cancelled == [("owner/repo", 1, True)]
 
 
+def test_central_dispatch_skips_non_authoritative_target_actions_inventory(
+    monkeypatch,
+):
+    """Central review dispatch must not spend App quota on target old-head runs."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_runs",
+        lambda *args, **kwargs: pytest.fail(
+            "central dispatch must not enumerate target Actions runs"
+        ),
+    )
+
+    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
+
+    assert decision.action == "skip"
+
+
 def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
     auto_merges = []
     disables = []

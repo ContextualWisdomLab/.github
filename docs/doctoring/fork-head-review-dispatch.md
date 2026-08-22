@@ -85,6 +85,20 @@ Central dispatch inventory now validates the exact repository, PR, and head SHA
 encoded in the dispatch title before applying the legacy workflow-name filter.
 The regression covers both API shapes so only one exact-head model review runs.
 
+Live retry `32572857921` exposed one remaining pre-dispatch quota consumer. Every
+PR inspection unconditionally enumerated queued and running workflows in the
+target repository to cancel old-head CI before it examined the centrally hosted
+review run. The shared App installation was already rate-limited, so
+`contextual-orchestrator#820` stopped on that non-authoritative cleanup read and
+never reached exact-head review dispatch. When the required reviewer is hosted
+centrally, target-repository old-head jobs do not supply current-head approval or
+merge evidence and the central dispatch functions already deduplicate and cancel
+their own stale review runs. Centralized inspections therefore skip only that
+target old-head inventory/cancellation step. Same-repository schedulers retain it,
+and all current-head checks, review identity, target reads needed for live PR
+validation, and explicit target mutations remain fail-closed. This removes two
+target Actions-list requests per inspected PR without widening any authority.
+
 ## APA 7th references
 
 GitHub, Inc. (n.d.-a). *REST API endpoints for pull requests*. GitHub Docs.

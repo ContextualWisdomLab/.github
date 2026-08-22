@@ -2371,7 +2371,11 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
-    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
+    # Central reviewers own their run lifecycle in the dispatch repository.
+    # Target old-head CI is non-authoritative, and enumerating it can exhaust
+    # the installation quota before the current-head review is dispatched.
+    if repository_dispatch_target(repo) == repo:
+        cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
