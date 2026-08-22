@@ -660,6 +660,7 @@ jobs:
             && rm -rf /var/lib/apt/lists/*
           ENV LLVM_COV=/usr/bin/llvm-cov-19
           ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
+          ENV COREPACK_HOME=/opt/corepack
           RUN test -x "$LLVM_COV"
           RUN test -x "$LLVM_PROFDATA"
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
@@ -668,6 +669,7 @@ jobs:
             && tar --no-same-owner -xJf /tmp/node-linux-x64.tar.xz -C /usr/local --strip-components=1 \
             && test "$(/usr/local/bin/node --version)" = "v24.18.0" \
             && /usr/local/bin/npm --version >/dev/null \
+            && corepack --version >/dev/null \
             && rm -f /tmp/node-linux-x64.tar.xz
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
@@ -675,18 +677,9 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
-          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
-              https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
-            && echo '7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed  /tmp/pnpm.tgz' | sha512sum -c - \
-            && mkdir -p /opt/pnpm \
-            && tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1 \
-            && chmod 0755 /opt/pnpm/bin/pnpm.cjs \
-            && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
-            && test "$(/usr/local/bin/pnpm --version)" = "11.5.3" \
-            && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
+              mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
@@ -703,8 +696,8 @@ jobs:
                           --no-fund; \
                         rm -rf node_modules; \
                         ;; \
-                      pnpm@11.5.3) \
-                        pnpm fetch \
+                      pnpm@*) \
+                        corepack pnpm fetch \
                           --frozen-lockfile \
                           --ignore-scripts \
                           --store-dir /opt/pnpm-store; \
@@ -716,7 +709,7 @@ jobs:
                     esac; \
                   done; \
               npm cache verify --cache /opt/npm-cache; \
-              chmod -R a+rX /opt/npm-cache /opt/pnpm-store; \
+              chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
@@ -1263,6 +1256,9 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
+            if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
+              return 0
+            fi
             if command -v "$runner" >/dev/null 2>&1; then
               return 0
             fi
@@ -1508,7 +1504,7 @@ jobs:
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
                 run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
-                  pnpm install \
+                  corepack pnpm install \
                     --offline \
                     --frozen-lockfile \
                     --trust-lockfile \
@@ -1618,9 +1614,9 @@ jobs:
                 ;;
               pnpm)
                 if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
+                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack pnpm --filter "$package_name" run build
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack pnpm run build' bash "$package_dir"
                 fi
                 ;;
               yarn)
@@ -2019,13 +2015,13 @@ jobs:
                 if javascript_test_script_collects_coverage; then
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                   esac
                 else
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                   esac
                 fi
