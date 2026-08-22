@@ -3912,7 +3912,7 @@ run_current_target_scan() {
 	fi
 
 	case "$PR_FINDINGS_DECISION" in
-	block_changed | block_unmapped | block_manifest_unverified)
+	block_changed | block_unmapped | block_manifest_finding)
 		if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
 			return 1
 		fi
@@ -3989,7 +3989,7 @@ run_current_target_scan() {
 		fi
 
 		case "$PR_FINDINGS_DECISION" in
-		block_changed | block_unmapped | block_manifest_unverified)
+		block_changed | block_unmapped | block_manifest_finding)
 			if [ "$strict_fallback_provider_signal" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
 				return 1
 			fi
