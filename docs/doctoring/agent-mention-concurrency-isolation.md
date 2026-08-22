@@ -66,6 +66,16 @@ whose pull-list request completes first can expose its recent PR comments
 before a slower sibling. Dispatch remains sequential through the existing
 ledger and exact-head validation boundaries.
 
+### Credential-safe transport diagnostics
+
+The router passes its GitHub credential only through `GH_TOKEN`, never through
+the command arguments. GitHub CLI failures can still echo that credential in
+standard error, so `GitHubClient.request` removes the client's exact token
+before applying the existing 2,000-character diagnostic bound. Timeout errors
+retain their fixed message and do not add command arguments. This follows the
+OWASP logging guidance to remove access tokens while preserving actionable
+operational evidence; it does not mask operational PII.
+
 ## Preserved boundaries
 
 - No model provider, reviewer identity, repository allowlist, token name, credential scope, or branch-protection rule changes.
@@ -74,6 +84,8 @@ ledger and exact-head validation boundaries.
 - Only trusted non-bot `OWNER`, `MEMBER`, or `COLLABORATOR` comments on open pull requests are eligible.
 - Pull request number, exact head and base SHAs, base branch, source comment, requested agent, and requesting actor remain bound to the invocation key.
 - Mention routing remains unable to approve, merge, update branches, publish, or release.
+- GitHub CLI diagnostics retain exit status and sanitized error text but never
+  the active router credential.
 
 ## Operational acceptance
 
@@ -86,6 +98,8 @@ After protected integration:
 5. distinguish downstream provider or review failure from routing failure rather than treating every missing verdict as the same incident.
 6. verify the slow-first/fast-later repository regression remains green so a
    delayed repository cannot starve a completed sibling's comment inventory.
+7. force a GitHub CLI failure that echoes the synthetic client credential and
+   require `[REDACTED]` in the raised diagnostic with no credential value.
 
 A receipt proves routing and durable claim processing. It is not an approval and never substitutes for exact-head checks or branch protection.
 
@@ -108,5 +122,7 @@ GitHub. (n.d.). *Control the concurrency of workflows and jobs*. GitHub Docs. Re
 GitHub. (n.d.). *REST API endpoints for repositories: Create a repository dispatch event*. GitHub Docs. Retrieved August 19, 2026, from https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event
 
 GitHub. (n.d.). *Store and share data with workflow artifacts*. GitHub Docs. Retrieved August 19, 2026, from https://docs.github.com/en/actions/tutorials/store-and-share-data
+
+OWASP Foundation. (n.d.). *Logging cheat sheet*. OWASP Cheat Sheet Series. Retrieved August 22, 2026, from https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html
 
 Python Software Foundation. (n.d.). *concurrent.futures — Launching parallel tasks*. Python documentation. Retrieved August 20, 2026, from https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.as_completed

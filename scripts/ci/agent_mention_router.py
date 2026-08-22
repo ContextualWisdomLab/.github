@@ -97,6 +97,7 @@ class GitHubClient:
             )
             if not diagnostic:
                 diagnostic = "no stderr output"
+            diagnostic = diagnostic.replace(self._token, "[REDACTED]")
             raise RuntimeError(
                 f"gh api failed with exit code {return_code}: {diagnostic[:2000]}"
             )

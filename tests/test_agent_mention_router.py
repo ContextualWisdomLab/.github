@@ -314,7 +314,7 @@ def test_dispatch_noema_only_covers_non_opencode_path() -> None:
 
 
 def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
-    """The token-bound client never places credentials in command arguments."""
+    """The token-bound client keeps credentials out of commands and errors."""
 
     module = load_module()
     with pytest.raises(ValueError, match="token"):
@@ -339,6 +339,19 @@ def test_github_client_validates_token_and_decodes_json(monkeypatch) -> None:
         lambda *args, **kwargs: SimpleNamespace(stdout="  "),
     )
     assert client.request(["repos/x/y"]) is None
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stderr="authentication failed for secret-token",
+            stdout="",
+        ),
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        client.request(["repos/x/y"])
+    assert "secret-token" not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
 
 
 def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
