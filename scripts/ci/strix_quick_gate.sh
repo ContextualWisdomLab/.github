@@ -2664,11 +2664,12 @@ is_nvidia_nim_not_found_error() {
 
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
-## Four error families qualify:
+## Five error families qualify:
 ##   - RateLimit / RESOURCE_EXHAUSTED / HTTP 429
 ##   - litellm API connection failures with LLM-provider evidence
 ##   - litellm service-unavailable / high-demand provider failures
 ##   - MidStreamFallbackError (litellm mid-stream provider switch)
+##   - Caido bootstrap timing failures (guest login before the local proxy is up)
 ## Timeouts are infrastructure failures. In strict CI mode they fail closed;
 ## otherwise the caller may still move to fallback model evaluation.
 is_transient_same_model_retry_error() {
