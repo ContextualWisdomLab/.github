@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -121,6 +122,12 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
+
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError(f"URL cannot target external hostname: {hostname}")
+
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
