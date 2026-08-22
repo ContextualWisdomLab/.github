@@ -1967,6 +1967,34 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     ]
 
 
+def test_active_workflow_runs_use_central_runner_token_for_central_dispatch(
+    monkeypatch,
+):
+    """Central run discovery must not spend the cross-repository App quota."""
+    calls = []
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        calls.append((tuple(args), None if env is None else env.get("GH_TOKEN")))
+        return '{"workflow_runs": []}'
+
+    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "cross-repository-actions-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "central-runner-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    sched.active_workflow_runs("ContextualWisdomLab/.github", statuses=("queued",))
+    sched.active_workflow_runs("owner/repo", statuses=("queued",))
+
+    assert [call[1] for call in calls] == [
+        "central-runner-token",
+        "cross-repository-actions-token",
+    ]
+
+
 def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
     calls = []
     head_sha = "a" * 40

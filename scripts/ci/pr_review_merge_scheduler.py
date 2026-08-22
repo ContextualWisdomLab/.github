@@ -1922,11 +1922,19 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
 
 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
-    """Return active workflow runs for a repository."""
+    """Return active workflow runs with the credential scoped to their host."""
     runs: list[dict[str, Any]] = []
+    central_repo = (
+        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
+    ).strip()
+    run_command = (
+        run_github_dispatch
+        if central_repo and repo == central_repo
+        else run_github_actions
+    )
     for status in statuses:
         payload = json.loads(
-            run_github_actions(
+            run_command(
                 [
                     "gh",
                     "api",
