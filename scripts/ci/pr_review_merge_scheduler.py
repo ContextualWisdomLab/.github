@@ -1583,6 +1583,8 @@ def run_head_guarded_merge(
 
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Enable auto-merge for a PR at its current head using an allowed method."""
+    if pr.get("isDraft"):
+        raise RuntimeError("enable-auto-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return
@@ -1593,6 +1595,8 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Merge a current-head-approved PR immediately with a head guard."""
+    if pr.get("isDraft"):
+        raise RuntimeError("direct-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return

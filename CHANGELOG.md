@@ -57,6 +57,11 @@ Semantic Versioning where the repository publishes a release.
   Exact repository-dispatch titles are also matched before GitHub's `name`
   field is treated as a workflow alias, preventing duplicate exact-head model
   runs when that field contains the configured `run-name`.
+- Refused draft pull requests again at both direct-merge and auto-merge mutation
+  boundaries, even though `inspect_pr` already skips drafts before any mutation.
+  This defense in depth makes a future caller unable to turn forged check or
+  review metadata into a draft merge and records Strix run `32573579932` finding
+  `vuln-0001` without adding a scanner allowlist or weakening required checks.
 - Kept independently valid root-level Python lock environments separate during
   trusted base coverage installation. A directory with more than two candidate
   locks no longer collapses unrelated OpenCode, security, and application

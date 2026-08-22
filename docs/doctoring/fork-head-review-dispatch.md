@@ -99,6 +99,27 @@ and all current-head checks, review identity, target reads needed for live PR
 validation, and explicit target mutations remain fail-closed. This removes two
 target Actions-list requests per inspected PR without widening any authority.
 
+## Draft merge defense in depth
+
+Exact-head Strix run `32573579932` reported `vuln-0001`, alleging that a draft
+pull request could forge successful checks and reach merge without OpenCode
+approval. The proposed proof of concept does not traverse the executable
+control flow: `inspect_pr` returns `skip: draft PR` before stale-run cleanup,
+review interpretation, auto-merge, or direct merge, and an arbitrary author's
+review is not an exact-head OpenCode approval. The report also assumed a fork
+pull-request token could create base-repository check runs and approvals,
+contrary to the least-privilege fork boundary documented by GitHub (GitHub,
+Inc., n.d.-b).
+
+The finding is retained as security evidence rather than broadly suppressed.
+As defense in depth against a future caller bypassing `inspect_pr`, both guarded
+merge mutation functions now reject `isDraft` before actor validation or any
+GitHub call. The regression invokes both mutation boundaries with a valid head
+SHA and asserts an exception plus zero outbound commands. The existing
+top-level draft regression remains, and a new exact-head Strix run must clear
+the changed code; no scanner severity, check requirement, workflow identity, or
+finding allowlist changed.
+
 ## APA 7th references
 
 GitHub, Inc. (n.d.-a). *REST API endpoints for pull requests*. GitHub Docs.
