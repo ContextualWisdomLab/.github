@@ -9,7 +9,9 @@ Semantic Versioning where the repository publishes a release.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification
-  during materialization and then rejecting every version except pnpm 11.5.3.
+  during materialization and then rejecting every version except pnpm 11.5.3;
+  route generic coverage and docstring package scripts through the same
+  Corepack boundary instead of invoking a removed bare `pnpm` binary.
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
   dependencies without weakening registry hashes or the networkless PR sandbox,
   reject namespace, ambiguous, linked, native-extension, and installed-metadata

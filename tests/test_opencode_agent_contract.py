@@ -972,6 +972,27 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert "return" in declared_pnpm_block
 
 
+def test_opencode_coverage_uses_corepack_for_all_pnpm_package_scripts():
+    """Every generic pnpm script runs through the pinned Corepack boundary."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    assert "run_package_script_and_capture()" in measure_step
+    assert (
+        'pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;'
+        in measure_step
+    )
+    assert 'npm) run_and_capture "$label" npm run "$script" ;;' in measure_step
+    assert 'yarn) run_and_capture "$label" yarn run "$script" ;;' in measure_step
+    assert '"$package_runner" run' not in measure_step
+
+
 def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     """An existing coverage flag/tool must run once instead of receiving a duplicate flag."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")

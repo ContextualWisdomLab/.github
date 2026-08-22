@@ -27,8 +27,9 @@ a second pnpm binary:
   cache in the immutable image layer.
 - Networked image construction runs `corepack pnpm fetch` only against
   materialized trusted-base package inputs.
-- The unprivileged, networkless coverage phase runs all pnpm install, build, and
-  test commands through `corepack pnpm`, preserving the declared exact version.
+- The unprivileged, networkless coverage phase runs all pnpm install, build,
+  test, coverage, and docstring package scripts through `corepack pnpm`,
+  preserving the declared exact version.
 - Existing validated-base lock equality, offline install, disabled lifecycle
   hooks, and writable-store-copy controls remain unchanged.
 
@@ -41,9 +42,10 @@ the networked build boundary.
 
 ## Verification
 
-The contract test was changed first and failed against the literal pnpm 11.5.3
-case. After the correction it passes and asserts that build-time fetch plus
-runtime install, build, and test paths all use Corepack.
+The contract tests were changed first and failed against the literal pnpm
+11.5.3 case and the remaining bare `pnpm run` coverage/docstring paths. After
+the correction they pass and assert that build-time fetch plus every runtime
+install, build, test, coverage, and docstring path uses Corepack.
 
 An amd64 reproduction used the production-pinned Python image and Node archive,
 then materialized LineageWeave base commit

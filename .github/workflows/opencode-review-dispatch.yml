@@ -1299,6 +1299,17 @@ jobs:
             fi
           }
 
+          run_package_script_and_capture() {
+            local label="$1"
+            local package_runner="$2"
+            local script="$3"
+            case "$package_runner" in
+              npm) run_and_capture "$label" npm run "$script" ;;
+              pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
+              yarn) run_and_capture "$label" yarn run "$script" ;;
+            esac
+          }
+
           run_python_docstring_coverage() {
             local measured_projects=0
             while IFS= read -r project_dir; do
@@ -1993,11 +2004,11 @@ jobs:
               fi
 
               if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
-                run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
+                run_package_script_and_capture "Repository docstring coverage" "$package_runner" check:python-docstrings
               elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
+                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docstring:coverage
               elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
+                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docs:coverage
               else
                 append "### JavaScript/TypeScript docstring coverage"
                 append ""
@@ -2009,7 +2020,7 @@ jobs:
               if [ -z "$package_runner" ]; then
                 :
               elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
+                run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
                 if javascript_test_script_collects_coverage; then
