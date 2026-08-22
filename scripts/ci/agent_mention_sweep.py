@@ -33,6 +33,21 @@ class SweepMetrics:
     failures: int = 0
 
 
+class SweepRateLimitExhausted(RuntimeError):
+    """Signal that shared GitHub API capacity is unavailable for this sweep."""
+
+
+def is_rate_limit_exhaustion(error: Exception) -> bool:
+    """Return whether an API error says the shared primary/secondary budget is exhausted."""
+
+    message = " ".join(str(error).split()).casefold()
+    if "secondary rate limit" in message:
+        return True
+    return "rate limit" in message and (
+        "exceeded" in message or "exhausted" in message
+    )
+
+
 def parse_timestamp(value: str) -> datetime:
     """Parse one GitHub ISO-8601 timestamp into timezone-aware UTC."""
 
@@ -329,10 +344,20 @@ def sweep(
     dispatched = 0
 
     def record_failure(scope: str, error: Exception) -> None:
-        """Record one isolated error and preserve the remaining sweep."""
+        """Record isolated errors but stop when the shared API budget is exhausted."""
 
         counters.failures += 1
         message = " ".join(str(error).split()) or error.__class__.__name__
+        if is_rate_limit_exhaustion(error):
+            print(
+                f"::error::Agent mention sweep stopping at {scope}: shared GitHub "
+                "API rate limit exhausted. Wait for the installation budget to "
+                "reset; do not re-run this sweep immediately."
+            )
+            raise SweepRateLimitExhausted(
+                "GitHub API rate limit exhausted; stopping organization sweep "
+                "to preserve the shared installation budget"
+            ) from error
         print(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
@@ -403,19 +428,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         os.environ.get("OPENCODE_REPOSITORY_DISPATCH_TARGETS", "")
     )
     metrics = SweepMetrics()
-    sweep(
-        target_client=GitHubClient(
-            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
-        ),
-        dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
-        organization=args.organization,
-        repository_source=args.repository_source,
-        lookback_hours=args.lookback_hours,
-        max_dispatches=args.max_dispatches,
-        opencode_allowlist=allowlist,
-        dry_run=args.dry_run,
-        metrics=metrics,
-    )
+    try:
+        sweep(
+            target_client=GitHubClient(
+                os.environ.get("TARGET_REPOSITORY_TOKEN", "")
+            ),
+            dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
+            organization=args.organization,
+            repository_source=args.repository_source,
+            lookback_hours=args.lookback_hours,
+            max_dispatches=args.max_dispatches,
+            opencode_allowlist=allowlist,
+            dry_run=args.dry_run,
+            metrics=metrics,
+        )
+    except SweepRateLimitExhausted as exc:
+        print(
+            f"::error::{exc} Wait for the installation REST budget to reset "
+            "before the next scheduled run; do not re-run immediately."
+        )
+        return 1
     return 1 if metrics.failures else 0
 
 
