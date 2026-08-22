@@ -128,6 +128,7 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert (
         "github.event_name == 'repository_dispatch' && "
         "github.event.client_payload.target_repository != '' && "
+        "github.event.client_payload.target_repository != github.repository && "
         "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.scheduler_app_token.outputs.token) || github.token"
     ) in inspect
