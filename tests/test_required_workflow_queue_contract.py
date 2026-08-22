@@ -933,6 +933,24 @@ def test_org_queue_sweep_rotation_index_uses_persistent_counter_when_available(
     assert result.stdout.strip() == "8"  # incremented by exactly one
 
 
+def test_org_queue_sweep_rotation_index_counter_increment_forces_base_10(
+    tmp_path: Path,
+) -> None:
+    """A manually-seeded leading-zero value ("08") must not be parsed as
+    octal, where it would error under set -e (Devin review finding on
+    #1223) — unprefixed bash arithmetic treats a leading zero as an octal
+    literal, and "08"/"09" are not valid octal digits."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="08", patch_ok=True, post_ok=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "9"
+
+
 def test_org_queue_sweep_rotation_index_creates_counter_on_first_run(tmp_path: Path) -> None:
     """A PATCH 404 (variable does not exist yet) falls back to creating it."""
 
