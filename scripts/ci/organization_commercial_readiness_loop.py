@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import dataclasses
 import enum
 import hashlib
@@ -686,17 +687,36 @@ def run_once(
     snapshots: list[RepositorySnapshot] = []
     errors: list[tuple[str, str]] = []
     leased: list[str] = []
-    for repository in selected_repositories:
-        full_name = str(repository["full_name"])
-        default_branch = str(repository["default_branch"])
-        try:
-            current = client.snapshot(full_name, default_branch)
-        except (GitHubError, SnapshotChanged) as exc:
-            errors.append((full_name, _bounded_error(exc)))
-            continue
-        snapshots.append(current)
-        if _has_writer_lease(current):
-            leased.append(full_name)
+
+    def fetch_snapshot(repo: dict[str, Any]) -> RepositorySnapshot:
+        full_name = str(repo["full_name"])
+        default_branch = str(repo["default_branch"])
+        return client.snapshot(full_name, default_branch)
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(10, max(1, len(selected_repositories))))
+    try:
+        futures = {
+            executor.submit(fetch_snapshot, repo): str(repo["full_name"])
+            for repo in selected_repositories
+        }
+        for future in concurrent.futures.as_completed(futures):
+            full_name = futures[future]
+            try:
+                current = future.result()
+            except (GitHubError, SnapshotChanged) as exc:
+                errors.append((full_name, _bounded_error(exc)))
+                continue
+            snapshots.append(current)
+            if _has_writer_lease(current):
+                leased.append(full_name)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # Sort snapshots to maintain determinism for build_plan
+    snapshots.sort(key=lambda s: s.full_name)
+    errors.sort(key=lambda e: e[0])
+    leased.sort()
+
     plan = build_plan(
         snapshots,
         rotation_seed=rotation_seed,
