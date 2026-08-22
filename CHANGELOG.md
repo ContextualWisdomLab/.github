@@ -52,9 +52,10 @@ Semantic Versioning where the repository publishes a release.
   absent/`null` `client_payload` property to `0` for a mixed-type `!=`
   comparison, so a targeted self-service dispatch that simply omitted one of
   these fields (rather than explicitly setting it to `false`) silently
-  produced the same `false` result as an explicit opt-out — meaning every
-  review-dispatch/auto-merge/branch-update self-service call that did not
-  spell out all three flags as `true` quietly no-op'd. Replaced the direct
+  produced the same `false` result as an explicit opt-out for that field
+  specifically — each of the three flags is independent, so a call that
+  set, say, `trigger_reviews: true` but omitted `enable_auto_merge` still
+  disabled only the merge step, not the whole dispatch. Replaced the direct
   comparison with `toJSON(...) != 'false'`, an exact string comparison
   unaffected by that coercion. Verified empirically: an identical dispatch
   payload produced `TRIGGER_REVIEWS=false` before this fix and
