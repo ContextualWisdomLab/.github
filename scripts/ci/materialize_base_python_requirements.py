@@ -797,7 +797,9 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(
-            "No tracked hash-bearing Python requirement candidates exist at the validated base SHA."
+            "No tracked hash-bearing Python requirement candidates exist at the "
+            "validated base SHA; any exact VCS source pins are listed in "
+            "vcs-manifest.json."
         )
     return 0
 

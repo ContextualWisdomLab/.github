@@ -616,7 +616,7 @@ def test_main_reports_when_no_locks_exist(
         == 0
     )
     assert (
-        "No tracked hash-bearing Python requirement candidates exist"
+        "any exact VCS source pins are listed in vcs-manifest.json"
         in capsys.readouterr().out
     )
 
