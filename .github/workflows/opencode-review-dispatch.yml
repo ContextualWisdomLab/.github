@@ -7925,14 +7925,14 @@ jobs:
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head

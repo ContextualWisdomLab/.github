@@ -45,6 +45,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Prefer the job-scoped `github.token` when the central OpenCode dispatch
+  publishes a commit status back to the same `.github` repository. The job's
+  declared `statuses: write` permission now reaches the endpoint instead of an
+  unrelated OpenCode App installation token that can lack commit-status write
+  permission; cross-repository status publication keeps the existing explicit
+  PAT/App credential chain.
 - Used the receiving repository's workflow token for same-repository scheduler
   Actions inventory and read calls, while retaining the established mutation
   credential chain. An exhausted organization-wide OpenCode App installation
