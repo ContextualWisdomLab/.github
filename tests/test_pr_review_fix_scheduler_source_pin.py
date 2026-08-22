@@ -23,15 +23,22 @@ def test_reusable_scheduler_validates_called_workflow_identity_before_checkout()
     assert guard < checkout
     # job.workflow_repository/workflow_sha/workflow_ref/workflow_file_path are
     # not real Actions context properties (actionlint flags them as undefined
-    # on the `job` object). github.workflow_ref/github.workflow_sha are the
-    # real, documented properties identifying the currently-executing
-    # reusable workflow's own pinned source.
-    assert "WORKFLOW_REF: ${{ github.workflow_ref }}" in workflow
+    # on the `job` object). github.workflow_ref/github.workflow_sha are real,
+    # documented properties, but for a `workflow_call` target they reflect
+    # the top-level CALLING workflow, not this reusable workflow's own file
+    # (GitHub exposes a called reusable workflow's own ref/sha only via the
+    # OIDC job_workflow_ref claim). Every caller uses a local, same-repo
+    # `uses: ./...`, so caller and callee share one commit: github.repository
+    # is the correct identity check, and github.workflow_sha is still the
+    # correct commit to trust for that same-repo call.
+    assert "CALLER_REPOSITORY: ${{ github.repository }}" in workflow
     assert "WORKFLOW_SHA: ${{ github.workflow_sha }}" in workflow
+    assert '[ "$CALLER_REPOSITORY" != "$expected_repository" ]' in workflow
     assert "${{ job.workflow_repository }}" not in workflow
     assert "${{ job.workflow_sha }}" not in workflow
     assert "${{ job.workflow_ref }}" not in workflow
     assert "${{ job.workflow_file_path }}" not in workflow
+    assert "${{ github.workflow_ref }}" not in workflow
     assert 'expected_repository="ContextualWisdomLab/.github"' in workflow
     assert 'expected_file=".github/workflows/pr-review-fix-scheduler.yml"' in workflow
     assert '[[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
