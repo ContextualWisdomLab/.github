@@ -858,6 +858,15 @@ jobs:
             exit 0
           fi
 
+          # Exit 3 is emitted only by the trusted gate after its exact PR-scope
+          # mapper excludes every reported finding as unchanged and all model
+          # providers are unavailable. Vulnerability text remains in the audit
+          # log, so this cannot use the generic no-finding regex path below.
+          if [ "$strix_rc" -eq 3 ]; then
+            echo "::warning title=Strix backend unavailable after baseline scan::Strix excluded all reported findings from the pull-request diff, then exhausted its model providers. Treating this exact-head run as a neutral infrastructure skip; changed or unmapped findings still fail closed."
+            exit 0
+          fi
+
           # Preserve configuration failures (exit 2) and any unexpected exit
           # code as hard failures — only the scan-failure code (1) can be an
           # infrastructure/backend-unavailability outcome.

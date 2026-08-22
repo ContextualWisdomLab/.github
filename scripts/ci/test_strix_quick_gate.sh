@@ -4650,6 +4650,28 @@ EOS
 		echo "Penetration test failed: baseline critical finding"
 		exit 1
 		;;
+	pr-baseline-provider-exhausted)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/baseline-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-provider/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java:5
+EOS
+			echo "litellm.APIConnectionError: GeminiException LLM CONNECTION FAILED after baseline report"
+			exit 1
+			;;
+		vertex_ai/fallback-one | vertex_ai/fallback-two)
+			echo "litellm.APIConnectionError: GeminiException LLM CONNECTION FAILED: provider unavailable"
+			exit 1
+			;;
+		*)
+			echo "Error: pr-baseline-provider-exhausted unexpected model (${STRIX_LLM:-})" >&2
+			exit 35
+			;;
+		esac
+		;;
 	pr-critical-changed)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -6275,6 +6297,28 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"Materialized PR-head changed-file scope" \
 			"repository_dispatch"
+		;;
+	pr-baseline-provider-exhausted)
+		run_gate_case "pr-baseline-provider-exhausted" \
+			"vertex_ai/baseline-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"3" \
+			"Configured Vertex model and fallback models were unavailable after unchanged-file findings were excluded." \
+			"3" \
+			"vertex_ai/baseline-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
+			"<unset>|<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -10896,6 +10940,27 @@ run_gate_case "pr-baseline-critical-unchanged" \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-baseline-provider-exhausted" \
+	"vertex_ai/baseline-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"3" \
+	"Configured Vertex model and fallback models were unavailable after unchanged-file findings were excluded." \
+	"3" \
+	"vertex_ai/baseline-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
+	"<unset>|<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \

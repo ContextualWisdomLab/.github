@@ -4040,6 +4040,18 @@ run_current_target_scan() {
 		return 1
 	fi
 
+	# The trusted PR-scope mapper has already proved these reports belong only
+	# to unchanged files. Keep that decision distinct from a real changed-file
+	# finding when every remaining provider is unavailable.
+	if [ "$PR_FINDINGS_DECISION" = "allow_baseline" ] && [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+		if is_vertex_model "$PRIMARY_MODEL"; then
+			echo "Configured Vertex model and fallback models were unavailable after unchanged-file findings were excluded." >&2
+		else
+			echo "Configured model and fallback models were unavailable after unchanged-file findings were excluded." >&2
+		fi
+		return 3
+	fi
+
 	local threshold_rank
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
 	if [ "${STRIX_MAX_SEVERITY_RANK:--1}" -ge "$threshold_rank" ]; then

@@ -256,6 +256,16 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             workflow,
         )
 
+    def test_workflow_accepts_trusted_unchanged_finding_provider_exhaustion(self) -> None:
+        """Keep gate-mapped baseline findings separate from provider exhaustion."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('if [ "$strix_rc" -eq 3 ]; then', workflow)
+        self.assertIn(
+            "Strix excluded all reported findings from the pull-request diff",
+            workflow,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

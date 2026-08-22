@@ -22,6 +22,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Preserve the trusted PR-scope decision when Strix finds only unchanged-file
+  baseline issues and then exhausts every LLM provider, so provider retirement
+  or outage is a neutral infrastructure result while changed and unmapped
+  findings still fail closed; the reproduced incident and gate boundary are
+  recorded in `docs/doctoring/strix-pr-baseline-provider-exhaustion.md`.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
