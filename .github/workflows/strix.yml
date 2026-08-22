@@ -866,19 +866,36 @@ jobs:
           fi
 
           # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|Error code:[[:space:]]*410|github_models_retirement_brownout|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
           reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
 
+          # The gate may already have exempted an earlier, out-of-scope
+          # finding (unchanged-file evidence, or below the configured minimum
+          # severity) and logged "allowing pipeline continuation" before
+          # moving on to a later, independent model attempt. That earlier
+          # finding's own "Vulnerabilities N" / "severity:" text must not
+          # poison the backend-unavailable check for a later, unrelated
+          # provider outage. Scope the neutral-skip decision to the log tail
+          # after the LAST such continuation marker (the full log when no
+          # exemption occurred), so an unresolved vulnerability anywhere in
+          # that scope still fails closed.
+          strix_neutralization_scope_log="$strix_run_log"
+          if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+            strix_neutralization_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
+            awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
+              "$strix_run_log" > "$strix_neutralization_scope_log"
+          fi
+
           # Neutral skip only when ALL hold: a backend-unavailability signal is
-          # present and no vulnerability was reported anywhere. This preserves
-          # real security gating while keeping uncontrollable provider outages
-          # from blocking current-head merge progress.
-          if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
+          # present and no vulnerability was reported in the relevant scope.
+          # This preserves real security gating while keeping uncontrollable
+          # provider outages from blocking current-head merge progress.
+          if grep -Eiq "$backend_unavailable_signal" "$strix_neutralization_scope_log" \
+            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
             echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
             exit 0
           fi
