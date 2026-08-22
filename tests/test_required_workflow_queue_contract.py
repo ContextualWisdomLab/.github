@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -789,7 +790,7 @@ def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
     `gh api`/dispatch logic that would require live network credentials."""
 
     start_marker = "          sweep_target_count=${#sweep_targets[@]}\n"
-    end_marker = 'run number ${ORG_SWEEP_ROTATION_INDEX})."\n'
+    end_marker = 'rotation tick ${ORG_SWEEP_ROTATION_INDEX})."\n'
     start = workflow.index(start_marker)
     end = workflow.index(end_marker, start) + len(end_marker)
     return textwrap.dedent(workflow[start:end])
@@ -845,20 +846,79 @@ def test_org_queue_sweep_rotation_offset_is_safe_with_no_targets() -> None:
     assert "starting at rotation offset 0" in result.stdout
 
 
+def _extract_org_sweep_rotation_default_snippet(workflow: str) -> str:
+    """Return only the wall-clock-default/validation block for the rotation index,
+    without the surrounding `gh api` calls that would require network credentials."""
+
+    start_marker = "          if [ -z \"${ORG_SWEEP_ROTATION_INDEX:-}\" ]; then\n"
+    end_marker = "            exit 1\n          fi\n\n          repositories_json="
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start) + len("            exit 1\n          fi\n")
+    return textwrap.dedent(workflow[start:end])
+
+
+def test_org_queue_sweep_rotation_index_defaults_from_wall_clock() -> None:
+    """A rotation tick must advance by exactly one every 900s regardless of
+    how many non-sweep events triggered this workflow in between — the
+    guarantee `github.run_number` could not provide, since it increments on
+    every push/pull_request_target/pull_request_review/workflow_run trigger
+    of this workflow, not only the `*/15` sweep schedule."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    # Unset: derive from wall-clock time, one tick per 900 seconds.
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+    env = dict(os.environ)
+    env.pop("ORG_SWEEP_ROTATION_INDEX", None)
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    computed_tick = int(result.stdout.strip())
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
+
+    # Explicitly provided: preserved rather than overwritten.
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "42"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "42"
+
+    # Malformed override still fails closed.
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "not-a-number"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "ORG_SWEEP_ROTATION_INDEX must be a non-negative integer" in result.stdout
+
+
 def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> None:
     """Record why rotation exists and keep the new input on the same fail-closed contract."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert (
-        "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}"
-    ) in workflow
     assert "ContextualWisdomLab/.github#1219" in workflow
+    assert (
+        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))'
+    ) in workflow
     assert (
         'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
     ) in workflow
     assert (
         "rotation_offset=$(( ORG_SWEEP_ROTATION_INDEX % sweep_target_count ))"
     ) in workflow
+    # `github.run_number` increments on every trigger of this workflow, not
+    # only the sweep schedule, so it cannot give the per-sweep-tick rotation
+    # guarantee the fix is meant to provide (ContextualWisdomLab/.github#1220
+    # review finding). The env-block default must not reintroduce it.
+    assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
     # The fix must not change the org-wide budget itself, only which
     # repositories consume it — otherwise it reintroduces the exact
     # cost/rate-limit risk #1219 explicitly declined to guess at.
