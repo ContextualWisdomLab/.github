@@ -93,7 +93,9 @@ class GitHubClient:
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
         payload = None if input_payload is None else json.dumps(input_payload)
-        for attempt in range(1, GITHUB_API_MAX_ATTEMPTS + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 completed = subprocess.run(
                     command,
