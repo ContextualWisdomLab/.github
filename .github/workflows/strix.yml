@@ -868,8 +868,9 @@ jobs:
           fi
 
           # Preserve configuration failures (exit 2) and any unexpected exit
-          # code as hard failures — only the scan-failure code (1) can be an
-          # infrastructure/backend-unavailability outcome.
+          # code as hard failures. Exit 1 uses the log-based infrastructure
+          # fallback; exit 3 is the trusted post-baseline provider-exhaustion
+          # outcome handled above.
           if [ "$strix_rc" -ne 1 ]; then
             exit "$strix_rc"
           fi
