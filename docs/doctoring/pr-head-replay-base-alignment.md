@@ -22,9 +22,10 @@ The guard now distinguishes one base-alignment case from an evidence
 regression. A test absent from the exact protected base is not reported as
 regressed only when a non-test file with the same logical subject and language
 suffix is deleted in the same post-merge range and that source is also absent
-from the protected base. This admits removal of a feature-only source/test pair
-that aligns the head with the protected branch without letting a same-named
-documentation deletion excuse a code-test deletion.
+from the protected base, with no same-subject source remaining in the exact
+head. This admits removal of a feature-only source/test pair that aligns the
+head with the protected branch without letting a same-named documentation or
+sibling-source deletion excuse a code-test deletion.
 
 The following cases remain blocking:
 

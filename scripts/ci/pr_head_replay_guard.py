@@ -263,6 +263,15 @@ def test_file_changes(
             ["ls-tree", "-r", "--name-only", protected_revision],
         ).splitlines()
     )
+    head_source_subjects: set[tuple[str, str]] = set()
+    for path in git_output(
+        repo_root,
+        ["ls-tree", "-r", "--name-only", end],
+    ).splitlines():
+        if not is_test_path(path):
+            head_source_subjects.add(
+                (logical_test_subject(path), Path(path).suffix.lower())
+            )
     regressed: set[str] = set()
     added = 0
     name_status_lines = git_output(
@@ -276,10 +285,16 @@ def test_file_changes(
         if len(fields) < 2 or not fields[0].startswith("D"):
             continue
         deleted_paths.add(fields[-1])
-        if not is_test_path(fields[-1]) and fields[-1] not in protected_paths:
-            removed_feature_sources.add(
-                (logical_test_subject(fields[-1]), Path(fields[-1]).suffix.lower())
-            )
+        source_subject = (
+            logical_test_subject(fields[-1]),
+            Path(fields[-1]).suffix.lower(),
+        )
+        if (
+            not is_test_path(fields[-1])
+            and fields[-1] not in protected_paths
+            and source_subject not in head_source_subjects
+        ):
+            removed_feature_sources.add(source_subject)
     for line in name_status_lines:
         fields = line.split("\t")
         if len(fields) < 2 or not is_test_path(fields[-1]):

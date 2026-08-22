@@ -289,6 +289,40 @@ def test_removing_feature_only_test_to_match_current_base_passes(tmp_path):
     assert not evidence.blocked
 
 
+def test_removing_same_named_sibling_source_does_not_excuse_test_loss(tmp_path):
+    """A retained same-subject source keeps its feature test protected."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    write(repo, "README.md", "base\n")
+    commit(repo, "base")
+
+    git(repo, "checkout", "-b", "feature")
+    write(repo, "src/primary/legacy.py", "def legacy():\n    return True\n")
+    write(repo, "src/obsolete/legacy.py", "def legacy():\n    return False\n")
+    write(repo, "tests/test_legacy.py", "def test_legacy():\n    assert True\n")
+    commit(repo, "feature adds same-subject sources")
+
+    git(repo, "checkout", "main")
+    write(repo, "base-change.txt", "current base\n")
+    current_base = commit(repo, "advance base")
+
+    git(repo, "checkout", "feature")
+    git(repo, "merge", "--no-ff", "--no-edit", "main")
+    (repo / "src/obsolete/legacy.py").unlink()
+    (repo / "tests/test_legacy.py").unlink()
+    git(repo, "add", "-A")
+    head = commit(repo, "remove sibling and test")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_legacy.py",)
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
+
+
 def test_is_test_path_covers_common_layouts():
     """Test-path detection recognizes directories, prefixes, suffixes, and spec names."""
     assert guard.is_test_path("tests/test_guard.py")
@@ -397,6 +431,7 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
     outputs = iter(
         [
             "tests/test_shrunk.py",
+            "src/kept.py",
             name_status,
             numstat,
         ]
