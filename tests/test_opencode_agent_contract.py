@@ -2193,6 +2193,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
+    metadata_step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert (
+        '! [[ "$live_head_repository" =~ '
+        '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
+    ) in metadata_step
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
     trust_step = target_job.split(
         "      - name: Validate pull request head repository trust", 1
     )[1].split("\n      - name:", 1)[0]
@@ -2201,6 +2211,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "metadata changed before OIDC" in trust_step
     assert 'live_head_sha="$(jq -r' in trust_step
     assert '[ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]' in trust_step
+    assert (
+        '! [[ "$head_repository" =~ '
+        '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
+    ) in trust_step
+    assert '[ "$head_repository" != "$GH_REPOSITORY" ]' not in trust_step
     assert (
         "EXPECTED_IS_PRIVATE: "
         "${{ needs.validate-pr-metadata.outputs.is_private }}"
