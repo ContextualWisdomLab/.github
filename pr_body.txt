@@ -1,0 +1,7 @@
+💡 What: `scripts/ci/redact_sensitive_log.py`에서 누락된 크리덴셜 패턴(AWS Secret Key, Azure Storage Account Key, Stripe Secret Key)을 `PROVIDER_TOKEN_RE` 정규표현식에 추가하여 마스킹 범위를 확장했습니다.
+
+🎯 Why: 기존 코드는 AWS Access Key(`AKIA...`) 등 일부 크리덴셜만 마스킹하고 AWS Secret Key, Azure Storage Key, Stripe Secret Key 등은 마스킹 대상에 포함되지 않아, 이들이 로그에 독립적으로 출력될 경우 크리덴셜이 노출되는 심각한 보안 취약점(strix penetration test에서 보고됨)을 가지고 있었습니다.
+
+📊 Impact: AWS Secret Key (`[A-Za-z0-9/+]{40}`), Azure Storage Key (`[A-Za-z0-9/+]{88}`), Stripe Secret Key (`sk_(test|live)_[A-Za-z0-9]{24,}`) 패턴을 추가하여 주요 클라우드 및 결제 서비스의 민감한 자격 증명 유출을 방지합니다. 또한, 여러 개의 패턴 평가를 단일 정규표현식(`|`)으로 통합하여 성능 최적화(O(N) 상수항 감소)도 함께 유지됩니다.
+
+🔬 Measurement: 수정된 `PROVIDER_TOKEN_RE` 정규표현식을 통해 `git diff scripts/ci/redact_sensitive_log.py`를 검증하고, 기존 테스트를 통과하는 것을 확인했습니다.

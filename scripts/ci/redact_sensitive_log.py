@@ -28,7 +28,10 @@ PROVIDER_TOKEN_RE = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
     r"sk-[A-Za-z0-9_-]{20,}|"
     r"xox[baprs]-[A-Za-z0-9-]{20,}|"
-    r"AKIA[0-9A-Z]{16})\b"
+    r"AKIA[0-9A-Z]{16}|"
+    r"[A-Za-z0-9/+]{40}|"
+    r"[A-Za-z0-9/+]{88}|"
+    r"sk_(?:test|live)_[A-Za-z0-9]{24,})\b"
 )
 
 
