@@ -1,6 +1,6 @@
 # Review-agent mention routing reliability
 
-Review date: **2026-08-20**
+Review date: **2026-08-22**
 
 ## Incident
 
@@ -9,8 +9,9 @@ Trusted `@opencode-agent` comments could remain unacknowledged and fail to start
 1. The OpenCode `repository_dispatch.client_payload` exceeded GitHub's ten-property limit, so GitHub rejected the request with HTTP 422 before the trusted wrapper started.
 2. Interactive `issue_comment` routing and the five-minute organization sweep shared one workflow-level concurrency group. Under the default single-pending contract, a newly queued sweep could replace a pending interactive mention before exact-head resolution, durable claim creation, dispatch, or acknowledgement.
 3. The organization sweep submitted pull-list requests to four workers but consumed their futures in repository-list order. A slow earlier repository could therefore hide a completed later repository until the sweep approached its 15-minute job limit or its bounded dispatch frontier.
+4. The OpenCode wrapper omitted `trigger_reviews` from its second-hop payload. The scheduler evaluated the missing repository-dispatch field as false, so a successfully routed and durably claimed mention entered queue maintenance without dispatching the requested review.
 
-Neither defect is evidence that the requesting maintainer, model, repository allowlist, or final review result is invalid.
+None of these defects is evidence that the requesting maintainer, model, repository allowlist, or final review result is invalid.
 
 ## Test-first repair
 
@@ -34,7 +35,7 @@ update_branches=false
 merge_mode=disabled
 ```
 
-The wrapper-to-scheduler payload carries exactly ten fields, including the three values that override unsafe scheduler defaults. The wrapper therefore remains review-only and cannot merge or update a branch.
+The wrapper-to-scheduler payload carries exactly ten fields, including the three values that override unsafe scheduler defaults and explicit `trigger_reviews=true`. Source-comment identity remains bound in the validated invocation hash and immutable ledger claim but is not duplicated into the scheduler payload because the scheduler does not consume it. The wrapper therefore dispatches the requested review while remaining unable to merge or update a branch.
 
 ### Isolated concurrency queues
 
@@ -81,7 +82,7 @@ After protected integration:
 
 1. submit a fresh trusted `@opencode-agent` comment on an open pull request;
 2. require the hidden receipt marker, acknowledgement comment, or durable exact-name artifact for the source comment;
-3. require the trusted OpenCode wrapper and review-only scheduler dispatch to start for the same repository, pull request, and exact head;
+3. require the trusted OpenCode wrapper and review-only scheduler dispatch to start for the same repository, pull request, and exact head, with scheduler `TRIGGER_REVIEWS=true` and an actual review dispatch;
 4. verify that a scheduled sweep cannot cancel or replace the interactive route;
 5. distinguish downstream provider or review failure from routing failure rather than treating every missing verdict as the same incident.
 6. verify the slow-first/fast-later repository regression remains green so a
