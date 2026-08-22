@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -35,6 +36,7 @@ ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
+GITHUB_API_MAX_ATTEMPTS = 6
 
 
 @dataclass(frozen=True)
@@ -67,41 +69,55 @@ class GitHubClient:
         *,
         input_payload: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute one bounded ``gh api`` request and decode optional JSON."""
+        """Execute one bounded ``gh api`` request and decode optional JSON.
+
+        Retries a completed-but-failing request (e.g. a transient shared
+        GitHub App installation-token rate limit) up to
+        ``GITHUB_API_MAX_ATTEMPTS`` times with linear backoff, mirroring the
+        established retry convention in ``strix.yml``'s target-repository
+        visibility lookup. A hung request (``TimeoutExpired``) is not
+        retried; a stuck ``gh`` process should fail immediately rather than
+        compound the wait.
+        """
 
         command = ["gh", "api", *args]
         if input_payload is not None:
             command.extend(["--input", "-"])
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
-        try:
-            completed = subprocess.run(
-                command,
-                input=None if input_payload is None else json.dumps(input_payload),
-                text=True,
-                capture_output=True,
-                shell=False,
-                check=False,
-                env=environment,
-                timeout=GITHUB_API_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                "gh api timed out after "
-                f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
-            ) from exc
-        return_code = int(getattr(completed, "returncode", 0))
-        if return_code:
-            diagnostic = " ".join(
-                str(getattr(completed, "stderr", "") or "").split()
-            )
+        payload = None if input_payload is None else json.dumps(input_payload)
+        return_code = 0
+        diagnostic = ""
+        for attempt in range(1, GITHUB_API_MAX_ATTEMPTS + 1):
+            try:
+                completed = subprocess.run(
+                    command,
+                    input=payload,
+                    text=True,
+                    capture_output=True,
+                    shell=False,
+                    check=False,
+                    env=environment,
+                    timeout=GITHUB_API_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    "gh api timed out after "
+                    f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
+                ) from exc
+            return_code = int(getattr(completed, "returncode", 0))
+            if not return_code:
+                output = completed.stdout.strip()
+                return None if not output else json.loads(output)
+            diagnostic = " ".join(str(getattr(completed, "stderr", "") or "").split())
             if not diagnostic:
                 diagnostic = "no stderr output"
-            raise RuntimeError(
-                f"gh api failed with exit code {return_code}: {diagnostic[:2000]}"
-            )
-        output = completed.stdout.strip()
-        return None if not output else json.loads(output)
+            if attempt < GITHUB_API_MAX_ATTEMPTS:
+                time.sleep(attempt * 5)
+        raise RuntimeError(
+            f"gh api failed with exit code {return_code} after "
+            f"{GITHUB_API_MAX_ATTEMPTS} attempts: {diagnostic[:2000]}"
+        )
 
 
 def exact_mentions(body: str) -> tuple[str, ...]:
