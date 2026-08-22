@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-23 06:35 KST
+Updated: 2026-08-22 KST
 
 ## Decision
 
@@ -39,7 +39,7 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Stable branch-protection job names: `required-workflow-bootstrap`, `coverage-source-tree`, `coverage-evidence`, and `opencode-review`; these jobs are data-only sentinels, while approval remains a separate current-head PR-review requirement
 - Trusted source: `ContextualWisdomLab/.github`
 - PR-head handling: authenticated current-head `repository_dispatch` runs `.github/workflows/opencode-review-dispatch.yml` from the protected default branch; that workflow owns metadata validation, bounded coverage, source-as-data inspection, model review, and publication
-- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted repository, a fork head, or any live metadata mismatch
+- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted base repository, a malformed head-repository identity, or any live base/head metadata mismatch. A canonical fork head remains reviewable as untrusted source data.
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
 - Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
 - Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; the dispatch workflow runs bounded low-privilege coverage only after exact live metadata and scheduler identity validation
@@ -52,8 +52,11 @@ For a bounded current-head retry in one repository, dispatch `merge-scheduler`
 to the central repository with `target_repository`, `pr_number`, and the live
 `base_branch`. The target must exactly match
 `OPENCODE_REPOSITORY_DISPATCH_TARGETS`; the scheduler then re-reads the open PR
-and rejects a noncanonical repository name, fork head, base mismatch, malformed
-head SHA, or changed/closed PR before using cross-repository credentials:
+and rejects a noncanonical base or head repository name, base mismatch,
+malformed head SHA, or changed/closed PR before using cross-repository
+credentials. A fork head may pass this read/review boundary, but the scheduler
+still excludes it from direct merge, auto-merge, and non-maintainer branch
+mutation:
 
 ```bash
 jq -n '{

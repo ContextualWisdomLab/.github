@@ -19,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "ded5dfcd3789389e002ea904bcb5755e54463ba3"
+REVIEW_DISPATCH_BLOB_SHA = "3bc1ce6d385bce569e7a7ba037f149a8f18039d4"
 
 
 def _workflow_text(path: Path) -> str:
@@ -155,8 +155,8 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     assert guard in workflow[conflict_start:]
 
 
-def test_independent_review_agent_key_system_is_unchanged() -> None:
-    """Pin the existing read-only reviewer workflow byte-for-byte."""
+def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:
+    """Pin the reviewed read-only reviewer workflow byte-for-byte."""
     result = subprocess.run(
         ["git", "hash-object", str(REVIEW_DISPATCH_WORKFLOW)],
         check=True,

@@ -50,7 +50,7 @@ product's current-head tests passing.
 These controls follow pip's recommendation to use full VCS commit hashes and
 SLSA 1.2's treatment of Git revisions as immutable identifiers, while retaining
 the isolated, ephemeral test execution boundary (Python Packaging Authority,
-2026; Supply-chain Levels for Software Artifacts, 2025). They also support the
+2026c; Supply-chain Levels for Software Artifacts, 2025). They also support the
 SSDF practice of preserving dependency provenance and preventing recurrence of
 toolchain failures (Souppaya et al., 2022).
 
@@ -65,9 +65,45 @@ or installed distribution metadata. Namespace, alias/ambiguous, and native
 layouts therefore fail the build. The central Python quality workflow retains
 100% statement/branch and docstring coverage.
 
+## Independent root lock environments
+
+An exact-base coverage run for `contextual-orchestrator` exposed four
+root-level lock candidates: two independently complete application/tool locks
+and two security-tool fragments whose transitive `pip` dependency was not
+pinned and hashed. The installer correctly identified the incomplete
+candidates, but then treated every file sharing the repository root as one
+supplement group. That synthetic environment combined mutually exclusive
+versions of `rpds-py`, so a valid application lock could not reach the
+networkless test phase.
+
+Directory co-location is not a dependency relationship. The installer now
+recovers only an unambiguous directory containing exactly two candidates and at
+least one incomplete candidate. Directories containing more root locks require
+an explicit requirements-file include graph; absent that evidence, complete
+locks install independently and incomplete closures remain skipped. This keeps
+pip's all-or-nothing hash rule intact rather than weakening `--require-hashes`
+or choosing a dependency version locally. The boundary follows pip's defined
+`-r` include mechanism and its requirement that every dependency in hash mode
+be pinned and hashed (Python Packaging Authority, 2026a, 2026b). It also
+supports SSDF verification of third-party components and secure build
+configuration (Souppaya et al., 2022).
+
+The regression contract uses four root candidates and fails if the installer
+combines any of them. A Linux Python 3.14 replay against the exact protected
+base materialization preflighted all four, installed the two independently
+complete closures, skipped the two incomplete closures with their bounded root
+causes, and exited successfully.
+
 ## References
 
-Python Packaging Authority. (2026). *VCS support*. pip documentation v26.2.
+Python Packaging Authority. (2026a). *Requirements file format*. pip
+documentation v26.2.1.
+https://pip.pypa.io/en/stable/reference/requirements-file-format/
+
+Python Packaging Authority. (2026b). *Secure installs*. pip documentation
+v26.2. https://pip.pypa.io/en/stable/topics/secure-installs/
+
+Python Packaging Authority. (2026c). *VCS support*. pip documentation v26.2.
 https://pip.pypa.io/en/stable/topics/vcs-support/
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development

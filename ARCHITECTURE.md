@@ -139,6 +139,10 @@ An exact-base `uv.lock` may additionally expose source from an organization-owne
 GitHub repository pinned to a full commit: the secret-free image build verifies
 the fetched revision and makes its source importable without running package
 build or installation hooks. Pull-request execution remains networkless.
+Root-level lock files are independent environments unless an explicit include
+relationship says otherwise; only one unambiguous two-file supplement pair may
+be recovered together, so unrelated toolchains cannot create a synthetic
+resolver conflict.
 
 ## Related durable documents
 
