@@ -368,6 +368,148 @@ def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> N
             )
 
 
+def test_sweep_redacts_credentials_from_isolated_failure_messages(
+    monkeypatch, capsys
+) -> None:
+    """An exception message that embeds a credential is redacted before logging.
+
+    An isolated request/PR failure can wrap the underlying gh api stderr
+    verbatim (e.g. a malformed URL or verbose HTTP dump that happens to
+    include a token). record_failure must not leak that text into the
+    job's public log output.
+    """
+
+    sweep = module()
+    leaked_token = "ghp_" + ("A" * 24)
+    monkeypatch.setattr(
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter([candidate()])
+    )
+
+    def raise_with_token(*args, **kwargs):
+        """Raise an error whose message embeds a credential-shaped token."""
+
+        del args, kwargs
+        raise RuntimeError(f"gh api failed: Authorization: Bearer {leaked_token}")
+
+    monkeypatch.setattr(
+        sweep, "build_requests_for_pull_request", raise_with_token
+    )
+    result = sweep.sweep(
+        target_client=FakeClient(),
+        dispatch_client=FakeClient(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=24,
+        max_dispatches=1,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert leaked_token not in output
+    assert "Agent mention sweep skipped" in output
+
+
+def test_sweep_stops_before_its_time_budget_to_exit_cleanly(
+    monkeypatch, capsys
+) -> None:
+    """The sweep stops processing new candidates once its time budget elapses.
+
+    The sweep-organization-agent-mentions job has a 15-minute GitHub Actions
+    timeout; a hard cancellation on that deadline discards the run's log
+    tail and metrics. The sweep must instead stop itself with margin to
+    spare and report what it completed.
+
+    list_recent_pull_requests submits every repository's fetch to a bounded
+    ThreadPoolExecutor up front (see the comment above the loop in sweep()),
+    so a fake per-candidate generator here does not model which repository
+    fetches actually started — only that this loop stops PROCESSING
+    (building requests for) a candidate once the deadline has passed, even
+    though the candidate itself was already yielded.
+    """
+
+    sweep = module()
+    processed = []
+
+    def recording_candidates(*args, **kwargs):
+        """Yield three already-available candidates."""
+
+        del args, kwargs
+        yield from (candidate(1), candidate(2), candidate(3))
+
+    def recording_build_requests(client, *, issue, since):
+        """Record which candidate reached request-building and return none."""
+
+        del client, since
+        processed.append(issue["number"])
+        return ()
+
+    monkeypatch.setattr(sweep, "list_recent_pull_requests", recording_candidates)
+    monkeypatch.setattr(
+        sweep, "build_requests_for_pull_request", recording_build_requests
+    )
+    # One clock read to compute the deadline, then one read per loop
+    # iteration: under budget, under budget, over budget on the third.
+    clock_reads = iter([0.0, 10.0, 60.0, 200.0])
+    result = sweep.sweep(
+        target_client=FakeClient(),
+        dispatch_client=FakeClient(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=24,
+        max_dispatches=5,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+        time_budget_seconds=100.0,
+        clock=lambda: next(clock_reads),
+    )
+
+    assert result == 0
+    assert processed == [1, 2]
+    assert "time budget" in capsys.readouterr().out
+
+
+def test_sweep_time_budget_can_be_disabled(monkeypatch) -> None:
+    """Passing None for the time budget preserves unbounded iteration."""
+
+    sweep = module()
+    monkeypatch.setattr(
+        sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter(())
+    )
+
+    def forbidden_clock() -> float:
+        """Fail the test if the disabled budget still reads the clock."""
+
+        raise AssertionError("clock should not be read when disabled")
+
+    assert (
+        sweep.sweep(
+            target_client=FakeClient(),
+            dispatch_client=FakeClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            lookback_hours=24,
+            max_dispatches=5,
+            opencode_allowlist=frozenset(),
+            time_budget_seconds=None,
+            clock=forbidden_clock,
+        )
+        == 0
+    )
+    with pytest.raises(ValueError, match="time budget"):
+        sweep.sweep(
+            target_client=FakeClient(),
+            dispatch_client=FakeClient(),
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            lookback_hours=24,
+            max_dispatches=5,
+            opencode_allowlist=frozenset(),
+            time_budget_seconds=0.0,
+        )
+
+
 def test_sweep_noops_do_not_starve_new_mentions_across_repeated_runs(
     monkeypatch,
 ) -> None:
