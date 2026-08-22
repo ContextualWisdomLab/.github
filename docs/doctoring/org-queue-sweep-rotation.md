@@ -19,32 +19,46 @@ RankWeave's own turn.
 
 ## Decision
 
-Rotate the sweep's repository walk order by a wall-clock rotation tick
-(`$(date -u +%s) / 900`, one tick per 900 seconds) before applying the
-unchanged organization-wide budget. `rotation_offset = rotation_tick %
+Rotate the sweep's repository walk order by a rotation index before applying
+the unchanged organization-wide budget. `rotation_offset = rotation_index %
 repository_count`; the walk starts at that offset and wraps. This spreads the
 exact same total per-tick dispatch budget across repositories over successive
-sweep ticks instead of raising it.
+sweep executions instead of raising it.
 
-An earlier version of this fix derived the rotation index from
-`github.run_number` instead. PR review (`ContextualWisdomLab/.github#1220`,
-Devin) correctly flagged that `run_number` increments on every trigger of
-this workflow — push, `pull_request_target`, `pull_request_review`,
-`workflow_run` — not only the `*/15` sweep schedule, so it could not give the
-"bounded by `repository_count` ticks" guarantee a rotation is meant to
-provide: two consecutive sweep runs could see `run_number` jump by more than
-one, or (in a busy-workflow edge case) by an exact multiple of
-`repository_count`, silently skipping or repeating offsets. Wall-clock time
-does not have that dependency: a rotation tick advances by exactly one every
-15 minutes no matter how many other events fired this workflow in between,
-which is what the `repository_count`-tick bound actually requires.
-`ORG_SWEEP_ROTATION_INDEX` is left unset in the job's `env:` block in
-production so the sweep step computes it from wall-clock time; tests inject
-it directly for determinism. That earlier version merged as `#1220` before
-this correction landed (the review comment was informational, not a blocking
-request-changes, so the org's merge scheduler proceeded once checks were
-green) — this doc and the corrected workflow reflect the wall-clock version
-as the durable design.
+`ORG_SWEEP_ROTATION_INDEX`'s primary source is a persistent
+`ORG_SWEEP_ROTATION_COUNTER` repository variable on `ContextualWisdomLab/.github`
+itself, incremented by exactly one at the start of every actual
+`org-queue-sweep` execution (`gh api .../actions/variables/ORG_SWEEP_ROTATION_COUNTER
+-X PATCH`, falling back to `-X POST` to create it on the first run). It falls
+back to a wall-clock tick (`$(date -u +%s) / 900`) only if the counter
+read/write itself is unavailable (permissions, transient API failure) — a
+fairness mechanism must never fail the sweep's much more important
+review-dispatch/merge work. `ORG_SWEEP_ROTATION_INDEX` is left unset in the
+job's `env:` block in production so the sweep step computes it; tests inject
+it directly, or stub `gh` on `PATH`, for determinism.
+
+This design went through two prior, each independently review-flagged
+iterations, both instructive about why neither alone is sufficient:
+
+1. **`github.run_number`** (original `#1220`). Rejected because `run_number`
+   increments on every trigger of this workflow — push, `pull_request_target`,
+   `pull_request_review`, `workflow_run` — not only the `*/15` sweep schedule,
+   so it cannot give the "bounded by `repository_count` executions" guarantee
+   a rotation is meant to provide (Devin review finding on `#1220`; that
+   version merged before the correction landed, since the review comment was
+   informational rather than a blocking request-changes).
+2. **Wall-clock tick alone** (`#1223`, first revision). Rejected as the sole
+   source because `org-queue-sweep` is single-flight/non-cancelling with up to
+   a 60-minute `timeout-minutes`: a delayed or backlogged real execution can
+   let more than one 900-second window elapse before the next real run, and if
+   that elapsed-tick gap happens to be an exact multiple of `repository_count`
+   the modulo offset repeats — reintroducing the exact starvation `#1220`
+   fixed for a different reason (CodeRabbit review finding on `#1223`).
+
+A persistent per-execution counter is immune to both: it is untouched by
+non-sweep triggers of this workflow (unlike `run_number`) and advances by
+exactly one every time the sweep body actually runs, regardless of how much
+wall-clock time a slow prior run consumed (unlike a wall-clock tick alone).
 
 The budget-sizing question in #1219 (is `1` a deliberate LLM-provider
 cost/rate ceiling, or an unconsidered default?) is explicitly **not**
@@ -60,17 +74,21 @@ ceiling turns out to be conservative.
 
 - Every repository with ready work eventually reaches the front of the walk
   order and receives the shared dispatch, bounded by `repository_count`
-  ticks in the worst case, instead of never.
+  actual sweep executions in the worst case, instead of never.
 - Total review dispatches per tick, and therefore LLM-provider call volume
   per tick, are unchanged.
 - `rotation_offset` is logged (`Sweeping N repositories starting at rotation
-  offset O (rotation tick T).`) so a specific tick's walk order is
+  offset O (rotation tick T).`) so a specific execution's walk order is
   reconstructable from the run log alone.
 - `ORG_SWEEP_ROTATION_INDEX` follows the same fail-closed numeric-validation
   pattern as the sibling `ORG_SWEEP_*_LIMIT` variables (reject non-digit
   input before it reaches arithmetic context, where an unguarded `set -e`
-  would not trap the error), applied after the wall-clock default fills it in
-  when the environment does not already provide one.
+  would not trap the error), applied after the persistent-counter/wall-clock
+  default fills it in when the environment does not already provide one.
+- A degraded run (counter unavailable) still rotates by wall-clock time
+  rather than reverting to the original fixed order; it only loses the
+  strict per-execution guarantee for that one run, logged as a
+  `::warning::`.
 
 ## Verification
 
@@ -80,11 +98,17 @@ ceiling turns out to be conservative.
   full permutation of the input, not a subset.
 - `test_org_queue_sweep_rotation_offset_is_safe_with_no_targets` covers the
   zero-repository edge case.
-- `test_org_queue_sweep_rotation_index_defaults_from_wall_clock` executes the
-  extracted default/validation block standalone: confirms the unset case
-  derives `$(date -u +%s) / 900` (within a one-tick boundary-race tolerance),
-  an explicit override is preserved rather than overwritten, and a malformed
-  override still fails closed.
+- `test_org_queue_sweep_rotation_index_uses_persistent_counter_when_available`
+  stubs `gh` on `PATH` to simulate a successful read-increment-write and
+  confirms the counter advances by exactly one.
+- `test_org_queue_sweep_rotation_index_creates_counter_on_first_run` confirms
+  the POST-create fallback when the PATCH target does not exist yet.
+- `test_org_queue_sweep_rotation_index_falls_back_to_wall_clock` confirms the
+  wall-clock degraded path and its `::warning::` when the counter is entirely
+  unavailable.
+- `test_org_queue_sweep_rotation_index_override_is_preserved` and
+  `test_org_queue_sweep_rotation_index_rejects_malformed_override` cover the
+  test-injection and fail-closed-validation paths.
 - `test_org_queue_sweep_documents_rotation_leverage_and_validates_input`
   locks the `#1219` cross-reference, confirms `github.run_number` is not
   reintroduced as the source, and confirms the shared budget constant itself
@@ -96,6 +120,8 @@ ceiling turns out to be conservative.
 
 `ContextualWisdomLab/.github#1219` — original starvation report with sweep
 run evidence.
-`ContextualWisdomLab/.github#1220` — original rotation fix; review discussion
-on the `run_number` vs. wall-clock rotation-tick source that this document
-and the current workflow source reflect.
+`ContextualWisdomLab/.github#1220` — original rotation fix; `run_number` vs.
+per-execution-guarantee review discussion.
+`ContextualWisdomLab/.github#1223` — wall-clock correction, then the
+persistent-counter correction this document and the current workflow source
+reflect.

@@ -858,29 +858,120 @@ def _extract_org_sweep_rotation_default_snippet(workflow: str) -> str:
     return textwrap.dedent(workflow[start:end])
 
 
-def test_org_queue_sweep_rotation_index_defaults_from_wall_clock() -> None:
-    """A rotation tick must advance by exactly one every 900s regardless of
-    how many non-sweep events triggered this workflow in between — the
-    guarantee `github.run_number` could not provide, since it increments on
-    every push/pull_request_target/pull_request_review/workflow_run trigger
-    of this workflow, not only the `*/15` sweep schedule."""
+def _fake_gh_script(*, get_value: str, patch_ok: bool, post_ok: bool) -> str:
+    """A stand-in `gh` executable simulating the repository-variable API.
+
+    ``get_value`` is what `gh api .../variables/NAME --jq .value` prints
+    (empty string simulates the variable not existing yet / a 404).
+    ``patch_ok``/``post_ok`` control whether the corresponding mutation
+    exits zero, so tests can force the PATCH-then-POST-create fallback or
+    the full-failure wall-clock fallback without a real GitHub API call.
+    """
+    patch_exit = "0" if patch_ok else "1"
+    post_exit = "0" if post_ok else "1"
+    return textwrap.dedent(
+        f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$1" != "api" ]; then
+          echo "unsupported fake gh invocation: $*" >&2
+          exit 2
+        fi
+        shift
+        if [[ "$1" == *"/variables/"* ]] && [[ "$*" == *"-X PATCH"* || "$*" == *"PATCH"* ]]; then
+          exit {patch_exit}
+        fi
+        if [[ "$1" == "repos/"*"/actions/variables" ]]; then
+          exit {post_exit}
+        fi
+        if [[ "$1" == *"/variables/"* ]]; then
+          printf '%s' "{get_value}"
+          exit 0
+        fi
+        echo "unsupported fake gh api path: $1" >&2
+        exit 2
+        """
+    )
+
+
+def _run_rotation_default_snippet(
+    snippet: str, tmp_path: Path, *, get_value: str, patch_ok: bool, post_ok: bool
+) -> subprocess.CompletedProcess[str]:
+    """Execute the extracted default/validation block with a fake `gh` on PATH."""
+
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        _fake_gh_script(get_value=get_value, patch_ok=patch_ok, post_ok=post_ok),
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+    env = dict(os.environ)
+    env.pop("ORG_SWEEP_ROTATION_INDEX", None)
+    env["GITHUB_REPOSITORY"] = "ContextualWisdomLab/.github"
+    env["PATH"] = f"{tmp_path}{os.pathsep}{env.get('PATH', '')}"
+    return subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True
+    )
+
+
+def test_org_queue_sweep_rotation_index_uses_persistent_counter_when_available(
+    tmp_path: Path,
+) -> None:
+    """The primary source increments a persistent counter by exactly one per
+    actual sweep execution — immune to how much wall-clock time a prior
+    slow (up to 60-minute, non-cancelling) run consumed, which a wall-clock
+    tick alone cannot guarantee (CodeRabbit review finding on #1223)."""
 
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     snippet = _extract_org_sweep_rotation_default_snippet(workflow)
 
-    # Unset: derive from wall-clock time, one tick per 900 seconds.
-    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
-    env = dict(os.environ)
-    env.pop("ORG_SWEEP_ROTATION_INDEX", None)
-    result = subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="7", patch_ok=True, post_ok=True
     )
     assert result.returncode == 0, result.stderr
-    computed_tick = int(result.stdout.strip())
+    assert result.stdout.strip() == "8"  # incremented by exactly one
+
+
+def test_org_queue_sweep_rotation_index_creates_counter_on_first_run(tmp_path: Path) -> None:
+    """A PATCH 404 (variable does not exist yet) falls back to creating it."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="", patch_ok=False, post_ok=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
+
+
+def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path) -> None:
+    """If the persistent counter is entirely unavailable, degrade to a
+    wall-clock tick rather than failing the whole sweep over a fairness
+    mechanism."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="", patch_ok=False, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])  # last line: the printed value; earlier: the warning
     expected_tick = int(time.time()) // 900
     assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
+    assert "could not read/write" in result.stdout  # a `::warning::` workflow command
 
-    # Explicitly provided: preserved rather than overwritten.
+
+def test_org_queue_sweep_rotation_index_override_is_preserved() -> None:
+    """An explicitly injected value (as tests do) is never overwritten."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", script],
         env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "42"},
@@ -890,7 +981,14 @@ def test_org_queue_sweep_rotation_index_defaults_from_wall_clock() -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "42"
 
-    # Malformed override still fails closed.
+
+def test_org_queue_sweep_rotation_index_rejects_malformed_override() -> None:
+    """A malformed override still fails closed rather than reaching arithmetic."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", script],
         env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "not-a-number"},
