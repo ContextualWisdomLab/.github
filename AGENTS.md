@@ -5,7 +5,11 @@
 
 Every production component that calls contextual-orchestrator must follow the normative [`docs/standards/contextual-orchestrator-consumer-contract.md`](docs/standards/contextual-orchestrator-consumer-contract.md) and its operator-facing [`docs/doctoring/contextual-orchestrator-consumer-contract.md`](docs/doctoring/contextual-orchestrator-consumer-contract.md): ordinary traffic uses adaptive `auto`, quality/capability is optimized before trustworthy known cost, unpriced models are not free, and provider-native structured-output passthrough must not silently pin an adaptive product path to one worker.
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include (no `.`/`..`); a lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
+Materialize accepts only exact SHA-256 pins, a bounded relative `-r` include
+(no `.`/`..`), or an organization-owned HTTPS Git source pinned to a full
+commit and exposed without running build hooks; a lone `--require-hashes`
+directive is not trust evidence. See
+[`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
