@@ -187,8 +187,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} github_models/openai/o3 "
-            "github_models/openai/gpt-5-chat'",
+            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
             workflow,
         )
 
