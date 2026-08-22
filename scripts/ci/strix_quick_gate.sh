@@ -169,9 +169,11 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ produced "
-    r"non-lifecycle final output in non-interactive mode; forcing tool "
-    r"continuation \(\d+/\d+\): "
+    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"(?:"
+    r"produced non-lifecycle final output in non-interactive mode"
+    r"|ended a turn without a lifecycle tool call \(interactive=False\)"
+    r"); forcing tool continuation \(\d+/\d+\): "
 )
 
 
