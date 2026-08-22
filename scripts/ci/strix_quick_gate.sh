@@ -2212,28 +2212,6 @@ fallback_models_config_name_for_model() {
 	printf '%s\n' "STRIX_FALLBACK_MODELS"
 }
 
-has_distinct_fallback_model_for_model() {
-	local model="$1"
-	local fallback_models_raw
-	fallback_models_raw="$(fallback_models_raw_for_model "$model")"
-	fallback_models_raw="${fallback_models_raw//$'\r'/ }"
-	fallback_models_raw="${fallback_models_raw//$'\n'/ }"
-
-	local fallback_models=()
-	read -r -a fallback_models <<<"$fallback_models_raw"
-
-	local candidate_raw
-	local candidate
-	for candidate_raw in "${fallback_models[@]}"; do
-		candidate="$(normalize_model "$candidate_raw")"
-		if [ -n "$candidate" ] && [ "$candidate" != "$model" ]; then
-			return 0
-		fi
-	done
-
-	return 1
-}
-
 resolved_llm_api_base_for_model() {
 	local model="$1"
 
