@@ -26,9 +26,11 @@ Semantic Versioning where the repository publishes a release.
   baseline issues and then exhausts every LLM provider, so provider retirement
   or outage is a neutral infrastructure result even when no distinct fallback
   is configured; recognize the exact local Caido bootstrap connection failure
-  the same way only when no vulnerability exists, while changed and unmapped
+  the same way only when no vulnerability exists; route the exact single-line
+  LiteLLM/Azure unsupported-temperature failure to the existing distinct outer
+  fallback without accepting split-line imitations, while changed and unmapped
   findings and all other runtime failures still fail closed. The reproduced
-  incidents and gate boundary are recorded in
+  incidents, APA 7 sources, and gate boundary are recorded in
   `docs/doctoring/strix-pr-baseline-provider-exhaustion.md`.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and

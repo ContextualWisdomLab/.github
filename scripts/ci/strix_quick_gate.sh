@@ -2638,6 +2638,19 @@ is_nvidia_nim_not_found_error() {
 	return 1
 }
 
+is_unsupported_model_parameter_error() {
+	# Strix currently has no generation-parameter override. Match the exact
+	# single-line LiteLLM/Azure capability failure so a reasoning model that
+	# rejects Strix's temperature can move to the already-configured fallback.
+	if grep -Ei 'litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" |
+		grep -Ei '(AzureException|OpenAIException)' |
+		grep -Eiq "Unsupported value:[[:space:]]*['\"]temperature['\"].*Only the default[[:space:]]*\\(1\\)[[:space:]]*value is supported.*No fallback model group found"; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
 ## Four error families qualify:
@@ -2951,6 +2964,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 
@@ -3832,6 +3849,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 

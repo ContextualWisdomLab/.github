@@ -3386,6 +3386,27 @@ REPORT
 			;;
 		esac
 		;;
+	openai-direct-unsupported-temperature-github-models-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5.6-sol)
+			echo "litellm.BadRequestError: AzureException BadRequestError - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found for original model_group=gpt-5.6-sol."
+			exit 1
+			;;
+		openai/o3)
+			echo "scan ok with GitHub Models fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
+	openai-direct-unsupported-temperature-split-lines-nonrecoverable)
+		echo "litellm.BadRequestError: request rejected"
+		echo "AzureException - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found."
+		exit 1
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5519,7 +5540,8 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
-	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
+	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ] ||
+		[ "$scenario" = "openai-direct-unsupported-temperature-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
 		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
 		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
@@ -5900,6 +5922,66 @@ run_filtered_gate_case_if_requested() {
 			"2" \
 			"openai/gpt-5.6-luna|openai/o3" \
 			"<unset>|https://models.github.ai/inference" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/o3"
+		;;
+	openai-direct-unsupported-temperature-github-models-fallback-success)
+		run_gate_case "openai-direct-unsupported-temperature-github-models-fallback-success" \
+			"openai_direct/gpt-5.6-sol" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5.6-sol|openai/o3" \
+			"<unset>|https://models.github.ai/inference" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/o3"
+		;;
+	openai-direct-unsupported-temperature-split-lines-nonrecoverable)
+		run_gate_case "openai-direct-unsupported-temperature-split-lines-nonrecoverable" \
+			"openai_direct/gpt-5.6-sol" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/gpt-5.6-sol" \
+			"<unset>" \
 			"vertex_ai" \
 			"" \
 			"" \
@@ -12086,6 +12168,70 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 	"2" \
 	"openai/gpt-5.6-luna|openai/o3" \
 	"<unset>|https://models.github.ai/inference" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/o3"
+
+# Strix currently reaches LiteLLM with a sampling default and exposes no
+# documented generation-parameter override. Azure reasoning deployments reject
+# that temperature before Strix's internal model-group fallback can run, so the
+# trusted outer gate must try its already-configured distinct provider.
+run_gate_case "openai-direct-unsupported-temperature-github-models-fallback-success" \
+	"openai_direct/gpt-5.6-sol" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+	"2" \
+	"openai/gpt-5.6-sol|openai/o3" \
+	"<unset>|https://models.github.ai/inference" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/o3"
+
+# Cross-line assembly is deliberately rejected: target/source text cannot
+# manufacture a provider capability signal from independent log lines.
+run_gate_case "openai-direct-unsupported-temperature-split-lines-nonrecoverable" \
+	"openai_direct/gpt-5.6-sol" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-5.6-sol" \
+	"<unset>" \
 	"vertex_ai" \
 	"" \
 	"" \
