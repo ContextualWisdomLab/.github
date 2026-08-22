@@ -83,6 +83,7 @@ jobs:
       OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
       LOOKBACK_HOURS: ${{ vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
       MAX_DISPATCHES: ${{ vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
+      TIME_BUDGET_SECONDS: ${{ vars.AGENT_MENTION_TIME_BUDGET_SECONDS || '600' }}
       DRY_RUN: "false"
     steps:
       - name: Exchange OpenCode app token for sibling-repository comments
@@ -180,6 +181,7 @@ jobs:
             --repository-source "$TARGET_REPOSITORY_SOURCE"
             --lookback-hours "$LOOKBACK_HOURS"
             --max-dispatches "$MAX_DISPATCHES"
+            --time-budget-seconds "$TIME_BUDGET_SECONDS"
           )
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
