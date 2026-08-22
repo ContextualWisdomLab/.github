@@ -58,9 +58,12 @@ toolchain failures (Souppaya et al., 2022).
 
 Regression tests cover the real LineageWeave export shape, rejection of unsafe
 VCS forms, conflicting commits, deterministic manifests, exact-fetch workflow
-commands, source-only Python path publication, and the existing registry hash
-contract. The central Python quality workflow retains 100% statement/branch and
-docstring coverage.
+commands, and the existing registry hash contract. Before source-only Python
+path publication, the image build requires exactly one normalized root, a
+regular `__init__.py` for packages, and no symbolic links, compiled extensions,
+or installed distribution metadata. Namespace, alias/ambiguous, and native
+layouts therefore fail the build. The central Python quality workflow retains
+100% statement/branch and docstring coverage.
 
 ## References
 

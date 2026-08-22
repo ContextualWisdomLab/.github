@@ -686,9 +686,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
-    assert '[ -d "$destination/src/$import_name" ]' in measure_step
-    assert '[ -d "$destination/$import_name" ]' in measure_step
-    assert "has no import root" in measure_step
+    assert 'candidate_count=$((candidate_count + 1))' in measure_step
+    assert '[ "$candidate_count" -ne 1 ]' in measure_step
+    assert "has a missing or ambiguous import root" in measure_step
+    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
+    assert "has a namespace or linked import root" in measure_step
+    assert 'find "$destination" -type l -print -quit' in measure_step
+    assert "contains a symbolic-link layout" in measure_step
+    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
+    assert "contains a compiled extension" in measure_step
+    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
+    assert "contains installed distribution metadata" in measure_step
+    assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
