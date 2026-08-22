@@ -1255,7 +1255,8 @@ def test_strix_provider_outage_without_findings_is_neutralized() -> None:
     assert "before producing a vulnerability report" in workflow
     assert "genuine findings still fail the check" in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        '&& ! grep -Eiq "$reported_vulnerability_signal" '
+        '"$strix_neutralization_scope_log"' in workflow
     )
 
 
