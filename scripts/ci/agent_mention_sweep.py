@@ -26,13 +26,22 @@ ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
-# The sweep-organization-agent-mentions job has a 15-minute GitHub Actions
-# timeout; a forced cancellation on that deadline loses the run's log tail
-# and metrics. Stop dispatching new work with margin to spare so the sweep
-# exits cleanly and reports what it completed. GitHubClient's rate-limit
-# retry can now cost up to ~75s of backoff per failing repository, so this
-# margin must absorb several such retries, not just normal per-call latency.
-DEFAULT_TIME_BUDGET_SECONDS = 600.0
+# The sweep-organization-agent-mentions job has a 900s (15-minute) GitHub
+# Actions timeout; a forced cancellation on that deadline loses the run's
+# log tail and metrics. Stop dispatching new work with margin to spare so
+# the sweep exits cleanly and reports what it completed.
+#
+# Returning early only stops NEW work: list_recent_pull_requests' generator
+# cleanup still blocks (executor.shutdown(wait=True)) until every currently
+# RUNNING repository fetch finishes on its own. GitHubClient's rate-limit
+# retry costs up to ~255s worst case for one repository (six attempts, each
+# up to the 30s subprocess timeout, plus ~75s of backoff between them), and
+# up to max_workers of those can be running concurrently at the moment the
+# deadline trips (bounded by that ceiling, not multiplied by it, since they
+# run in parallel). Budget = 900s job timeout - ~60s setup/checkout
+# overhead - ~255s worst-case cleanup wait, with a further margin still
+# unspent.
+DEFAULT_TIME_BUDGET_SECONDS = 480.0
 
 
 @dataclass
