@@ -256,6 +256,39 @@ def test_test_refactor_with_replacement_passes(tmp_path):
     assert not evidence.blocked
 
 
+def test_removing_feature_only_test_to_match_current_base_passes(tmp_path):
+    """Deleting a test absent from the protected base is not a base replay."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    write(repo, "README.md", "base\n")
+    commit(repo, "base")
+
+    git(repo, "checkout", "-b", "feature")
+    write(repo, "src/legacy.py", "def legacy():\n    return True\n")
+    write(repo, "tests/test_legacy.py", "def test_legacy():\n    assert True\n")
+    commit(repo, "feature adds legacy code")
+
+    git(repo, "checkout", "main")
+    write(repo, "base-change.txt", "current base\n")
+    current_base = commit(repo, "advance base without legacy code")
+
+    git(repo, "checkout", "feature")
+    git(repo, "merge", "--no-ff", "--no-edit", "main")
+    (repo / "src/legacy.py").unlink()
+    (repo / "tests/test_legacy.py").unlink()
+    git(repo, "add", "-A")
+    head = commit(repo, "align feature with protected base")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ()
+    assert evidence.unmerged_paths == ()
+    assert not evidence.blocked
+
+
 def test_is_test_path_covers_common_layouts():
     """Test-path detection recognizes directories, prefixes, suffixes, and spec names."""
     assert guard.is_test_path("tests/test_guard.py")
@@ -267,6 +300,11 @@ def test_is_test_path_covers_common_layouts():
     assert guard.is_test_path("tests\\test_windows.py")
     assert not guard.is_test_path("scripts/ci/guard.py")
     assert not guard.is_test_path("docs/testing.md")
+    assert guard.logical_test_subject("tests/test_guard.py") == "guard"
+    assert guard.logical_test_subject("pkg/guard_test.go") == "guard"
+    assert guard.logical_test_subject("app/button.test.tsx") == "button"
+    assert guard.logical_test_subject("app/button.spec.ts") == "button"
+    assert guard.logical_test_subject("tests/README.md") == "README"
 
 
 def test_test_case_count_fails_closed_and_supports_known_formats(
@@ -343,6 +381,7 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
             "D\ttests/test_gone.py",
             "A\ttests/test_new.py",
             "M\ttests/test_kept.py",
+            "D\tdocs/gone.md",
             "D\tsrc/app_old.py",
             "badline",
         ]
@@ -355,7 +394,13 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
             "2\t9\tsrc/big.py",
         ]
     )
-    outputs = iter([name_status, numstat])
+    outputs = iter(
+        [
+            "tests/test_shrunk.py",
+            name_status,
+            numstat,
+        ]
+    )
     monkeypatch.setattr(guard, "git_output", lambda _root, _args: next(outputs))
     monkeypatch.setattr(
         guard,
@@ -363,7 +408,7 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
         lambda _root, revision, _path: 2 if revision == "a" else 1,
     )
 
-    regressed, added = guard.test_file_changes(tmp_path, "a", "b")
+    regressed, added = guard.test_file_changes(tmp_path, "a", "b", "protected")
 
     assert regressed == ("tests/test_gone.py", "tests/test_shrunk.py")
     assert added == 1

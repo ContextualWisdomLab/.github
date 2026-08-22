@@ -6,6 +6,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "pip>=25.0",
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
     "interrogate>=1.7.0",

@@ -16,8 +16,10 @@ merge.  It blocks, regardless of diff size:
   merge brought in (observed in appguardrail#297, where a stale snapshot
   reverted an accessibility wrapper and deleted its regression tests in a
   push far below the bulk thresholds);
-- test regression without replacement: post-merge commits deleting test files
-  or reducing declared test cases while adding no replacement test file;
+- test regression without replacement or protected-base alignment: post-merge
+  commits deleting test files or reducing declared test cases while adding no
+  replacement test file, except when a feature-only test and its same-subject,
+  same-language source are both retired to match the protected base;
 - the conservative bulk-regression signature: at least five tracked files and
   500 lines removed, with deletions at least four times additions.
 
@@ -91,7 +93,7 @@ class ReplayEvidence:
 
     @property
     def suspicious_test_regression(self) -> bool:
-        """Return whether test cases were lost with no replacement test file."""
+        """Return whether non-base-aligned tests were lost without replacement."""
         return bool(self.regressed_test_paths) and self.added_test_files == 0
 
     @property
@@ -188,6 +190,20 @@ def is_test_path(path: str) -> bool:
     )
 
 
+def logical_test_subject(path: str) -> str:
+    """Return the source-like stem represented by a common test filename."""
+    name = Path(path).name
+    for marker in (".test.", ".spec."):
+        if marker in name:
+            return name.split(marker, 1)[0]
+    stem = Path(name).stem
+    if stem.startswith("test_"):
+        return stem.removeprefix("test_")
+    if stem.endswith("_test"):
+        return stem.removesuffix("_test")
+    return stem
+
+
 def changed_paths(repo_root: Path, start: str, end: str) -> set[str]:
     """Return the set of paths whose content differs between two commits."""
     output = git_output(repo_root, ["diff", "--name-only", start, end])
@@ -234,16 +250,49 @@ def test_case_count(
     return len(pattern.findall(source)) if pattern is not None else None
 
 
-def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
-    """Return deleted or test-case-reducing paths and the added-test count."""
+def test_file_changes(
+    repo_root: Path,
+    start: str,
+    end: str,
+    protected_revision: str,
+) -> tuple[tuple[str, ...], int]:
+    """Return non-base-aligned test regressions and the added-test count."""
+    protected_paths = set(
+        git_output(
+            repo_root,
+            ["ls-tree", "-r", "--name-only", protected_revision],
+        ).splitlines()
+    )
     regressed: set[str] = set()
     added = 0
-    for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
+    name_status_lines = git_output(
+        repo_root,
+        ["diff", "--name-status", start, end],
+    ).splitlines()
+    deleted_paths: set[str] = set()
+    removed_feature_sources: set[tuple[str, str]] = set()
+    for line in name_status_lines:
+        fields = line.split("\t")
+        if len(fields) < 2 or not fields[0].startswith("D"):
+            continue
+        deleted_paths.add(fields[-1])
+        if not is_test_path(fields[-1]) and fields[-1] not in protected_paths:
+            removed_feature_sources.add(
+                (logical_test_subject(fields[-1]), Path(fields[-1]).suffix.lower())
+            )
+    for line in name_status_lines:
         fields = line.split("\t")
         if len(fields) < 2 or not is_test_path(fields[-1]):
             continue
         status = fields[0][:1]
-        if status == "D":
+        if status == "D" and (
+            fields[-1] in protected_paths
+            or (
+                logical_test_subject(fields[-1]),
+                Path(fields[-1]).suffix.lower(),
+            )
+            not in removed_feature_sources
+        ):
             regressed.add(fields[-1])
         elif status == "A":
             added += 1
@@ -252,7 +301,11 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
         path = fields[2]
-        if not is_test_path(path) or int(fields[1]) <= int(fields[0]):
+        if (
+            not is_test_path(path)
+            or path in deleted_paths
+            or int(fields[1]) <= int(fields[0])
+        ):
             continue
         before_count = test_case_count(repo_root, start, path)
         after_count = test_case_count(repo_root, end, path)
@@ -293,7 +346,12 @@ def collect_evidence(repo_root: Path, base_sha: str, head_sha: str) -> ReplayEvi
         head_sha,
     )
     unmerged = unmerged_base_paths(repo_root, merge_anchor, head_sha)
-    regressed_tests, added_tests = test_file_changes(repo_root, merge_anchor, head_sha)
+    regressed_tests, added_tests = test_file_changes(
+        repo_root,
+        merge_anchor,
+        head_sha,
+        base_sha,
+    )
     return ReplayEvidence(
         base_sha=base_sha,
         head_sha=head_sha,
@@ -336,7 +394,8 @@ def format_report(evidence: ReplayEvidence) -> str:
         )
     if evidence.suspicious_test_regression:
         reasons.append(
-            "post-merge commits deleted test files or reduced declared test cases "
+            "post-merge commits deleted protected-base or unpaired feature test files, "
+            "or reduced declared test cases "
             "without adding any replacement test file: "
             f"{summarize_paths(evidence.regressed_test_paths)}."
         )

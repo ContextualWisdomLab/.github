@@ -40,6 +40,13 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Keep the post-merge replay guard focused on lost protected-base evidence: a
+  feature-only source and its same-subject test may be removed together when
+  both are absent from the exact protected base, while protected-base test
+  deletion, test-only deletion, weakened retained tests, exact tree replay,
+  targeted base unmerge, and bulk regression remain fail-closed. Declare pip as
+  a development dependency because the materialized-lock regression invokes
+  its hash preflight inside the project-local uv environment.
 - Forward `trigger_reviews=true` explicitly from the trusted OpenCode mention wrapper to the authoritative scheduler while retaining GitHub's ten-key dispatch limit. Source-comment identity remains bound in the verified invocation claim and durable ledger instead of occupying an unused scheduler field, so a successfully routed `@opencode-agent` request now dispatches review work rather than entering queue maintenance with reviews disabled.
 - Confined OSV base and head repository checkouts to the same `source/` child directory, so a cross-fork head checkout can replace that repository without deleting the base-scan JSON held at the workspace root. Both scans retain identical source paths and the required base/head vulnerability comparison remains fail-closed.
 - Restored 100% docstring coverage for the commercial-readiness GitHub transport constructor.
