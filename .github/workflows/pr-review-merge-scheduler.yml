@@ -157,25 +157,30 @@ jobs:
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
-      # toJSON(...) != 'false' below (not a direct comparison against the
-      # boolean literal): GitHub Actions coerces both `false` and an
-      # absent/`null` client_payload property to 0 for a mixed-type
-      # inequality check, so that direct-comparison form is false -- not
-      # true, as the "default enabled unless explicitly disabled" intent
-      # requires -- whenever a repository_dispatch payload omits the field
-      # entirely. Stringifying first compares 'null' against 'false', which
-      # is exact and unaffected by that coercion. Verified empirically: a
-      # targeted merge-scheduler dispatch with no trigger_reviews field
-      # produced TRIGGER_REVIEWS=false on the old direct-comparison
-      # expression before this fix.
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false') || inputs.trigger_reviews == true }}
+      # toJSON(...) != 'false' && toJSON(...) != '"false"' below (not a
+      # direct comparison against the boolean literal): GitHub Actions
+      # coerces both `false` and an absent/`null` client_payload property to
+      # 0 for a mixed-type inequality check, so that direct-comparison form
+      # is false -- not true, as the "default enabled unless explicitly
+      # disabled" intent requires -- whenever a repository_dispatch payload
+      # omits the field entirely. Stringifying first compares 'null' against
+      # 'false', which is exact and unaffected by that coercion. Verified
+      # empirically: a targeted merge-scheduler dispatch with no
+      # trigger_reviews field produced TRIGGER_REVIEWS=false on the old
+      # direct-comparison expression before this fix. The second clause
+      # additionally rejects the JSON *string* "false" (toJSON produces
+      # '"false"', quotes included) -- a real possibility since `gh api -f
+      # field=false` sends a string, not a boolean (CodeRabbit review
+      # finding on #1238) -- so a naive `-f trigger_reviews=false` caller is
+      # also treated as disabled, not silently left enabled.
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' && toJSON(github.event.client_payload.trigger_reviews) != '"false"') || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
-      # Same toJSON(...) != 'false' coercion fix as TRIGGER_REVIEWS above.
-      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false') || inputs.enable_auto_merge == true }}
+      # Same toJSON(...) coercion fix as TRIGGER_REVIEWS above.
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' && toJSON(github.event.client_payload.enable_auto_merge) != '"false"') || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
-      # Same toJSON(...) != 'false' coercion fix as TRIGGER_REVIEWS above.
-      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false') || inputs.update_branches == true }}
+      # Same toJSON(...) coercion fix as TRIGGER_REVIEWS above.
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' && toJSON(github.event.client_payload.update_branches) != '"false"') || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
     steps:
       - name: Exchange OpenCode app token for scheduler mutations
@@ -619,13 +624,14 @@ jobs:
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
-      # toJSON(...) != 'false' coercion fix -- see the TRIGGER_REVIEWS
-      # comment earlier in this env block for why the natural-looking
-      # `!= false` form silently defaults to disabled on repository_dispatch.
-      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' || inputs.trigger_reviews == true }}
-      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' || inputs.enable_auto_merge == true }}
+      # toJSON(...) coercion fix -- see the TRIGGER_REVIEWS comment earlier
+      # in this env block for why the natural-looking `!= false` form
+      # silently defaults to disabled on repository_dispatch, and why the
+      # JSON string "false" needs its own clause alongside the boolean.
+      ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' && toJSON(github.event.client_payload.trigger_reviews) != '"false"' || inputs.trigger_reviews == true }}
+      ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' && toJSON(github.event.client_payload.enable_auto_merge) != '"false"' || inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
-      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' || inputs.update_branches == true }}
+      ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' && toJSON(github.event.client_payload.update_branches) != '"false"' || inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # The review-dispatch and branch-update budgets above are organization-wide
       # per sweep tick (sized to bound LLM review-provider cost/rate exposure, not

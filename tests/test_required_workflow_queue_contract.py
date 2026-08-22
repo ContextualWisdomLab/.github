@@ -1120,18 +1120,18 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
         "ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' || inputs.trigger_reviews == true }}"
+        "ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' && toJSON(github.event.client_payload.trigger_reviews) != '\"false\"' || inputs.trigger_reviews == true }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' || inputs.enable_auto_merge == true }}"
+        "ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' && toJSON(github.event.client_payload.enable_auto_merge) != '\"false\"' || inputs.enable_auto_merge == true }}"
     ) in workflow
     assert (
         "ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}"
         in workflow
     )
     assert (
-        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' || inputs.update_branches == true }}"
+        "ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' && toJSON(github.event.client_payload.update_branches) != '\"false\"' || inputs.update_branches == true }}"
         in workflow
     )
     # Neither the top-level nor the org-sweep variant of these three flags
@@ -1140,10 +1140,18 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     # value (0) for a mixed-type comparison, so `!= false` is false --
     # meaning "not explicitly disabled" -- for both a payload that
     # explicitly disabled the flag AND one that never mentioned it at all.
-    # Verified empirically against a live dispatch before this fix.
+    # Verified empirically against a live dispatch before this fix. Nor may
+    # either variant omit the JSON-string-"false" clause: `gh api -f
+    # field=false` sends a JSON string, not a boolean, and toJSON of that
+    # string is '"false"' (quotes included) -- distinct from toJSON(false)
+    # == 'false' -- so a bare `!= 'false'` alone would leave a naive `-f`
+    # caller's explicit disable silently ignored (CodeRabbit finding on #1238).
     assert "client_payload.trigger_reviews != false" not in workflow
     assert "client_payload.enable_auto_merge != false" not in workflow
     assert "client_payload.update_branches != false" not in workflow
+    assert 'toJSON(github.event.client_payload.trigger_reviews) != \'"false"\'' in workflow
+    assert 'toJSON(github.event.client_payload.enable_auto_merge) != \'"false"\'' in workflow
+    assert 'toJSON(github.event.client_payload.update_branches) != \'"false"\'' in workflow
     assert 'if [ "$ORG_SWEEP_TRIGGER_REVIEWS" = "true" ]; then' in workflow
     assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
     assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
