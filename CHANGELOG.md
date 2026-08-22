@@ -6,6 +6,11 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
+  dependencies without weakening registry hashes or the networkless PR sandbox,
+  reject namespace, ambiguous, linked, native-extension, and installed-metadata
+  layouts, and make exact roots readable by the unprivileged coverage user.
+
 ### Added
 
 - Added an hourly organization commercial-readiness coordinator that discovers writable repositories, honors enabled dedicated writer leases and fully paginated live writer runs, refetches exact repository/workflow/run/PR state before dispatch, rotates bounded review-repair and opt-in NVIDIA OpenCode product-development targets, fails nonzero on fleet-wide inspection or dispatch outages, retains three-day JSON receipts, and keeps the existing 15-minute merge scheduler authoritative.
@@ -41,6 +46,19 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Retried the Strix scan up to `STRIX_TRANSIENT_RETRY_PER_MODEL` times, same model, when the log shows the upstream strix-agent Caido sandbox bootstrap timing race (`loginAsGuest failed after N attempts` / `Failed to connect to 127.0.0.1 port <port>`; tracked upstream as usestrix/strix#1036, #1037, #1056). A slow CI runner can exceed strix-agent's fixed 10-attempt sandbox-login budget before its local intercepting proxy is reachable, even though the penetration test itself never started and no vulnerability evidence was produced or lost; the Docker image is already cached from the failed attempt, so a same-model retry is cheap and typically clears the one-off boot race. Not wired into cross-model fallback, since switching LLM models cannot change local sandbox container boot timing.
+- Used the receiving repository's workflow token for same-repository scheduler
+  Actions inventory and read calls, while retaining the established mutation
+  credential chain. An exhausted organization-wide OpenCode App installation
+  budget can no longer prevent a central `.github` PR from dispatching its
+  exact-head review; cross-repository targets still require an explicit
+  credential.
+- Kept independently valid root-level Python lock environments separate during
+  trusted base coverage installation. A directory with more than two candidate
+  locks no longer collapses unrelated OpenCode, security, and application
+  environments into one impossible resolver transaction; incomplete hash
+  closures remain skipped, while each complete hash-pinned closure installs
+  independently.
+- Rotated `org-queue-sweep`'s repository walk order by the workflow's own run number before applying the shared organization-wide review-dispatch/branch-update budget, so a fixed early repository in the unsorted `gh api /orgs/{org}/repos` walk order can no longer permanently starve every later repository's ready, all-green, zero-open-thread pull requests of the single per-tick dispatch (`ContextualWisdomLab/.github#1219`). The total per-tick budget is unchanged; only which repository consumes it rotates.
 - Forward `trigger_reviews=true` explicitly from the trusted OpenCode mention wrapper to the authoritative scheduler while retaining GitHub's ten-key dispatch limit. Source-comment identity remains bound in the verified invocation claim and durable ledger instead of occupying an unused scheduler field, so a successfully routed `@opencode-agent` request now dispatches review work rather than entering queue maintenance with reviews disabled.
 - Allowed an allowlisted base repository's open fork-head PR to enter the central exact-head OpenCode review path. The scheduler and privileged reviewer still re-read the live PR, bind base/head refs and SHAs, reject malformed repository identities, keep fork source as untrusted data, preserve the existing maintainer-writable update rule, and reserve the final external-head merge for a maintainer.
 - Confined OSV base and head repository checkouts to the same `source/` child directory, so a cross-fork head checkout can replace that repository without deleting the base-scan JSON held at the workspace root. Both scans retain identical source paths and the required base/head vulnerability comparison remains fail-closed.
