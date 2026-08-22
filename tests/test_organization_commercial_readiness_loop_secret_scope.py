@@ -18,10 +18,8 @@ def test_coordinator_token_is_scoped_only_to_the_dispatch_step() -> None:
 
     assert "PR_REVIEW_MERGE_TOKEN" not in before_dispatch
     assert "GH_TOKEN:" not in before_dispatch
-    assert (
-        "env:\n          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
-        "steps.opencode_app_token.outputs.token }}"
-    ) in dispatch_step
+    assert "env:\n          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in dispatch_step
+    assert "steps.opencode_app_token.outputs.token" not in source
     artifact_step = dispatch_step.split(
         "      - name: Preserve the exact fleet receipt\n", maxsplit=1
     )[1]

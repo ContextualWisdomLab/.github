@@ -50,6 +50,18 @@ The schedule runs at minute 7 rather than minute 0 to reduce exposure to the doc
 
 Organization, workflow, active-run, and pull-request inventories are paginated. One inaccessible repository is recorded as an inspection error while other independently safe repositories continue. A run fails nonzero when every selected repository inspection fails or when every planned dispatch fails; partial, independently contained failures remain visible without discarding successful work.
 
+Exact-head reviews found three exchange-path gaps before activation. A
+malformed HTTP-success OIDC or App-token response made `jq` exit under shell
+`errexit` before the workflow could publish its explicit unavailable result;
+the OIDC JWT was not registered with the runner masker; and the App exchange
+ran even when the preferred maintainer secret was already present. The final
+coordinator shell step now performs the exchange only when its preferred
+`GH_TOKEN` input is empty, guards both JSON parses with a bounded fail-closed
+diagnostic, and masks the OIDC JWT immediately after validation. Keeping
+selection and exchange in that final first-party shell step preserves the rule
+that no checkout, setup, artifact, or other third-party action receives either
+credential, and neither response body is logged.
+
 Each run writes one deterministic JSON receipt and the same bounded evidence to the GitHub Actions job summary. The JSON is uploaded through the immutable, SHA-pinned artifact action with a three-day retention period. Artifact upload receives no maintainer or model credential. The receipt proves only coordinator observations and downstream dispatch acceptance; it is not merge, release, or product-quality evidence.
 
 No queued, pending, skipped-required, cancelled, absent, stale-head, predecessor-head, synthetic-merge-only, or failed check is converted to passing evidence. The coordinator's successful dispatch means only that exact state was revalidated and a bounded downstream workflow was accepted by GitHub.

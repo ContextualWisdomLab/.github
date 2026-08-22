@@ -54,76 +54,65 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Exchange OpenCode app token for bounded fleet coordination
-        id: opencode_app_token
+      - name: Coordinate one bounded fleet pass
         env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
+          exchange_unavailable() {
+            echo "::error::OpenCode app token exchange unavailable: $1"
+            exit 1
           }
 
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
+          if [ -z "${GH_TOKEN:-}" ]; then
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              exchange_unavailable "OIDC request environment is missing."
+            fi
+
+            request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+            separator="&"
+            case "$request_url" in
+              *\?*) ;;
+              *) separator="?" ;;
+            esac
+
+            if ! oidc_response="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+            )"; then
+              exchange_unavailable "OIDC token request did not complete."
+            fi
+
+            if ! oidc_token="$(jq -r '.value // empty' <<<"$oidc_response" 2>/dev/null)"; then
+              exchange_unavailable "OIDC token response was malformed."
+            fi
+            if [ -z "$oidc_token" ]; then
+              exchange_unavailable "OIDC token response was empty."
+            fi
+            echo "::add-mask::$oidc_token"
+
+            if ! token_response="$(
+              curl -fsS \
+                -X POST \
+                -H "Authorization: Bearer ${oidc_token}" \
+                "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+            )"; then
+              exchange_unavailable "app token request did not complete."
+            fi
+
+            if ! app_token="$(jq -r '.token // empty' <<<"$token_response" 2>/dev/null)"; then
+              exchange_unavailable "app token response was malformed."
+            fi
+            if [ -z "$app_token" ]; then
+              exchange_unavailable "app token response was empty."
+            fi
+            echo "::add-mask::$app_token"
+            export GH_TOKEN="$app_token"
           fi
 
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-
-          if ! oidc_response="$(
-            curl -fsS \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          if ! token_response="$(
-            curl -fsS \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-
-          echo "::add-mask::$app_token"
-          {
-            echo "available=true"
-            echo "token=$app_token"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Coordinate one bounded fleet pass
-        env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || steps.opencode_app_token.outputs.token }}
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::PR_REVIEW_MERGE_TOKEN or the job-bound OpenCode App token exchange is required; neither the reviewer credential nor repository-scoped GITHUB_TOKEN is accepted."
             exit 1
