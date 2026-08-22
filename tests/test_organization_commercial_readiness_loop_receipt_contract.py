@@ -43,3 +43,4 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "results-receiver.actions.githubusercontent.com:443" in source
     assert "*.actions.githubusercontent.com:443" in source
     assert "*.blob.core.windows.net:443" in source
+    assert "api.opencode.ai:443" in source
