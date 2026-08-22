@@ -21,10 +21,17 @@ def test_reusable_scheduler_validates_called_workflow_identity_before_checkout()
     checkout = workflow.index("Checkout immutable called-workflow source")
 
     assert guard < checkout
-    assert "WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}" in workflow
-    assert "WORKFLOW_SHA: ${{ job.workflow_sha }}" in workflow
-    assert "WORKFLOW_REF: ${{ job.workflow_ref }}" in workflow
-    assert "WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}" in workflow
+    # job.workflow_repository/workflow_sha/workflow_ref/workflow_file_path are
+    # not real Actions context properties (actionlint flags them as undefined
+    # on the `job` object). github.workflow_ref/github.workflow_sha are the
+    # real, documented properties identifying the currently-executing
+    # reusable workflow's own pinned source.
+    assert "WORKFLOW_REF: ${{ github.workflow_ref }}" in workflow
+    assert "WORKFLOW_SHA: ${{ github.workflow_sha }}" in workflow
+    assert "${{ job.workflow_repository }}" not in workflow
+    assert "${{ job.workflow_sha }}" not in workflow
+    assert "${{ job.workflow_ref }}" not in workflow
+    assert "${{ job.workflow_file_path }}" not in workflow
     assert 'expected_repository="ContextualWisdomLab/.github"' in workflow
     assert 'expected_file=".github/workflows/pr-review-fix-scheduler.yml"' in workflow
     assert '[[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
