@@ -37,6 +37,7 @@ RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
 GITHUB_API_MAX_ATTEMPTS = 6
+RATE_LIMIT_DIAGNOSTIC_RE = re.compile(r"API rate limit exceeded", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -71,13 +72,19 @@ class GitHubClient:
     ) -> Any:
         """Execute one bounded ``gh api`` request and decode optional JSON.
 
-        Retries a completed-but-failing request (e.g. a transient shared
-        GitHub App installation-token rate limit) up to
-        ``GITHUB_API_MAX_ATTEMPTS`` times with linear backoff, mirroring the
-        established retry convention in ``strix.yml``'s target-repository
-        visibility lookup. A hung request (``TimeoutExpired``) is not
-        retried; a stuck ``gh`` process should fail immediately rather than
-        compound the wait.
+        Retries only a completed request that failed on the shared GitHub
+        App installation-token rate limit, up to ``GITHUB_API_MAX_ATTEMPTS``
+        times with linear backoff, mirroring the established retry
+        convention in ``strix.yml``'s target-repository visibility lookup.
+        GitHub rejects a rate-limited request at admission time before it
+        mutates anything, so retrying it (including a POST, e.g. a
+        ``repository_dispatch`` or comment write) cannot double-apply an
+        already-completed write. Retry is intentionally NOT attempted for
+        other failures (permission errors, 404s, malformed requests): those
+        are not transient, and a non-idempotent write that failed for an
+        unknown reason must not be silently resent. A hung request
+        (``TimeoutExpired``) is likewise not retried; a stuck ``gh`` process
+        should fail immediately rather than compound the wait.
         """
 
         command = ["gh", "api", *args]
@@ -86,8 +93,6 @@ class GitHubClient:
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
         payload = None if input_payload is None else json.dumps(input_payload)
-        return_code = 0
-        diagnostic = ""
         for attempt in range(1, GITHUB_API_MAX_ATTEMPTS + 1):
             try:
                 completed = subprocess.run(
@@ -112,12 +117,15 @@ class GitHubClient:
             diagnostic = " ".join(str(getattr(completed, "stderr", "") or "").split())
             if not diagnostic:
                 diagnostic = "no stderr output"
-            if attempt < GITHUB_API_MAX_ATTEMPTS:
+            retryable = RATE_LIMIT_DIAGNOSTIC_RE.search(diagnostic) is not None
+            if retryable and attempt < GITHUB_API_MAX_ATTEMPTS:
                 time.sleep(attempt * 5)
-        raise RuntimeError(
-            f"gh api failed with exit code {return_code} after "
-            f"{GITHUB_API_MAX_ATTEMPTS} attempts: {diagnostic[:2000]}"
-        )
+                continue
+            suffix = f" after {attempt} attempts" if attempt > 1 else ""
+            raise RuntimeError(
+                f"gh api failed with exit code {return_code}{suffix}: "
+                f"{diagnostic[:2000]}"
+            )
 
 
 def exact_mentions(body: str) -> tuple[str, ...]:
