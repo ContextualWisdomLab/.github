@@ -6,6 +6,11 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
+  dependencies without weakening registry hashes or the networkless PR sandbox,
+  reject namespace, ambiguous, linked, native-extension, and installed-metadata
+  layouts, and make exact roots readable by the unprivileged coverage user.
+
 ### Added
 
 - Added an hourly organization commercial-readiness coordinator that discovers writable repositories, honors enabled dedicated writer leases and fully paginated live writer runs, refetches exact repository/workflow/run/PR state before dispatch, rotates bounded review-repair and opt-in NVIDIA OpenCode product-development targets, fails nonzero on fleet-wide inspection or dispatch outages, retains three-day JSON receipts, and keeps the existing 15-minute merge scheduler authoritative.
@@ -47,6 +52,18 @@ Semantic Versioning where the repository publishes a release.
   targeted base unmerge, and bulk regression remain fail-closed. Declare pip as
   a development dependency because the materialized-lock regression invokes
   its hash preflight inside the project-local uv environment.
+- Used the receiving repository's workflow token for same-repository scheduler
+  Actions inventory and read calls, while retaining the established mutation
+  credential chain. An exhausted organization-wide OpenCode App installation
+  budget can no longer prevent a central `.github` PR from dispatching its
+  exact-head review; cross-repository targets still require an explicit
+  credential.
+- Kept independently valid root-level Python lock environments separate during
+  trusted base coverage installation. A directory with more than two candidate
+  locks no longer collapses unrelated OpenCode, security, and application
+  environments into one impossible resolver transaction; incomplete hash
+  closures remain skipped, while each complete hash-pinned closure installs
+  independently.
 - Rotated `org-queue-sweep`'s repository walk order by the workflow's own run number before applying the shared organization-wide review-dispatch/branch-update budget, so a fixed early repository in the unsorted `gh api /orgs/{org}/repos` walk order can no longer permanently starve every later repository's ready, all-green, zero-open-thread pull requests of the single per-tick dispatch (`ContextualWisdomLab/.github#1219`). The total per-tick budget is unchanged; only which repository consumes it rotates.
 - Forward `trigger_reviews=true` explicitly from the trusted OpenCode mention wrapper to the authoritative scheduler while retaining GitHub's ten-key dispatch limit. Source-comment identity remains bound in the verified invocation claim and durable ledger instead of occupying an unused scheduler field, so a successfully routed `@opencode-agent` request now dispatches review work rather than entering queue maintenance with reviews disabled.
 - Allowed an allowlisted base repository's open fork-head PR to enter the central exact-head OpenCode review path. The scheduler and privileged reviewer still re-read the live PR, bind base/head refs and SHAs, reject malformed repository identities, keep fork source as untrusted data, preserve the existing maintainer-writable update rule, and reserve the final external-head merge for a maintainer.
