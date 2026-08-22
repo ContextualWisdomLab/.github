@@ -785,6 +785,87 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     assert "current_head=closed-or-no-open-pr" in result.stdout
 
 
+def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
+    """Return only the rotation-offset bash block, without the surrounding
+    `gh api`/dispatch logic that would require live network credentials."""
+
+    start_marker = "          sweep_target_count=${#sweep_targets[@]}\n"
+    end_marker = 'run number ${ORG_SWEEP_ROTATION_INDEX})."\n'
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start) + len(end_marker)
+    return textwrap.dedent(workflow[start:end])
+
+
+def test_org_queue_sweep_rotation_offset_is_deterministic_and_reorders_targets() -> None:
+    """Rotating the sweep walk order must preserve every target and only reorder them."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_snippet(workflow)
+
+    for rotation_index, expected_first in (
+        ("0", "repo-a"),
+        ("1", "repo-b"),
+        ("2", "repo-c"),
+        ("5", "repo-a"),  # 5 % 5 == 0: wraps back to unrotated order
+        ("7", "repo-c"),  # 7 % 5 == 2
+    ):
+        script = (
+            "sweep_targets=($'repo-a\\tmain' $'repo-b\\tmain' $'repo-c\\tmain' "
+            "$'repo-d\\tmain' $'repo-e\\tmain')\n"
+            + snippet
+            + '\nprintf "%s\\n" "${sweep_targets[@]}"\n'
+        )
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", script],
+            env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": rotation_index},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        rotated = [
+            line.split("\t")[0]
+            for line in result.stdout.strip().splitlines()
+            if "\t" in line
+        ]
+        assert len(rotated) == 5
+        assert set(rotated) == {"repo-a", "repo-b", "repo-c", "repo-d", "repo-e"}
+        assert rotated[0] == expected_first, (rotation_index, result.stdout)
+
+
+def test_org_queue_sweep_rotation_offset_is_safe_with_no_targets() -> None:
+    """An org with no sweepable repositories must not crash the rotation arithmetic."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_snippet(workflow)
+    script = "sweep_targets=()\n" + snippet
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "3"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "starting at rotation offset 0" in result.stdout
+
+
+def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> None:
+    """Record why rotation exists and keep the new input on the same fail-closed contract."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert (
+        "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}"
+    ) in workflow
+    assert "ContextualWisdomLab/.github#1219" in workflow
+    assert (
+        'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
+    ) in workflow
+    assert (
+        "rotation_offset=$(( ORG_SWEEP_ROTATION_INDEX % sweep_target_count ))"
+    ) in workflow
+    # The fix must not change the org-wide budget itself, only which
+    # repositories consume it — otherwise it reintroduces the exact
+    # cost/rate-limit risk #1219 explicitly declined to guess at.
+    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+
+
 def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     """Manual full-sweep cadence must override repository variables and defaults."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
