@@ -45,6 +45,20 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Made `pr-review-merge-scheduler.yml`'s `TRIGGER_REVIEWS`, `ENABLE_AUTO_MERGE`,
+  and `UPDATE_BRANCHES` (and their `ORG_SWEEP_` counterparts) actually default
+  to enabled on a `repository_dispatch`, as their `!= false` comparisons were
+  written to intend. GitHub Actions coerces both boolean `false` and an
+  absent/`null` `client_payload` property to `0` for a mixed-type `!=`
+  comparison, so a targeted self-service dispatch that simply omitted one of
+  these fields (rather than explicitly setting it to `false`) silently
+  produced the same `false` result as an explicit opt-out — meaning every
+  review-dispatch/auto-merge/branch-update self-service call that did not
+  spell out all three flags as `true` quietly no-op'd. Replaced the direct
+  comparison with `toJSON(...) != 'false'`, an exact string comparison
+  unaffected by that coercion. Verified empirically: an identical dispatch
+  payload produced `TRIGGER_REVIEWS=false` before this fix and
+  `TRIGGER_REVIEWS=true` after, with no other change.
 - Retried the Strix scan up to `STRIX_TRANSIENT_RETRY_PER_MODEL` times, same model, when the log shows the upstream strix-agent Caido sandbox bootstrap timing race (`loginAsGuest failed after N attempts` / `Failed to connect to 127.0.0.1 port <port>`; tracked upstream as usestrix/strix#1036, #1037, #1056). A slow CI runner can exceed strix-agent's fixed 10-attempt sandbox-login budget before its local intercepting proxy is reachable, even though the penetration test itself never started and no vulnerability evidence was produced or lost; the Docker image is already cached from the failed attempt, so a same-model retry is cheap and typically clears the one-off boot race. Not wired into cross-model fallback, since switching LLM models cannot change local sandbox container boot timing.
 - Replaced nonexistent `job.workflow_repository` / `job.workflow_sha` / `job.workflow_ref` / `job.workflow_file_path` context references (actionlint: "property ... is not defined in object type") in `pr-review-fix-scheduler.yml`'s called-workflow source verification and `exact-artifact-sbom-attestation.yml`'s trusted-verifier checkout. Both always failed closed on the missing properties (ContextualWisdomLab/.github#1212) or, for the SBOM attestation checkout, silently resolved an empty repository/ref instead of the pinned trusted source (downstream `gh attestation verify --signer-repo`/`--signer-workflow`, using the separately hardcoded `SIGNER_REPOSITORY` constant rather than any workflow_ref, still failed closed on the resulting empty signer identity). `github.workflow_ref`/`github.workflow_sha` are real, documented properties, but for a `workflow_call` target they reflect the top-level *calling* workflow, not the reusable workflow's own file — a prefix match against the reusable workflow's own path can never succeed. `exact-artifact-sbom-attestation.yml`'s checkout now uses `github.workflow_sha` (correct today: it has no callers yet); `pr-review-fix-scheduler.yml`'s identity check instead validates `github.repository`, since every current caller uses a local, same-repo `uses: ./...` where caller and callee share one commit and `github.workflow_sha` is still the right pin. Tracked follow-up for the SBOM attestation checkout once a real (potentially cross-repo) caller exists: ContextualWisdomLab/.github#1228.
 - Used the receiving repository's workflow token for same-repository scheduler
