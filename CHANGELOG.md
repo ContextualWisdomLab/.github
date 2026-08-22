@@ -45,6 +45,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Used the receiving repository's workflow token for same-repository scheduler
+  Actions inventory and read calls, while retaining the established mutation
+  credential chain. An exhausted organization-wide OpenCode App installation
+  budget can no longer prevent a central `.github` PR from dispatching its
+  exact-head review; cross-repository targets still require an explicit
+  credential.
 - Kept independently valid root-level Python lock environments separate during
   trusted base coverage installation. A directory with more than two candidate
   locks no longer collapses unrelated OpenCode, security, and application

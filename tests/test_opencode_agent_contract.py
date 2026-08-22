@@ -1985,14 +1985,16 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
     assert "secrets.OPENCODE_APPROVE_TOKEN" in workflow
     assert "steps.scheduler_app_token.outputs.token" in workflow
-    assert (
-        "SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' "
-        "&& github.event.client_payload.target_repository != '' && "
-        "(secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.scheduler_app_token.outputs.token) || github.token }}"
-        in workflow
-    )
+    for token_name in ("SCHEDULER_ACTIONS_TOKEN", "SCHEDULER_READ_TOKEN"):
+        assert (
+            f"{token_name}: ${{{{ github.event_name == 'repository_dispatch' "
+            "&& github.event.client_payload.target_repository != '' && "
+            "github.event.client_payload.target_repository != github.repository && "
+            "(secrets.PR_REVIEW_MERGE_TOKEN || "
+            "secrets.OPENCODE_APPROVE_TOKEN || "
+            "steps.scheduler_app_token.outputs.token) || github.token }}"
+            in workflow
+        )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
