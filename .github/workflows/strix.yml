@@ -269,11 +269,21 @@ jobs:
             echo "::error::Strix target repository must belong to ContextualWisdomLab."
             exit 1
           fi
-          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
+          is_private=""
+          for target_visibility_attempt in 1 2 3 4 5 6; do
+            if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
+              break
+            fi
+            is_private=""
+            if [ "$target_visibility_attempt" -lt 6 ]; then
+              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+              sleep "$(( target_visibility_attempt * 5 ))"
+            fi
+          done
           case "$is_private" in
             true | false) ;;
             *)
-              echo "::error::Target repository visibility did not resolve to true or false."
+              echo "::error::Target repository visibility did not resolve to true or false after retries."
               exit 1
               ;;
           esac
@@ -866,7 +876,7 @@ jobs:
           fi
 
           # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|Error code:[[:space:]]*410|github_models_retirement_brownout|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|Error code:[[:space:]]*410|github_models_retirement_brownout|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
