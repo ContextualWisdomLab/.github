@@ -30,19 +30,18 @@ FIRST_HOP_IDENTITY_KEYS = frozenset(
         "source_comment_id",
     }
 )
-SECOND_HOP_IDENTITY_KEYS = frozenset(
+SECOND_HOP_EXPECTED_KEYS = frozenset(
     {
         "target_repository",
         "pr_number",
         "pr_head_sha",
         "pr_base_sha",
-    }
-)
-OPENCODE_FORWARD_SAFETY_KEYS = frozenset(
-    {
+        "base_branch",
         "enable_auto_merge",
         "update_branches",
         "merge_mode",
+        "trigger_reviews",
+        "agent_invocation_key",
     }
 )
 
@@ -129,11 +128,9 @@ def test_wrapper_forwarders_stay_within_github_key_limit() -> None:
     opencode_keys = _wrapper_forward_payload_keys(opencode_workflow)
 
     assert len(noema_keys) <= limit
-    assert len(opencode_keys) <= limit
+    assert len(opencode_keys) == limit
     assert FIRST_HOP_IDENTITY_KEYS <= set(noema_keys)
-    assert SECOND_HOP_IDENTITY_KEYS <= set(opencode_keys)
-    assert OPENCODE_FORWARD_SAFETY_KEYS <= set(opencode_keys)
-    assert "trigger_reviews" in opencode_keys
+    assert set(opencode_keys) == SECOND_HOP_EXPECTED_KEYS
     assert re.search(
         r"^\s+trigger_reviews:\s+true,$", opencode_workflow, re.MULTILINE
     )
