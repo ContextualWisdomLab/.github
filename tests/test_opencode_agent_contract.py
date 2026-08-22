@@ -689,6 +689,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert '[ -d "$destination/src/$import_name" ]' in measure_step
     assert '[ -d "$destination/$import_name" ]' in measure_step
     assert "has no import root" in measure_step
+    assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(

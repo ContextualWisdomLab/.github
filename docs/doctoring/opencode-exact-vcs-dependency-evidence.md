@@ -35,6 +35,15 @@ product's current-head tests passing.
   request source cannot modify the networked image build inputs.
 - Source dependencies are import-only. No `pip install`, PEP 517 backend, setup
   hook, or dependency lifecycle script runs while the network is available.
+- The source repository must be publicly fetchable without credentials, expose
+  the normalized top-level import package directly or under `src`, and remain a
+  pure-Python leaf dependency. Private repositories, environment-marked VCS
+  requirements, namespace/layout aliases, installed-distribution metadata,
+  entry points, compiled extensions, and registry packages that require the VCS
+  distribution fail closed instead of expanding the secret-free build boundary.
+- The checkout roots and path file are explicitly world-readable so the later
+  networkless coverage container can run as UID 65532 independently of the
+  image builder's umask.
 - This records exact source inputs for a test image; it does not claim a SLSA
   build level or substitute for upstream package publication and attestation.
 

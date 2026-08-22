@@ -760,7 +760,8 @@ jobs:
                     fi; \
                     dependency_index=$((dependency_index + 1)); \
                   done <"$dependency_list"; \
-              rm -f -- "$dependency_list"
+              rm -f -- "$dependency_list"; \
+              chmod -R a+rX /opt/base-vcs-dependencies "$path_file"
           COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \

@@ -7,7 +7,8 @@ Semantic Versioning where the repository publishes a release.
 ## [Unreleased]
 
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
-  dependencies without weakening registry hashes or the networkless PR sandbox.
+  dependencies without weakening registry hashes or the networkless PR sandbox,
+  and make the exact source roots readable by the unprivileged coverage user.
 
 ### Added
 
