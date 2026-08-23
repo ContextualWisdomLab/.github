@@ -1682,10 +1682,52 @@ def test_valid_control_accepts_a_bare_json_number_run_identity(tmp_path, monkeyp
     numeric_identity = control(
         head_sha="deadbeef", run_id=32601740155, run_attempt=1
     )
-    assert norm.valid_control(numeric_identity, **kwargs) is not None
+    normalized = norm.valid_control(numeric_identity, **kwargs)
+    assert normalized is not None
+    assert normalized["run_id"] == "32601740155"
+    assert normalized["run_attempt"] == "1"
 
     wrong_attempt = control(head_sha="deadbeef", run_id=32601740155, run_attempt=2)
     assert norm.valid_control(wrong_attempt, **kwargs) is None
+
+
+def test_main_canonicalizes_numeric_run_identity_for_approval_gate(tmp_path):
+    """The published control remains valid at the downstream shell gate."""
+    manifest = tmp_path / norm.TRUSTED_ARTIFACT_MANIFEST
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["run_id"] = "32601740155"
+    manifest_payload["run_attempt"] = "1"
+    manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    anchor_manifest(manifest)
+    norm.trusted_execution_receipts.cache_clear()
+
+    output = tmp_path / "opencode-review.md"
+    output.write_text(
+        json.dumps(control(run_id=32601740155, run_attempt=1)),
+        encoding="utf-8",
+    )
+
+    assert norm.main(
+        ["normalizer", "head", "32601740155", "1", str(output)]
+    ) == 0
+
+    completed = subprocess.run(
+        [
+            "bash",
+            "scripts/ci/opencode_review_approve_gate.sh",
+            "head",
+            "32601740155",
+            "1",
+            str(output),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "APPROVE"
 
 
 def test_valid_control_canonicalizes_known_safe_finding_field_drift():

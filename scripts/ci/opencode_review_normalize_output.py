@@ -1455,8 +1455,8 @@ def valid_control(
 
     normalized = {
         "head_sha": value["head_sha"],
-        "run_id": value["run_id"],
-        "run_attempt": value["run_attempt"],
+        "run_id": expected_run_id,
+        "run_attempt": expected_run_attempt,
         "result": result,
         "reason": reason,
         "summary": summary,
