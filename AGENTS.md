@@ -3,8 +3,20 @@
 <!-- CWL-ENTRY -->
 > **Agents: read the master context FIRST.** Before any work, read [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission · naruon-as-platform + inter-component UML · cross-cutting disciplines · conventions · roadmap · current state), the live **GitHub Project #1** <https://github.com/orgs/ContextualWisdomLab/projects/1> (work/roadmap source of truth), the full spec **ContextualWisdomLab/naruon#974**, and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md). The repo/Project — not any private agent memory — is the source of truth.
 
-Materialize accepts only complete exact SHA-256 pins or a bounded two-token `-r`/`--requirement` include. An include target must be a normalized relative POSIX path with no absolute, `.`, `..`, option-like, home-expansion, backslash, URL/scheme, query, fragment, or extra-inline-option form, and it must name either a conventional `requirements.lock`/`requirements*.txt` lock (excluding generated `requirements-*-ci-hashes.txt`) or a direct `.txt` child of a directory named `requirements`. A lone `--require-hashes` directive is not trust evidence. See [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md).
+Materialize accepts only exact SHA-256 pins, a bounded relative `-r` include
+(no `.`/`..`), or an organization-owned HTTPS Git source pinned to a full
+commit and exposed without running build hooks; a lone `--require-hashes`
+directive is not trust evidence. See
+[`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
-Trusted-uv accepts only the fixed GitHub Releases HTTPS origin and retries HTTP 408, 425, 429, 500, 502, 503, 504, and 522 plus explicitly classified transient DNS, timeout, connection, host, or network failures. TLS, permanent DNS, malformed transport evidence, and every other unclassified failure fail closed. See [`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md).
+
+OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
+
+The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
+Trusted uv downloads retry only HTTP 408, 425, 429, 500, 502, 503, 504, and 522
+plus the documented transient transport classes. Every
+generated lock, bounded include, and manifest is written through a
+descriptor-pinned, no-follow output tree. See
+[`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md).

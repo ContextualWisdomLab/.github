@@ -25,8 +25,9 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    An organization required-workflow ruleset (`CWL Central required workflows`, id `18156473`) runs
    Strix, OpenCode Review, and the PR Review Merge Scheduler from this repo in each target
    repository's context. Repository-local copies of these workflows are drift sources, not
-   repo-specific contracts. See `README.md` (policy summary) and `PR_GOVERNANCE_AUDIT.md`
-   (live audit + per-repo DX/UX transfer decisions).
+   repo-specific contracts. See `README.md` (operator overview),
+   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
+   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
@@ -36,7 +37,10 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
 **OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.** OpenCode approval is
 evidence-gated (changed files, CodeGraph evidence, Change Flow DAG, test/coverage/docstring evidence,
 an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/sandboxed_web_e2e.py`,
-split `Developer experience:` / `User experience:` sections). The scheduler updates a PR branch only
+split `Developer experience:` / `User experience:` sections). Deterministic
+code may repair only trusted `path:line` bindings on LLM probes that already
+carry an independent proof and source-line digest; it never invents observed
+results. The scheduler updates a PR branch only
 when the latest review is approved, no current-head check has failed, and GitHub reports the PR as
 behind. The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
 PRs repair guidance. A separate edit-capable autofix flow
@@ -44,7 +48,7 @@ PRs repair guidance. A separate edit-capable autofix flow
 approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
 resulting head is fully re-reviewed and re-checked before it can merge, so a wrong resolution cannot
 merge unreviewed. Old approvals and old checks are not merge evidence after the head SHA changes.
-Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
+Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 
 ## Structure
 
@@ -68,8 +72,8 @@ Details: `README.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `docs/` — master context, Project protocol, `org-required-workflow-rollout.md`,
   `scorecard-governance.md`, SBOM inventory. Doctoring records live under
   `docs/doctoring/`. [`ARCHITECTURE.md`](ARCHITECTURE.md) is the control-plane
-  diagram for review, hourly NVIDIA NIM repair, trusted-uv retry, and merge
-  trust boundaries.
+  diagram for review, hourly NVIDIA NIM repair, exact-artifact SBOM attestation,
+  and merge trust boundaries.
 - `.jules/` — recorded performance (`bolt.md`) and security (`sentinel.md`) learnings from past work
   on `scripts/ci/`; worth scanning before optimizing or hardening those scripts.
 
@@ -117,7 +121,7 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
-- **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
+- **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*

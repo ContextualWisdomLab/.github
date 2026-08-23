@@ -10,6 +10,13 @@ import pytest
 from scripts.ci import materialize_base_python_requirements as materializer
 
 
+@pytest.fixture(autouse=True)
+def _empty_base_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep FIFO rejection independent of Git repository materialization."""
+
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"")
+
+
 def _one_lock() -> list[tuple[str, bytes]]:
     """Return one deterministic trusted lock fixture."""
 
@@ -25,7 +32,11 @@ def test_materializer_rejects_existing_fifo_without_blocking(
     output_directory.mkdir()
     fifo_path = output_directory / "requirements-000.txt"
     os.mkfifo(fifo_path)
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: (_one_lock(), []),
+    )
 
     real_open = materializer.os.open
     existing_open_flags: list[int] = []

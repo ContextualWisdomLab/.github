@@ -40,7 +40,7 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
 
     assert "permissions:\n  contents: read" in workflow
     assert workflow.count(
-        "step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920"
+        "step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40"
     ) == 2
     assert workflow.count(
         "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"

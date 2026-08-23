@@ -39,6 +39,13 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## aFIPC hourly caller
+
+`afipc-hourly-review-repair.yml` is a thin, read-only caller at minute
+2. It names `ContextualWisdomLab/aFIPC` and protected `master`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -70,29 +77,24 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
-## Trusted uv transient retry
+## Exact-artifact SBOM attestation
 
 ```mermaid
 flowchart TD
-  Get["GET pinned GitHub Releases HTTPS archive"]
-  Status{"408 / 425 / 429 / 500 / 502 / 503 / 504 / 522 or temporary DNS (EAI_AGAIN), timeout, connection reset/refused/aborted, host/network unreachable?"}
-  Retry["At most three attempts; discard partial bytes"]
-  Verify["SHA-256 then versioned executable"]
-  Fail["Fail closed after one attempt"]
+  Seal["Six-file sealed artifact"]
+  Read["verify-evidence-artifact: actions/contents read"]
+  Sign["attest-exact-artifacts after verify"]
+  Offline["SHA256SUMS + README + bundles"]
+  Fail["Fail closed; no OIDC token"]
 
-  Get --> Status
-  Status -->|"yes, attempts remain"| Retry
-  Retry --> Get
-  Status -->|"yes, exhausted"| Fail
-  Status -->|"TLS, permanent DNS, 404, malformed, unclassified"| Fail
-  Status -->|"200 + exact size"| Verify
+  Seal --> Read
+  Read -->|"invalid JSON, digest, or identity"| Fail
+  Read -->|"valid"| Sign
+  Sign --> Offline
 ```
 
-A retry cannot change the origin, follow a redirect, or accept an
-unverified payload. Transport evidence is classified before retry: only the
-closed HTTP set and explicit temporary DNS, timeout, connection, host, or
-network failures receive another attempt; certificate verification, permanent
-DNS, malformed exception reasons, and other `OSError` classes fail immediately.
+Caller inputs enter shell steps only as named environment variables. This
+workflow does not claim SLSA Build L3.
 
 ## Control-plane data flow
 
@@ -117,6 +119,9 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- OpenCode remains the review reasoner. Deterministic code may repair only
+  trusted `path:line` source-line digest bindings on LLM probes; it never
+  invents a hypothesis, observed result, or verdict.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
 - Logs and review receipts redact credential shapes (tokens, bearer values,
@@ -127,13 +132,8 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
-- Generated output directories and files are opened descriptor-relative without
-  following symlinks. Pre-existing destinations use `O_NONBLOCK | O_NOFOLLOW`;
-  `ENXIO` and every non-regular destination fail closed before mutation. The
-  writer verifies regular-file type, device/inode identity, and a single link
-  before writing, synchronizes bytes, then revalidates the same properties after
-  `fsync` so pathname replacement, symlink, FIFO, and hard-link races cannot be
-  silently accepted.
+- Downloaded SBOM and distribution bytes are inert. The signing job does
+  not import, install, or unpack them.
 
 ## Quality gates
 
@@ -142,6 +142,22 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
+That immutable download retries only HTTP 408 / 425 / 429 / 500 / 502 / 503 / 504 / 522
+and a closed, bounded set of transient transport failures;
+permanent transport, TLS, origin, size, digest, and archive failures remain
+single-attempt failures. Generated requirements, bounded include subtrees, and
+registry/VCS manifests are published only through descriptor-relative,
+no-follow directory and file opens, with inode and single-link revalidation
+before success. This keeps availability recovery separate from source and
+output-integrity policy.
+An exact-base `uv.lock` may additionally expose source from an organization-owned
+GitHub repository pinned to a full commit: the secret-free image build verifies
+the fetched revision and makes its source importable without running package
+build or installation hooks. Pull-request execution remains networkless.
+Root-level lock files are independent environments unless an explicit include
+relationship says otherwise; only one unambiguous two-file supplement pair may
+be recovered together, so unrelated toolchains cannot create a synthetic
+resolver conflict.
 
 ## Related durable documents
 
@@ -149,11 +165,19 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   ecosystem.
 - [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
   — Project #1 operation.
+- [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md)
+  — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md)
+  — LLM probe publication without inventing observed proof.
+- [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md)
+  — import-only exact source dependencies for networkless coverage.
+- [`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md)
+  — bounded download retry and descriptor-pinned output decision.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
-- [`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md)
-  — current increment's retry decision and APA 7th citations.
+- [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
+  — current increment's attestation decision and APA 7th citations.

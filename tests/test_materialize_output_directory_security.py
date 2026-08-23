@@ -3,18 +3,112 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 from scripts.ci import materialize_base_python_requirements as materializer
 
 
+@pytest.fixture(autouse=True)
+def _empty_base_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep descriptor tests independent of Git repository materialization."""
+
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"")
+
+
 def _one_lock() -> list[tuple[str, bytes]]:
     """Return one deterministic trusted lock fixture."""
 
     return [("requirements.lock", b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")]
+
+
+def _one_input_set() -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
+    """Return one lock and no VCS sources in the current materializer shape."""
+
+    return _one_lock(), []
+
+
+def test_descriptor_publication_preserves_includes_and_vcs_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The secure writer retains both current include and VCS evidence outputs."""
+
+    lock = b"-r constraints/pins.txt\n"
+    vcs_sources = [
+        {
+            "package": "demo",
+            "repository": "Demo",
+            "commit": "a" * 40,
+            "source": "uv.lock",
+        }
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([('requirements.txt', lock)], vcs_sources),
+    )
+    monkeypatch.setattr(
+        materializer,
+        "_included_base_lock_blobs",
+        lambda *_args: [
+            (
+                PurePosixPath("constraints/pins.txt"),
+                b"demo==1 --hash=sha256:" + b"b" * 64 + b"\n",
+            )
+        ],
+    )
+    output_directory = tmp_path / "generated_locks"
+
+    materializer.materialize(tmp_path, "a" * 40, output_directory)
+
+    assert (output_directory / "requirements-000.txt").read_bytes() == (
+        b"-r includes-000/constraints/pins.txt\n"
+    )
+    assert (
+        output_directory / "includes-000" / "constraints" / "pins.txt"
+    ).read_bytes().startswith(b"demo==1")
+    assert json.loads(
+        (output_directory / "vcs-manifest.json").read_text(encoding="utf-8")
+    ) == vcs_sources
+
+
+def test_output_subdirectory_closes_descriptor_after_component_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed include-directory walk closes its duplicated root descriptor."""
+
+    output_fd = os.open(tmp_path, materializer.SECURE_DIRECTORY_OPEN_FLAGS)
+    duplicated_descriptors: list[int] = []
+    real_dup = materializer.os.dup
+
+    def capture_dup(file_descriptor: int) -> int:
+        descriptor = real_dup(file_descriptor)
+        duplicated_descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(materializer.os, "dup", capture_dup)
+    monkeypatch.setattr(
+        materializer,
+        "_open_directory_component",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("component failed")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="component failed"):
+            materializer._open_pinned_output_subdirectory(
+                output_fd,
+                PurePosixPath("includes-000/constraints"),
+            )
+    finally:
+        os.close(output_fd)
+
+    assert len(duplicated_descriptors) == 1
+    with pytest.raises(OSError) as raised:
+        os.fstat(duplicated_descriptors[0])
+    assert raised.value.errno == errno.EBADF
 
 
 def test_materializer_rejects_symlinked_output_parent(
@@ -26,7 +120,7 @@ def test_materializer_rejects_symlinked_output_parent(
     target_directory.mkdir()
     linked_parent = tmp_path / "linked_parent"
     linked_parent.symlink_to(target_directory, target_is_directory=True)
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: [])
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: ([], []))
 
     with pytest.raises(ValueError, match="must not contain symlinks"):
         materializer.materialize(
@@ -46,11 +140,13 @@ def test_materializer_fails_closed_when_output_binding_disappears(
     output_directory = tmp_path / "generated_locks"
     moved_directory = tmp_path / "moved_locks"
 
-    def move_output_before_return(*_args: object) -> list[tuple[str, bytes]]:
+    def move_output_before_return(
+        *_args: object,
+    ) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
         output_directory.rename(moved_directory)
-        return _one_lock()
+        return _one_input_set()
 
-    monkeypatch.setattr(materializer, "base_hash_locks", move_output_before_return)
+    monkeypatch.setattr(materializer, "_base_python_inputs", move_output_before_return)
 
     with pytest.raises(ValueError, match="changed during secure materialization"):
         materializer.materialize(tmp_path, "a" * 40, output_directory)
@@ -68,13 +164,15 @@ def test_materializer_fails_closed_when_output_binding_is_replaced(
     pinned_directory = tmp_path / "pinned_locks"
     replacement_directory = tmp_path / "replacement_locks"
 
-    def replace_output_before_return(*_args: object) -> list[tuple[str, bytes]]:
+    def replace_output_before_return(
+        *_args: object,
+    ) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
         output_directory.rename(pinned_directory)
         replacement_directory.mkdir()
         replacement_directory.rename(output_directory)
-        return _one_lock()
+        return _one_input_set()
 
-    monkeypatch.setattr(materializer, "base_hash_locks", replace_output_before_return)
+    monkeypatch.setattr(materializer, "_base_python_inputs", replace_output_before_return)
 
     with pytest.raises(ValueError, match="changed during secure materialization"):
         materializer.materialize(tmp_path, "a" * 40, output_directory)
@@ -93,7 +191,7 @@ def test_materializer_rejects_symlinked_destination_file(
     outside_file = tmp_path / "outside_file"
     outside_file.write_bytes(b"unchanged")
     (output_directory / "requirements-000.txt").symlink_to(outside_file)
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
 
     with pytest.raises(ValueError, match="must not be symlinks"):
         materializer.materialize(tmp_path, "a" * 40, output_directory)
@@ -111,7 +209,7 @@ def test_materializer_rejects_multiply_linked_destination_file(
     outside_file = tmp_path / "outside_file"
     outside_file.write_bytes(b"unchanged")
     os.link(outside_file, output_directory / "requirements-000.txt")
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
 
     with pytest.raises(ValueError, match="singly linked regular files"):
         materializer.materialize(tmp_path, "a" * 40, output_directory)
@@ -126,7 +224,7 @@ def test_materializer_detects_hard_link_added_during_pinned_write(
 
     output_directory = tmp_path / "generated_locks"
     outside_link = tmp_path / "captured_output"
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
     real_fsync = materializer.os.fsync
     linked = False
 
@@ -164,7 +262,7 @@ def test_materializer_safely_replaces_single_link_regular_output(
     output_directory.mkdir()
     destination = output_directory / "requirements-000.txt"
     destination.write_bytes(b"stale")
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
 
     manifest = materializer.materialize(tmp_path, "a" * 40, output_directory)
 
@@ -182,7 +280,7 @@ def test_materializer_detects_destination_swap_after_pinned_write(
     output_directory = tmp_path / "generated_locks"
     outside_file = tmp_path / "outside_file"
     outside_file.write_bytes(b"unchanged")
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
     real_fsync = materializer.os.fsync
     swapped = False
 
@@ -209,7 +307,7 @@ def test_materializer_detects_destination_removal_after_pinned_write(
     """Removing a generated pathname after open is detected before success."""
 
     output_directory = tmp_path / "generated_locks"
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
     real_fsync = materializer.os.fsync
     removed = False
 
@@ -235,7 +333,7 @@ def test_materializer_fails_when_descriptor_write_makes_no_progress(
 ) -> None:
     """A zero-length descriptor write is an error rather than a truncated success."""
 
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
     monkeypatch.setattr(materializer.os, "write", lambda *_args: 0)
 
     with pytest.raises(OSError, match="made no progress"):
@@ -341,7 +439,7 @@ def test_materializer_propagates_unclassified_existing_file_open_failure(
     output_directory = tmp_path / "generated_locks"
     output_directory.mkdir()
     (output_directory / "requirements-000.txt").write_bytes(b"stale")
-    monkeypatch.setattr(materializer, "base_hash_locks", lambda *_args: _one_lock())
+    monkeypatch.setattr(materializer, "_base_python_inputs", lambda *_args: _one_input_set())
     real_open = materializer.os.open
 
     def deny_existing_file(
