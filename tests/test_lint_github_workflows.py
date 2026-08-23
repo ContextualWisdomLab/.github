@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import textwrap
 
@@ -89,6 +90,8 @@ def _tool_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
 def _run_linter(workflow: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """Run the real trusted linter against one controlled workflow."""
 
+    if shutil.which("ruby", path=environment["PATH"]) is None:
+        pytest.skip("Ruby is unavailable; the hosted quality job runs this runtime contract")
     return subprocess.run(
         ["ruby", str(LINTER), str(workflow)],
         env=environment,

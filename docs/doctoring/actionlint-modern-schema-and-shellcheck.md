@@ -49,6 +49,10 @@ regression passes directly through the pinned actionlint/ShellCheck pair.
   normalization retain actionlint's effective-shell behavior.
 - ShellCheck findings, malformed result JSON, actionlint failures, and invalid
   concurrency queue values all fail closed with actionable workflow context.
+- The offline Python-only coverage sandbox records the Ruby subprocess
+  contracts as unavailable instead of failing with `FileNotFoundError`; the
+  hosted quality job, whose runner includes Ruby, executes those contracts and
+  the real all-workflow lint command.
 
 ## References
 
