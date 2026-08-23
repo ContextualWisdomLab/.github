@@ -62,6 +62,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Bound the Strix changed-path quality gate to the complete production hash
+  lock and mirrored production's deliberate `--no-deps` security-override
+  boundary without rejecting source distributions that production accepts.
 - Restored the hourly organization commercial-readiness loop after five
   consecutive startup failures caused by its mandatory but unprovisioned
   `PR_REVIEW_MERGE_TOKEN`. Protected scheduled jobs now prefer that maintainer
@@ -75,7 +78,9 @@ Semantic Versioning where the repository publishes a release.
   when the preferred maintainer secret is absent, masks the OIDC JWT before the
   second request, and converts malformed successful JSON responses into the
   existing explicit unavailable output instead of exiting early under
-  `errexit`.
+  `errexit`. Both OIDC and App-token HTTP requests now use a 10-second connect
+  timeout and 30-second total timeout so a stalled exchange fails within the
+  bounded coordinator step.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
