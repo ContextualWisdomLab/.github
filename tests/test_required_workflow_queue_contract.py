@@ -1268,10 +1268,36 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert "clean: false" not in workflow
     assert "Preserve base OSV output outside the checkout path" in workflow
     assert "Restore preserved base OSV output" in workflow
+    assert "Capture head OSV output outside the checkout path" in workflow
     assert "${RUNNER_TEMP}/osv-old-results.json" in workflow
+    assert "${RUNNER_TEMP}/osv-new-results.json" in workflow
     assert "source/old-results.json" in workflow
-    assert "test -s old-results.json" in workflow
-    assert "test -s new-results.json" in workflow
+    assert "source/new-results.json" in workflow
+    preserve = workflow.index(
+        "      - name: Preserve base OSV output outside the checkout path"
+    )
+    checkout_head = workflow.index("      - name: Checkout head")
+    restore = workflow.index("      - name: Restore preserved base OSV output")
+    scan_head = workflow.index("      - name: Scan head with OSV")
+    capture_head = workflow.index(
+        "      - name: Capture head OSV output outside the checkout path"
+    )
+    require_output = workflow.index("      - name: Require OSV scan output")
+    assert preserve < checkout_head < restore < scan_head < capture_head < require_output
+    discard_after_restore = workflow.index(
+        "      - name: Discard checkout-provided OSV result files", restore
+    )
+    restore_block = workflow[restore:discard_after_restore]
+    require_block = workflow[
+        require_output : workflow.index("      - name: Print OSV findings being compared")
+    ]
+    assert "source/old-results.json" not in restore_block
+    assert "source/old-results.json" not in require_block
+    assert "source/new-results.json" not in require_block
+    assert 'cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
+    assert "rm -f source/old-results.json source/new-results.json" in workflow
+    assert 'test -s "${old}"' in require_block
+    assert 'test -s "${new}"' in require_block
 
 
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:

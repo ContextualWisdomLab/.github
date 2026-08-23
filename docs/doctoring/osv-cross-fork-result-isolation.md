@@ -8,25 +8,34 @@ checkout used the upstream repository while the head belonged to a fork.
 `actions/checkout` detected the different repository origin and replaced the
 workspace before checking out the fork, including the untracked base result.
 `clean: false` does not preserve files when checkout must replace a workspace
-whose repository identity changed.
+whose repository identity changed. Copying a captured result back onto the
+workspace `old-results.json` can also fail: the scanner action may create that
+file as root, so a runner-user overwrite returns permission denied.
 
 ## Decision
 
 Checkout both exact repositories into the same `source/` child directory and
-scan that directory. Immediately copy a non-empty base result from the
-workspace root or `source/old-results.json` into `${RUNNER_TEMP}/osv-old-results.json`,
-then restore that file after the fork head checkout. Reusing the same checkout
-path keeps base and head scan source paths comparable. Missing or empty output
-after restore remains a hard failure; a zero-finding head scan does not skip
-the base comparison. This change does not weaken vulnerability comparison.
+scan that directory. Copy a non-empty scanner result into
+`${RUNNER_TEMP}/osv-old-results.json` and `${RUNNER_TEMP}/osv-new-results.json`
+immediately after each scan. Do not copy those captures back onto an existing
+workspace `old-results.json`: the OSV action may create that file as root, and
+a runner-user `cp` then fails with permission denied (observed on
+ContextualWisdomLab/.github#1257). Restore by unlinking the workspace file
+first, then copying from `RUNNER_TEMP`. Discard `source/old-results.json` and
+`source/new-results.json` before each scan so a fork cannot plant reporter
+input. After the head checkout, never treat checkout-path JSON as scanner
+output. Missing or empty captured output remains a hard failure; a
+zero-finding head scan does not skip the base comparison. This change does not
+weaken vulnerability comparison.
 
 ## Verification and rollback
 
 - The workflow contract proves both checkouts target `source/`, every scan reads
-  that same directory, and both result files remain at the workspace root.
+  that same directory, captures land in `RUNNER_TEMP` before compare, restore
+  unlinks before copy, and post-checkout `source/*.json` is not reporter input.
 - `actionlint` validates the edited workflow.
-- Rerun a fork PR's `Security Scan`; both `old-results.json` and
-  `new-results.json` must be non-empty before the reporter runs.
+- Rerun a fork PR's `Security Scan`; both captured result files must be
+  non-empty before the reporter runs.
 - Roll back only after another job-scoped store retains the base artifact across
   repository replacement without changing the compared source paths.
 

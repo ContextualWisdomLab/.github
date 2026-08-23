@@ -6,10 +6,11 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
-- Preserve OSV `old-results.json` in `RUNNER_TEMP` before a fork head checkout
-  and restore it before compare, including when the scanner writes the file
-  under `source/`, so a zero-finding fork scan cannot fail on an empty base
-  artifact.
+- Preserve OSV scan output in `RUNNER_TEMP` before a fork head checkout and
+  restore it by unlinking any root-owned workspace copy first, so a
+  permission-denied overwrite cannot drop the base artifact; discard
+  checkout-provided result files before each scan and never treat post-checkout
+  `source/*.json` as reporter input.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification

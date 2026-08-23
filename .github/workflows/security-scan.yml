@@ -74,6 +74,10 @@ jobs:
           path: source
           fetch-depth: 0
           persist-credentials: false
+      - name: Discard checkout-provided OSV result files
+        run: |
+          set -euo pipefail
+          rm -f source/old-results.json source/new-results.json
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
@@ -112,12 +116,12 @@ jobs:
           for candidate in old-results.json source/old-results.json; do
             if [ -s "${candidate}" ]; then
               cp "${candidate}" "${dest}"
-              cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"
               echo "Preserved OSV base output from ${candidate}"
               exit 0
             fi
           done
-          echo "::warning::OSV base output was not present after the base scan steps."
+          echo "::error::OSV base output was not present after the base scan steps."
+          exit 1
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -130,12 +134,13 @@ jobs:
         run: |
           set -euo pipefail
           src="${RUNNER_TEMP}/osv-old-results.json"
-          if [ -s "${src}" ]; then
-            cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"
-          fi
-          if [ ! -s old-results.json ] && [ -s source/old-results.json ]; then
-            cp source/old-results.json old-results.json
-          fi
+          test -s "${src}"
+          rm -f "${GITHUB_WORKSPACE}/old-results.json"
+          cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"
+      - name: Discard checkout-provided OSV result files
+        run: |
+          set -euo pipefail
+          rm -f source/old-results.json source/new-results.json
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
@@ -167,20 +172,29 @@ jobs:
             --allow-no-lockfiles
             -r
             source/
+      - name: Capture head OSV output outside the checkout path
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/osv-new-results.json"
+          for candidate in new-results.json source/new-results.json; do
+            if [ -s "${candidate}" ]; then
+              cp "${candidate}" "${dest}"
+              echo "Captured OSV head output from ${candidate}"
+              exit 0
+            fi
+          done
+          echo "::error::OSV head output was not present after the head scan steps."
+          exit 1
       - name: Require OSV scan output
         run: |
           set -euo pipefail
-          if [ ! -s old-results.json ] && [ -s source/old-results.json ]; then
-            cp source/old-results.json old-results.json
-          fi
-          if [ ! -s new-results.json ] && [ -s source/new-results.json ]; then
-            cp source/new-results.json new-results.json
-          fi
-          if [ ! -s old-results.json ] && [ -s "${RUNNER_TEMP}/osv-old-results.json" ]; then
-            cp "${RUNNER_TEMP}/osv-old-results.json" old-results.json
-          fi
-          test -s old-results.json
-          test -s new-results.json
+          old="${RUNNER_TEMP}/osv-old-results.json"
+          new="${RUNNER_TEMP}/osv-new-results.json"
+          test -s "${old}"
+          test -s "${new}"
+          rm -f old-results.json new-results.json
+          cp "${old}" old-results.json
+          cp "${new}" new-results.json
       - name: Print OSV findings being compared
         shell: python3 {0}
         run: |
