@@ -152,6 +152,8 @@ def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
 
     def fake_run(args, **kwargs):
         assert args[0] == "gh"
+        assert "--paginate" in args
+        assert "--slurp" in args
         return type("Completed", (), {"returncode": 0, "stdout": json.dumps([page]), "stderr": ""})()
 
     monkeypatch.setattr(identity.subprocess, "run", fake_run)
