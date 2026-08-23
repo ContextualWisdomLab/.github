@@ -111,6 +111,8 @@ def _redact_assignments(text: str) -> str:
         key_end = candidate.end()
         while key_end < len(text) and text[key_end] in KEY_CHARS:
             key_end += 1
+        while key_start < candidate.start() and text[key_start].isdigit():
+            key_start += 1
 
         assignment_start = key_start
         if assignment_start > cursor and text[assignment_start - 1] in "\"'":

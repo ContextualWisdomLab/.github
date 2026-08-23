@@ -79,6 +79,7 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
         "token=": "token=",
         "token=,": "token=,",
         "9safe=value": "9safe=value",
+        "9password=value": f"9password={redactor.REDACTED}",
         '"token: value': f'"token: {redactor.REDACTED}',
         "token:   ": "token:   ",
     }
