@@ -207,7 +207,7 @@ flowchart LR
 
 ### 4.1 Same-session open/close delta
 
-None at snapshot time. If a later `gh pr list` capture in the same session differs, record the closed or newly opened numbers here instead of treating the table as merge authorization.
+- ContextualWisdomLab/.github#1252 head advanced in this session from `f7b0fd3253747efeef590859df150fd759aaf306` to the commit that lands this refresh. Re-read `gh pr view 1252 --json headRefOid` before merge. No other open/close delta at write time.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
