@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
+import json
 import runpy
+import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -28,6 +32,13 @@ def _created_tool_directory(path: Path) -> str:
     """Create the directory normally returned by ``tempfile.mkdtemp``."""
     path.mkdir(mode=0o700)
     return str(path)
+
+
+def _force_linux_x86_64_installer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the installer path that GitHub-hosted linux x86_64 runners use."""
+    monkeypatch.setattr(materializer.sys, "platform", "linux")
+    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    materializer._install_trusted_uv.cache_clear()
 
 
 def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) -> None:
@@ -90,6 +101,101 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
     assert "requirements.txt" not in (output / "manifest.json").read_text(
         encoding="utf-8"
     )
+    assert (output / "vcs-manifest.json").read_text(encoding="utf-8") == "[]\n"
+
+
+def test_materializes_exact_vcs_sources_in_a_separate_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VCS source pins never enter a pip --require-hashes input file."""
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git(repository, "init")
+    git(repository, "config", "user.name", "Test")
+    git(repository, "config", "user.email", "test@example.invalid")
+    (repository / "tracked.txt").write_text("base\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "base")
+    base_sha = git(repository, "rev-parse", "HEAD")
+    hash_lock = b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    vcs_sources = [
+        {
+            "package": "rankweave",
+            "import_name": "rankweave",
+            "repository": "RankWeave",
+            "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
+            "source": "uv.lock",
+        }
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([("uv.lock", hash_lock)], vcs_sources),
+    )
+
+    output = tmp_path / "output"
+    materializer.materialize(repository, base_sha, output)
+
+    assert (output / "requirements-000.txt").read_bytes() == hash_lock
+    assert (
+        json.loads((output / "vcs-manifest.json").read_text(encoding="utf-8"))
+        == vcs_sources
+    )
+
+
+def test_base_inputs_preserve_a_vcs_only_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source-only uv closure is useful even without registry requirements."""
+    tree = (
+        b"100644 blob " + b"a" * 40 + b"\tpyproject.toml\0"
+        b"100644 blob " + b"b" * 40 + b"\tuv.lock\0"
+    )
+    dependency = {
+        "package": "rankweave",
+        "import_name": "rankweave",
+        "repository": "RankWeave",
+        "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
+    }
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda *_args: (b"", [dependency]),
+    )
+
+    locks, vcs_sources = materializer._base_python_inputs(tmp_path, "a" * 40)
+
+    assert locks == []
+    assert vcs_sources == [{**dependency, "source": "uv.lock"}]
+
+
+def test_base_inputs_reject_conflicting_vcs_revisions_across_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate uv projects cannot select ambiguous revisions of one source."""
+    tree = b"".join(
+        b"100644 blob " + bytes(character, "ascii") * 40 + b"\t" + path + b"\0"
+        for character, path in (
+            ("a", b"first/pyproject.toml"),
+            ("b", b"first/uv.lock"),
+            ("c", b"second/pyproject.toml"),
+            ("d", b"second/uv.lock"),
+        )
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+
+    def export(_repo: Path, _sha: str, lock_path: str):
+        commit = "a" * 40 if lock_path.startswith("first/") else "b" * 40
+        return b"", [{"package": "demo", "repository": "demo", "commit": commit}]
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._base_python_inputs(tmp_path, "a" * 40)
 
 
 def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
@@ -118,6 +224,12 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
         "hypothesis==6 --hash=sha256:" + ("b" * 64) + "\n",
         encoding="utf-8",
     )
+    requirements_dir = repo / "requirements"
+    requirements_dir.mkdir()
+    (requirements_dir / "ci.txt").write_text(
+        "pytest==9 --hash=sha256:" + ("c" * 64) + "\n",
+        encoding="utf-8",
+    )
     (repo / "uv.lock").write_text(
         "version = 1\n[[package]]\nname = 'x'\n", encoding="utf-8"
     )
@@ -131,6 +243,7 @@ def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
 
     assert [entry["source"] for entry in manifest] == [
         "requirements-test.txt",
+        "requirements/ci.txt",
         "services/account_unification/requirements-dev.txt",
     ]
 
@@ -145,14 +258,39 @@ def test_lock_name_candidates_are_pip_requirements_files() -> None:
     )
     assert not materializer._is_candidate_lock_name("uv.lock")
     assert not materializer._is_candidate_lock_name("pyproject.toml")
+    assert materializer._is_candidate_lock_path(
+        materializer.pathlib.PurePosixPath("requirements/ci.txt")
+    )
+    assert materializer._is_candidate_lock_path(
+        materializer.pathlib.PurePosixPath("service/requirements/package.txt")
+    )
+    assert not materializer._is_candidate_lock_path(
+        materializer.pathlib.PurePosixPath("service/config/ci.txt")
+    )
 
 
 def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> None:
     """Only fully hash-pinned, non-empty lock content is materialized."""
     assert not materializer._is_hash_pinned(b"# comment only\n\n")
-    assert materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
+    assert not materializer._is_hash_pinned(b"--require-hashes\ndemo==1\n")
     assert materializer._is_hash_pinned(b"demo==1 --hash=sha256:" + b"a" * 64 + b"\n")
+    assert materializer._is_hash_pinned(b"-r requirements-other.txt\n")
     assert materializer._is_hash_pinned(b"-r other-hashes.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ./requirements-other.txt\n")
+    assert not materializer._is_hash_pinned(b"-r ../escape.txt\n")
+    assert materializer._is_bounded_requirement_include(
+        "--requirement requirements-other.txt"
+    )
+    assert not materializer._is_bounded_requirement_include("-r .")
+    assert not materializer._is_bounded_requirement_include("-r -evil.txt")
+    assert not materializer._is_bounded_requirement_include("-r ~evil.txt")
+    assert not materializer._is_bounded_requirement_include("-r C:foo.txt")
+    assert not materializer._is_bounded_requirement_include("-r foo?bar.txt")
+    assert not materializer._is_bounded_requirement_include("-r foo#bar.txt")
+    assert not materializer._is_bounded_requirement_include(r"-r foo\\bar.txt")
+    assert not materializer._is_bounded_requirement_include("-r")
+    assert not materializer._is_bounded_requirement_include("-r /abs/requirements.txt")
+    assert not materializer._is_bounded_requirement_include("-r pyproject.toml")
     assert not materializer._is_hash_pinned(b"untrusted==1\n")
     # uv export / pip-compile multi-line continuation format (spec, then --hash= lines).
     assert materializer._is_hash_pinned(
@@ -164,39 +302,208 @@ def test_hash_pin_detection_includes_pinned_and_excludes_unpinned_or_empty() -> 
     )
 
 
-@pytest.mark.parametrize(
-    "line",
-    [
-        "-r requirements.lock extra",
-        "x requirements.lock",
-        "-r -requirements.lock",
-        "-r ~requirements.lock",
-        r"-r service\\requirements.lock",
-        "-r https://example.invalid/requirements.lock",
-        "-r requirements.lock?download=1",
-        "-r requirements.lock#fragment",
-        "-r /requirements.lock",
-        "-r requirements/./requirements.lock",
-        "-r requirements/../requirements.lock",
-        "-r requirements//requirements.lock",
-        "-r other.txt",
-    ],
-)
-def test_bounded_requirement_include_rejects_unsafe_or_non_lock_targets(
-    line: str,
-) -> None:
-    """Only normalized relative requirement-lock includes cross the boundary."""
-    assert not materializer._is_bounded_requirement_include(line)
+def test_materialized_bounded_include_is_resolvable_by_pip(tmp_path: Path) -> None:
+    """A safe base-owned include survives flattening and pip hash preflight."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    wheel = wheel_dir / "demo-1-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo/__init__.py", "__version__ = '1'\n")
+        archive.writestr(
+            "demo-1.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: demo\nVersion: 1\n",
+        )
+        archive.writestr(
+            "demo-1.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: TEPP-test\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr("demo-1.dist-info/RECORD", "")
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+
+    (repo / "requirements.txt").write_text(
+        "-r other-hashes.txt\n", encoding="utf-8"
+    )
+    (repo / "other-hashes.txt").write_text(
+        f"--require-hashes\ndemo==1 --hash=sha256:{digest}\n", encoding="utf-8"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output)
+    assert manifest == [{"file": "requirements-000.txt", "source": "requirements.txt"}]
+    assert (output / "requirements-000.txt").read_text(encoding="utf-8") == (
+        "-r includes-000/other-hashes.txt\n"
+    )
+    assert (output / "includes-000" / "other-hashes.txt").is_file()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--ignore-installed",
+            "--disable-pip-version-check",
+            "--no-index",
+            "--find-links",
+            str(wheel_dir),
+            "--require-hashes",
+            "-r",
+            str(output / "requirements-000.txt"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-@pytest.mark.parametrize(
-    "line", ["-r requirements.lock", "--requirement requirements-dev.txt"]
-)
-def test_bounded_requirement_include_accepts_normalized_relative_lock_targets(
-    line: str,
+def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> None:
+    """Includes must resolve to direct complete hash closures in the exact base."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements.txt").write_text("-r child.txt\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "missing")
+    missing_sha = git(repo, "rev-parse", "HEAD")
+    with pytest.raises(RuntimeError, match="not a regular base blob"):
+        materializer.materialize(repo, missing_sha, tmp_path / "missing-output")
+
+    (repo / "child.txt").write_text("-r grandchild.txt\n", encoding="utf-8")
+    (repo / "grandchild.txt").write_text(
+        "demo==1 --hash=sha256:" + ("d" * 64) + "\n", encoding="utf-8"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "nested")
+    nested_sha = git(repo, "rev-parse", "HEAD")
+    with pytest.raises(RuntimeError, match="must contain only exact SHA-256 pins"):
+        materializer.materialize(repo, nested_sha, tmp_path / "nested-output")
+
+    with pytest.raises(RuntimeError, match="base lock requirements.txt is not valid UTF-8"):
+        materializer._rewrite_materialized_includes(
+            b"\xff", "includes-000", "requirements.txt"
+        )
+
+
+def test_bounded_repair_driver_runs_against_a_staged_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both supported include spellings accept a normalized lock filename."""
-    assert materializer._is_bounded_requirement_include(line)
+    """The one-shot repair driver applies every guarded edit in isolation."""
+    repository_root = Path(__file__).parents[1]
+    relative_files = (
+        "scripts/ci/repair_pr827_coderabbit_comments.py",
+        "scripts/ci/materialize_base_python_requirements.py",
+        "tests/test_materialize_base_python_requirements.py",
+        "tests/test_opencode_rust_coverage_toolchain_contract.py",
+        "docs/doctoring/opencode-rust-coverage-runtime-boundary.md",
+        ".github/workflows/opencode-review-dispatch.yml",
+        "CHANGELOG.md",
+    )
+    for relative_file in relative_files:
+        source = repository_root / relative_file
+        destination = tmp_path / relative_file
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        changelog.read_text(encoding="utf-8").replace(
+            "## [Unreleased]\n",
+            "## [Unreleased]\n\n"
+            "- Materialized base Python locks only when every package line is an exact "
+            "SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone "
+            "`--require-hashes` directive, a dotted include such as `./lock.txt`, or "
+            "`-r other-hashes.txt` no longer enters the trusted build context.\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runpy.run_path(
+        str(repository_root / "scripts/ci/repair_pr827_coderabbit_comments.py"),
+        run_name="__main__",
+    )
+
+    materializer_source = (
+        tmp_path / "scripts/ci/materialize_base_python_requirements.py"
+    ).read_text(encoding="utf-8")
+    assert "def _bounded_requirement_include_target(" in materializer_source
+    assert "def _included_base_lock_blobs(" in materializer_source
+    assert "includes-000/" in (
+        tmp_path / "tests/test_materialize_base_python_requirements.py"
+    ).read_text(encoding="utf-8")
+    assert "Apache-2.0 WITH LLVM-exception" in (
+        tmp_path / "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
+    ).read_text(encoding="utf-8")
+
+    script_path = repository_root / "scripts/ci/repair_pr827_coderabbit_comments.py"
+    tree = ast.parse(script_path.read_text(encoding="utf-8"), filename=str(script_path))
+    definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    namespace: dict[str, object] = {"Path": Path}
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[])),
+            str(script_path),
+            "exec",
+        ),
+        namespace,
+    )
+    replace_once = namespace["replace_once"]
+    replace_between = namespace["replace_between"]
+    once_file = tmp_path / "once.txt"
+    once_file.write_text("old", encoding="utf-8")
+    replace_once(str(once_file), "old", "new")  # type: ignore[operator]
+    assert once_file.read_text(encoding="utf-8") == "new"
+    with pytest.raises(SystemExit, match="expected one replacement marker"):
+        replace_once(str(once_file), "missing", "other")  # type: ignore[operator]
+    repeated_file = tmp_path / "repeated.txt"
+    repeated_file.write_text("oldold", encoding="utf-8")
+    replace_once(  # type: ignore[operator]
+        str(repeated_file), "old", "new", allow_repeated=True
+    )
+    assert repeated_file.read_text(encoding="utf-8") == "newold"
+
+    between_file = tmp_path / "between.txt"
+    between_file.write_text("START old END", encoding="utf-8")
+    replace_between(str(between_file), "START", "END", "START new ")  # type: ignore[operator]
+    assert between_file.read_text(encoding="utf-8") == "START new END"
+    replace_between(str(between_file), "MISSING", "END", "START new ")  # type: ignore[operator]
+    before_file = tmp_path / "before.txt"
+    before_file.write_text("ANCHOR", encoding="utf-8")
+    insert_before = namespace["insert_before"]
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    assert before_file.read_text(encoding="utf-8") == "PREFIX ANCHOR"
+    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_before(str(before_file), "MISSING", "OTHER ")  # type: ignore[operator]
+    after_file = tmp_path / "after.txt"
+    after_file.write_text("ANCHOR", encoding="utf-8")
+    insert_after = namespace["insert_after"]
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    assert after_file.read_text(encoding="utf-8") == "ANCHOR SUFFIX"
+    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
+    with pytest.raises(SystemExit, match="expected one insertion anchor"):
+        insert_after(str(after_file), "MISSING", " OTHER")  # type: ignore[operator]
+    between_file.write_text("START old START END", encoding="utf-8")
+    with pytest.raises(SystemExit, match="start marker missing or ambiguous"):
+        replace_between(str(between_file), "START", "END", "replacement")  # type: ignore[operator]
+    between_file.write_text("START old", encoding="utf-8")
+    with pytest.raises(SystemExit, match="end marker missing"):
+        replace_between(str(between_file), "START", "END", "replacement")  # type: ignore[operator]
 
 
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
@@ -309,7 +616,7 @@ def test_main_reports_when_no_locks_exist(
         == 0
     )
     assert (
-        "No tracked hash-bearing Python requirement candidates exist"
+        "any exact VCS source pins are listed in vcs-manifest.json"
         in capsys.readouterr().out
     )
 
@@ -717,8 +1024,7 @@ def test_install_trusted_uv_verifies_version_and_caches_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer writes one executable, verifies its version, and caches it."""
-    monkeypatch.setattr(materializer.sys, "platform", "linux")
-    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -767,8 +1073,7 @@ def test_install_trusted_uv_rejects_version_process_failures(
     failure: OSError | subprocess.TimeoutExpired,
 ) -> None:
     """A missing or hung downloaded executable is removed and rejected."""
-    monkeypatch.setattr(materializer.sys, "platform", "linux")
-    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / "uv"
     monkeypatch.setattr(
         materializer.tempfile,
@@ -808,8 +1113,7 @@ def test_install_trusted_uv_rejects_wrong_version_or_exit_status(
     completed: subprocess.CompletedProcess[bytes],
 ) -> None:
     """Unexpected version output or a nonzero status cannot satisfy the pin."""
-    monkeypatch.setattr(materializer.sys, "platform", "linux")
-    monkeypatch.setattr(materializer.platform, "machine", lambda: "x86_64")
+    _force_linux_x86_64_installer(monkeypatch)
     tool_dir = tmp_path / f"uv-{completed.returncode}-{len(completed.stdout)}"
     monkeypatch.setattr(
         materializer.tempfile,

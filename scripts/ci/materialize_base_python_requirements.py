@@ -36,6 +36,13 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
     r"==[^\s;]+(?:\s*;\s*\S(?:.*\S)?)?"
 )
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
+UV_EXACT_ORG_VCS_RE = re.compile(
+    r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?)\s+@\s+"
+    r"git\+https://github\.com/ContextualWisdomLab/"
+    r"(?P<repository>[A-Za-z0-9_.-]{1,100})\.git@"
+    r"(?P<commit>[0-9a-fA-F]{40})"
+)
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
@@ -166,22 +173,19 @@ def _is_candidate_lock_path(path: pathlib.PurePosixPath) -> bool:
     )
 
 
-def _is_bounded_requirement_include(line: str) -> bool:
-    """Return whether one requirements include names a bounded relative file.
+def _bounded_requirement_include_target(
+    line: str,
+) -> pathlib.PurePosixPath | None:
+    """Return the safe relative target of one bounded requirements include.
 
-    Includes are accepted only as a two-token ``-r``/``--requirement`` form
-    whose target is itself a candidate lock path written as a normalized
-    relative POSIX path. Absolute paths, ``.`` or ``..`` components, double
-    slashes, URLs, option-like targets, shell/Windows path separators,
-    fragments, queries, extra inline options or hashes, and includes of
-    non-lock files are rejected before a base-owned file can enter the
-    trusted build context.
-    The downstream installer still proves that the candidate is an independently
-    complete hash closure; this predicate grants syntax eligibility only.
+    The target may use any normalized relative ``.txt`` name, including names
+    such as ``other-hashes.txt``. Eligibility does not confer trust: the exact
+    base-tree target must later be a regular blob containing only exact
+    SHA-256-pinned package requirements.
     """
     fields = line.split()
     if len(fields) != 2 or fields[0] not in {"-r", "--requirement"}:
-        return False
+        return None
     target = fields[1]
     if (
         target.startswith(("-", "~"))
@@ -190,16 +194,23 @@ def _is_bounded_requirement_include(line: str) -> bool:
         or "?" in target
         or "#" in target
     ):
-        return False
+        return None
     include_path = pathlib.PurePosixPath(target)
-    return (
-        bool(include_path.parts)
-        and target == include_path.as_posix()
-        and not include_path.is_absolute()
-        and "." not in include_path.parts
-        and ".." not in include_path.parts
-        and _is_candidate_lock_path(include_path)
-    )
+    if (
+        not include_path.parts
+        or target != include_path.as_posix()
+        or include_path.is_absolute()
+        or "." in include_path.parts
+        or ".." in include_path.parts
+        or include_path.suffix != ".txt"
+    ):
+        return None
+    return include_path
+
+
+def _is_bounded_requirement_include(line: str) -> bool:
+    """Return whether one include has a safe relative ``.txt`` target."""
+    return _bounded_requirement_include_target(line) is not None
 
 
 def _requirement_lines(content: bytes) -> list[str]:
@@ -222,23 +233,26 @@ def _requirement_lines(content: bytes) -> list[str]:
 
 
 def _is_hash_pinned(content: bytes) -> bool:
-    """Return whether content carries hash pins and is safe to preflight.
+    """Return whether content carries only trusted pins or bounded includes.
 
-    Discovery is content-based rather than name-based so hash-pinned locks in any
-    location (a service subdirectory, ``requirements-dev.txt``,
-    ``requirements-test.txt``) can be considered for offline coverage, while an
-    unpinned or PR-mutable requirements file is still excluded from the networked
-    build context. Hash syntax cannot prove that a file includes every transitive
-    dependency, so the trusted image installer separately preflights every
-    candidate as an independent ``--require-hashes`` closure. An empty file
-    carries no installable dependency and is not materialized.
+    Discovery is content-based rather than name-based so exact hash-pinned locks
+    in service subdirectories and role-specific requirements files can be
+    considered for offline coverage. Candidate syntax is deliberately stricter
+    than a substring search: each package line must be an exact ``==`` pin with
+    one or more complete SHA-256 hashes, or a bounded relative requirements
+    include. A global ``--require-hashes`` directive is not trust evidence by
+    itself. The downstream installer separately preflights every candidate as an
+    independent ``pip --require-hashes`` closure, so syntax eligibility never
+    substitutes for dependency-closure proof.
     """
     lines = _requirement_lines(content)
-    if not lines:
+    requirement_lines = [line for line in lines if line != "--require-hashes"]
+    if not requirement_lines:
         return False
-    return any(line == "--require-hashes" for line in lines) or all(
-        "--hash=" in line or line.startswith(("-r ", "--requirement "))
-        for line in lines
+    return all(
+        _is_fully_hash_pinned_requirement(line)
+        or _is_bounded_requirement_include(line)
+        for line in requirement_lines
     )
 
 
@@ -277,6 +291,42 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     """
     lines = _requirement_lines(content)
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
+
+
+def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
+    """Separate registry hash pins from exact organization VCS source pins."""
+    registry_requirements: list[str] = []
+    vcs_by_repository: dict[str, dict[str, str]] = {}
+    for line in _requirement_lines(content):
+        if _is_fully_hash_pinned_requirement(line):
+            registry_requirements.append(line)
+            continue
+        match = UV_EXACT_ORG_VCS_RE.fullmatch(line)
+        if match is None:
+            raise ValueError("uv export contains an unsupported dependency line")
+        dependency = {
+            "package": match.group("package"),
+            "import_name": re.sub(
+                r"[-_.]+", "_", match.group("package").partition("[")[0]
+            ).lower(),
+            "repository": match.group("repository"),
+            "commit": match.group("commit").lower(),
+        }
+        repository_key = dependency["repository"].casefold()
+        previous = vcs_by_repository.get(repository_key)
+        if previous is not None and previous["commit"] != dependency["commit"]:
+            raise ValueError("uv export pins one VCS repository to conflicting commits")
+        vcs_by_repository[repository_key] = dependency
+
+    registry_content = (
+        ("\n".join(registry_requirements) + "\n").encode("utf-8")
+        if registry_requirements
+        else b""
+    )
+    return registry_content, sorted(
+        vcs_by_repository.values(),
+        key=lambda dependency: dependency["repository"].casefold(),
+    )
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -485,7 +535,7 @@ def _reject_unsupported_uv_workspace(
 
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
-) -> bytes | None:
+) -> tuple[bytes, list[dict[str, str]]] | None:
     """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
     The caller proves that the sibling ``pyproject.toml`` is a regular blob in
@@ -527,11 +577,14 @@ def _export_uv_lock(
     exported = completed.stdout
     if not _requirement_lines(exported):
         return None
-    if not _is_fully_hash_pinned_export(exported):
+    try:
+        partitioned = _partition_uv_export(exported)
+    except ValueError as exc:
         raise RuntimeError(
-            f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
-        )
-    return exported
+            f"uv export for tracked base lock {lock_path} was not fully hash-pinned "
+            "or exact organization VCS-pinned"
+        ) from exc
+    return partitioned
 
 
 def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosixPath]]:
@@ -562,8 +615,10 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
     return regular_blobs
 
 
-def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
-    """Return regular hash-lock blobs from the exact validated base commit."""
+def _base_python_inputs(
+    repo_root: pathlib.Path, base_sha: str
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
+    """Return hash locks and exact VCS sources from one validated base commit."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -571,18 +626,99 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_blobs = _regular_base_blob_paths(entries)
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
+    vcs_by_repository: dict[str, dict[str, str]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
-            if _is_flat_materializable_lock(content):
+            if _is_hash_pinned(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
             if _uv_pyproject_path(path) not in regular_paths:
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                locks.append((path, exported))
-    return sorted(locks, key=lambda item: item[0])
+                registry_content, vcs_dependencies = exported
+                if registry_content:
+                    locks.append((path, registry_content))
+                for dependency in vcs_dependencies:
+                    dependency = {**dependency, "source": path}
+                    repository_key = dependency["repository"].casefold()
+                    previous = vcs_by_repository.get(repository_key)
+                    if (
+                        previous is not None
+                        and previous["commit"] != dependency["commit"]
+                    ):
+                        raise RuntimeError(
+                            "base uv locks pin one VCS repository "
+                            "to conflicting commits"
+                        )
+                    vcs_by_repository[repository_key] = dependency
+    return (
+        sorted(locks, key=lambda item: item[0]),
+        sorted(
+            vcs_by_repository.values(),
+            key=lambda dependency: dependency["repository"].casefold(),
+        ),
+    )
+
+
+def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
+    """Return regular hash-lock blobs from the exact validated base commit."""
+    return _base_python_inputs(repo_root, base_sha)[0]
+
+
+def _included_base_lock_blobs(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    source_path: str,
+    content: bytes,
+    regular_paths: set[str],
+) -> list[tuple[pathlib.PurePosixPath, bytes]]:
+    """Load direct bounded includes from the exact base as complete closures."""
+    source_parent = pathlib.PurePosixPath(source_path).parent
+    included: dict[pathlib.PurePosixPath, bytes] = {}
+    for line in _requirement_lines(content):
+        target = _bounded_requirement_include_target(line)
+        if target is None:
+            continue
+        resolved = source_parent / target
+        resolved_path = resolved.as_posix()
+        if resolved_path not in regular_paths:
+            raise RuntimeError(
+                f"bounded include {target} from {source_path} is not a regular base blob"
+            )
+        included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
+        if not _is_flat_materializable_lock(included_content):
+            raise RuntimeError(
+                f"bounded include {resolved_path} must contain only exact SHA-256 pins"
+            )
+        included[target] = included_content
+    return sorted(included.items(), key=lambda item: item[0].as_posix())
+
+
+def _rewrite_materialized_includes(
+    content: bytes, include_directory: str, source_path: str = ""
+) -> bytes:
+    """Rewrite root include targets to their preserved generated subtree."""
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"base lock {source_path} is not valid UTF-8") from exc
+    rewritten: list[str] = []
+    for raw_line in text.splitlines(keepends=True):
+        body = raw_line.rstrip("\r\n")
+        ending = raw_line[len(body) :]
+        stripped = body.strip()
+        target = _bounded_requirement_include_target(stripped)
+        if target is None:
+            rewritten.append(raw_line)
+            continue
+        indentation = body[: len(body) - len(body.lstrip())]
+        option = stripped.split()[0]
+        rewritten.append(
+            f"{indentation}{option} {include_directory}/{target.as_posix()}{ending}"
+        )
+    return "".join(rewritten).encode("utf-8")
 
 
 def materialize(
@@ -590,18 +726,36 @@ def materialize(
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
-    """Write base lock blobs under generated names safe for a Docker build context."""
+    """Write base locks and resolvable bounded includes into a safe context."""
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    resolved_repo = repo_root.resolve()
+    entries = _git(resolved_repo, "ls-tree", "-r", "-z", "--full-tree", base_sha)
+    regular_paths = {
+        path for path, _candidate in _regular_base_blob_paths(entries)
+    }
+    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
     manifest: list[dict[str, str]] = []
-    for index, (source_path, content) in enumerate(
-        base_hash_locks(repo_root.resolve(), base_sha)
-    ):
+    for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
+        include_directory = f"includes-{index:03d}"
+        included = _included_base_lock_blobs(
+            resolved_repo,
+            base_sha,
+            source_path,
+            content,
+            regular_paths,
+        )
+        for relative_target, included_content in included:
+            destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(included_content)
         destination = output_dir / generated_name
-        destination.write_bytes(content)
+        destination.write_bytes(
+            _rewrite_materialized_includes(content, include_directory, source_path)
+        )
         manifest.append({"file": generated_name, "source": source_path})
 
     (output_dir / "manifest.json").write_text(
@@ -610,6 +764,10 @@ def materialize(
     )
     (output_dir / "manifest.txt").write_text(
         "".join(f"{entry['file']}\n" for entry in manifest),
+        encoding="utf-8",
+    )
+    (output_dir / "vcs-manifest.json").write_text(
+        json.dumps(vcs_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return manifest
@@ -639,7 +797,9 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(
-            "No tracked hash-bearing Python requirement candidates exist at the validated base SHA."
+            "No tracked hash-bearing Python requirement candidates exist at the "
+            "validated base SHA; any exact VCS source pins are listed in "
+            "vcs-manifest.json."
         )
     return 0
 

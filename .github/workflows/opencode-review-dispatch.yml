@@ -179,13 +179,13 @@ jobs:
 
           if [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
-            [ "$live_head_repository" != "$TARGET_REPOSITORY" ] ||
+            ! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$live_is_private" =~ ^(true|false)$ ]] ||
             [ -z "$live_base_ref" ] ||
             [ -z "$live_head_ref" ]; then
-            printf '::error::PR metadata validation rejected closed, missing, cross-repository, or malformed live metadata. target=%s#%s state=%s base_repo=%s head_repo=%s base=%s head=%s\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_sha:-<missing>}" "${live_head_sha:-<missing>}"
+            printf '::error::PR metadata validation rejected closed, missing, or malformed live metadata. target=%s#%s state=%s base_repo=%s head_repo=%s base=%s head=%s\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_sha:-<missing>}" "${live_head_sha:-<missing>}"
             exit 1
           fi
 
@@ -652,17 +652,24 @@ jobs:
               r-base \
               r-cran-covr \
               r-cran-testthat \
+              llvm-19 \
               rustc \
               util-linux \
               vulkan-tools \
               xz-utils \
             && rm -rf /var/lib/apt/lists/*
+          ENV LLVM_COV=/usr/bin/llvm-cov-19
+          ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
+          ENV COREPACK_HOME=/opt/corepack
+          RUN test -x "$LLVM_COV"
+          RUN test -x "$LLVM_PROFDATA"
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
               https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
             && echo '55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  /tmp/node-linux-x64.tar.xz' | sha256sum -c - \
             && tar --no-same-owner -xJf /tmp/node-linux-x64.tar.xz -C /usr/local --strip-components=1 \
             && test "$(/usr/local/bin/node --version)" = "v24.18.0" \
             && /usr/local/bin/npm --version >/dev/null \
+            && corepack --version >/dev/null \
             && rm -f /tmp/node-linux-x64.tar.xz
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
@@ -670,18 +677,9 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
-          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
-              https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
-            && echo '7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed  /tmp/pnpm.tgz' | sha512sum -c - \
-            && mkdir -p /opt/pnpm \
-            && tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1 \
-            && chmod 0755 /opt/pnpm/bin/pnpm.cjs \
-            && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
-            && test "$(/usr/local/bin/pnpm --version)" = "11.5.3" \
-            && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
+              mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
@@ -698,8 +696,8 @@ jobs:
                           --no-fund; \
                         rm -rf node_modules; \
                         ;; \
-                      pnpm@11.5.3) \
-                        pnpm fetch \
+                      pnpm@*) \
+                        corepack pnpm fetch \
                           --frozen-lockfile \
                           --ignore-scripts \
                           --store-dir /opt/pnpm-store; \
@@ -711,7 +709,7 @@ jobs:
                     esac; \
                   done; \
               npm cache verify --cache /opt/npm-cache; \
-              chmod -R a+rX /opt/npm-cache /opt/pnpm-store; \
+              chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
@@ -721,8 +719,82 @@ jobs:
               --only-binary=:all: \
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
-          COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           COPY base-python-requirements /tmp/base-python-requirements
+          RUN set -eu; \
+              mkdir -p /opt/base-vcs-dependencies; \
+              site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+              path_file="${site_packages}/opencode-base-vcs-dependencies.pth"; \
+              : >"$path_file"; \
+              dependency_index=0; \
+              dependency_list=/tmp/base-vcs-dependencies.tsv; \
+              jq -r '.[] | [.import_name, .repository, .commit] | @tsv' \
+                /tmp/base-python-requirements/vcs-manifest.json >"$dependency_list"; \
+              while IFS="$(printf '\t')" read -r import_name repository commit; do \
+                    destination="$(printf '/opt/base-vcs-dependencies/dependency-%03d' "$dependency_index")"; \
+                    git init --quiet "$destination"; \
+                    git -C "$destination" remote add origin \
+                      "https://github.com/ContextualWisdomLab/${repository}.git"; \
+                    git -C "$destination" -c protocol.version=2 fetch \
+                      --quiet --no-tags --depth=1 origin "$commit"; \
+                    test "$(git -C "$destination" rev-parse FETCH_HEAD)" = "$commit"; \
+                    git -C "$destination" checkout --quiet --detach FETCH_HEAD; \
+                    test "$(git -C "$destination" rev-parse HEAD)" = "$commit"; \
+                    rm -rf -- "$destination/.git"; \
+                    import_root=''; \
+                    python_root=''; \
+                    candidate_count=0; \
+                    for candidate in \
+                      "$destination/src/$import_name" \
+                      "$destination/src/$import_name.py" \
+                      "$destination/$import_name" \
+                      "$destination/$import_name.py"; do \
+                      if [ -e "$candidate" ] || [ -L "$candidate" ]; then \
+                        import_root="$candidate"; \
+                        candidate_count=$((candidate_count + 1)); \
+                      fi; \
+                    done; \
+                    if [ "$candidate_count" -ne 1 ]; then \
+                      printf 'locked VCS source %s has a missing or ambiguous import root for %s\n' \
+                        "$repository" "$import_name" >&2; \
+                      exit 1; \
+                    fi; \
+                    if [ -L "$import_root" ] \
+                      || { [ -d "$import_root" ] \
+                        && { [ ! -f "$import_root/__init__.py" ] \
+                          || [ -L "$import_root/__init__.py" ]; }; }; then \
+                      printf 'locked VCS source %s has a namespace or linked import root for %s\n' \
+                        "$repository" "$import_name" >&2; \
+                      exit 1; \
+                    fi; \
+                    if find "$destination" -type l -print -quit | grep -q .; then \
+                      printf 'locked VCS source %s contains a symbolic-link layout\n' \
+                        "$repository" >&2; \
+                      exit 1; \
+                    fi; \
+                    if find "$destination" -type f \
+                      \( -name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib' \) \
+                      -print -quit | grep -q .; then \
+                      printf 'locked VCS source %s contains a compiled extension\n' \
+                        "$repository" >&2; \
+                      exit 1; \
+                    fi; \
+                    if find "$destination" -type d \
+                      \( -name '*.dist-info' -o -name '*.egg-info' \) \
+                      -print -quit | grep -q .; then \
+                      printf 'locked VCS source %s contains installed distribution metadata\n' \
+                        "$repository" >&2; \
+                      exit 1; \
+                    fi; \
+                    case "$import_root" in \
+                      "$destination/src/"*) python_root="$destination/src" ;; \
+                      *) python_root="$destination" ;; \
+                    esac; \
+                    printf '%s\n' "$python_root" >>"$path_file"; \
+                    dependency_index=$((dependency_index + 1)); \
+                  done <"$dependency_list"; \
+              rm -f -- "$dependency_list"; \
+              chmod -R a+rX /opt/base-vcs-dependencies "$path_file"
+          COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \
@@ -769,6 +841,8 @@ jobs:
               --env RUNNER_TEMP=/secure-output \
               --env GITHUB_OUTPUT=/secure-output/github-output \
               --env GITHUB_STEP_SUMMARY=/secure-output/step-summary \
+              --env LLVM_COV=/usr/bin/llvm-cov-19 \
+              --env LLVM_PROFDATA=/usr/bin/llvm-profdata-19 \
               "$coverage_tool_image" \
               /bin/bash /trusted-measure-step.sh || sandbox_status=$?
 
@@ -1194,20 +1268,26 @@ jobs:
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
                   [ -n "$configured_command_json" ] || continue
-                  run_and_capture "Python configured CI test suite (${project_dir})" \
+                  run_python_test_and_capture \
+                    "Python configured CI test suite (${project_dir})" \
+                    "$project_dir" \
                     python3 "${GITHUB_WORKSPACE}/scripts/ci/safe_pytest_command.py" execute \
                       --project-dir "$project_dir" \
                       --command-json "$configured_command_json"
                 done <<<"$configured_commands_json"
             else
-              run_and_capture "Python coverage with missing-line report (${project_dir})" \
+              run_python_test_and_capture \
+                "Python coverage with missing-line report (${project_dir})" \
+                "$project_dir" \
                 bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
             done < <(tracked_python_projects_with_tests)
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
-                run_and_capture "Python coverage with missing-line report" \
+                run_python_test_and_capture \
+                  "Python coverage with missing-line report" \
+                  "." \
                   bash -c 'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
                 run_and_capture "Python pytest-cov coverage" python3 -m pytest --cov=. --cov-report=term-missing
@@ -1281,6 +1361,9 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
+            if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
+              return 0
+            fi
             if command -v "$runner" >/dev/null 2>&1; then
               return 0
             fi
@@ -1319,6 +1402,17 @@ jobs:
             elif command -v npm >/dev/null 2>&1; then
               printf '%s\n' "npm"
             fi
+          }
+
+          run_package_script_and_capture() {
+            local label="$1"
+            local package_runner="$2"
+            local script="$3"
+            case "$package_runner" in
+              npm) run_and_capture "$label" npm run "$script" ;;
+              pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
+              yarn) run_and_capture "$label" yarn run "$script" ;;
+            esac
           }
 
           run_python_docstring_coverage() {
@@ -1526,7 +1620,7 @@ jobs:
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
                 run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
-                  pnpm install \
+                  corepack pnpm install \
                     --offline \
                     --frozen-lockfile \
                     --trust-lockfile \
@@ -1636,9 +1730,9 @@ jobs:
                 ;;
               pnpm)
                 if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
+                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack pnpm --filter "$package_name" run build
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack pnpm run build' bash "$package_dir"
                 fi
                 ;;
               yarn)
@@ -1808,6 +1902,18 @@ jobs:
           }
 
           ensure_rust_toolchain() {
+            if [ "${LLVM_COV:-}" != "/usr/bin/llvm-cov-19" ] || \
+              [ "${LLVM_PROFDATA:-}" != "/usr/bin/llvm-profdata-19" ] || \
+              ! test -x "$LLVM_COV" || ! test -x "$LLVM_PROFDATA"; then
+              append "### Rust coverage toolchain"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: the networkless coverage runtime did not preserve the reviewed LLVM 19 tool paths."
+              append "- Fix: rebuild the trusted coverage image and preserve the exact LLVM bindings at the Docker boundary."
+              append ""
+              failures=$((failures + 1))
+              return 1
+            fi
             if ! command -v cargo >/dev/null 2>&1; then
               append "### Rust coverage toolchain"
               append ""
@@ -1960,6 +2066,11 @@ jobs:
             verify_trusted_python_test_toolchain
             run_python_test_coverage
 
+            if [ "$python_native_peer_check_required" -eq 1 ]; then
+              append "- Python native-extension peer evidence: deferred source-only collection requires successful exact-head peer checks"
+              append ""
+            fi
+
             if run_python_docstring_coverage; then
               :
             elif has_repository_docstring_script; then
@@ -2003,11 +2114,11 @@ jobs:
               fi
 
               if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
-                run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
+                run_package_script_and_capture "Repository docstring coverage" "$package_runner" check:python-docstrings
               elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
+                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docstring:coverage
               elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
+                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docs:coverage
               else
                 append "### JavaScript/TypeScript docstring coverage"
                 append ""
@@ -2019,19 +2130,19 @@ jobs:
               if [ -z "$package_runner" ]; then
                 :
               elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
-                run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
+                run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
                 if javascript_test_script_collects_coverage; then
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                   esac
                 else
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                   esac
                 fi
@@ -2245,7 +2356,7 @@ jobs:
           live_is_private="$(jq -r '.base.repo.private | tostring' <<<"$pull_request_json")"
           if [ "$live_state" != "open" ] ||
             [ "$base_repository" != "$GH_REPOSITORY" ] ||
-            [ "$head_repository" != "$GH_REPOSITORY" ] ||
+            ! [[ "$head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
             [ "$live_base_ref" != "$EXPECTED_BASE_REF" ] ||
             [ "$live_base_sha" != "$EXPECTED_BASE_SHA" ] ||
             [ "$live_head_ref" != "$EXPECTED_HEAD_REF" ] ||
@@ -2257,7 +2368,7 @@ jobs:
               "$GH_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${base_repository:-<missing>}" "${live_base_ref:-<missing>}" "${live_base_sha:-<missing>}" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "${head_repository:-<missing>}" "${live_head_ref:-<missing>}" "${live_head_sha:-<missing>}" "$EXPECTED_HEAD_REF" "$EXPECTED_HEAD_SHA" "${live_is_private:-<missing>}" "${EXPECTED_IS_PRIVATE:-<missing>}"
             exit 1
           fi
-          printf 'Validated same-repository OpenCode review source for %s#%s (%s).\n' \
+          printf 'Validated exact-head OpenCode review source for %s#%s (%s).\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$head_repository"
 
       - name: Exchange OpenCode app token for target repository review reads
@@ -7506,6 +7617,10 @@ jobs:
               return 0
             fi
 
+            if ! require_python_native_peer_checks_for_deferred_coverage; then
+              return 1
+            fi
+
             if ! require_r_cmd_check_for_deferred_coverage; then
               return 1
             fi
@@ -7893,6 +8008,27 @@ jobs:
                 else
                   stop_failed_check_fallback_unavailable
                 fi
+              fi
+              if ! require_python_native_peer_checks_for_deferred_coverage; then
+                body="$(printf '%s\n' \
+                  "## Pull request overview" \
+                  "" \
+                  "OpenCode reviewed the current-head source evidence but Python tests were deferred after one bounded native-extension collection failure." \
+                  "" \
+                  "## Approval hold" \
+                  "" \
+                  "### Successful exact-head Python, Rust/PyO3, and package CheckRuns are required" \
+                  "- Problem: coverage-evidence deferred an unchanged declared PyO3 module that was unavailable in the source-only sandbox, but the required peer CheckRuns were not all successful." \
+                  "- Root cause: deterministic coverage deferral is safe only when the repository's native build, Python tests, and package workflow all pass on this exact head." \
+                  "- Fix: add or repair CI::python, CI::rust, and CI::package, then rerun all three successfully on the current head." \
+                  "- Regression test: Keep native-extension coverage deferral fail-closed unless all three successful exact-head CheckRuns are present." \
+                  "" \
+                  "- Result: WAITING_FOR_PYTHON_NATIVE_PEER_CHECKS" \
+                  "- Head SHA: \`${HEAD_SHA}\`" \
+                  "- Workflow run: ${RUN_ID}" \
+                  "- Workflow attempt: ${RUN_ATTEMPT}"
+                )"
+                hold_approval_without_review "WAITING_FOR_PYTHON_NATIVE_PEER_CHECKS" "$body"
               fi
               if ! require_r_cmd_check_for_deferred_coverage; then
                 body="$(printf '%s\n' \

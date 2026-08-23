@@ -57,6 +57,31 @@ def test_failed_python_suite_uses_bounded_repo_root_aware_classifier() -> None:
     assert "if run_python_native_extension_classifier" in workflow
 
 
+def test_python_coverage_executes_classifier_path_and_publishes_peer_requirement() -> None:
+    """Every pytest path must classify failures and serialize the peer gate."""
+
+    coverage_function = _workflow_function("run_python_test_coverage")
+    workflow = _review_workflow()
+    evidence_start = workflow.index("          if has_changed_tracked_files '*.py';")
+    evidence_end = workflow.index(
+        '          javascript_package_dirs="$(javascript_coverage_package_dirs)"',
+        evidence_start,
+    )
+    python_evidence = workflow[evidence_start:evidence_end]
+    approval_function = _workflow_function("publish_blockers_after_model_unavailable")
+
+    assert coverage_function.count("run_python_test_and_capture") == 3
+    assert "python_native_peer_check_required" in python_evidence
+    assert (
+        "Python native-extension peer evidence: deferred source-only collection "
+        "requires successful exact-head peer checks" in python_evidence
+    )
+    assert "require_python_native_peer_checks_for_deferred_coverage" in (
+        approval_function
+    )
+    assert workflow.count("require_python_native_peer_checks_for_deferred_coverage") == 3
+
+
 def test_python_failure_log_is_materialized_under_runner_temp() -> None:
     """Potentially large untrusted pytest output must use runner-owned storage."""
 
@@ -287,11 +312,14 @@ def test_quality_workflow_covers_supported_pythons_and_all_contract_files() -> N
     for path in (
         _HELPER,
         "tests/test_python_native_extension_peer_gate.py",
+        "tests/test_python_native_extension_peer_gate_file_safety.py",
         "tests/test_python_native_extension_peer_gate_nested_project.py",
+        "tests/test_python_native_extension_peer_gate_requirements_directory.py",
         "tests/test_python_native_extension_peer_gate_workflow_contract.py",
         ".github/workflows/opencode-review-dispatch.yml",
         ".github/workflows/python-native-extension-peer-gate-quality-ci.yml",
         "docs/doctoring/python-native-extension-peer-evidence.md",
+        "docs/doctoring/python-native-extension-peer-file-safety.md",
         "CHANGELOG.md",
     ):
         assert path in workflow

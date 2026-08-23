@@ -8,9 +8,12 @@ on:
       - ".github/workflows/python-native-extension-peer-gate-quality-ci.yml"
       - "scripts/ci/python_native_extension_peer_gate.py"
       - "tests/test_python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate_file_safety.py"
       - "tests/test_python_native_extension_peer_gate_nested_project.py"
+      - "tests/test_python_native_extension_peer_gate_requirements_directory.py"
       - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
       - "docs/doctoring/python-native-extension-peer-evidence.md"
+      - "docs/doctoring/python-native-extension-peer-file-safety.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
   push:
@@ -20,9 +23,12 @@ on:
       - ".github/workflows/python-native-extension-peer-gate-quality-ci.yml"
       - "scripts/ci/python_native_extension_peer_gate.py"
       - "tests/test_python_native_extension_peer_gate.py"
+      - "tests/test_python_native_extension_peer_gate_file_safety.py"
       - "tests/test_python_native_extension_peer_gate_nested_project.py"
+      - "tests/test_python_native_extension_peer_gate_requirements_directory.py"
       - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
       - "docs/doctoring/python-native-extension-peer-evidence.md"
+      - "docs/doctoring/python-native-extension-peer-file-safety.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
 
@@ -63,7 +69,9 @@ jobs:
           python -m compileall -q \
             scripts/ci/python_native_extension_peer_gate.py \
             tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_file_safety.py \
             tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_requirements_directory.py \
             tests/test_python_native_extension_peer_gate_workflow_contract.py
 
       - name: Exercise the conditional tomli import
@@ -131,7 +139,9 @@ jobs:
           python -m coverage erase
           python -m coverage run -m pytest \
             tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_file_safety.py \
             tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_requirements_directory.py \
             tests/test_python_native_extension_peer_gate_workflow_contract.py \
             -q
           python -m coverage report
@@ -153,7 +163,9 @@ jobs:
           python -m compileall -q \
             scripts/ci/python_native_extension_peer_gate.py \
             tests/test_python_native_extension_peer_gate.py \
+            tests/test_python_native_extension_peer_gate_file_safety.py \
             tests/test_python_native_extension_peer_gate_nested_project.py \
+            tests/test_python_native_extension_peer_gate_requirements_directory.py \
             tests/test_python_native_extension_peer_gate_workflow_contract.py
 
       - name: Install checksum-pinned actionlint

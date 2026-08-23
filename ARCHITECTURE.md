@@ -39,6 +39,13 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## aFIPC hourly caller
+
+`afipc-hourly-review-repair.yml` is a thin, read-only caller at minute
+2. It names `ContextualWisdomLab/aFIPC` and protected `master`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## Hourly NVIDIA NIM repair gate
 
 ```mermaid
@@ -70,24 +77,45 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
-## PyO3 peer-evidence gate
+## Exact-artifact SBOM attestation
 
 ```mermaid
 flowchart TD
-  Sandbox["Source-only OpenCode sandbox"]
-  Collect{"ModuleNotFoundError on PyO3 module?"}
-  Peer{"Exact-head native build and test succeeded?"}
-  Defer["Classify environment limitation; do not pass tests"]
-  Fail["Product failure remains a failure"]
+  Seal["Six-file sealed artifact"]
+  Read["verify-evidence-artifact: actions/contents read"]
+  Sign["attest-exact-artifacts after verify"]
+  Offline["SHA256SUMS + README + bundles"]
+  Fail["Fail closed; no OIDC token"]
 
-  Sandbox --> Collect
-  Collect -->|"no"| Fail
-  Collect -->|"yes"| Peer
-  Peer -->|"no"| Fail
-  Peer -->|"yes"| Defer
+  Seal --> Read
+  Read -->|"invalid JSON, digest, or identity"| Fail
+  Read -->|"valid"| Sign
+  Sign --> Offline
 ```
 
-The sandbox never runs pull-request maturin or cargo hooks.
+Caller inputs enter shell steps only as named environment variables. This
+workflow does not claim SLSA Build L3.
+
+## Python native-extension peer evidence
+
+```mermaid
+flowchart TD
+  Source["Networkless source-only pytest"]
+  Classify{"Only an unchanged declared PyO3 module is missing?"}
+  Peers{"Exact-head CI::python, CI::rust, and CI::package successful?"}
+  Hold["Fail or hold approval"]
+  Continue["Accept bounded environment deferral"]
+
+  Source --> Classify
+  Classify -->|"no"| Hold
+  Classify -->|"yes"| Peers
+  Peers -->|"no"| Hold
+  Peers -->|"yes"| Continue
+```
+
+The source sandbox never executes pull-request-selected maturin or Cargo build
+hooks. The exact-head peer gate preserves Rust ownership and converts neither a
+missing module nor a passing build check into product-correctness evidence.
 
 ## Control-plane data flow
 
@@ -112,6 +140,9 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- OpenCode remains the review reasoner. Deterministic code may repair only
+  trusted `path:line` source-line digest bindings on LLM probes; it never
+  invents a hypothesis, observed result, or verdict.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
 - Logs and review receipts redact credential shapes (tokens, bearer values,
@@ -122,8 +153,11 @@ sequenceDiagram
   review-agent key schemes stay unchanged.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
-- Rust remains the psychometric arithmetic owner. The peer gate does not
-  introduce a Python substitute.
+- Downloaded SBOM and distribution bytes are inert. The signing job does
+  not import, install, or unpack them.
+- A native-extension coverage deferral remains fail-closed until all named
+  exact-head peer CheckRuns succeed; stale, skipped, status-only, or lookalike
+  checks do not satisfy the boundary.
 
 ## Quality gates
 
@@ -132,6 +166,14 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
+An exact-base `uv.lock` may additionally expose source from an organization-owned
+GitHub repository pinned to a full commit: the secret-free image build verifies
+the fetched revision and makes its source importable without running package
+build or installation hooks. Pull-request execution remains networkless.
+Root-level lock files are independent environments unless an explicit include
+relationship says otherwise; only one unambiguous two-file supplement pair may
+be recovered together, so unrelated toolchains cannot create a synthetic
+resolver conflict.
 
 ## Related durable documents
 
@@ -139,11 +181,17 @@ trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
   ecosystem.
 - [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md)
   — Project #1 operation.
+- [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md)
+  — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
+- [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md)
+  — LLM probe publication without inventing observed proof.
+- [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md)
+  — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
-- [`docs/doctoring/python-native-extension-peer-evidence.md`](docs/doctoring/python-native-extension-peer-evidence.md)
-  — current increment's peer-evidence decision and APA 7th citations.
+- [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
+  — current increment's attestation decision and APA 7th citations.

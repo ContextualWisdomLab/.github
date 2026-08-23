@@ -1,7 +1,5 @@
 # Doctoring record: Python native-extension peer evidence
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 ## Purpose
 
 The central OpenCode coverage sandbox executes pull-request tests without a
@@ -141,9 +139,10 @@ adversarial cases for:
 - flat and GraphQL-shaped workflow metadata;
 - both CLI success and fail-closed paths.
 
-Local verification before publication reported 81 tests passing with 220/220
-production statements and 98/98 production branches covered. Permanent central
-quality and security workflows remain authoritative after the branch is pushed.
+Current-main reconciliation verification reported 109 focused tests passing
+with 261/261 production statements and 116/116 production branches covered.
+Permanent central quality and security workflows remain authoritative after the
+branch is pushed.
 
 ## Interpretation limits
 
