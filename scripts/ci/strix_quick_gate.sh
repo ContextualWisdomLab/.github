@@ -2811,7 +2811,7 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if ! has_any_reported_severity_markers && ! strix_reported_zero_vulnerabilities; then
+		if ! has_structured_reported_severity_markers && ! strix_reported_zero_vulnerabilities; then
 			INFRA_ERROR_DETECTED=1
 			echo "Strix exited successfully without an authoritative vulnerability report or zero-findings marker; failing closed." >&2
 			return 1
@@ -3446,7 +3446,7 @@ fail_reported_vulnerabilities_before_fallback_success() {
 	return 1
 }
 
-has_any_reported_severity_markers() {
+has_structured_reported_severity_markers() {
 	local run_dir
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
@@ -3473,11 +3473,15 @@ has_any_reported_severity_markers() {
 		done
 	done
 
-	if grep -Eiq 'severity[[:space:]]*:' "$STRIX_LOG"; then
+	return 1
+}
+
+has_any_reported_severity_markers() {
+	if has_structured_reported_severity_markers; then
 		return 0
 	fi
 
-	return 1
+	grep -Eiq 'severity[[:space:]]*:' "$STRIX_LOG"
 }
 
 strix_reported_zero_vulnerabilities() {

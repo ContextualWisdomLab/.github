@@ -3327,6 +3327,8 @@ emit_synthetic_completion_evidence() {
 	local rc=$?
 	if [ "$rc" -eq 0 ] &&
 		[ "${FAKE_STRIX_SCENARIO:?}" != "success-without-evidence" ] &&
+		[ "${FAKE_STRIX_SCENARIO:?}" != "success-with-log-only-severity" ] &&
+		[ "${FAKE_STRIX_SCENARIO:?}" != "success-with-low-report" ] &&
 		[ "${FAKE_STRIX_SCENARIO:?}" != "success-with-critical-report" ]; then
 		echo "Vulnerabilities 0"
 	fi
@@ -3341,6 +3343,17 @@ success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-open
 		exit 0
 		;;
 	success-without-evidence)
+		exit 0
+		;;
+	success-with-log-only-severity)
+		echo "Severity: HIGH"
+		exit 0
+		;;
+	success-with-low-report)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-success-low/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-success-low/vulnerabilities/vuln-0001.md" <<'REPORT'
+Severity: LOW
+REPORT
 		exit 0
 		;;
 	scan-working-directory-isolated)
@@ -6133,6 +6146,26 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"1" \
 			"without an authoritative vulnerability report or zero-findings marker" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	success-with-log-only-severity)
+		run_gate_case "success-with-log-only-severity" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"without an authoritative vulnerability report or zero-findings marker" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	success-with-low-report)
+		run_gate_case "success-with-low-report" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"0" \
+			"Strix run succeeded" \
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
@@ -9854,6 +9887,24 @@ run_gate_case "success-without-evidence" \
 	"" \
 	"1" \
 	"without an authoritative vulnerability report or zero-findings marker" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "success-with-log-only-severity" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"without an authoritative vulnerability report or zero-findings marker" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "success-with-low-report" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"0" \
+	"Strix run succeeded" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"
