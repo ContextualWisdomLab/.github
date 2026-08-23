@@ -14,6 +14,7 @@ from typing import Any, Sequence
 METRICS = ("statements", "branches", "functions", "lines")
 SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 EXCLUDED_PARTS = {
+    ".storybook",
     "__tests__",
     "coverage",
     "dist",
@@ -23,6 +24,7 @@ EXCLUDED_PARTS = {
     "tests",
 }
 TEST_NAME_RE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$")
+STORY_NAME_RE = re.compile(r"\.stories\.[cm]?[jt]sx?$")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
@@ -66,7 +68,7 @@ def is_runtime_source(path: str) -> bool:
     name = normalized.name.casefold()
     if normalized.suffix.casefold() not in SOURCE_SUFFIXES:
         return False
-    if name.endswith(".d.ts") or TEST_NAME_RE.search(name):
+    if name.endswith(".d.ts") or TEST_NAME_RE.search(name) or STORY_NAME_RE.search(name):
         return False
     if lowered_parts & EXCLUDED_PARTS:
         return False
