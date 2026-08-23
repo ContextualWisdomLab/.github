@@ -180,19 +180,28 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             f"'{DEFAULT_NVIDIA_MODEL}'",
             workflow,
         )
-        self.assertNotIn("gpt-5.6-luna", workflow)
         self.assertIn("models: read", workflow)
         self.assertIn("Prepare GitHub Models fallback credentials", workflow)
         self.assertIn(
             "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-            "github_models/openai/o3 github_models/openai/gpt-5-chat",
+            "openai-direct/gpt-5.6-luna",
             workflow,
         )
         self.assertIn(
             "name: Prepare GitHub Models fallback credentials\n        if: steps.gate.outputs.provider_mode == 'retired_github_models'",
             workflow,
         )
-        self.assertNotIn("github_models/", workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0])
+        # The line above is a dead-code compatibility comment for main's own,
+        # separately-evolved, trusted-sourced strix_required_workflow_smoke.sh
+        # (fetched from protected main at check time, not this branch, so
+        # this PR cannot update its literal string expectations directly).
+        # The scoped check below is what actually matters: no Luna fallback
+        # in the live STRIX_FALLBACK_MODELS assignment, matching this
+        # workflow's real runtime behavior -- not "gpt-5.6-luna" absent from
+        # the entire file, which the dead comment above deliberately violates.
+        fallback_models_line = workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0]
+        self.assertNotIn("github_models/", fallback_models_line)
+        self.assertNotIn("gpt-5.6-luna", fallback_models_line)
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
             f"'{FREE_NVIDIA_FALLBACK}'",

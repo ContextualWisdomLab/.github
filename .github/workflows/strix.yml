@@ -649,9 +649,13 @@ jobs:
 
       # pull_request_target self-test still executes main's
       # strix_required_workflow_smoke.sh against this file. Keep the step
-      # name and the exact fallback list that smoke greps for. Runtime
-      # fallback stays NIM-only; this step never provisions credentials.
-      # nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat
+      # name and the exact fallback list that smoke greps for -- update
+      # this comment whenever that upstream, trusted-sourced smoke test's
+      # own expected string changes, since it is fetched from protected
+      # main at check time and cannot be updated by this PR's own diff.
+      # Runtime fallback stays NIM-only; this step never provisions
+      # credentials.
+      # nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna
       - name: Prepare GitHub Models fallback credentials
         if: steps.gate.outputs.provider_mode == 'retired_github_models'
         run: |

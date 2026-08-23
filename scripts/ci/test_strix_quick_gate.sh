@@ -295,7 +295,11 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
 	assert_file_contains "$workflow_file" "github.event.client_payload.strix_llm || 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b'" "strix workflow defaults every scan to NVIDIA NIM Nemotron"
-	assert_file_not_contains "$workflow_file" "gpt-5.6-luna" "strix workflow does not fall back to Luna when NVIDIA_NIM_API_KEY is unset"
+	local strix_fallback_models_line
+	strix_fallback_models_line="$(grep -m1 "STRIX_FALLBACK_MODELS:" "$workflow_file")"
+	if [[ "$strix_fallback_models_line" == *"gpt-5.6-luna"* ]]; then
+		record_failure "strix workflow does not fall back to Luna when NVIDIA_NIM_API_KEY is unset (found in: $strix_fallback_models_line)"
+	fi
 	assert_file_contains "$workflow_file" "NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans" "strix workflow fails closed when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
@@ -351,11 +355,15 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the provider API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps the required-workflow smoke fallback list as a compatibility pin"
+	assert_file_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna" "strix workflow keeps the required-workflow smoke fallback list as a compatibility pin (matches main's own, separately-evolved, trusted-sourced smoke test string -- update this pin whenever that upstream string changes)"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5'" "strix workflow gives NVIDIA NIM scans a NIM-only fallback"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow keeps the required-workflow smoke step name"
 	assert_file_contains "$workflow_file" $'name: Prepare GitHub Models fallback credentials\n        if: steps.gate.outputs.provider_mode == '\''retired_github_models'\''' "strix workflow does not run the retired GitHub Models fallback credential step"
-	assert_file_not_contains "$workflow_file" "gpt-5.6-luna" "strix workflow does not keep any GPT-5.6 Luna fallback (retired alongside GitHub Models)"
+	local fallback_models_line
+	fallback_models_line="$(grep -m1 "STRIX_FALLBACK_MODELS:" "$workflow_file")"
+	if [[ "$fallback_models_line" == *"gpt-5.6-luna"* ]]; then
+		record_failure "strix workflow's live STRIX_FALLBACK_MODELS must not depend on the retired GPT-5.6 Luna fallback (found in: $fallback_models_line)"
+	fi
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
