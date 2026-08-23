@@ -3601,6 +3601,23 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-ratelimit-model-quality-warning-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+			echo "litellm.RateLimitError: Nvidia_nimException - Error code: 429 - Too Many Requests"
+			exit 1
+			;;
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			echo "│  MODEL QUALITY WARNING                                                       │"
+			echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
+			exit 0
+			;;
+		*)
+			echo "Error: NVIDIA model-quality fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 61
+			;;
+		esac
+		;;
 	vertex-primary-resource-exhausted-fallback-success)
 		case "${STRIX_LLM:-}" in
 		vertex_ai/resource-exhausted-primary)
@@ -6444,6 +6461,17 @@ run_filtered_gate_case_if_requested() {
 		"1" \
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
+		;;
+	nvidia-ratelimit-model-quality-warning-fallback-success)
+		run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"<unset>|<unset>" \
+			"openai"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -9783,6 +9811,16 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-fallback-success" 
 	"2" \
 	"vertex_ai/ratelimit-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
+
+run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"<unset>|<unset>" \
+	"openai"
 
 run_gate_case_allow_provider_signal "vertex-primary-resource-exhausted-fallback-success" \
 	"vertex_ai/resource-exhausted-primary" \
