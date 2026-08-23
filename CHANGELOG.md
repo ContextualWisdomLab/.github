@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Aligned every central OpenSSF Scorecard Action use to the official v2.4.4
+  commit so pull-request, scheduled, and combined security scans execute one
+  immutable, reviewed release.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
