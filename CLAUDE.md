@@ -8,9 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission, ecosystem UML, cross-cutting
 disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap), the live
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
-truth), the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md)
-(not merge authorization; Figma File ID for this repo is N/A), and operate the Project per
-[`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
+truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
