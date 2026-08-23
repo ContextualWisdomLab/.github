@@ -171,6 +171,39 @@ def test_linter_uses_actionlint_schema_and_file_based_shellcheck(tmp_path: Path)
     assert shellcheck_records[1]["script"] == "set -e\necho ok\n"
 
 
+def test_linter_preserves_lines_inside_multiline_expressions(tmp_path: Path) -> None:
+    """Expression sanitizing keeps ShellCheck source and diagnostic lines aligned."""
+
+    environment, capture_dir = _tool_environment(tmp_path)
+    workflow = tmp_path / "multiline-expression.yml"
+    workflow.write_text(
+        """name: multiline-expression
+on: push
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "${{
+            github.sha
+          }}"
+          echo after
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_linter(workflow, environment)
+
+    record = json.loads(
+        (capture_dir / "shellcheck-0.json").read_text(encoding="utf-8")
+    )
+    lines = record["script"].splitlines()
+    assert result.returncode == 0, result.stderr
+    assert lines[2].strip(" _") == ""
+    assert lines[3].endswith('"')
+    assert lines[4] == "echo after"
+
+
 def test_write_capable_autofix_always_uses_the_trusted_linter() -> None:
     """Changed workflows fail closed through the dispatch-pinned helper."""
 

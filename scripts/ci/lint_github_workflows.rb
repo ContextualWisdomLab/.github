@@ -81,7 +81,7 @@ def sanitize_expressions(script)
     break unless end_index
 
     length = end_index + 2 - start_index
-    sanitized[start_index, length] = "_" * length
+    sanitized[start_index, length] = sanitized[start_index, length].gsub(/[^\r\n]/, "_")
     offset = start_index + length
   end
   sanitized
