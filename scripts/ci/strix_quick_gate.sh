@@ -177,6 +177,11 @@ known_clean_advisory = re.compile(
     r"|Warning: You are sending unauthenticated requests to the HF Hub\. "
     r"Please set a HF_TOKEN to enable higher rate limits and faster downloads\.)$"
 )
+known_optional_web_search_advisory = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"[^ ]+ - strix\.tools\.web_search\.tool: "
+    r"web_search invoked without PERPLEXITY_API_KEY configured$"
+)
 
 
 def iter_report_logs(root: Path):
@@ -204,6 +209,7 @@ for log_path in iter_report_logs(root):
         for line in lines
         if not known_internal_warning.match(line)
         and not known_clean_advisory.fullmatch(line.rstrip("\r\n"))
+        and not known_optional_web_search_advisory.fullmatch(line.rstrip("\r\n"))
     ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")

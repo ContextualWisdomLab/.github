@@ -4613,6 +4613,15 @@ EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
 		exit 0
 		;;
+	report-web-search-advisory-sanitized | report-web-search-advisory-suffix-fails)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-web-search-advisory"
+		cat >"$STRIX_REPORTS_DIR/fake-web-search-advisory/strix.log" <<EOS
+2026-08-23 14:00:33.382 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured${FAKE_STRIX_SCENARIO#report-web-search-advisory-sanitized}
+2026-08-23 14:00:34.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		echo "scan completed with optional web search advisory"
+		exit 0
+		;;
 	report-unknown-warning-fails)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-unknown-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-unknown-warning/strix.log" <<'EOS'
@@ -5930,6 +5939,17 @@ PY
 			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
+	if [ "$scenario" = "report-web-search-advisory-sanitized" ]; then
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-web-search-advisory/strix.log" \
+			"web_search invoked without PERPLEXITY_API_KEY configured" \
+			"scenario=$scenario strips only the known optional web search advisory"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-web-search-advisory/strix.log" \
+			"finish_scan: completed scan with 0 vulnerability report(s)" \
+			"scenario=$scenario keeps non-warning Strix report evidence"
+	fi
+
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
 		assert_file_contains \
 			"$output_log" \
@@ -6561,6 +6581,26 @@ run_filtered_gate_case_if_requested() {
 		"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
 		"1" \
 		"vertex_ai/report-known-internal-warning-sanitized" \
+		"<unset>"
+		;;
+	report-web-search-advisory-sanitized)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-web-search-advisory-sanitized" \
+		"" \
+		"0" \
+		"Strix run succeeded for model 'vertex_ai/report-web-search-advisory-sanitized'" \
+		"1" \
+		"vertex_ai/report-web-search-advisory-sanitized" \
+		"<unset>"
+		;;
+	report-web-search-advisory-suffix-fails)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-web-search-advisory-suffix-fails" \
+		"" \
+		"1" \
+		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+		"1" \
+		"vertex_ai/report-web-search-advisory-suffix-fails" \
 		"<unset>"
 		;;
 	nvidia-ratelimit-model-quality-warning-fallback-success)
@@ -10697,6 +10737,24 @@ run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "report-web-search-advisory-sanitized" \
+	"vertex_ai/report-web-search-advisory-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/report-web-search-advisory-sanitized'" \
+	"1" \
+	"vertex_ai/report-web-search-advisory-sanitized" \
+	"<unset>"
+
+run_gate_case "report-web-search-advisory-suffix-fails" \
+	"vertex_ai/report-web-search-advisory-suffix-fails" \
+	"" \
+	"1" \
+	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+	"1" \
+	"vertex_ai/report-web-search-advisory-suffix-fails" \
+	"<unset>"
 
 run_gate_case "report-unknown-warning-fails" \
 	"vertex_ai/report-unknown-warning-fails" \
