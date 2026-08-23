@@ -346,9 +346,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps GitHub Models fallback on tool-capable OpenAI models without GPT-4.1 downgrade"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives direct-OpenAI scans GitHub Models fallbacks so provider quota outages degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
@@ -1506,8 +1507,8 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
-	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.run_id" "scheduler keeps manual queue scans isolated per run"
-	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
+	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
+	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number) }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
 	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
@@ -4419,6 +4420,15 @@ EOS
 		echo "scan ok with sanitized internal Strix report notice"
 		exit 0
 		;;
+	report-known-internal-warning-variant-sanitized)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning-variant"
+		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning-variant/strix.log" <<'EOS'
+2026-08-22 09:53:26.193 WARNING strix-pr-scope-example - strix.core.execution: agent 673f770f ended a turn without a lifecycle tool call (interactive=False); forcing tool continuation (1/500): <empty>
+2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		echo "scan ok with sanitized internal Strix report notice variant"
+		exit 0
+		;;
 	report-unknown-warning-fails)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-unknown-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-unknown-warning/strix.log" <<'EOS'
@@ -5680,6 +5690,17 @@ PY
 			"$repo_root_dir/outside-strix-report/strix.log" \
 			"outside report should not be rewritten" \
 			"scenario=$scenario does not rewrite logs through symlinked report directories"
+	fi
+
+	if [ "$scenario" = "report-known-internal-warning-variant-sanitized" ]; then
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
+			"ended a turn without a lifecycle tool call" \
+			"scenario=$scenario strips the newer-wording known internal Strix warning from published artifacts"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
+			"finish_scan: completed scan with 0 vulnerability report(s)" \
+			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
@@ -9979,6 +10000,35 @@ run_gate_case "report-known-internal-warning-sanitized" \
 	"1200" \
 	"0" \
 	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "report-known-internal-warning-variant-sanitized" \
+	"vertex_ai/report-known-internal-warning-variant-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-variant-sanitized'" \
+	"1" \
+	"vertex_ai/report-known-internal-warning-variant-sanitized" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
 	"" \
 	"" \
 	"" \

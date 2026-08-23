@@ -71,8 +71,21 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name }}
           ref: ${{ github.event.pull_request.base.sha }}
+          path: source
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify OSV base checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::OSV base checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
@@ -86,7 +99,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Explain base OSV resolver fallback
         if: steps.osv_base.outcome == 'failure'
         run: |
@@ -103,15 +116,27 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          path: source
           fetch-depth: 0
-          clean: false
           persist-credentials: false
+      - name: Verify OSV head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::OSV head checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
@@ -125,7 +150,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Explain head OSV resolver fallback
         if: steps.osv_head.outcome == 'failure'
         run: |
@@ -142,7 +167,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Require OSV scan output
         run: |
           set -euo pipefail
@@ -257,12 +282,24 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout exact head
+      - name: Checkout exact dependency-review head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Dependency Review head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Dependency Review checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=dependency-review revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Check dependency review support
         id: dependency_review_support
         env:
@@ -303,6 +340,8 @@ jobs:
         if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
 
@@ -314,10 +353,24 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact Trivy head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Trivy head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Trivy checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=trivy-fs revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
@@ -390,6 +443,8 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Trivy SARIF upload failure
         if: steps.upload_trivy_sarif.outcome == 'failure'
@@ -406,10 +461,24 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact Scorecard head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Scorecard head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Scorecard checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=scorecard revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Run Scorecard
         uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
@@ -464,6 +533,8 @@ jobs:
         with:
           sarif_file: results.sarif
           category: scorecard
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Scorecard SARIF upload failure
         if: steps.upload_scorecard_sarif.outcome == 'failure'
