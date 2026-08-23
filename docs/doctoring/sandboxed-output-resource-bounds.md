@@ -50,13 +50,27 @@ POSIX file-size resource limits apply to every regular file written by the child
 
 A truncation marker is included inside, not in addition to, the declared retained byte budget. Reader errors and reader-join timeouts are explicit failures.
 
-## Deferred consumer integration
+## Long-running service boundary
 
-The second stack layer adopts the library in `sandboxed_verify.py` for
-short-lived verification commands. Long-running `sandboxed_web_e2e.py` service
-evidence remains a separate layer. Keeping those integrations separate prevents
-a shared process primitive, workspace symlink policy, and E2E result schema from
-becoming one monolithic review.
+The third stack layer adopts the same bounded drainer for each backend and
+frontend combined stdout/stderr pipe. A capture retains the final suffix in
+memory and writes only its bounded rendered form to the private sandbox log when
+the stream closes, so the evidence file cannot exceed its declared budget.
+
+Service overflow is checked during readiness, after E2E execution, and after
+service shutdown. It takes precedence over an otherwise successful command or
+readiness result, while a true E2E timeout remains `124`. A verbose but healthy
+service is intentionally stopped once it exceeds the default 4 MiB combined-log
+contract; projects that need more evidence must select an explicit supported
+budget. `tail_text()` reads no more than 65,536 bytes from the end of the already
+bounded file and keeps the truncation marker visible.
+
+The result separates `output_limited`, `output_limit_unsupported`, and
+`service_capture_failed`. A nonzero E2E or readiness code remains authoritative
+even when a late service overflow also sets `output_limited=true`; the Boolean
+retains the secondary resource evidence without erasing the original failure.
+If service finalization fails, the wrapper performs another best-effort group
+kill, bounded reap, and capture join before publishing failure evidence.
 
 ## Security and availability properties
 
@@ -87,13 +101,17 @@ Real subprocess tests exercise:
 - a real same-group descendant that inherits the pipes, outlives the direct
   child, and is prevented from writing a delayed sentinel;
 - final-suffix retention and one overflow callback;
+- bounded persisted service evidence;
+- service overflow before or during readiness/E2E, including a sentinel proof
+  that E2E never ran;
+- ordinary backend/frontend/E2E success and cleanup;
 - partial UTF-8 suffix decoding;
 - UTF-8 replacement expansion within the declared byte budget;
 - bounded file reads;
 - unsupported-platform failure;
 - invalid budgets;
 - reader exceptions, stuck-reader joins, a common finite join bound, and sibling finalization after the first failure;
-- deterministic return and timeout evidence.
+- deterministic result fields and exit-code precedence.
 
 The exact pull-request head must additionally pass the complete central test suite, 100% production statement and branch coverage for the changed surface, production docstrings, Secret Scan, CodeQL, Semgrep, Python Security, dependency and supply-chain checks, OpenCode, Noema, CodeRabbit, independent current-head approval, and branch protection.
 
