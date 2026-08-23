@@ -177,6 +177,37 @@ def test_missing_executable_returns_stable_failed_evidence(
     assert "Traceback" not in captured.err
 
 
+@pytest.mark.parametrize("candidate_kind", ["file", "directory"])
+def test_non_executable_command_returns_stable_failed_evidence(
+    tmp_path: Path,
+    capsys,
+    candidate_kind: str,
+) -> None:
+    """A present but unusable command tells the operator how to recover."""
+
+    candidate = tmp_path / "verification-candidate"
+    if candidate_kind == "file":
+        candidate.write_text("not executable\n", encoding="utf-8")
+    else:
+        candidate.mkdir()
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(_repository(tmp_path)),
+            "--",
+            str(candidate),
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = _result_payload(captured.out)
+
+    assert exit_code == sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
+    assert payload["exit_code"] == sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
+    assert "select an executable file or correct its permissions" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_unsupported_resource_limit_fails_closed(
     monkeypatch,
     tmp_path: Path,

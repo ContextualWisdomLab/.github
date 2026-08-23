@@ -13,7 +13,11 @@ The default retained budgets are:
 - 1,048,576 bytes for each short-lived command stream; and
 - 4,194,304 bytes for each backend or frontend combined service stream.
 
-Configurations below 4,096 bytes or above 67,108,864 bytes are rejected before repository code executes. Every normal-path output-reader join also has a finite 30-second bound.
+Configurations below 4,096 bytes or above 67,108,864 bytes are rejected before
+repository code executes. Each of the two normal-path output-reader joins has a
+finite 30-second bound. Because sibling readers are finalized sequentially so
+one failure cannot skip the other, the worst-case two-reader finalization bound
+is 60 seconds.
 
 ## Why complete capture was unsafe
 
@@ -77,9 +81,15 @@ publishes its normal machine-readable failed result, and tells the operator to
 install the executable or correct `PATH`. Provider and host path details do not
 escape through an uncaught traceback.
 
-The web E2E consumer applies the same exit code and machine-readable failure to
-backend, frontend, and E2E executable lookup. Services that started before a
-later lookup failure still pass through the ordinary bounded cleanup path.
+A path that exists but is a directory or lacks execute permission is distinct:
+the consumer returns exit code `126` and tells the operator to select an
+executable file or correct its permissions. The stable failed result remains
+available without exposing the operating-system exception traceback.
+
+The web E2E consumer applies the same `126`/`127` machine-readable failure
+boundary to backend, frontend, and E2E command launch. Services that started
+before a later launch failure still pass through the ordinary bounded cleanup
+path.
 
 ## Security and availability properties
 

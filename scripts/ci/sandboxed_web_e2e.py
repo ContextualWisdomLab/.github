@@ -42,6 +42,10 @@ class CommandExecutableNotFoundError(RuntimeError):
     """Report that one declared service or E2E executable is unavailable."""
 
 
+class CommandNotExecutableError(RuntimeError):
+    """Report that one declared service or E2E path cannot be executed."""
+
+
 @dataclass
 class Service:
     """A long-running web service process and its bounded combined log capture."""
@@ -171,6 +175,8 @@ def start_service(
         )
     except FileNotFoundError as error:
         raise CommandExecutableNotFoundError from error
+    except (PermissionError, IsADirectoryError) as error:
+        raise CommandNotExecutableError from error
     if process.stdout is None:
         bounded_subprocess.kill_process_group(process)
         process.wait()
@@ -243,6 +249,8 @@ def run_shell(
         )
     except FileNotFoundError as error:
         raise CommandExecutableNotFoundError from error
+    except (PermissionError, IsADirectoryError) as error:
+        raise CommandNotExecutableError from error
 
 
 def stop_service(service: Service) -> None:
@@ -422,6 +430,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+        except CommandNotExecutableError:
+            print(
+                "sandboxed-web-e2e: select executable files or correct their permissions",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
         except bounded_subprocess.OutputLimitUnsupportedError:
             output_limit_unsupported = True
             print(

@@ -318,6 +318,49 @@ def test_missing_executable_returns_stable_failed_evidence(
     assert "Traceback" not in captured.err
 
 
+@pytest.mark.parametrize("command_role", ["backend", "frontend", "e2e"])
+@pytest.mark.parametrize("candidate_kind", ["file", "directory"])
+def test_non_executable_command_returns_stable_failed_evidence(
+    tmp_path: Path,
+    capsys,
+    command_role: str,
+    candidate_kind: str,
+) -> None:
+    """Every web command role classifies a present but unusable executable."""
+
+    candidate = tmp_path / "web-command-candidate"
+    if candidate_kind == "file":
+        candidate.write_text("not executable\n", encoding="utf-8")
+    else:
+        candidate.mkdir()
+    commands = {
+        "backend": _command("import time; time.sleep(30)"),
+        "frontend": _command("import time; time.sleep(30)"),
+        "e2e": _command("print('ready')"),
+    }
+    commands[command_role] = str(candidate)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(_repository(tmp_path)),
+            "--backend-cmd",
+            commands["backend"],
+            "--frontend-cmd",
+            commands["frontend"],
+            "--e2e-cmd",
+            commands["e2e"],
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = _result_payload(captured.out)
+
+    assert exit_code == sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
+    assert payload["exit_code"] == sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
+    assert "select executable files or correct their permissions" in captured.err
+    assert "Traceback" not in captured.err
+
+
 @pytest.mark.parametrize(
     ("option", "value"),
     [

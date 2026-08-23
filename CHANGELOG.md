@@ -54,11 +54,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Route sandboxed verification commands through the bounded subprocess layer,
   reject copied-tree symlinks that leave the sandbox, and publish distinct
-  output-limit, unsupported-platform, missing-executable, and path-boundary
-  evidence without exposing host paths or uncaught tracebacks.
-- Classify missing backend, frontend, and E2E executables with the same stable
-  exit code and operator recovery action while still cleaning up services that
-  started before the failure.
+  output-limit, unsupported-platform, missing/non-executable command, and
+  path-boundary evidence without exposing host paths or uncaught tracebacks.
+- Classify missing or non-executable backend, frontend, and E2E commands with
+  stable exit codes and operator recovery actions while still cleaning up
+  services that started before the failure.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
