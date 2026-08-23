@@ -6390,13 +6390,33 @@ run_filtered_gate_case_if_requested() {
 	nim-primary-rate-limit-clean-fallback-quality-warning)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
-			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
 			"0" \
 			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
 			"2" \
 			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
-			"nvidia_nim"
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"1"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -10367,13 +10387,33 @@ run_gate_case "strict-zero-findings-timeout-fails-pr" \
 
 run_gate_case "nim-primary-rate-limit-clean-fallback-quality-warning" \
 	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
-	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"" \
 	"0" \
 	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
 	"2" \
 	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
-	"nvidia_nim"
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"1"
 
 run_gate_case "provider-fatal-success-signal" \
 	"vertex_ai/provider-fatal-success-signal" \
