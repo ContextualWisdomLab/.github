@@ -41,3 +41,5 @@ def test_opencode_exchange_fails_closed_without_wasting_or_exposing_credentials(
     assert "OIDC token response was malformed" in source
     assert "app token response was malformed" in source
     assert 'echo "::add-mask::$oidc_token"' in source
+    assert coordinate.count("--connect-timeout 10") == 2
+    assert coordinate.count("--max-time 30") == 2
