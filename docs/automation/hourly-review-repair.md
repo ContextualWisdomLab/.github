@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `inkspan-hourly-review-repair.yml` owns Inkspan's heartbeat at minute 47 with
+  a two-hour same-head retry floor.
 - `orgmetra-hourly-review-repair.yml` owns Orgmetra's heartbeat at minute 58
   of every hour against protected `develop`.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
@@ -46,6 +48,25 @@ The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
 `NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
 OpenCode execution steps in the separately reviewed autofix worker.
+
+## Inkspan execution contract
+
+The Inkspan caller is a thin consumer of the same reusable scheduler:
+
+```yaml
+target_repository: ContextualWisdomLab/inkspan
+base_branch: main
+max_prs: "50"
+max_dispatches: "1"
+retry_hours: "2"
+```
+
+It runs at `47 * * * *`, uses its own non-cancelling single-flight group, and
+passes only the two established scheduler credentials. The caller grants the
+reusable job `id-token: write` for the existing OIDC App-token fallback but
+does not receive model credentials. Before protected-main activation,
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS` must include the exact Inkspan
+repository; a missing mapping fails before mutation credential materialization.
 
 ## Orgmetra execution contract
 
@@ -221,8 +242,11 @@ Permanent tests prove:
 
 - the Clearfolio caller owns exactly one hourly schedule and names the exact
   repository and protected base branch;
+- the Inkspan caller owns its minute-47 schedule, exact repository and base,
+  non-cancelling concurrency, OIDC boundary, and explicit secret contract;
 - the shared scheduler contains no product-specific timer or repository name;
-- the dispatch budget and same-head retry floor remain one;
+- each caller retains its declared one-dispatch budget and same-head retry
+  floor;
 - caller and reusable-workflow secrets are explicit and never use
   `secrets: inherit`;
 - immutable source, NVIDIA-only model authentication, child-process credential
