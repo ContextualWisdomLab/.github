@@ -32,9 +32,9 @@ fallback produces complete evidence.
 
 A completed zero-vulnerability fallback may emit Strix's model-quality banner
 and Hugging Face's exact unauthenticated-download advisory while loading public
-scanner assets. The console allowlist removes only those two complete lines.
-Structured report logs additionally allow Strix's bounded lifecycle-continuation
-warning and its exact optional-web-search-key advisory. A suffix, prefix, or any
+scanner assets. The console allowlist removes only those two complete lines and
+the exact optional-web-search-key advisory. Structured report logs additionally
+allow Strix's bounded lifecycle-continuation warning. A suffix, prefix, or any
 other warning text remains fail-closed provider-failure evidence.
 
 Exhausted provider infrastructure remains fail-closed even when the trusted

@@ -4627,7 +4627,7 @@ EOS
 2026-08-23 14:00:33.382 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured${FAKE_STRIX_SCENARIO#report-web-search-advisory-sanitized}
 2026-08-23 14:00:34.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
-		echo "scan completed with optional web search advisory"
+		echo "2026-08-23 14:00:33.382 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured${FAKE_STRIX_SCENARIO#report-web-search-advisory-sanitized}"
 		exit 0
 		;;
 	report-unknown-warning-fails)
