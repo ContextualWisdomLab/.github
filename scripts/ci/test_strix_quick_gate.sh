@@ -167,6 +167,7 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
 	assert_file_contains "$GATE_SCRIPT" "backend/api/auth.py" "strix gate includes backend auth context for deployment scans"
+	assert_file_contains "$GATE_SCRIPT" "backend/app/auth.py" "strix gate includes app-package auth context for backend scans"
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
 	assert_file_contains "$GATE_SCRIPT" "frontend/postcss.config.mjs" "strix gate includes frontend build config context"
 	assert_file_contains "$GATE_SCRIPT" "VERSION" "strix gate includes release version context for workflow scans"
@@ -359,9 +360,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "github_models/openai/o3 github_models/openai/gpt-5-chat" "strix workflow keeps GitHub Models fallback on tool-capable OpenAI models without GPT-4.1 downgrade"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives direct-OpenAI scans GitHub Models fallbacks so provider quota outages degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
@@ -4518,6 +4520,15 @@ EOS
 		echo "scan ok with sanitized internal Strix report notice"
 		exit 0
 		;;
+	report-known-internal-warning-variant-sanitized)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning-variant"
+		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning-variant/strix.log" <<'EOS'
+2026-08-22 09:53:26.193 WARNING strix-pr-scope-example - strix.core.execution: agent 673f770f ended a turn without a lifecycle tool call (interactive=False); forcing tool continuation (1/500): <empty>
+2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		echo "scan ok with sanitized internal Strix report notice variant"
+		exit 0
+		;;
 	report-unknown-warning-fails)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-unknown-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-unknown-warning/strix.log" <<'EOS'
@@ -5817,6 +5828,17 @@ PY
 			"$repo_root_dir/outside-strix-report/strix.log" \
 			"outside report should not be rewritten" \
 			"scenario=$scenario does not rewrite logs through symlinked report directories"
+	fi
+
+	if [ "$scenario" = "report-known-internal-warning-variant-sanitized" ]; then
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
+			"ended a turn without a lifecycle tool call" \
+			"scenario=$scenario strips the newer-wording known internal Strix warning from published artifacts"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
+			"finish_scan: completed scan with 0 vulnerability report(s)" \
+			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
@@ -7187,6 +7209,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 matched_backend_context=0
+if [ ! -f "$target_path/backend/app/auth.py" ]; then
+	echo "Error: app-package auth context missing from backend PR scope ($target_path)" >&2
+	exit 78
+fi
+if ! grep -Fq -- 'BASE_APP_AUTH_SHOULD_BE_SCANNED' "$target_path/backend/app/auth.py"; then
+	echo "Error: app-package auth context did not use trusted base content" >&2
+	cat -- "$target_path/backend/app/auth.py" >&2
+	exit 79
+fi
 if [ -f "$target_path/backend/api/calendar.py" ]; then
 	if [ ! -f "$target_path/backend/services/calendar_service.py" ]; then
 		echo "Error: calendar service backend dependency context missing from PR scope ($target_path)" >&2
@@ -7296,7 +7327,9 @@ EOF
 		git config user.name 'Strix Test'
 		git config user.email 'strix-test@example.invalid'
 		echo 'seed' >README.md
-		mkdir -p backend/api backend/app backend/services
+		mkdir -p backend/app backend/api backend/services
+		: >backend/app/__init__.py
+		printf '%s\n' 'BASE_APP_AUTH_SHOULD_BE_SCANNED' >backend/app/auth.py
 		printf '%s\n' 'BASE_AUTH_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/auth.py
 		printf '%s\n' 'BASE_EMAILS_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/emails.py
 		printf '%s\n' 'BASE_CALENDAR_SERVICE_SHOULD_BE_SCANNED' >backend/services/calendar_service.py
@@ -10385,6 +10418,35 @@ run_gate_case "report-known-internal-warning-sanitized" \
 	"1200" \
 	"0" \
 	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "report-known-internal-warning-variant-sanitized" \
+	"vertex_ai/report-known-internal-warning-variant-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-variant-sanitized'" \
+	"1" \
+	"vertex_ai/report-known-internal-warning-variant-sanitized" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
 	"" \
 	"" \
 	"" \

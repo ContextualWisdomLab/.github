@@ -269,11 +269,21 @@ jobs:
             echo "::error::Strix target repository must belong to ContextualWisdomLab."
             exit 1
           fi
-          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
+          is_private=""
+          for target_visibility_attempt in 1 2 3 4 5 6; do
+            if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
+              break
+            fi
+            is_private=""
+            if [ "$target_visibility_attempt" -lt 6 ]; then
+              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+              sleep "$(( target_visibility_attempt * 5 ))"
+            fi
+          done
           case "$is_private" in
             true | false) ;;
             *)
-              echo "::error::Target repository visibility did not resolve to true or false."
+              echo "::error::Target repository visibility did not resolve to true or false after retries."
               exit 1
               ;;
           esac
@@ -812,7 +822,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'openrouter' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
@@ -875,12 +885,23 @@ jobs:
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
           reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
 
+          # An earlier out-of-scope/below-threshold finding may already have
+          # been exempted by the trusted gate. Classify a later provider
+          # outage from the tail after the last continuation marker, but keep
+          # that incomplete later scan non-passing.
+          strix_neutralization_scope_log="$strix_run_log"
+          if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+            strix_neutralization_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
+            awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
+              "$strix_run_log" > "$strix_neutralization_scope_log"
+          fi
+
           # Classify provider/backend exhaustion only when no vulnerability
           # finding was emitted. Classification improves diagnosis; it never
           # converts an incomplete scan into passing security evidence.
-          if ( grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-            || grep -Eq "$model_behavior_error_signal" "$strix_run_log" ) \
-            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
+          if ( grep -Eiq "$backend_unavailable_signal" "$strix_neutralization_scope_log" \
+            || grep -Eq "$model_behavior_error_signal" "$strix_neutralization_scope_log" ) \
+            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
             echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
             exit "$strix_rc"
           fi
