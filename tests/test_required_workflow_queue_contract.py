@@ -1264,8 +1264,12 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert workflow.count("path: source") == 2
     assert workflow.count("--output=old-results.json") == 2
     assert workflow.count("--output=new-results.json") == 2
-    assert workflow.count("source/") == 4
+    assert workflow.count("-r\n            source/") == 4
     assert "clean: false" not in workflow
+    assert "Preserve base OSV output outside the checkout path" in workflow
+    assert "Restore preserved base OSV output" in workflow
+    assert "${RUNNER_TEMP}/osv-old-results.json" in workflow
+    assert "source/old-results.json" in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 

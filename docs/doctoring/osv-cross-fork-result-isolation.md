@@ -13,11 +13,12 @@ whose repository identity changed.
 ## Decision
 
 Checkout both exact repositories into the same `source/` child directory and
-scan that directory. The head checkout may replace `source/` when the repository
-identity changes, but the base result remains at the workspace root. Reusing the
-same checkout path also gives the base and head scan identical source paths, so
-the existing OSV comparison retains its meaning. Missing or empty output remains
-a hard failure; this change does not weaken vulnerability comparison.
+scan that directory. Immediately copy a non-empty base result from the
+workspace root or `source/old-results.json` into `${RUNNER_TEMP}/osv-old-results.json`,
+then restore that file after the fork head checkout. Reusing the same checkout
+path keeps base and head scan source paths comparable. Missing or empty output
+after restore remains a hard failure; a zero-finding head scan does not skip
+the base comparison. This change does not weaken vulnerability comparison.
 
 ## Verification and rollback
 
