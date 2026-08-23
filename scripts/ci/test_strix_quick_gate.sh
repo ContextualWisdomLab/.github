@@ -4467,7 +4467,7 @@ EOS
 			;;
 		esac
 		;;
-	nim-primary-rate-limit-clean-fallback-quality-warning)
+	nim-primary-rate-limit-clean-fallback-quality-warning|nim-primary-rate-limit-clean-fallback-quality-report-warning)
 		case "${STRIX_LLM:-}" in
 		nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
 			echo "LLM CONNECTION FAILED"
@@ -4481,6 +4481,13 @@ EOS
 			echo "│  frontier model for Strix.                                                   │"
 			echo "│  You can continue, but weaker models may miss vulnerabilities or produce     │"
 			echo "│  lower-quality findings.                                                     │"
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "nim-primary-rate-limit-clean-fallback-quality-report-warning" ]; then
+				mkdir -p "$STRIX_REPORTS_DIR/fake-nim-quality-advisory"
+				cat >"$STRIX_REPORTS_DIR/fake-nim-quality-advisory/strix.log" <<'EOS'
+│  MODEL QUALITY WARNING                                                       │
+2026-08-23 12:32:17.984 INFO strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+			fi
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			exit 0
@@ -6387,7 +6394,7 @@ run_filtered_gate_case_if_requested() {
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
 		;;
-	nim-primary-rate-limit-clean-fallback-quality-warning)
+	nim-primary-rate-limit-clean-fallback-quality-warning | nim-primary-rate-limit-clean-fallback-quality-report-warning)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
 			"" \
@@ -10386,6 +10393,36 @@ run_gate_case "strict-zero-findings-timeout-fails-pr" \
 	"1"
 
 run_gate_case "nim-primary-rate-limit-clean-fallback-quality-warning" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"1"
+
+run_gate_case "nim-primary-rate-limit-clean-fallback-quality-report-warning" \
 	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
 	"" \
 	"0" \
