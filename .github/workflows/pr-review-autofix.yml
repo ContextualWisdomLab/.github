@@ -509,8 +509,9 @@ jobs:
           if [ "${#changed_python_files[@]}" -gt 0 ]; then
             python3 -m py_compile "${changed_python_files[@]}"
           fi
-          if [ "${#changed_workflows[@]}" -gt 0 ] && command -v actionlint >/dev/null 2>&1; then
-            actionlint "${changed_workflows[@]}"
+          if [ "${#changed_workflows[@]}" -gt 0 ]; then
+            ruby "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/lint_github_workflows.rb" \
+              "${changed_workflows[@]}"
           fi
 
       - name: Commit and push autofix

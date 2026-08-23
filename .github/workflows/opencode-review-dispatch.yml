@@ -907,9 +907,11 @@ jobs:
           }
 
           append_command() {
-            printf '$ ' >>"$summary_file"
-            printf '%q ' "$@" >>"$summary_file"
-            printf '\n' >>"$summary_file"
+            {
+              printf '$ '
+              printf '%q ' "$@"
+              printf '\n'
+            } >>"$summary_file"
           }
 
           emit_captured_log() {
@@ -1182,6 +1184,8 @@ jobs:
                       --command-json "$configured_command_json"
                 done <<<"$configured_commands_json"
             else
+              # The child shell expands its own cwd and PYTHONPATH.
+              # shellcheck disable=SC2016
               run_and_capture "Python coverage with missing-line report (${project_dir})" \
                 bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing' bash "$project_dir"
             fi
@@ -1189,6 +1193,8 @@ jobs:
 
             if [ "$measured_projects" -eq 0 ]; then
               if has_tracked_files '*.py'; then
+                # The child shell resolves the checked-out source layout.
+                # shellcheck disable=SC2016
                 run_and_capture "Python coverage with missing-line report" \
                   bash -c 'PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m coverage run -m pytest && python3 -m coverage report --show-missing'
               elif python3 -I -c 'import pytest_cov' >/dev/null 2>&1; then
@@ -1308,6 +1314,8 @@ jobs:
             while IFS= read -r project_dir; do
               if [ -f "${project_dir}/tests/test_docstrings.py" ]; then
                 measured_projects=1
+                # The child shell expands its own positional cwd.
+                # shellcheck disable=SC2016
                 run_and_capture "Python docstring coverage (${project_dir})" \
                   bash -c 'cd "$1" && PYTHONPATH="$([ -d src ] && printf src:. || printf .)" python3 -m pytest tests/test_docstrings.py' bash "$project_dir"
               fi
@@ -1613,6 +1621,8 @@ jobs:
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
                 else
+                  # The child shell expands its own positional cwd.
+                  # shellcheck disable=SC2016
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
                 fi
                 ;;
@@ -1620,6 +1630,8 @@ jobs:
                 if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
                 else
+                  # The child shell expands its own positional cwd.
+                  # shellcheck disable=SC2016
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
                 fi
                 ;;
@@ -1627,6 +1639,8 @@ jobs:
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
                   run_and_capture "Tauri frontendDist build (${package_dir})" yarn workspace "$package_name" build
                 else
+                  # The child shell expands its own positional cwd.
+                  # shellcheck disable=SC2016
                   run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && yarn build' bash "$package_dir"
                 fi
                 ;;
@@ -1743,8 +1757,8 @@ jobs:
             # coverage command still runs and reports any uncovered GPU lines
             # exactly as before, so Rust repositories without GPU code are
             # unaffected and no gate is weakened.
-            if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
-              lvp_icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1)"
+            lvp_icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit 2>/dev/null || true)"
+            if [ -n "$lvp_icd" ]; then
               export VK_ICD_FILENAMES="$lvp_icd"
               export VK_DRIVER_FILES="$lvp_icd"
               export WGPU_BACKEND=vulkan
@@ -2868,12 +2882,17 @@ jobs:
               language_signal="Match changed prose"
             fi
 
+            # Markdown backticks are literal; the format argument is intentional.
+            # shellcheck disable=SC2016
             printf -- '- Preferred review language: `%s`\n' "$language_signal"
             printf -- '- Rule: write human-readable review prose in the preferred language; keep file paths, identifiers, logs, quoted source, error text, and protocol literals unchanged.\n'
+            # shellcheck disable=SC2016
             printf -- '- PR title: `%s`\n' "$(printf '%s' "$title" | tr '\r\n`' '   ' | cut -c 1-240)"
             if [ -n "$body" ]; then
+              # shellcheck disable=SC2016
               printf -- '- PR body excerpt: `%s`\n' "$(printf '%s' "$body" | tr '\r\n`' '   ' | cut -c 1-360)"
             else
+              # shellcheck disable=SC2016
               printf -- '- PR body excerpt: `[empty]`\n'
             fi
           }
@@ -3153,6 +3172,8 @@ jobs:
             shift
 
             if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff "$@"; then
+              # Markdown backticks are literal; the format arguments are intentional.
+              # shellcheck disable=SC2016
               printf 'Unable to collect %s from `%s` to `%s`; continue review from available changed-file evidence and direct file inspection.\n' "$description" "$PR_MERGE_BASE" "$PR_HEAD_SHA"
             fi
           }
@@ -3163,12 +3184,14 @@ jobs:
             printf -- "- Base SHA: \`%s\`\n" "$PR_BASE_SHA"
             printf -- "- Head SHA: \`%s\`\n\n" "$PR_HEAD_SHA"
             if ! PR_MERGE_BASE="$(git -C "$OPENCODE_SOURCE_WORKDIR" merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA")"; then
+              # shellcheck disable=SC2016
               printf 'Merge-base discovery failed for `%s` and `%s`; falling back to base SHA for bounded diff evidence.\n\n' "$PR_BASE_SHA" "$PR_HEAD_SHA"
               PR_MERGE_BASE="$PR_BASE_SHA"
             fi
             printf -- "- Merge base SHA: \`%s\`\n\n" "$PR_MERGE_BASE"
             printf '## Current-head authority order\n\n'
             printf 'Treat current-head sections in this file as authoritative for this run: Other unresolved review thread evidence, Failed GitHub Check evidence, Coverage execution evidence, Changed files, and Focused changed hunks.\n'
+            # shellcheck disable=SC2016
             printf 'All PR reviews and comments evidence is historical context only and may contain stale bot conclusions. Do not infer active failed checks, unresolved threads, or missing changed files from those comments unless current-head evidence corroborates the same claim for Head SHA `%s`.\n\n' "$PR_HEAD_SHA"
             if ! git -C "$OPENCODE_SOURCE_WORKDIR" diff --name-only --find-renames "$PR_MERGE_BASE" "$PR_HEAD_SHA" |
               awk 'NF > 0 && $0 !~ /^\// && $0 !~ /(^|\/)\.\.($|\/)/ { print }' >"$OPENCODE_CHANGED_FILES_FILE"; then
@@ -4804,6 +4827,8 @@ jobs:
               "$@"
           }
 
+          # jq expands its own variables inside this literal program.
+          # shellcheck disable=SC2016
           self_check_filter='
             def self_check:
               (.name // "") as $n
@@ -5466,6 +5491,8 @@ jobs:
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 printf '## OpenCode %s review body\n\n' "$event"
+                # Markdown backticks are literal; the format argument is intentional.
+                # shellcheck disable=SC2016
                 printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
                 printf -- '- Workflow run: %s\n' "$RUN_ID"
                 printf -- '- Workflow attempt: %s\n\n' "$RUN_ATTEMPT"
@@ -5812,6 +5839,8 @@ jobs:
               printf '## Summary\n\n'
               printf '%s\n\n' "$summary"
               printf '## Adversarial validation\n\n'
+              # Markdown fences are literal; the format argument is intentional.
+              # shellcheck disable=SC2016
               printf '```json\n%s\n```\n\n' "$adversarial_evidence"
               printf -- '- Result: REQUEST_CHANGES\n'
               printf -- '- Reason: %s\n\n' "$reason"
@@ -6609,6 +6638,8 @@ jobs:
 
             case "$mode" in
               failed)
+                # jq expands its own variables inside this literal program.
+                # shellcheck disable=SC2016
                 jq_filter='
                   [.[].check_runs[]?]
                   | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
@@ -6625,6 +6656,8 @@ jobs:
                 '
                 ;;
               pending)
+                # jq expands its own variables inside this literal program.
+                # shellcheck disable=SC2016
                 jq_filter='
                   [.[].check_runs[]?]
                   | sort_by((.started_at // .completed_at // .created_at // ""), (.id // 0))
@@ -6689,6 +6722,8 @@ jobs:
             local owner="${GH_REPOSITORY%%/*}"
             local name="${GH_REPOSITORY#*/}"
 
+            # GraphQL variables are expanded by GitHub, not Bash.
+            # shellcheck disable=SC2016
             timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
@@ -6842,6 +6877,8 @@ jobs:
             commit_check_runs_file="$(mktemp)"
             filtered_rollup_file="$(mktemp)"
             successful_check_names_file="$(mktemp)"
+            # GraphQL variables are expanded by GitHub, not Bash.
+            # shellcheck disable=SC2016
             if ! pr_node_id="$(timeout "$(check_lookup_api_timeout_seconds)s" gh api graphql \
               -f owner="$owner" \
               -f name="$name" \
@@ -7285,6 +7322,8 @@ jobs:
             head_ref="$(printf '%s\n' "$pr_json" | jq -r '.headRefName // empty')"
             [ -n "$head_ref" ] || return 1
             lookup_error_file="$(mktemp)"
+            # jq expands its own variables inside this literal program.
+            # shellcheck disable=SC2016
             if ! GH_TOKEN="$scan_token" timeout "$(check_lookup_api_timeout_seconds)s" \
               gh api -X GET "repos/${GH_REPOSITORY}/code-scanning/alerts" \
                 -f "ref=refs/heads/${head_ref}" \
@@ -7352,6 +7391,8 @@ jobs:
                 printf 'OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n\n'
                 printf '## Findings\n\n'
                 printf '### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n'
+                # Markdown backticks are literal; the format argument is intentional.
+                # shellcheck disable=SC2016
                 printf -- '- Problem: Failed same-head checks remain for `%s`.\n' "$HEAD_SHA"
                 printf -- '- Root cause: The model-unavailable evidence fallback is allowed only when peer GitHub Checks are complete and clean.\n'
                 printf -- '- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n'
@@ -7408,10 +7449,14 @@ jobs:
               if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                 {
                   printf '## OpenCode required check satisfied by existing same-head approval\n\n'
+                  # Markdown backticks are literal in these format strings.
+                  # shellcheck disable=SC2016
                   printf -- '- Result: `EXISTING_CURRENT_HEAD_APPROVAL`\n'
+                  # shellcheck disable=SC2016
                   printf -- '- Head SHA: `%s`\n' "$HEAD_SHA"
                   printf -- '- Workflow run: %s\n' "$RUN_ID"
                   printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
+                  # shellcheck disable=SC2016
                   printf -- '- Model-pool outcome: `%s`\n' "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
                   printf -- '- Reason: a prior real-model OpenCode APPROVED review with passed structured adversarial probes already targets this exact head, and the fallback rechecked coverage, peer checks, code-scanning alerts, and unresolved review threads before accepting it.\n'
                   printf -- '- Review state: unchanged; no duplicate APPROVE review was posted from model-output-unavailable evidence.\n\n'
