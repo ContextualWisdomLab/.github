@@ -45,6 +45,35 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_organization_readiness_does_not_echo_untrusted_http_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep arbitrary HTTP method text out of organization-loop diagnostics."""
+    from types import SimpleNamespace
+
+    from scripts.ci.organization_commercial_readiness_loop import (
+        GitHubClient,
+        GitHubError,
+    )
+
+    token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB"
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="request rejected",
+        ),
+    )
+
+    with pytest.raises(GitHubError) as raised:
+        GitHubClient("client-token").request("/repos/example", method=token)
+
+    message = str(raised.value)
+    assert token.upper() not in message
+    assert "[REDACTED_METHOD]" in message
+
+
 def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
     """Dispatch payloads must not smuggle shell syntax into scheduler arguments."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
@@ -1510,19 +1539,25 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
-    """Keep provider outages non-blocking only when no vulnerability finding exists."""
+def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
+    """Keep provider outages typed and non-passing until authoritative evidence exists."""
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
+    assert "model_behavior_error_signal=" in workflow
+    assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
+    assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
+    assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
+    assert 'exit "$strix_rc"' in workflow
+    assert "Treating as a neutral skip" not in workflow
+    assert "authoritative vulnerability analysis" in workflow
+    assert "incomplete scan into passing security evidence" in workflow
     assert (
         '&& ! grep -Eiq "$reported_vulnerability_signal" '
         '"$strix_neutralization_scope_log"' in workflow
