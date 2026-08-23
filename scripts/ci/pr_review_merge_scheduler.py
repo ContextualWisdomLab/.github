@@ -230,8 +230,8 @@ def mutation_token_label() -> str:
     return labels.get(source, "workflow GH_TOKEN")
 
 
-def head_mutation_credential_starts_workflows() -> bool:
-    """Return whether scheduler head mutations can start required workflow runs.
+def head_mutation_credential_problem() -> str | None:
+    """Explain why the selected mutation credential cannot start workflow runs.
 
     GitHub never creates a new workflow run for an event produced with the
     workflow ``GITHUB_TOKEN``, so a PR head moved with that credential can never
@@ -242,22 +242,41 @@ def head_mutation_credential_starts_workflows() -> bool:
         GitHub. (2025). *Automatic token authentication*.
         https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication
     """
-    return mutation_token_source() in WORKFLOW_STARTING_MUTATION_SOURCES
+    source = mutation_token_source()
+    if source == "github-token":
+        return "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
+    if source not in WORKFLOW_STARTING_MUTATION_SOURCES:
+        return f"{mutation_token_label()} is not allowlisted as workflow-starting"
+
+    selected_token = (os.environ.get("GH_TOKEN") or "").strip()
+    workflow_token = (os.environ.get("SCHEDULER_WORKFLOW_TOKEN") or "").strip()
+    if not selected_token:
+        return f"{mutation_token_label()} is missing and therefore not proven workflow-starting"
+    if not workflow_token:
+        return (
+            "workflow GITHUB_TOKEN comparison evidence is missing, so the selected mutation "
+            "credential is not proven workflow-starting"
+        )
+    if selected_token == workflow_token:
+        return (
+            f"{mutation_token_label()} resolved to the workflow GITHUB_TOKEN, whose head "
+            "mutations never start new workflow runs"
+        )
+    return None
+
+
+def head_mutation_credential_starts_workflows() -> bool:
+    """Return whether the actual scheduler mutation token can start workflow runs."""
+    return head_mutation_credential_problem() is None
 
 
 def non_triggering_head_mutation_reason(action: str) -> str:
     """Explain why a head mutation is withheld for a non-triggering credential."""
-    source = mutation_token_source()
-    if source == "github-token":
-        credential_reason = (
-            "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
-        )
-    else:
-        credential_reason = (
-            f"the {mutation_token_label()}, which is not allowlisted as workflow-starting"
-        )
+    credential_reason = head_mutation_credential_problem()
+    if credential_reason is None:
+        raise RuntimeError("withheld-mutation messaging requires a non-triggering mutation credential")
     return (
-        f"{action} withheld because the scheduler mutation credential is {credential_reason}, "
+        f"{action} withheld because {credential_reason}, "
         "so the moved head would stay permanently "
         "BLOCKED without current-head required checks; configure PR_REVIEW_MERGE_TOKEN, "
         "OPENCODE_APPROVE_TOKEN, or the OpenCode app token for the scheduler job"
@@ -272,13 +291,11 @@ def require_workflow_starting_mutation_credential(action: str) -> None:
 
 def head_mutation_credential_guidance_text() -> tuple[str, str]:
     """Return operator-facing summary and limit text for a withheld head mutation."""
-    if mutation_token_source() == "github-token":
-        return (
-            "The scheduler withheld a head mutation because the workflow GITHUB_TOKEN cannot start the required current-head workflow runs.",
-            "Moving the head with the workflow GITHUB_TOKEN would leave the PR permanently BLOCKED, so the scheduler waits instead.",
-        )
+    problem = head_mutation_credential_problem()
+    if problem is None:
+        raise RuntimeError("withheld-mutation messaging requires a non-triggering mutation credential")
     return (
-        f"The scheduler withheld a head mutation because {mutation_token_label()} is not allowlisted as workflow-starting.",
+        f"The scheduler withheld a head mutation because {problem}.",
         "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
     )
 
@@ -599,6 +616,19 @@ def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str
     if env is None:
         return run_github_actions(args, stdin=stdin)
     return run_with_env(args, stdin=stdin, env=env)
+
+
+def run_github_actions_for_repository(
+    repo: str,
+    args: Sequence[str],
+) -> str:
+    """Run an Actions command with the credential scoped to its host repository."""
+    central_repo = (
+        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
+    ).strip()
+    if central_repo and repo.casefold() == central_repo.casefold():
+        return run_github_dispatch(args)
+    return run_github_actions(args)
 
 
 def split_repo(repo: str) -> tuple[str, str]:
@@ -1570,6 +1600,8 @@ def run_head_guarded_merge(
 
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Enable auto-merge for a PR at its current head using an allowed method."""
+    if pr.get("isDraft"):
+        raise RuntimeError("enable-auto-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return
@@ -1580,6 +1612,8 @@ def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Merge a current-head-approved PR immediately with a head guard."""
+    if pr.get("isDraft"):
+        raise RuntimeError("direct-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return
@@ -1922,11 +1956,12 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
 
 
 def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
-    """Return active workflow runs for a repository."""
+    """Return active workflow runs with the credential scoped to their host."""
     runs: list[dict[str, Any]] = []
     for status in statuses:
         payload = json.loads(
-            run_github_actions(
+            run_github_actions_for_repository(
+                repo,
                 [
                     "gh",
                     "api",
@@ -2009,9 +2044,6 @@ def active_review_run_refs(
     # must not suppress the central authenticated reviewer.
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
-            run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
-                continue
             run_id = run_data.get("id")
             if not run_id:
                 continue
@@ -2030,6 +2062,9 @@ def active_review_run_refs(
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            run_name = str(run_data.get("name") or "")
+            if run_name != workflow and run_name not in workflow_aliases:
                 continue
             if centralized_dispatch:
                 continue
@@ -2096,7 +2131,8 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     def cancel_one(run_id: str) -> tuple[str, str | None]:
         """Return one run id and its bounded GitHub cancellation error, if any."""
         try:
-            run_github_actions(
+            run_github_actions_for_repository(
+                repo,
                 [
                     "gh",
                     "api",
@@ -2356,7 +2392,11 @@ def inspect_pr(
 
     if pr.get("isDraft"):
         return Decision(number, "skip", "draft PR")
-    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
+    # Central reviewers own their run lifecycle in the dispatch repository.
+    # Target old-head CI is non-authoritative, and enumerating it can exhaust
+    # the installation quota before the current-head review is dispatched.
+    if repository_dispatch_target(repo).casefold() == repo.casefold():
+        cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
@@ -3100,6 +3140,8 @@ def parse_non_triggering_head_mutation_reason(reason: str) -> bool:
     return (
         "whose head mutations never start new workflow runs" in reason
         or "which is not allowlisted as workflow-starting" in reason
+        or "is not allowlisted as workflow-starting" in reason
+        or "not proven workflow-starting" in reason
     )
 
 
@@ -3297,16 +3339,28 @@ def summarize_action_error(exc: RuntimeError) -> str:
 
 @contextlib.contextmanager
 def declared_mutation_token_source(source: str) -> Iterator[None]:
-    """Declare a scheduler mutation credential source for the enclosed block."""
-    previous = os.environ.get("SCHEDULER_MUTATION_TOKEN_SOURCE")
+    """Declare a coherent synthetic mutation credential for offline self-tests."""
+    keys = (
+        "SCHEDULER_MUTATION_TOKEN_SOURCE",
+        "GH_TOKEN",
+        "SCHEDULER_WORKFLOW_TOKEN",
+    )
+    previous = {key: os.environ.get(key) for key in keys}
     os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = source
+    os.environ["SCHEDULER_WORKFLOW_TOKEN"] = "self-test-workflow-token"
+    os.environ["GH_TOKEN"] = (
+        "self-test-workflow-token"
+        if source == "github-token"
+        else "self-test-selected-mutation-token"
+    )
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop("SCHEDULER_MUTATION_TOKEN_SOURCE", None)
-        else:
-            os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = previous
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def self_test() -> None:

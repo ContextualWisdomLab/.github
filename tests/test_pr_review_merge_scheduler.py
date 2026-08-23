@@ -33,6 +33,8 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
 
 
 def fake_github_token(prefix, body):
@@ -1742,6 +1744,21 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     ]
 
 
+def test_draft_pr_cannot_reach_merge_mutations(monkeypatch):
+    """Defense in depth rejects drafts at both guarded merge boundaries."""
+    calls = []
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    draft_pr = make_pr(isDraft=True, headRefOid="a" * 40)
+
+    for mutation in (sched.enable_auto_merge, sched.merge_pr):
+        with pytest.raises(RuntimeError, match="draft PR"):
+            mutation("owner/repo", draft_pr, dry_run=False)
+
+    assert calls == []
+
+
 def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -1800,16 +1817,26 @@ def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
 
 
 def test_declared_mutation_token_source_restores_the_previous_environment(monkeypatch):
-    """The declaration helper restores both a set and an unset prior value."""
+    """The declaration helper restores source and token evidence after self-tests."""
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "opencode-app")
+    monkeypatch.setenv("GH_TOKEN", "prior-selected-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "prior-workflow-token")
     with sched.declared_mutation_token_source("github-token"):
         assert sched.mutation_token_source() == "github-token"
+        assert not sched.head_mutation_credential_starts_workflows()
     assert sched.mutation_token_source() == "opencode-app"
+    assert os.environ["GH_TOKEN"] == "prior-selected-token"
+    assert os.environ["SCHEDULER_WORKFLOW_TOKEN"] == "prior-workflow-token"
 
     monkeypatch.delenv("SCHEDULER_MUTATION_TOKEN_SOURCE", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("SCHEDULER_WORKFLOW_TOKEN", raising=False)
     with sched.declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
         assert sched.mutation_token_source() == "PR_REVIEW_MERGE_TOKEN"
+        assert sched.head_mutation_credential_starts_workflows()
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" not in os.environ
+    assert "GH_TOKEN" not in os.environ
+    assert "SCHEDULER_WORKFLOW_TOKEN" not in os.environ
 
 
 def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
@@ -1817,6 +1844,40 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
     for source in ("PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"):
         monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", source)
         assert sched.head_mutation_credential_starts_workflows()
+        sched.require_workflow_starting_mutation_credential("update-branch")
+
+
+def test_withheld_mutation_messages_reject_a_workflow_starting_credential(monkeypatch):
+    """Withheld-mutation helpers reject callers that have no credential problem."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+
+    with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
+        sched.non_triggering_head_mutation_reason("update-branch")
+    with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
+        sched.head_mutation_credential_guidance_text()
+
+
+@pytest.mark.parametrize(
+    ("selected_token", "workflow_token", "message"),
+    (
+        ("", "workflow-runner-token", "is missing"),
+        ("selected-mutation-token", "", "comparison evidence is missing"),
+        ("workflow-runner-token", "workflow-runner-token", "resolved to"),
+    ),
+)
+def test_declared_workflow_starting_source_cannot_mask_runner_token_fallback(
+    monkeypatch,
+    selected_token,
+    workflow_token,
+    message,
+):
+    """A missing credential that resolves to github.token cannot move a PR head."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", selected_token)
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", workflow_token)
+
+    assert not sched.head_mutation_credential_starts_workflows()
+    with pytest.raises(RuntimeError, match=message):
         sched.require_workflow_starting_mutation_credential("update-branch")
 
 
@@ -1964,6 +2025,38 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "repos/owner/repo/dispatches",
         "--input",
         "-",
+    ]
+
+
+def test_central_workflow_runs_use_central_runner_token_for_central_dispatch(
+    monkeypatch,
+):
+    """Central run discovery and cancellation must not spend the App quota."""
+    calls = []
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        calls.append((tuple(args), None if env is None else env.get("GH_TOKEN")))
+        return '{"workflow_runs": []}'
+
+    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "cross-repository-actions-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "central-runner-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "contextualwisdomlab/.GITHUB",
+    )
+
+    sched.active_workflow_runs("ContextualWisdomLab/.github", statuses=("queued",))
+    sched.force_cancel_workflow_runs("ContextualWisdomLab/.github", ["101"])
+    sched.active_workflow_runs("owner/repo", statuses=("queued",))
+    sched.force_cancel_workflow_runs("owner/repo", ["202"])
+
+    assert [call[1] for call in calls] == [
+        "central-runner-token",
+        "central-runner-token",
+        "cross-repository-actions-token",
+        "cross-repository-actions-token",
     ]
 
 
@@ -2232,10 +2325,11 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("workflow_name", "run_title"),
+    ("workflow_name", "run_title", "configured_run_name"),
     [
-        ("OpenCode Review Dispatch", "OpenCode Review Dispatch"),
-        ("Required OpenCode Review", "Required OpenCode Review"),
+        ("OpenCode Review Dispatch", "OpenCode Review Dispatch", False),
+        ("Required OpenCode Review", "Required OpenCode Review", False),
+        ("OpenCode Review Dispatch", "OpenCode Review Dispatch", True),
     ],
 )
 def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
@@ -2243,15 +2337,17 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     capsys,
     workflow_name,
     run_title,
+    configured_run_name,
 ):
     calls = []
     head_sha = "a" * 40
+    display_title = f"{run_title} owner/repo#1@{head_sha}"
     current_dispatch = {
         "id": 9100,
-        "name": workflow_name,
+        "name": display_title if configured_run_name else workflow_name,
         "event": "repository_dispatch",
         "head_sha": "default-branch-sha",
-        "display_title": f"{run_title} owner/repo#1@{head_sha}",
+        "display_title": display_title,
         "pull_requests": [],
     }
 
@@ -3536,6 +3632,7 @@ def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr
 
 
 def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "OWNER/REPO")
     cancelled = []
     monkeypatch.setattr(
         sched,
@@ -3547,6 +3644,27 @@ def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
 
     assert decision.action == "skip"
     assert cancelled == [("owner/repo", 1, True)]
+
+
+def test_central_dispatch_skips_non_authoritative_target_actions_inventory(
+    monkeypatch,
+):
+    """Central review dispatch must not spend App quota on target old-head runs."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        sched,
+        "cancel_stale_pr_runs",
+        lambda *args, **kwargs: pytest.fail(
+            "central dispatch must not enumerate target Actions runs"
+        ),
+    )
+
+    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
+
+    assert decision.action == "skip"
 
 
 def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):

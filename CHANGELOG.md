@@ -6,6 +6,12 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Honor each trusted base project's exact, integrity-bearing pnpm
+  `packageManager` specification in OpenCode coverage images through the pinned
+  Node distribution's Corepack runtime, instead of admitting the specification
+  during materialization and then rejecting every version except pnpm 11.5.3;
+  route generic coverage and docstring package scripts through the same
+  Corepack boundary instead of invoking a removed bare `pnpm` binary.
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
   dependencies without weakening registry hashes or the networkless PR sandbox,
   reject namespace, ambiguous, linked, native-extension, and installed-metadata
@@ -51,14 +57,29 @@ Semantic Versioning where the repository publishes a release.
   expression semantics, and narrowly accept GitHub's native
   `concurrency.queue: max` while rejecting every other queue value until
   upstream actionlint schema support is released.
-- Retried the Strix scan up to `STRIX_TRANSIENT_RETRY_PER_MODEL` times, same model, when the log shows the upstream strix-agent Caido sandbox bootstrap timing race (`loginAsGuest failed after N attempts` / `Failed to connect to 127.0.0.1 port <port>`; tracked upstream as usestrix/strix#1036, #1037, #1056). A slow CI runner can exceed strix-agent's fixed 10-attempt sandbox-login budget before its local intercepting proxy is reachable, even though the penetration test itself never started and no vulnerability evidence was produced or lost; the Docker image is already cached from the failed attempt, so a same-model retry is cheap and typically clears the one-off boot race. Not wired into cross-model fallback, since switching LLM models cannot change local sandbox container boot timing.
+- Bound head-mutation authorization to the actual selected `GH_TOKEN` as well
+  as its declared source, failing closed when it is missing or resolves to the
+  workflow `github.token`; case-fold repository host comparisons so casing
+  drift cannot select the wrong Actions credential or skip same-repository
+  stale-run cleanup.
+- Derived `org-queue-sweep`'s rotation index (added in `ContextualWisdomLab/.github#1220` to stop the walk-order starvation from `ContextualWisdomLab/.github#1219`) from a persistent `ORG_SWEEP_ROTATION_COUNTER` repository variable incremented by exactly one at the start of every actual sweep execution, instead of `github.run_number` (which increments on every trigger of this workflow, not only the sweep schedule — Devin review finding on `#1220`) or a wall-clock tick alone (which can repeat an offset when this single-flight, up-to-60-minute job runs behind schedule by an exact multiple of the repository count — CodeRabbit review finding on `#1223`). Falls back to the wall-clock tick only if the persistent counter itself is unavailable, so a fairness mechanism never blocks the sweep's review-dispatch/merge work.
+- Retried the Strix scan up to `STRIX_TRANSIENT_RETRY_PER_MODEL` times, same model, when the log shows the upstream strix-agent Caido sandbox bootstrap timing race (`loginAsGuest failed after N attempts` / `Failed to connect to 127.0.0.1 port <port>`; tracked upstream as usestrix/strix#1036, usestrix/strix#1037, usestrix/strix#1056). A slow CI runner can exceed strix-agent's fixed 10-attempt sandbox-login budget before its local intercepting proxy is reachable, even though the penetration test itself never started and no vulnerability evidence was produced or lost; the Docker image is already cached from the failed attempt, so a same-model retry is cheap and typically clears the one-off boot race. Not wired into cross-model fallback, since switching LLM models cannot change local sandbox container boot timing.
 - Replaced nonexistent `job.workflow_repository` / `job.workflow_sha` / `job.workflow_ref` / `job.workflow_file_path` context references (actionlint: "property ... is not defined in object type") in `pr-review-fix-scheduler.yml`'s called-workflow source verification and `exact-artifact-sbom-attestation.yml`'s trusted-verifier checkout. Both always failed closed on the missing properties (ContextualWisdomLab/.github#1212) or, for the SBOM attestation checkout, silently resolved an empty repository/ref instead of the pinned trusted source (downstream `gh attestation verify --signer-repo`/`--signer-workflow`, using the separately hardcoded `SIGNER_REPOSITORY` constant rather than any workflow_ref, still failed closed on the resulting empty signer identity). `github.workflow_ref`/`github.workflow_sha` are real, documented properties, but for a `workflow_call` target they reflect the top-level *calling* workflow, not the reusable workflow's own file — a prefix match against the reusable workflow's own path can never succeed. `exact-artifact-sbom-attestation.yml`'s checkout now uses `github.workflow_sha` (correct today: it has no callers yet); `pr-review-fix-scheduler.yml`'s identity check instead validates `github.repository`, since every current caller uses a local, same-repo `uses: ./...` where caller and callee share one commit and `github.workflow_sha` is still the right pin. Tracked follow-up for the SBOM attestation checkout once a real (potentially cross-repo) caller exists: ContextualWisdomLab/.github#1228.
-- Used the receiving repository's workflow token for same-repository scheduler
-  Actions inventory and read calls, while retaining the established mutation
-  credential chain. An exhausted organization-wide OpenCode App installation
-  budget can no longer prevent a central `.github` PR from dispatching its
-  exact-head review; cross-repository targets still require an explicit
-  credential.
+- Use the repository hosting each workflow run to select scheduler Actions
+  credentials: central required-workflow inventory and stale-run cancellation
+  use the receiving repository's job token. Centrally hosted review dispatches
+  no longer enumerate or cancel non-authoritative target old-head CI before
+  dispatch; same-repository cleanup and explicit target mutations keep their
+  established credentials. An exhausted organization-wide OpenCode App
+  installation budget can no longer stop exact-head review on that cleanup read.
+  Exact repository-dispatch titles are also matched before GitHub's `name`
+  field is treated as a workflow alias, preventing duplicate exact-head model
+  runs when that field contains the configured `run-name`.
+- Refused draft pull requests again at both direct-merge and auto-merge mutation
+  boundaries, even though `inspect_pr` already skips drafts before any mutation.
+  This defense in depth makes a future caller unable to turn forged check or
+  review metadata into a draft merge and records Strix run `32573579932` finding
+  `vuln-0001` without adding a scanner allowlist or weakening required checks.
 - Kept independently valid root-level Python lock environments separate during
   trusted base coverage installation. A directory with more than two candidate
   locks no longer collapses unrelated OpenCode, security, and application
