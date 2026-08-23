@@ -56,10 +56,11 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Re-dispatch an exact-head OpenCode review after its coverage-only blocker is
-  cleared, selecting the newest same-workflow coverage rerun and ignoring only
-  the superseded OpenCode failure and the central required-workflow placeholder
-  while unresolved threads, Strix, coverage, and unrelated failed checks remain
-  fail-closed.
+  cleared, selecting the newest coverage rerun by timestamp across workflow
+  names and ignoring only the superseded `opencode-review` failure and central
+  required-workflow placeholder. Conflicting heads and failed sibling jobs in an
+  OpenCode workflow remain fail-closed alongside unresolved threads, Strix,
+  coverage, and unrelated failed checks.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning

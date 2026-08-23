@@ -1339,9 +1339,20 @@ def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
 
 def coverage_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, complete, or failed for the latest coverage gate."""
-    for node in reversed(latest_check_runs(pr)):
-        if (node.get("name") or "").lower() != "coverage-evidence":
-            continue
+    coverage_runs = [
+        node
+        for node in latest_check_runs(pr)
+        if (node.get("name") or "").lower() == "coverage-evidence"
+    ]
+    if coverage_runs:
+        _, node = max(
+            enumerate(coverage_runs),
+            key=lambda item: (
+                parse_github_datetime(item[1].get("startedAt"))
+                or datetime.min.replace(tzinfo=timezone.utc),
+                item[0],
+            ),
+        )
         status = (node.get("status") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
@@ -1549,8 +1560,9 @@ def failed_status_checks(
     """Return failing check or status context names from the PR rollup.
 
     ``ignore_opencode`` is reserved for the authenticated coverage-only retry
-    path: the previous OpenCode run is expected to be failing there because it
-    published the current-head coverage change request being retried.
+    path: the previous ``opencode-review`` job or status is expected to be
+    failing there because it published the current-head coverage change request
+    being retried. Sibling jobs in the same workflow remain authoritative.
     """
     failed: list[str] = []
     status_contexts = [
@@ -1567,7 +1579,7 @@ def failed_status_checks(
     for node in latest_check_runs(pr):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
-            if ignore_opencode and is_opencode_check_run(node):
+            if ignore_opencode and node.get("name") == "opencode-review":
                 continue
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
@@ -2563,7 +2575,8 @@ def inspect_pr(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
         coverage_ready = (
-            trigger_reviews
+            merge_state not in {"DIRTY", "CONFLICTING"}
+            and trigger_reviews
             and review_dispatch_allowed
             and current_head_coverage_change_request(pr)
             and coverage_evidence_state(pr) == "complete"
@@ -2584,16 +2597,27 @@ def inspect_pr(
                 "review_dispatch",
                 "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched",
             )
+        conflict_suffix = (
+            f"; {merge_conflict_guidance(pr, merge_state)}"
+            if merge_state in {"DIRTY", "CONFLICTING"}
+            else ""
+        )
         if pr.get("autoMergeRequest"):
             return finish(
                 disable_auto_merge_decision(
                     repo,
                     pr,
                     dry_run=dry_run,
-                    reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                    reason=(
+                        "current-head OpenCode review requested changes; address the review "
+                        f"before re-enabling auto-merge{conflict_suffix}"
+                    ),
                 )
             )
-        return decide("block", "current-head OpenCode review requested changes")
+        return decide(
+            "block",
+            f"current-head OpenCode review requested changes{conflict_suffix}",
+        )
 
     current_head_approved = has_current_head_approval(pr)
     if current_head_approved:
