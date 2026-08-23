@@ -1,4 +1,4 @@
-"""Regression contract for backend-outage neutral-skip after an exempted finding.
+"""Regression contract for typed backend failure after an exempted finding.
 
 The Strix required check's console log can legitimately contain an
 already-exempted vulnerability (out-of-scope unchanged-file evidence, or one
@@ -11,9 +11,9 @@ retirement brownout, HTTP 410 code `github_models_retirement_brownout`).
 Before this fix, the workflow's outer neutral-skip decision grepped the whole
 combined log for `reported_vulnerability_signal`, so the earlier -- already
 exempted -- finding's own "Vulnerabilities N" / "severity:" text permanently
-disqualified the neutral skip, turning a pure CI-infrastructure outage into a
-required-check failure that blocks merges. The fix scopes that decision to
-the log tail after the last "allowing pipeline continuation" marker. This
+disqualified precise provider-failure classification. The fix scopes that
+decision to the log tail after the last "allowing pipeline continuation"
+marker while preserving a non-passing result for the incomplete scan. This
 test extracts the actual bash block from the workflow (not a reimplementation)
 and executes it against synthetic logs shaped like the real PR #392 run.
 """
@@ -66,18 +66,22 @@ def _extract_neutralization_block(workflow: str) -> str:
     start_marker = (
         "          # Recognized signals that the LLM backend was unavailable"
     )
+    terminal_failure_marker = (
+        '          echo "Strix reported security findings or failed for a '
+        'non-backend reason; failing the required check'
+    )
     end_marker = '          exit "$strix_rc"\n'
     start = workflow.index(start_marker)
-    end = workflow.index(end_marker, start) + len(end_marker)
+    terminal_failure = workflow.index(terminal_failure_marker, start)
+    end = workflow.index(end_marker, terminal_failure) + len(end_marker)
     return workflow[start:end]
 
 
 def _run_gate_tail(log_text: str) -> int:
     """Execute the extracted block against a synthetic log; return its exit code.
 
-    0 means the run neutral-skips (CI-infrastructure outage, not a finding).
-    Any other code means the block falls through to the hard failure branch,
-    matching the real workflow's `exit "$strix_rc"`.
+    A non-zero code is required because provider failure produced no
+    authoritative complete vulnerability result.
     """
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
@@ -118,14 +122,14 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("strix_neutralization_scope_log", workflow)
         self.assertIn("allowing pipeline continuation", workflow)
-        self.assertIn("github_models_retirement_brownout", workflow)
-        self.assertIn("Error code:[[:space:]]*410", workflow)
+        self.assertIn("::error title=STRIX_PROVIDER_UNAVAILABLE::", workflow)
+        self.assertNotIn("Treating as a neutral skip", workflow)
 
-    def test_neutralizes_brownout_after_an_already_exempted_finding(self) -> None:
-        """The PR #392 shape: exempted finding, then an unrelated 410 brownout."""
+    def test_brownout_after_an_already_exempted_finding_is_non_passing(self) -> None:
+        """The PR #392 shape remains typed and non-passing after an exemption."""
 
         log = EXEMPTED_FINDING_AND_CONTINUATION + GITHUB_MODELS_BROWNOUT
-        self.assertEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
     def test_still_fails_closed_on_a_finding_reported_after_continuation(self) -> None:
         """A real finding surfacing *after* the continuation marker still blocks."""
@@ -134,20 +138,20 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
             EXEMPTED_FINDING_AND_CONTINUATION
             + "Vulnerability Report\nSeverity: CRITICAL\nVulnerabilities 1\n"
         )
-        self.assertNotEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
     def test_still_fails_closed_with_no_continuation_marker_at_all(self) -> None:
         """Preserve prior behavior: a bare unresolved finding still blocks."""
 
         log = "Vulnerability Report\nSeverity: CRITICAL\nVulnerabilities 1\n"
-        self.assertNotEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
-    def test_still_neutralizes_a_bare_backend_outage_with_no_finding_at_all(
+    def test_bare_backend_outage_with_no_finding_is_non_passing(
         self,
     ) -> None:
-        """Preserve prior behavior: a pure outage with no finding still skips."""
+        """A pure outage still lacks authoritative scan evidence."""
 
-        self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 0)
+        self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 1)
 
 
 if __name__ == "__main__":
