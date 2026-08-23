@@ -621,6 +621,12 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertIn("osv_direct_source_reconcile.py", workflow)
         self.assertIn("osv-provenance-audit.json", workflow)
+        self.assertIn('if [ ! -f "$reconciler" ]; then', workflow)
+        self.assertIn(
+            "trusted provenance policy is not yet present; retaining raw OSV evidence",
+            workflow,
+        )
+        self.assertNotIn('test -f "$reconciler"', workflow)
         self.assertEqual(workflow.count("--source-path source/pnpm-lock.yaml"), 2)
         self.assertIn("--lockfile source/pnpm-lock.yaml", workflow)
 

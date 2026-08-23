@@ -356,30 +356,34 @@ jobs:
           set -euo pipefail
           reconciler=".cwl-trusted-security-policy/scripts/ci/osv_direct_source_reconcile.py"
           audit="osv-provenance-audit.json"
-          test -f "$reconciler"
-          test ! -L "$reconciler"
-
-          base_lock="$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
-          if [ -f "$base_lock" ]; then
-            python3 "$reconciler" \
-              --results old-results.json \
-              --lockfile "$base_lock" \
-              --source-path source/pnpm-lock.yaml \
-              --audit "$audit" \
-              --label base
-          fi
-
-          if [ -L source/pnpm-lock.yaml ]; then
-            echo "::error::Head pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+          if [ -L "$reconciler" ]; then
+            echo "::error::Trusted OSV provenance policy is a symlink; refusing an untrusted policy boundary."
             exit 1
-          fi
-          if [ -f source/pnpm-lock.yaml ]; then
-            python3 "$reconciler" \
-              --results new-results.json \
-              --lockfile source/pnpm-lock.yaml \
-              --source-path source/pnpm-lock.yaml \
-              --audit "$audit" \
-              --label head
+          elif [ ! -f "$reconciler" ]; then
+            echo "::notice::trusted provenance policy is not yet present; retaining raw OSV evidence without reconciliation."
+          else
+            base_lock="$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+            if [ -f "$base_lock" ]; then
+              python3 "$reconciler" \
+                --results old-results.json \
+                --lockfile "$base_lock" \
+                --source-path source/pnpm-lock.yaml \
+                --audit "$audit" \
+                --label base
+            fi
+
+            if [ -L source/pnpm-lock.yaml ]; then
+              echo "::error::Head pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+              exit 1
+            fi
+            if [ -f source/pnpm-lock.yaml ]; then
+              python3 "$reconciler" \
+                --results new-results.json \
+                --lockfile source/pnpm-lock.yaml \
+                --source-path source/pnpm-lock.yaml \
+                --audit "$audit" \
+                --label head
+            fi
           fi
       - name: Require OSV scan output
         run: |
