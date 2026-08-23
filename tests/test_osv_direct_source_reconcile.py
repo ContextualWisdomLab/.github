@@ -610,6 +610,11 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertLess(reconcile_step, require_output)
         self.assertLess(require_output, reporter)
         self.assertIn("github.workflow_sha", workflow)
+        self.assertIn(
+            "github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github'",
+            workflow,
+        )
+        self.assertIn("github.event.pull_request.base.sha || github.workflow_sha", workflow)
         self.assertNotIn(
             "github.repository == 'ContextualWisdomLab/.github' && github.event.pull_request.head.sha",
             workflow,

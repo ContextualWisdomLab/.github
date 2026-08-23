@@ -348,7 +348,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github' && github.event.pull_request.base.sha || github.workflow_sha }}
           path: .cwl-trusted-security-policy
           persist-credentials: false
       - name: Reconcile immutable direct-source provenance
