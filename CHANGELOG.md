@@ -70,6 +70,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Made pull-request scheduler mutation and dispatch failures fail the targeted workflow and organization sweep after the complete structured decision summary is emitted, while ordinary policy waits remain successful.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

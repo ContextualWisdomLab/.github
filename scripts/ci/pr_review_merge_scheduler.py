@@ -2883,6 +2883,17 @@ def print_summary(
     )
 
 
+def scheduler_exit_code(decisions: list[Decision]) -> int:
+    """Return failure after a complete scan when a requested action failed.
+
+    Ordinary policy outcomes remain successful scheduler executions. A caught
+    ``action_error`` is different: the scheduler attempted a mutation or
+    dispatch and could not complete it. The caller receives that failure only
+    after :func:`print_summary` preserves every per-PR decision.
+    """
+    return 1 if any(decision.action == "action_error" for decision in decisions) else 0
+
+
 def markdown_cell(value: object) -> str:
     """Escape a value for a compact GitHub Actions summary table cell."""
     return str(value).replace("|", "\\|").replace("\n", "<br>")
@@ -3960,7 +3971,7 @@ def main(argv: list[str]) -> int:
         base_branch=args.base_branch,
         project_flow=args.project_flow,
     )
-    return 0
+    return scheduler_exit_code(decisions)
 
 
 if __name__ == "__main__":  # pragma: no cover
