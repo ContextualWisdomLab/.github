@@ -66,9 +66,14 @@ def _extract_neutralization_block(workflow: str) -> str:
     start_marker = (
         "          # Recognized signals that the LLM backend was unavailable"
     )
+    terminal_failure_marker = (
+        '          echo "Strix reported security findings or failed for a '
+        'non-backend reason; failing the required check'
+    )
     end_marker = '          exit "$strix_rc"\n'
     start = workflow.index(start_marker)
-    end = workflow.index(end_marker, start) + len(end_marker)
+    terminal_failure = workflow.index(terminal_failure_marker, start)
+    end = workflow.index(end_marker, terminal_failure) + len(end_marker)
     return workflow[start:end]
 
 
@@ -124,7 +129,7 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
         """The PR #392 shape remains typed and non-passing after an exemption."""
 
         log = EXEMPTED_FINDING_AND_CONTINUATION + GITHUB_MODELS_BROWNOUT
-        self.assertNotEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
     def test_still_fails_closed_on_a_finding_reported_after_continuation(self) -> None:
         """A real finding surfacing *after* the continuation marker still blocks."""
@@ -133,20 +138,20 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
             EXEMPTED_FINDING_AND_CONTINUATION
             + "Vulnerability Report\nSeverity: CRITICAL\nVulnerabilities 1\n"
         )
-        self.assertNotEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
     def test_still_fails_closed_with_no_continuation_marker_at_all(self) -> None:
         """Preserve prior behavior: a bare unresolved finding still blocks."""
 
         log = "Vulnerability Report\nSeverity: CRITICAL\nVulnerabilities 1\n"
-        self.assertNotEqual(_run_gate_tail(log), 0)
+        self.assertEqual(_run_gate_tail(log), 1)
 
     def test_bare_backend_outage_with_no_finding_is_non_passing(
         self,
     ) -> None:
         """A pure outage still lacks authoritative scan evidence."""
 
-        self.assertNotEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 0)
+        self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 1)
 
 
 if __name__ == "__main__":
