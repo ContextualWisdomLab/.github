@@ -169,9 +169,11 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ produced "
-    r"non-lifecycle final output in non-interactive mode; forcing tool "
-    r"continuation \(\d+/\d+\): "
+    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"(?:"
+    r"produced non-lifecycle final output in non-interactive mode"
+    r"|ended a turn without a lifecycle tool call \(interactive=False\)"
+    r"); forcing tool continuation \(\d+/\d+\): "
 )
 
 
@@ -1213,6 +1215,8 @@ pull_request_scope_context_files() {
 	if [ "$needs_backend_python" -eq 1 ]; then
 		cat <<'EOF'
 backend/requirements.txt
+backend/app/__init__.py
+backend/app/auth.py
 backend/api/__init__.py
 backend/api/accounts.py
 backend/api/auth.py
@@ -2662,11 +2666,12 @@ is_nvidia_nim_not_found_error() {
 
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
-## Four error families qualify:
+## Five error families qualify:
 ##   - RateLimit / RESOURCE_EXHAUSTED / HTTP 429
 ##   - litellm API connection failures with LLM-provider evidence
 ##   - litellm service-unavailable / high-demand provider failures
 ##   - MidStreamFallbackError (litellm mid-stream provider switch)
+##   - Caido bootstrap timing failures (guest login before the local proxy is up)
 ## Timeouts are infrastructure failures. In strict CI mode they fail closed;
 ## otherwise the caller may still move to fallback model evaluation.
 is_transient_same_model_retry_error() {
@@ -2684,6 +2689,9 @@ is_transient_same_model_retry_error() {
 		return 0
 	fi
 	if is_midstream_fallback_error; then
+		return 0
+	fi
+	if is_caido_bootstrap_timing_error; then
 		return 0
 	fi
 	return 1
@@ -2747,6 +2755,8 @@ run_strix_with_transient_retry() {
 			retry_reason="LLM service unavailable"
 		elif is_midstream_fallback_error; then
 			retry_reason="midstream fallback"
+		elif is_caido_bootstrap_timing_error; then
+			retry_reason="Caido sandbox bootstrap timing"
 		fi
 		echo "Retrying model '$model' due to $retry_reason (attempt $((attempt + 1))/$max_attempts)." >&2
 		sleep "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
@@ -2924,6 +2934,23 @@ is_midstream_fallback_error() {
 	return 1
 }
 
+## Detects the upstream strix-agent Caido sandbox bootstrap timing race
+## (usestrix/strix#1036, #1037, #1056): the sandbox container runs a
+## chown -R before starting caido-cli, and a slow CI runner can exceed
+## Strix's fixed 10-attempt loginAsGuest budget before the proxy is
+## reachable, even though the penetration test itself never started. This
+## is local sandbox/container timing, not model-specific, so it is
+## same-model-retry-eligible only; switching LLM models would not change
+## how long the sandbox takes to boot.
+is_caido_bootstrap_timing_error() {
+	if grep -Fq 'loginAsGuest failed after' "$STRIX_LOG" &&
+		grep -Eq 'Failed to connect to 127\.0\.0\.1 port [0-9]+' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 # Narrower variant: LLM providers only, excluding HTTP transport libraries
 # (httpx, httpcore, requests). Used for generic transport failures where
 # library names alone are insufficient to prove the timeout/connection error
@@ -2973,6 +3000,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_caido_bootstrap_timing_error; then
 		return 0
 	fi
 
