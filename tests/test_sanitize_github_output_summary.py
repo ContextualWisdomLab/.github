@@ -14,6 +14,8 @@ DATABASE_URL: postgresql://naruon:secret@db:5432/ai_email
 AUTH_SESSION_HMAC_SECRET: super-secret
 ENCRYPTION_KEY=abc123
 Authorization: Bearer token-value
+github_pat_11ABCD2222333344445555
+ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890
 regular evidence line stays intact
 """
 
@@ -27,6 +29,9 @@ regular evidence line stays intact
     assert "secret@db" not in sanitized
     assert "super-secret" not in sanitized
     assert "token-value" not in sanitized
+    assert "github_pat_11ABCD2222333344445555" not in sanitized
+    assert "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890" not in sanitized
+    assert "<redacted>" in sanitized
     assert "regular evidence line stays intact" in sanitized
 
 
@@ -50,8 +55,13 @@ def test_cli_writes_sanitized_summary(tmp_path, monkeypatch):
         ],
     )
 
-    with pytest.raises(SystemExit) as excinfo:
-        runpy.run_path("scripts/ci/sanitize_github_output_summary.py", run_name="__main__")
-
-    assert excinfo.value.code == 0
+    from scripts.ci.sanitize_github_output_summary import main
+    assert main() == 0
     assert destination.read_text(encoding="utf-8") == "DATABASE_URL=<redacted>\n- Result: PASS\n"
+
+
+def test_sanitize_text_without_trailing_newline():
+    from scripts.ci.sanitize_github_output_summary import sanitize_text
+    source = "DATABASE_URL=postgresql://user:secret@db/app\n- Result: PASS"
+    sanitized = sanitize_text(source)
+    assert sanitized == "DATABASE_URL=<redacted>\n- Result: PASS"

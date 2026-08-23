@@ -17,6 +17,7 @@ SECRET_KEY_RE = re.compile(
 )
 URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@")
 AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+")
+GITHUB_TOKEN_RE = re.compile(r"(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
 
 
 def sanitize_line(line: str) -> str:
@@ -26,7 +27,8 @@ def sanitize_line(line: str) -> str:
     if match:
         return f"{line[: match.end()]}<redacted>"
     line = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
-    return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", line)
+    line = AUTH_HEADER_RE.sub(r"\1\2 <redacted>", line)
+    return GITHUB_TOKEN_RE.sub("<redacted>", line)
 
 
 def sanitize_text(text: str) -> str:
@@ -52,5 +54,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
