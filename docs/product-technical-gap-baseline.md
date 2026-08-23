@@ -1,9 +1,9 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-24 01:57 KST**
+작성 기준일: **2026-08-24 02:57 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`
-현재 열린 PR 수: **99** (아래 표에 이 스냅샷의 전체 목록 포함)
+현재 열린 PR 수: **97** (아래 표에 이 스냅샷의 전체 목록 포함)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -74,10 +74,10 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR은 99개다. metadata상 CLEAN은 1개(#1252) / DIRTY 64 / BLOCKED 28 / BEHIND 6 / UNSTABLE 0 / draft 14이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
+| G-01 | 열린 PR은 97개다. metadata상 CLEAN은 0개 / DIRTY 60 / BLOCKED 31 / BEHIND 6 / UNSTABLE 0 / draft 14이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
 | G-02 | 리뷰 credential / same-repo status / agent dispatch 중 #1162/#1227/#1215는 main 위로 올라와 BLOCKED다. 어느 쪽도 current-head OpenCode APPROVE가 없다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
-| G-03 | main-line G-03 successor는 #1263(`1fd718f3177d3e8ffe908aed38b50dc94e926f8d`)이다. Required `strix`는 `pull_request_target`로 보호 main `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`의 `strix_quick_gate.sh`를 실행하므로 이 PR은 MODEL QUALITY WARNING + hyphenated `openai-direct/` LiteLLM `LLM Provider NOT provided`를 자기 고친 게이트로 self-verify할 수 없다. 닫힌 #1213/#1262를 되살리지 않는다. #1153 incomplete-scan fail-closed는 main에 있다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
-| G-04 | 99개 live PR 중 대부분이 BEHIND/DIRTY/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
+| G-03 | main-line G-03 successor는 #1263(`71afa06c116159f757092677fa605405097a9e05`)이다. Required `strix`는 `pull_request_target`로 보호 main `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`의 `strix_quick_gate.sh`를 실행하므로 이 PR은 MODEL QUALITY WARNING + hyphenated `openai-direct/` LiteLLM `LLM Provider NOT provided`를 자기 고친 게이트로 self-verify할 수 없다. 닫힌 #1213/#1262를 되살리지 않는다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
+| G-04 | 97개 live PR 중 대부분이 BEHIND/DIRTY/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
 | G-06 | ContextualWisdomLab/naruon#974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다. Phase 0 Issue ContextualWisdomLab/naruon#975는 Done(closed completed 2026-07-13)이다. 다음 순서 단계는 ContextualWisdomLab/naruon#976 (P1 Plugin SDK)이며 한 번에 한 phase만 진행한다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
 | G-07 | multi-level/multi-membership/temporal 관계 원칙은 master context에 있으나 모든 소비 저장소의 schema/API가 동일한 reified relationship contract를 보장하는지는 미확인이다 | 개인 단위로 집계하거나 전역 권한을 적용하는 atomistic/ecological fallacy 위험이 남는다 | relationship, membership, norm_group, validity window, evidence, confidence, disclosure를 정규화하고 cross-context golden tests를 만든다 |
@@ -91,20 +91,22 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 GitHub PR list가 2026-08-24 01:57 KST에 반환한 99개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
+아래는 GitHub PR list가 2026-08-24 02:57 KST에 반환한 97개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
 
-스냅샷 요약: CLEAN [1252]; BLOCKED [1266, 1265, 1264, 1263, 1259, 1258, 1257, 1246, 1245, 1244, 1242, 1238, 1233, 1231, 1227, 1215, 1198, 1176, 1166, 1162, 1158, 1107, 1086, 1052, 941, 897, 790, 789]; UNSTABLE []; DIRTY 64; BEHIND 6; draft 14.
+스냅샷 요약: CLEAN []; BLOCKED [1269, 1267, 1266, 1265, 1264, 1263, 1259, 1258, 1257, 1252, 1246, 1245, 1244, 1242, 1238, 1233, 1231, 1227, 1215, 1198, 1176, 1166, 1162, 1158, 1107, 1052, 941, 897, 821, 790, 789]; UNSTABLE []; DIRTY 60; BEHIND 6; draft 14.
 
 | PR | title | head SHA | base | metadata | mode |
 |---|---|---|---|---|---|
-| #1266 | fix(scheduler): retry OpenCode after coverage blockers clear | `9f2ab9ae2f97be49fc4ab4dbcd13123057005b97` | main | BLOCKED | ready |
+| #1269 | ⚡ Bolt: Combine provider token regexes for log redaction optimization | `fbca7adac3e899a7c5e496f677df35f368a86e07` | main | BLOCKED | ready |
+| #1267 | feat(automation): repair Inkspan reviews hourly | `34efa03ecec7d815d8e6a4f7354767208fb1ce4a` | main | BLOCKED | ready |
+| #1266 | fix(scheduler): retry OpenCode after coverage blockers clear | `855b1837cc0f277043f6e34509b09245a44a28b3` | main | BLOCKED | ready |
 | #1265 | test: provision pip in fresh uv environments | `73b674b31f80473d49c067ec339a9c561bbbb844` | main | BLOCKED | ready |
 | #1264 | perf(redaction): skip invalid key rescans without masking diagnostics | `cbc5852b25634cb333a32da1a89de9825cb24802` | main | BLOCKED | ready |
-| #1263 | fix(strix): make Azure and cross-provider fallbacks executable | `de3abcd1206e97ce758742775823e0e94f317d82` | main | BLOCKED | ready |
+| #1263 | fix(strix): make Azure and cross-provider fallbacks executable | `71afa06c116159f757092677fa605405097a9e05` | main | BLOCKED | ready |
 | #1259 | feat(automation): add a thin LineageWeave hourly review-repair caller | `6041f2aa9e23af5850cd83fa838a3eb6c45d84b9` | main | BLOCKED | ready |
-| #1258 | fix(coverage): run pnpm 9 evidence without --trust-lockfile | `9b5dba9f558d20dbb651b409ea9fa54a865e3405` | main | BLOCKED | ready |
+| #1258 | fix(coverage): run pnpm 9 evidence without --trust-lockfile | `897819c48279b0c0d5e2372eb39dce6120784685` | main | BLOCKED | ready |
 | #1257 | fix(osv): keep base scan results across fork checkout | `20d72bc838d7f91b74ce01bb4de16d07144fa270` | main | BLOCKED | ready |
-| #1252 | docs: refresh live product and technical gap baseline | `81b7fa453cdfa27493380565f64817c71a6ba58f` | main | CLEAN | ready |
+| #1252 | docs: refresh live product and technical gap baseline | `de2d5c3605df1c05eed3efd91a2512517bc1f7fe` | main | BLOCKED | ready |
 | #1246 | fix(opencode-review): accept int-typed run_id/run_attempt in control JSON | `f88499b708a90edb6a538aeb2c397e14304681ad` | main | BLOCKED | ready |
 | #1245 | fix(scheduler): retry and gracefully defer shared installation rate limits | `92624300414b19dbed0f96a0295b1ac516181b4b` | main | BLOCKED | ready |
 | #1244 | fix(e2e): restrict readiness polling to loopback destinations | `a0c82c87dfc01b49698fd84db378a71942714b57` | main | BLOCKED | ready |
@@ -120,7 +122,7 @@ flowchart LR
 | #1176 | fix(governance): preserve proposal branch create transition | `49f6988795262194e4eda8b3ea7319b7b39c4e77` | main | BLOCKED | ready |
 | #1172 | fix(autofix): resolve live NVIDIA NIM models instead of a retired pin | `edab578feca63c223368aef17c175bb52ce22e5a` | main | DIRTY | ready |
 | #1170 | feat: route OpenCode reviews through contextual gateway | `cbf937bc7216bf34883032a040aa3850136b9e81` | main | DIRTY | ready |
-| #1166 | fix(ci): recognize replacement tests in existing files | `2cdfbe3ba56ed8a63287e3a757fd858d9f8a72f4` | main | BLOCKED | ready |
+| #1166 | fix(ci): recognize replacement tests in existing files | `7986334aacb2bc8e5d794d581202f47c91e4875e` | main | BLOCKED | ready |
 | #1162 | fix: use review credentials for agent dispatch | `4a7031d7adbba759742605deb1c78d10aef16e7d` | main | BLOCKED | ready |
 | #1161 | fix: make hourly coordinator credential absence auditable | `49bc5e4a59cd30550f87070b48b61e966ac480e1` | main | DIRTY | ready |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `e61fb11fbd5c7464d34cc8bedc3a7177fbdcade2` | main | BLOCKED | ready |
@@ -144,7 +146,6 @@ flowchart LR
 | #1092 | feat(automation): run psychometrics-commons hourly NVIDIA NIM review repair | `6c330dbfbede45acb41972f1d384ef586b83c2b8` | main | DIRTY | ready |
 | #1088 | feat(automation): run mightyETL hourly NVIDIA NIM review repair | `d955cb949329f3bc3726c440542f549fe2978209` | main | DIRTY | ready |
 | #1087 | feat(automation): run life-os hourly NVIDIA NIM review repair | `37377d0a19dfae9739ae2e0a845b8270303b38be` | main | DIRTY | ready |
-| #1086 | feat(automation): repair the LineageWeave buyer-surface stack hourly | `aeb096a52c5f4c2647f05f54f0aa6b17200a350f` | main | BLOCKED | ready |
 | #1085 | feat(automation): run kaefa hourly NVIDIA NIM review repair | `3e6c94603a6332b066e0be962aab23991987e094` | main | DIRTY | ready |
 | #1083 | feat(automation): run pg-llm-batch hourly NVIDIA NIM review repair | `584141341346b7882fded053b459a7d4c16477a2` | main | DIRTY | ready |
 | #1082 | feat(automation): run semantic-data-portal hourly NVIDIA NIM review repair | `dbfdbbf3547b4c84bb5c2a1760ecfda080751546` | main | DIRTY | ready |
@@ -189,20 +190,18 @@ flowchart LR
 | #899 | fix(scheduler): fail after summarized action errors | `56ffdd1cc1bc235a39b0373a58430fb8c7b00afb` | main | DIRTY | ready |
 | #897 | fix(security): fail closed on unavailable dependency review | `d9b395cd01999a6ec946d3c7a013f22225143782` | main | BLOCKED | ready |
 | #834 | fix(noema): replay OIDC envelope repair on current main | `7b64d26c157df3b0da13d8ed0e1cd8365ae47d1e` | main | DIRTY | ready |
-| #831 | feat(opencode): add head-matched gold corpus tooling | `fec33cf22a3085e3261eb51a399ccbf7db722e4f` | main | DIRTY | ready |
 | #828 | fix(scheduler): require independent exact-head approval | `cbc5f91349fbf0083270caded8512f2022ca9abf` | main | BEHIND | ready |
-| #821 | fix(ci): replace conflicted fatal OpenCode process-group prerequisite | `180bc31ae92595d46c8cbc0c4f629739f1e0354a` | main | DIRTY | ready |
-| #807 | fix(coverage): validate nested npm metadata through canonical pins | `46cc52f7e05b559ce3442542b28fc133d9b2e2e4` | main | DIRTY | ready |
-| #796 | feat(automation): run Inkspan hourly NVIDIA NIM review repair | `0254a9a2c32aa1f321b6dcfd071c53029dfe5fe0` | main | DIRTY | ready |
+| #821 | fix(opencode): reap fatal provider process groups | `7c6070135c3a5797ab99ceb20d82462cbb28b73b` | main | BLOCKED | ready |
 | #790 | fix(coverage): retry transient trusted uv downloads | `05e284a17e7e692ad5e58dc39045ef42de84d9af` | main | BLOCKED | ready |
 | #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `861478bb11ba89f71b97dbbdd874b3d872372125` | main | BLOCKED | ready |
 
 ### 4.1 Same-session open/close delta
 
-- ContextualWisdomLab/.github#1252 is GitHub `CLEAN` on `81b7fa453cdfa27493380565f64817c71a6ba58f` with hosted Checks green and threads resolved, but latestOpinionatedReviews is empty (no current-head OpenCode APPROVE). CLEAN is not merge authorization.
-- ContextualWisdomLab/.github#1263 required Strix on this head still fail-closes on 0-vuln `MODEL QUALITY WARNING` then `openai-direct/gpt-5.6-luna` `LLM Provider NOT provided`, because `pull_request_target` uses protected main's gate. Manual `repository_dispatch` Strix also ran against `main@885f2cd2` and is not merge evidence.
-- ContextualWisdomLab/.github#1265 (`73b674b31f80473d49c067ec339a9c561bbbb844`) and #1266 (`9f2ab9ae2f97be49fc4ab4dbcd13123057005b97`) opened. #1264 head advanced to `cbc5852b25634cb333a32da1a89de9825cb24802`. #1237 and #1218 closed unmerged.
-- Open count moved 103 → 99. No `.github` PR merged this pass. Main remains `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`.
+- ContextualWisdomLab/.github#1252 head advanced concurrently to `de2d5c3605df1c05eed3efd91a2512517bc1f7fe` then to the commit that lands this 97-row refresh. Hosted Checks were green on `de2d5c36` except cancelled `scan-pr-queue`; latestOpinionatedReviews remain empty. CLEAN/BLOCKED is not merge authorization.
+- ContextualWisdomLab/.github#1263 head advanced to `71afa06c116159f757092677fa605405097a9e05` (trusted-lock install + retrigger). Required Strix still uses protected main.
+- ContextualWisdomLab/.github#1265 remains `73b674b31f80473d49c067ec339a9c561bbbb844` with Strix PASS and no current-head OpenCode APPROVE.
+- ContextualWisdomLab/.github#1267 (Inkspan hourly caller) and #1269 (Bolt redaction regex) opened. #1268 closed unmerged. #1266 head `855b1837cc0f277043f6e34509b09245a44a28b3`.
+- Open count moved 99 → 97. No `.github` PR merged this pass. Main remains `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`.
 
 
 ## 5. 실행 루프와 고객의 다음 행동
@@ -223,10 +222,10 @@ flowchart LR
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1263 — G-03. Required Strix는 보호 main 게이트라 self-green이 아니다. OpenCode가 이 한계를 인정한 current-head 승인과, Strix 외 required Checks green일 때만 병합을 재평가한다. 닫힌 #1213/#1262를 되살리지 않는다.
-2. ContextualWisdomLab/.github#1252 — GitHub CLEAN이지만 current-head OpenCode APPROVE가 없다. 승인 후 `--match-head-commit` 병합.
-3. ContextualWisdomLab/.github#1265 — pip pin in fresh uv env. Strix already PASS. current-head OpenCode 승인 후 병합.
-4. ContextualWisdomLab/.github#1162/#1227/#1257 — Strix 0-vuln MODEL QUALITY CR은 G-03이지 해당 PR 코드 결함이 아니다. #1263 병합 전에 코드로 고치지 않는다.
+1. ContextualWisdomLab/.github#1265 — Strix PASS, mechanical Checks green aside from cancelled `scan-pr-queue`. Independent current-head OpenCode APPROVE 후 `--match-head-commit`.
+2. ContextualWisdomLab/.github#1252 — 이 베이스라인. current-head OpenCode APPROVE 없이 병합하지 않는다.
+3. ContextualWisdomLab/.github#1263 — G-03. Required Strix는 보호 main 게이트라 self-green이 아니다. 닫힌 #1213/#1262를 되살리지 않는다.
+4. ContextualWisdomLab/.github#1259/#1227/#1257 OpenCode CR은 Strix G-03이지 해당 PR 코드 결함이 아니다.
 5. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#976부터 한 phase씩 구현한다.
 
 
