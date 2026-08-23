@@ -213,29 +213,6 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
 
-    def test_direct_openai_fallback_alias_uses_litellm_provider_prefix(self) -> None:
-        """Translate the workflow alias before invoking LiteLLM through Strix."""
-
-        gate_source = STRIX_GATE.read_text(encoding="utf-8")
-        function_source = _function_block(gate_source, "child_model_for_api_base")
-        script = "\n".join(
-            (
-                "set -euo pipefail",
-                "is_github_models_api_base() { return 1; }",
-                function_source,
-                'child_model_for_api_base "$1" ""',
-            )
-        )
-        completed = subprocess.run(
-            ["bash", "-c", script, "strix-model", "openai-direct/gpt-5.6-luna"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "openai/gpt-5.6-luna")
-
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
 

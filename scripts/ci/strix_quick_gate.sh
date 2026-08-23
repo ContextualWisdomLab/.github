@@ -2452,10 +2452,6 @@ child_model_for_api_base() {
 		printf 'openai/%s\n' "${model#openai_direct/}"
 		return 0
 		;;
-	openai-direct/*)
-		printf 'openai/%s\n' "${model#openai-direct/}"
-		return 0
-		;;
 	esac
 
 	printf '%s\n' "$model"

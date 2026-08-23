@@ -70,10 +70,6 @@ Semantic Versioning where the repository publishes a release.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
-- Translate the workflow-only `openai-direct/...` Strix fallback alias to
-  LiteLLM's documented `openai/...` provider prefix before invocation, so a
-  recoverable NVIDIA capacity failure can reach the configured cross-provider
-  fallback without being misclassified as a successful scan.
 - Install actionlint 1.7.12 and shfmt 3.13.1 from their official release
   artifacts with exact SHA-256 verification, then invoke both through fixed
   executable names supplied by the trusted step-local `PATH`; this removes the
