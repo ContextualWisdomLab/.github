@@ -41,6 +41,11 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_LLM_RESPONSE_BYTES = 1024 * 1024
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+TRUSTED_LOOPBACK_ADDRESSES = frozenset(
+    {ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")}
+)
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -423,6 +428,75 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def resolve_endpoint_addresses(
+    hostname: str,
+    port: int,
+) -> frozenset[IpAddress]:
+    """Resolve every stream address for an endpoint or fail closed."""
+    try:
+        addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Noema endpoint DNS resolution failed") from exc
+    if not addrinfo:
+        raise ValueError("Noema endpoint DNS resolution returned no addresses")
+
+    addresses: set[IpAddress] = set()
+    for result in addrinfo:
+        try:
+            raw_address = result[4][0]
+            address = ipaddress.ip_address(raw_address)
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("Noema endpoint DNS resolution returned a malformed address") from exc
+        addresses.add(address)
+    return frozenset(addresses)
+
+
+def validate_endpoint(
+    api_url: str,
+) -> tuple[str, int, frozenset[IpAddress]]:
+    """Validate transport and pre-request DNS evidence for a model endpoint."""
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https:// to prevent SSRF vulnerabilities"
+        )
+    parsed = urllib.parse.urlparse(api_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https://"
+        )
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Noema endpoint URL cannot contain user information")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise ValueError("URL cannot target localhost")
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+    try:
+        literal_address = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_address = None
+    trusted_loopback = literal_address in TRUSTED_LOOPBACK_ADDRESSES
+    if not trusted_loopback and scheme != "https":
+        raise ValueError("Noema non-loopback endpoints must use HTTPS")
+
+    addresses = resolve_endpoint_addresses(hostname, port)
+    if trusted_loopback:
+        if any(not address.is_loopback for address in addresses):
+            raise ValueError("Noema loopback endpoint DNS resolution left loopback")
+    elif any(
+        not address.is_global or address.is_multicast for address in addresses
+    ):
+        raise ValueError(
+            "Noema non-loopback endpoint DNS must contain only globally routable unicast addresses"
+        )
+    return hostname, port, addresses
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response."""
     stripped = text.strip()
@@ -449,32 +523,7 @@ def call_llm(
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
-    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
-        raise ValueError(
-            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
-            "with http:// or https:// to prevent SSRF vulnerabilities"
-        )
-    parsed = urllib.parse.urlparse(api_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        raise ValueError("URL must have a valid hostname")
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
-        raise ValueError("URL cannot target localhost")
-    try:
-        addrinfo = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        pass
-    else:
-        for result in addrinfo:
-            ip_str = result[4][0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                raise ValueError("URL cannot target internal IP addresses")
+    hostname, port, addresses = validate_endpoint(api_url)
 
     prompt = {
         "role": "user",
@@ -516,7 +565,12 @@ def call_llm(
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
     with opener.open(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+        raw_bytes = response.read(MAX_LLM_RESPONSE_BYTES + 1)
+    if len(raw_bytes) > MAX_LLM_RESPONSE_BYTES:
+        raise RuntimeError("Noema LLM response exceeded the byte limit")
+    if resolve_endpoint_addresses(hostname, port) != addresses:
+        raise ValueError("Noema endpoint DNS addresses changed during the request")
+    raw = raw_bytes.decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)

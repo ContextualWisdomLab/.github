@@ -70,6 +70,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Fail closed before sending Noema's bearer credential to a configured model
+  endpoint unless a non-loopback target uses HTTPS with stable, globally
+  routable unicast DNS evidence; preserve only the literal same-job loopback
+  sidecar exception, keep redirects disabled, and bound response bodies to
+  1 MiB before JSON decoding.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

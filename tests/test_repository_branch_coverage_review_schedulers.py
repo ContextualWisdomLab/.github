@@ -27,7 +27,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
     monkeypatch.setattr(
         noema.socket,
         "getaddrinfo",
-        lambda *_args: [(2, 1, 6, "", ("8.8.8.8", 0))],
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("8.8.8.8", 0))],
     )
 
     class Response:
@@ -39,8 +39,8 @@ def test_noema_public_dns_result_reaches_valid_model_response(
         def __exit__(self, *_args: object) -> bool:
             return False
 
-        def read(self) -> bytes:
-            return json.dumps(
+        def read(self, size: int = -1) -> bytes:
+            payload = json.dumps(
                 {
                     "choices": [
                         {
@@ -57,6 +57,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
                     ]
                 }
             ).encode()
+            return payload if size < 0 else payload[:size]
 
     class Opener:
         """Open one deterministic provider response."""
