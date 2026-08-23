@@ -40,6 +40,17 @@ def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
 
 
+def test_strix_workflow_reruns_when_shared_runtime_or_doctoring_changes() -> None:
+    """Shared model routing and its decision record always rerun exact-head checks."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    for path in (
+        "docs/doctoring/strix-unsupported-sampling-fallback.md",
+        "scripts/ci/strix_model_utils.sh",
+    ):
+        assert f'      - "{path}"' in workflow
+
+
 def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
     """Central executable workflows load no branch-selected manual source."""
     workflow = WORKFLOW.read_text(encoding="utf-8")

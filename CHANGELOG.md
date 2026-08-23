@@ -46,7 +46,8 @@ Semantic Versioning where the repository publishes a release.
   evidence. Exact clean model-quality and Hugging Face advisories are filtered
   consistently from console and report logs, while any appended warning text
   remains fail closed. The incident and fail-closed boundary are recorded in
-  `docs/doctoring/strix-unsupported-sampling-fallback.md`.
+  `docs/doctoring/strix-unsupported-sampling-fallback.md`; changes to that
+  record or the shared model normalizer now rerun the exact-head path gate.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
