@@ -224,6 +224,7 @@ def test_linter_invokes_fixed_tool_names_without_dynamic_command_selection() -> 
     assert 'Open3.capture3("actionlint", *arguments)' in source
     assert 'Open3.capture3("shfmt", "-ln", "bash", "-tojson"' in source
     assert 'Open3.capture3("shfmt", "-ln", "posix", "-tojson"' in source
+    assert "findings = workflows.sum" not in source
     assert source.count(
         "# nosemgrep: ruby.lang.security.dangerous-exec.dangerous-exec"
     ) == 1

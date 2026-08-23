@@ -78,9 +78,10 @@ Semantic Versioning where the repository publishes a release.
   artifacts with exact SHA-256 verification, then invoke both through fixed
   executable names supplied by the trusted step-local `PATH`; this removes the
   undocumented runner-image assumption and unused environment-selected command
-  overrides while preserving fail-closed, no-shell linting. Narrowly suppress
-  Semgrep's remaining false positive on the literal actionlint call, whose
-  dynamic workflow paths remain separate argv values.
+  overrides while preserving fail-closed, no-shell linting. Treat shfmt as the
+  parser contract it is instead of accumulating an unreachable findings count.
+  Narrowly suppress Semgrep's remaining false positive on the literal
+  actionlint call, whose dynamic workflow paths remain separate argv values.
 
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and

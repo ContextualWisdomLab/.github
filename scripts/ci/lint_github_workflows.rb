@@ -164,12 +164,12 @@ def lint(paths)
   actionlint_status = run_actionlint(paths)
   return actionlint_status unless actionlint_status.zero?
 
-  findings = workflows.sum do |path, workflow|
-    shell_scripts(path, workflow).sum do |script_path, job_name, step_name, dialect, script|
+  workflows.each do |path, workflow|
+    shell_scripts(path, workflow).each do |script_path, job_name, step_name, dialect, script|
       run_shfmt(script_path, job_name, step_name, dialect, script)
     end
   end
-  findings.zero? ? 0 : 1
+  0
 rescue WorkflowLintError => error
   warn "ERROR: #{error.message}"
   2
