@@ -55,6 +55,17 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Recognize the hyphenated `openai-direct/` fallback alias (pinned verbatim by
+  protected main's own trusted `strix_required_workflow_smoke.sh`, so the
+  `STRIX_FALLBACK_MODELS` string itself cannot change) in
+  `child_model_for_api_base`, alongside the existing underscored
+  `openai_direct/` form. Previously the hyphenated alias passed through
+  unrecognized and unrewritten, so a NIM-exhaustion fallback to
+  `openai-direct/gpt-5.6-luna` reached LiteLLM as a literal, unrecognized
+  provider string (`litellm.BadRequestError: LLM Provider NOT provided`)
+  instead of the intended `openai/gpt-5.6-luna`, observed after NVIDIA NIM
+  rate-limited both the primary and first fallback model in three
+  consecutive Strix runs.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

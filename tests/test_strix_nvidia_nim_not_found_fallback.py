@@ -73,6 +73,34 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     return completed.returncode == 0
 
 
+def _child_model_for_api_base(model: str, llm_api_base_value: str) -> str:
+    """Execute the production model-alias normalizer against one input pair."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    function_source = "\n".join(
+        _function_block(gate_source, name)
+        for name in (
+            "is_github_models_api_base",
+            "is_github_models_model",
+            "child_model_for_api_base",
+        )
+    )
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            function_source,
+            'child_model_for_api_base "$1" "$2"',
+        )
+    )
+    completed = subprocess.run(
+        ["bash", "-c", script, "strix-normalizer", model, llm_api_base_value],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     """Extract one single-quoted POSIX ERE assigned in the Strix workflow."""
 
@@ -212,6 +240,29 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             maxsplit=1,
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
+
+    def test_gate_normalizes_hyphenated_openai_direct_fallback_alias(self) -> None:
+        """Route the NIM-exhaustion fallback alias to a real LiteLLM provider.
+
+        `STRIX_FALLBACK_MODELS`' NVIDIA NIM entry ends in the hyphenated
+        `openai-direct/gpt-5.6-luna` alias (the workflow's user-facing input
+        spelling, also pinned verbatim by protected main's own trusted
+        `strix_required_workflow_smoke.sh`, so this exact string cannot
+        change). The gate must still resolve it to LiteLLM's `openai/`
+        provider -- the same target the underscored `openai_direct/` alias
+        already reaches -- or NVIDIA NIM rate-limiting the primary and first
+        fallback model leaves the run one hop from
+        `litellm.BadRequestError: LLM Provider NOT provided`.
+        """
+
+        self.assertEqual(
+            _child_model_for_api_base("openai-direct/gpt-5.6-luna", ""),
+            "openai/gpt-5.6-luna",
+        )
+        self.assertEqual(
+            _child_model_for_api_base("openai_direct/gpt-5.6-luna", ""),
+            "openai/gpt-5.6-luna",
+        )
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
