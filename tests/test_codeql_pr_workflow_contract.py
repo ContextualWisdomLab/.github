@@ -48,6 +48,10 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "sha: ${{ steps.verify-merge-preview.outputs.merge_sha }}" in workflow
     assert "refs/pull/{0}/head" in workflow
     assert "ref: ${{ github.event.pull_request.merge_commit_sha }}" in workflow
+    merge_checkout = workflow.split("      - name: Checkout merge preview", 1)[1].split(
+        "      - name: Verify merge preview identity", 1
+    )[0]
+    assert "fetch-depth: 0" in merge_checkout
     assert "ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}" in workflow
     assert workflow.count("security-events: read") == 2
     assert "security-events: write" not in workflow

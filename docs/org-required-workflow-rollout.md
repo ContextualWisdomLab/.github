@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-07-23 06:35 KST
+Updated: 2026-08-24 KST
 
 ## Decision
 
@@ -91,7 +91,8 @@ merge tree before analysis. GitHub's `pull_request.merge_commit_sha` remains
 the supplied preview identity, but if its parents or tree are stale the
 workflow materializes a deterministic local two-parent merge preview and
 publishes the SHA of the tree it actually analyzed. The documented
-`refs/pull/<n>/merge` ref shape remains the SARIF publication boundary.
+`refs/pull/<n>/merge` value remains only the SARIF ref label; the analyzed
+merge SHA and its tree are the authoritative publication identity.
 
 Repository-local `codeql.yml` push/default-branch scans may remain for branch
 history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.

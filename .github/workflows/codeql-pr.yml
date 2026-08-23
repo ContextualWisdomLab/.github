@@ -198,6 +198,9 @@ jobs:
           # materialize the exact merge-result SHA locally while retaining the
           # documented pull-request ref shape for CodeQL result publication.
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+          # merge-tree requires the real base/head merge base; an explicit-SHA
+          # depth-1 checkout leaves every fetched commit as a shallow root.
+          fetch-depth: 0
 
       - name: Verify merge preview identity
         id: verify-merge-preview
