@@ -1412,6 +1412,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "ContextualWisdomLab/.github:tests/test_adversarial_evidence.py | \\"
         in workflow
     )
+    assert (
+        "ContextualWisdomLab/.github:tests/test_opencode_coverage_artifact_rerun_contract.py | \\"
+        in workflow
+    )
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
     assert (
         "ContextualWisdomLab/appguardrail:scripts/ci/collect_org_security_failures.py"
