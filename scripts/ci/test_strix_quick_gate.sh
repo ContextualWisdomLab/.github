@@ -4511,6 +4511,9 @@ EOS
 		exit 0
 		;;
 	provider-warning-success-signal)
+		for _ in {1..10000}; do
+			echo "benign scanner output"
+		done
 		echo "Warning: provider response included incomplete scan state"
 		exit 0
 		;;
