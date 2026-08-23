@@ -361,10 +361,11 @@ jobs:
           } >> offline-attestation-evidence/README.md
           (
             cd offline-attestation-evidence
-            mapfile -t evidence_files < <(
-              LC_ALL=C find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
-                | LC_ALL=C sort
-            )
+            evidence_file_list="$(mktemp "${RUNNER_TEMP}/offline-attestation-files.XXXXXX")"
+            LC_ALL=C find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort > "$evidence_file_list"
+            mapfile -t evidence_files < "$evidence_file_list"
+            rm -f "$evidence_file_list"
             for evidence_file in "${evidence_files[@]}"; do
               sha256sum "$evidence_file"
             done > SHA256SUMS

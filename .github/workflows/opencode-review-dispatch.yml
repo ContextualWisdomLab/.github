@@ -1764,7 +1764,13 @@ jobs:
             # coverage command still runs and reports any uncovered GPU lines
             # exactly as before, so Rust repositories without GPU code are
             # unaffected and no gate is weakened.
-            lvp_icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit 2>/dev/null || true)"
+            lvp_icd=""
+            for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do
+              if [ -f "$candidate" ]; then
+                lvp_icd="$candidate"
+                break
+              fi
+            done
             if [ -n "$lvp_icd" ]; then
               export VK_ICD_FILENAMES="$lvp_icd"
               export VK_DRIVER_FILES="$lvp_icd"
