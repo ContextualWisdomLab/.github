@@ -113,9 +113,13 @@ jobs:
         run: |
           set -euo pipefail
           dest="${RUNNER_TEMP}/osv-old-results.json"
+          rm -f "${dest}"
+          umask 077
           for candidate in old-results.json source/old-results.json; do
-            if [ -s "${candidate}" ]; then
-              cp "${candidate}" "${dest}"
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ] && [ -s "${candidate}" ]; then
+              /usr/bin/sudo --non-interactive /usr/bin/cat -- "${candidate}" | /usr/bin/tee "${dest}" >/dev/null
+              test -s "${dest}"
+              test -O "${dest}"
               echo "Preserved OSV base output from ${candidate}"
               exit 0
             fi
@@ -176,9 +180,13 @@ jobs:
         run: |
           set -euo pipefail
           dest="${RUNNER_TEMP}/osv-new-results.json"
+          rm -f "${dest}"
+          umask 077
           for candidate in new-results.json source/new-results.json; do
-            if [ -s "${candidate}" ]; then
-              cp "${candidate}" "${dest}"
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ] && [ -s "${candidate}" ]; then
+              /usr/bin/sudo --non-interactive /usr/bin/cat -- "${candidate}" | /usr/bin/tee "${dest}" >/dev/null
+              test -s "${dest}"
+              test -O "${dest}"
               echo "Captured OSV head output from ${candidate}"
               exit 0
             fi

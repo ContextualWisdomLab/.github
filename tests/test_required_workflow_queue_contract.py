@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
@@ -1298,6 +1299,81 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert "rm -f source/old-results.json source/new-results.json" in workflow
     assert 'test -s "${old}"' in require_block
     assert 'test -s "${new}"' in require_block
+
+
+@pytest.mark.parametrize(
+    ("step_name", "candidate_name", "destination_name"),
+    [
+        (
+            "Preserve base OSV output outside the checkout path",
+            "old-results.json",
+            "osv-old-results.json",
+        ),
+        (
+            "Capture head OSV output outside the checkout path",
+            "source/new-results.json",
+            "osv-new-results.json",
+        ),
+    ],
+)
+def test_security_scan_transfers_unreadable_scanner_output_to_runner(
+    tmp_path: Path,
+    step_name: str,
+    candidate_name: str,
+    destination_name: str,
+) -> None:
+    """A privileged read must create a private runner-owned capture."""
+    workflow = workflow_text("security-scan.yml")
+    run_marker = "        run: |\n"
+    step = workflow_step(workflow, step_name)
+    assert run_marker in step
+
+    fake_sudo = tmp_path / "sudo"
+    fake_sudo.write_text(
+        """#!/bin/sh
+set -eu
+test "$1" = "--non-interactive"
+shift
+test "$1" = "/usr/bin/cat"
+shift
+test "$1" = "--"
+shift
+chmod u+r "$1"
+exec /bin/cat "$1"
+""",
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o700)
+
+    source = tmp_path / candidate_name
+    source.parent.mkdir(parents=True, exist_ok=True)
+    expected = '{"results": []}\n'
+    source.write_text(expected, encoding="utf-8")
+    source.chmod(0)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+
+    script = textwrap.dedent(step.split(run_marker, 1)[1]).replace(
+        "/usr/bin/sudo", shlex.quote(str(fake_sudo))
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "RUNNER_TEMP": str(runner_temp),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    destination = runner_temp / destination_name
+    assert result.returncode == 0, result.stderr
+    assert destination.read_text(encoding="utf-8") == expected
+    assert destination.stat().st_uid == os.geteuid()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
 
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
