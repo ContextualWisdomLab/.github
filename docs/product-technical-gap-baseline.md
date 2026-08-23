@@ -1,9 +1,9 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-23 21:51 KST**
-대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계  
+작성 기준일: **2026-08-23 22:01 KST**
+대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함)
+현재 열린 PR 수: **108** (아래 표에 이 스냅샷의 전체 목록 포함)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -14,7 +14,7 @@
 1. [CWL Master Context](CWL-MASTER-CONTEXT.md): naruon의 이메일 우선 플랫폼 경계, DIKW, no-ask 자동 해결, 다층·다중소속·시간·프라이버시 원칙.
 2. [naruon #974](https://github.com/ContextualWisdomLab/naruon/pull/974): `docs/planning/naruon-platform-plan.md`를 추가한 병합된 제품/IA/User Story/Use Case/Architecture 기준. 이슈 트래커의 Phase 항목은 ContextualWisdomLab/naruon#975–#980.
 3. [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1): 로드맵의 live source of truth. 이 문서는 live project board의 상태를 반영하며, 세부 항목 수는 project에서 직접 확인한다.
-4. 중앙 ADR·doctoring·계약 문서: [ADR-0002](adr/0002-product-technical-gap-baseline.md), [hourly NVIDIA NIM autofix](doctoring/hourly-nvidia-nim-autofix.md), [Strix cryptography override](doctoring/strix-agent-cryptography-override.md), [trusted uv lock materialization](doctoring/trusted-uv-lock-materialization.md), [product-technical gap doctoring](doctoring/product-technical-gap-baseline.md).
+4. 중앙 ADR·doctoring·계약 문서: [ADR-0002](adr/0002-product-technical-gap-baseline.md), [hourly NVIDIA NIM autofix](doctoring/hourly-nvidia-nim-autofix.md), [Strix cryptography override](../requirements-strix-ci-overrides.txt), [trusted uv lock materialization](doctoring/trusted-uv-lock-materialization.md), [product-technical gap doctoring](doctoring/product-technical-gap-baseline.md).
 
 ### 1.2 제품 경계
 
@@ -74,10 +74,10 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR은 107개다. metadata상 CLEAN은 #1252 하나뿐이고 DIRTY 77 / BLOCKED 14 / BEHIND 14 / UNSTABLE 1 / draft 17이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
+| G-01 | 열린 PR은 108개다. metadata상 CLEAN은 없고 DIRTY 77 / BLOCKED 16 / BEHIND 14 / UNSTABLE 1 / draft 17이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
 | G-02 | 리뷰 credential / same-repo status / agent dispatch PR(#1162, #1227, #1215)이 DIRTY로 남아 선행 main 경로와 어긋난다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
 | G-03 | Strix provider/fallback 스택이 #1254/#1255/#1256에 동시에 열려 있고, #1213은 UNSTABLE이며 #1153의 incomplete-scan fail-closed는 이미 main에 있다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
-| G-04 | 107개 live PR 중 대부분이 BEHIND/DIRTY/UNSTABLE이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
+| G-04 | 108개 live PR 중 대부분이 BEHIND/DIRTY/UNSTABLE/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
 | G-06 | naruon #974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다. Phase 0 Issue ContextualWisdomLab/naruon#975는 In Progress다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
 | G-07 | multi-level/multi-membership/temporal 관계 원칙은 master context에 있으나 모든 소비 저장소의 schema/API가 동일한 reified relationship contract를 보장하는지는 미확인이다 | 개인 단위로 집계하거나 전역 권한을 적용하는 atomistic/ecological fallacy 위험이 남는다 | relationship, membership, norm_group, validity window, evidence, confidence, disclosure를 정규화하고 cross-context golden tests를 만든다 |
@@ -91,17 +91,18 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 GitHub PR list가 2026-08-23 21:51 KST에 반환한 107개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
+아래는 GitHub PR list가 2026-08-23 22:01 KST에 반환한 108개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
 
-스냅샷 요약: CLEAN [1252]; BLOCKED [1256, 1255, 1254, 1253, 1238, 1233, 1231, 1176, 1158, 1107, 1086, 1052, 941, 897]; UNSTABLE [1213]; DIRTY 77; BEHIND 14; draft 17.
+스냅샷 요약: CLEAN []; BLOCKED [1257, 1256, 1255, 1254, 1253, 1252, 1238, 1233, 1231, 1176, 1158, 1107, 1086, 1052, 941, 897]; UNSTABLE [1213]; DIRTY 77; BEHIND 14; draft 17.
 
 | PR | title | head SHA | base | metadata | mode |
 |---|---|---|---|---|---|
+| #1257 | fix(osv): keep base scan results across fork checkout | `2c82c366c668123ca63f27c29350213c2c047354` | main | BLOCKED | ready |
 | #1256 | fix(strix): recognize the hyphenated openai-direct fallback alias | `f2a6aab1fa7297c801b9aa324f52d8e979671ca0` | main | BLOCKED | ready |
 | #1255 | fix(strix): accept complete scans with benign model-quality advisory | `a1fc43a13085b4dbe9367a871e33461c4eea9ae0` | main | BLOCKED | ready |
 | #1254 | fix(strix): preserve NIM fallback evidence | `e21c149af5549fd63d9c8d53a342e0a8018273f3` | main | BLOCKED | ready |
 | #1253 | feat(opencode): audit ScopeWeave calendar stack after #506 merge | `1e4caae4528b62fa6d2fd557f73b251bba89680f` | main | BLOCKED | ready |
-| #1252 | docs: refresh live product and technical gap baseline | `f7b0fd3253747efeef590859df150fd759aaf306` | main | CLEAN | ready |
+| #1252 | docs: refresh live product and technical gap baseline | `42a0821827af9825d31c08e6b6e211721b551ce1` | main | BLOCKED | ready |
 | #1246 | fix(opencode-review): accept int-typed run_id/run_attempt in control JSON | `c82036c33bb64c3a81b765531d1f90704d8252da` | main | BEHIND | ready |
 | #1245 | fix(scheduler): retry and gracefully defer shared installation rate limits | `c895eec54b50119496cc9c962682d1fafc18c405` | main | BEHIND | ready |
 | #1244 | 🛡️ Sentinel: [CRITICAL/HIGH] Fix SSRF in sandboxed_web_e2e wait_for_url | `4b4ad37da919a2f9c1c18aa1fba8cbb1da79cd56` | main | BEHIND | ready |
@@ -207,7 +208,9 @@ flowchart LR
 
 ### 4.1 Same-session open/close delta
 
-- ContextualWisdomLab/.github#1252 head advanced in this session from `f7b0fd3253747efeef590859df150fd759aaf306` to the commit that lands this refresh. Re-read `gh pr view 1252 --json headRefOid` before merge. No other open/close delta at write time.
+- ContextualWisdomLab/.github#1257 opened after the 107-row snapshot (`2c82c366c668123ca63f27c29350213c2c047354`, BLOCKED). The row is now in the inventory; it is not merge authorization.
+- ContextualWisdomLab/.github#1252 head advanced from `f7b0fd3253747efeef590859df150fd759aaf306` to `42a0821827af9825d31c08e6b6e211721b551ce1`, then to the commit that lands this refresh. The previous `quality` failure on `42a08218` was trailing whitespace on the baseline title line (`git diff --check`). Re-read `gh pr view 1252 --json headRefOid` before merge.
+- #1257 `osv-scan` failed on `cp` permission denied while overwriting a root-owned workspace `old-results.json`; that fix belongs on #1257, not this docs PR.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
@@ -227,10 +230,11 @@ flowchart LR
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1252 — 이 베이스라인. current-head OpenCode/Noema 승인 후 병합.
-2. Strix fallback/quality 스택 #1254/#1255/#1256 — BLOCKED. current-head 실패 Checks를 고치고 중복을 stack한다.
-3. Hourly fleet/OIDC/scheduler #1233/#1231/#1238/#1176 — BLOCKED. 자격 증명 분리를 유지한 채 exact-head 수리.
-4. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#975 (Phase 0 dense KG)로 제품 Gap을 구현한다.
+1. ContextualWisdomLab/.github#1252 — 이 베이스라인. current-head OpenCode/Noema 승인 후 병합. `quality` trailing-whitespace는 이 refresh에서 제거한다.
+2. ContextualWisdomLab/.github#1257 — OSV base 결과를 fork checkout 밖으로 보존. workspace `old-results.json`을 덮어쓰지 말고 `RUNNER_TEMP`만 사용한다.
+3. Strix fallback/quality 스택 #1254/#1255/#1256 — BLOCKED. current-head 실패 Checks를 고치고 중복을 stack한다. #1256 Strix는 `pull_request_target`가 base `strix_quick_gate.sh`를 쓰므로 이 PR만으로는 self-verify할 수 없다.
+4. Hourly fleet/OIDC/scheduler #1233/#1231/#1238/#1176 — BLOCKED. 자격 증명 분리를 유지한 채 exact-head 수리.
+5. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#975 (Phase 0 dense KG)로 제품 Gap을 구현한다.
 
 ## 6. Compliance and data boundary
 
