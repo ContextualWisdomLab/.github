@@ -209,7 +209,7 @@ assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishe
 assert_file_contains "$workflow_file" "Existing current-run Strix success status is already present" "Strix manual follow-up status publisher accepts already-published same-run evidence"
 assert_file_not_contains "$workflow_file" 'repository: ${{ github.repository }}' "Strix workflow must not checkout target repository with actions/checkout in privileged context"
 assert_file_not_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE_TEST"' "Strix required path must not execute the full long-form gate harness"
-assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "Strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
+assert_file_not_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "Strix workflow does not expose unused GitHub Models fallback credentials"
 assert_file_contains "$gate_script" "STRIX_GITHUB_MODELS_KEY_FILE" "Strix gate supports GitHub Models fallback credentials for cross-provider fallback"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT" "Strix gate consumes explicit target root"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT must reference a regular directory" "Strix gate rejects invalid or symlink target roots"
