@@ -77,7 +77,7 @@ concurrency:
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
-# read-only and scope same-repo status publication to the Strix scan job.
+# read-only and isolate status publication from the secret-bearing scan job.
 permissions:
   actions: read
   contents: read
@@ -92,6 +92,12 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+
+    outputs:
+      dispatch_metadata_validated: ${{ steps.dispatch_metadata.outputs.validated }}
+      dispatch_target_repository: ${{ steps.dispatch_metadata.outputs.target_repository }}
+      dispatch_head_sha: ${{ steps.dispatch_metadata.outputs.head_sha }}
+      scan_enabled: ${{ steps.gate.outputs.enabled }}
     # Large repositories can require a legitimate full-hour review. The scanner
     # gets a 90-minute process budget and a 95-minute total retry budget; the
     # 100-minute step and 120-minute job leave deterministic time to preserve
@@ -99,20 +105,14 @@ jobs:
     # fail-closed and never turns an incomplete scan into an approval.
     timeout-minutes: 120
     runs-on: ubuntu-latest
-    # Least-privilege token scoped to this job (Scorecard alert #43): the scan
-    # exchanges an OIDC token (id-token) and publishes same-repo status evidence
-    # from the scan job only.
+    # The scanner can exchange provider credentials but cannot publish statuses.
+    # Status writes occur only in the isolated follow-up job after live metadata
+    # validation, so scanner descendants never inherit a status-capable token.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
-      statuses: write
-    outputs:
-      dispatch_validation: ${{ steps.validate_dispatch.outcome }}
-      dispatch_target_repository: ${{ steps.validate_dispatch.outputs.target_repository }}
-      dispatch_head_sha: ${{ steps.validate_dispatch.outputs.head_sha }}
-      scan_enabled: ${{ steps.gate.outputs.enabled }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -313,7 +313,7 @@ jobs:
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
 
       - name: Validate repository dispatch against live pull request metadata
-        id: validate_dispatch
+        id: dispatch_metadata
         if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
@@ -366,6 +366,7 @@ jobs:
           git -C "$trusted_workspace" checkout --detach --quiet "$live_base_sha"
           git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
+          echo "validated=true" >>"$GITHUB_OUTPUT"
 
       - name: Fetch pull request head for trusted scan
         if: github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != ''
@@ -615,6 +616,67 @@ jobs:
             printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256"
           } >> "$GITHUB_ENV"
 
+      - name: Verify Strix sandbox credential boundary
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: trusted-strix-source
+        run: |
+          python3 - <<'PY'
+          import asyncio
+          import os
+
+          from strix.config import load_settings
+          import strix.runtime.session_manager as session_manager
+
+          allowed_sandbox_environment = {
+              "ALL_PROXY",
+              "HOST_GATEWAY",
+              "NO_PROXY",
+              "PYTHONUNBUFFERED",
+              "STRIX_HOST_GID",
+              "STRIX_HOST_UID",
+              "http_proxy",
+              "https_proxy",
+          }
+          for name in (
+              "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+              "GH_TOKEN",
+              "GITHUB_TOKEN",
+              "GOOGLE_APPLICATION_CREDENTIALS",
+              "LLM_API_KEY",
+              "OPENAI_API_KEY",
+          ):
+              os.environ[name] = "credential-boundary-sentinel"
+
+          class BoundaryVerified(Exception):
+              pass
+
+          async def capture_backend(**kwargs):
+              sandbox_environment = set(kwargs["manifest"].environment.value)
+              unexpected = sandbox_environment - allowed_sandbox_environment
+              if unexpected:
+                  raise SystemExit(
+                      "Strix sandbox receives unreviewed host environment keys: "
+                      + ", ".join(sorted(unexpected))
+                  )
+              raise BoundaryVerified
+
+          if load_settings().runtime.backend != "docker":
+              raise SystemExit("Strix scans must execute target commands in Docker.")
+          session_manager.get_backend = lambda _: capture_backend
+          try:
+              asyncio.run(
+                  session_manager.create_or_reuse(
+                      "credential-boundary",
+                      image="ghcr.io/usestrix/strix-sandbox:1.3.0",
+                      local_sources=[],
+                  )
+              )
+          except BoundaryVerified:
+              pass
+          else:
+              raise SystemExit("Strix sandbox manifest validation did not execute.")
+          PY
+
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
@@ -861,11 +923,6 @@ jobs:
           BUN_CONFIG_IGNORE_SCRIPTS: "true"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
           STRIX_DISABLE_PR_SCOPING: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '0' || '1' }}
-          # A repository_dispatch executes in this central repository, so its
-          # github.token cannot read the target repository's PR. Reuse the
-          # target-app token that already validated and fetched that exact PR;
-          # preserve the target-repository token for pull_request_target runs.
-          GH_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && (steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token) || github.event_name == 'pull_request_target' && github.token || '' }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
@@ -911,7 +968,7 @@ jobs:
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
-          reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
+          reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:'
 
           # An earlier out-of-scope/below-threshold finding may already have
           # been exempted by the trusted gate. Classify a later provider
@@ -947,6 +1004,10 @@ jobs:
           copied_reports=0
           for candidate_dir in "$TRUSTED_WORKSPACE/strix_runs" "$RUNNER_TEMP/strix_runs"; do
             if [ -d "$candidate_dir" ] && [ -n "$(find "$candidate_dir" -mindepth 1 -print -quit)" ]; then
+              if [ -n "$(find -P "$candidate_dir" -mindepth 1 -type l -print -quit)" ]; then
+                echo "::error::Strix report artifact tree contains a symlink: $candidate_dir"
+                exit 1
+              fi
               cp -R "$candidate_dir"/. "$GITHUB_WORKSPACE/strix_runs"/
               copied_reports=1
             fi
@@ -976,91 +1037,14 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-      - name: Publish same-head manual Strix status
-        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && steps.validate_dispatch.outcome == 'success' }}
-        env:
-          TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
-          GITHUB_STATUS_TOKEN: ${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}
-          PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
-          OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}
-          PR_HEAD_SHA: ${{ steps.validate_dispatch.outputs.head_sha }}
-          STRIX_RESULT: ${{ job.status }}
-          STRIX_SCAN_ENABLED: ${{ steps.gate.outputs.enabled }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::PR head SHA must be a 40-character git SHA."
-            exit 1
-          fi
-
-          case "$STRIX_RESULT:$STRIX_SCAN_ENABLED" in
-            success:true)
-              state="success"
-              description="Default-branch repository_dispatch Strix evidence passed"
-              ;;
-            failure:*|cancelled:*|skipped:*)
-              state="failure"
-              description="Default-branch repository_dispatch Strix evidence failed"
-              ;;
-            *)
-              state="error"
-              description="Default-branch repository_dispatch Strix evidence inconclusive"
-              ;;
-          esac
-
-          post_strix_status() {
-            token_label="$1"
-            token="$2"
-            if [ -z "$token" ]; then
-              return 1
-            fi
-            status_response="$(mktemp)"
-            status_error="$(mktemp)"
-            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}" \
-              -f state="$state" \
-              -f context="strix" \
-              -f description="$description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-              >"$status_response" 2>"$status_error"; then
-              rm -f "$status_response" "$status_error"
-              echo "Published manual Strix status to ${TARGET_REPOSITORY}@${PR_HEAD_SHA} using ${token_label}."
-              return 0
-            fi
-            error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
-            rm -f "$status_response" "$status_error"
-            if [ -n "$error_summary" ]; then
-              echo "::notice::Manual Strix status publish using ${token_label} did not succeed: ${error_summary}"
-            else
-              echo "::notice::Manual Strix status publish using ${token_label} did not succeed."
-            fi
-            return 1
-          }
-
-          if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
-            exit 0
-          fi
-          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
-            exit 0
-          fi
-          echo "::warning::Could not publish manual Strix status from scan job; keeping scan evidence result authoritative in the workflow run."
-
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && needs.strix.outputs.dispatch_validation == 'success' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && needs.strix.outputs.dispatch_metadata_validated == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      statuses: write
     steps:
       - name: Exchange OpenCode app token for target repository status
         id: target_app_token

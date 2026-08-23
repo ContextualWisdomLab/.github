@@ -90,13 +90,15 @@ allowed_jobs = {
 }
 expected_job_permissions = {
     "cancel-closed-pr-runs": {},
-    "publish-manual-pr-evidence-status": {"id-token": "write"},
+    "publish-manual-pr-evidence-status": {
+        "id-token": "write",
+        "statuses": "write",
+    },
     "strix": {
         "actions": "read",
         "contents": "read",
         "id-token": "write",
         "models": "read",
-        "statuses": "write",
     },
 }
 job_names: list[str] = []
@@ -194,6 +196,8 @@ assert_file_not_contains "$workflow_file" 'show "$PR_HEAD_SHA:requirements-strix
 assert_file_contains "$workflow_file" "requirements-strix-ci-hashes.txt" "Strix workflow installs from the central trusted hashed requirements lock"
 assert_file_contains "$workflow_file" 'trusted_lock_blob="$(git rev-parse "HEAD:$trusted_lock")"' "Strix workflow binds its dependency lock to the trusted workflow commit"
 assert_file_contains "$workflow_file" '--only-binary=:all:' "Strix workflow installs only hash-verified wheels"
+assert_file_contains "$workflow_file" 'Verify Strix sandbox credential boundary' "Strix workflow verifies its target-command sandbox before loading provider credentials"
+assert_file_contains "$workflow_file" 'sandbox_environment - allowed_sandbox_environment' "Strix workflow rejects unreviewed host environment keys in the target-command sandbox"
 assert_file_contains "$workflow_file" "Materialize target workspace" "Strix workflow separates target workspace from trusted source"
 assert_file_contains "$workflow_file" 'STRIX_REPO_ROOT:' "Strix workflow passes target root explicitly"
 assert_file_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE"' "Strix workflow executes central Strix gate"

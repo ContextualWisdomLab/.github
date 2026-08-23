@@ -606,28 +606,27 @@ def test_strix_gate_rejects_multiline_model_outputs(
 def test_strix_manual_status_uses_only_live_validated_identifiers() -> None:
     """Failed dispatch validation cannot write a caller-selected commit status."""
     workflow = workflow_text("strix.yml")
+    publish_step = workflow_step(workflow, "Publish same-head manual Strix status")
 
-    assert "id: validate_dispatch" in workflow
-    assert "dispatch_validation: ${{ steps.validate_dispatch.outcome }}" in workflow
+    assert "id: dispatch_metadata" in workflow
     assert (
-        "github.event_name == 'repository_dispatch' && "
-        "steps.validate_dispatch.outcome == 'success'"
+        "dispatch_metadata_validated: "
+        "${{ steps.dispatch_metadata.outputs.validated }}"
     ) in workflow
     assert (
         "github.event_name == 'repository_dispatch' && "
-        "needs.strix.outputs.dispatch_validation == 'success'"
+        "needs.strix.outputs.dispatch_metadata_validated == 'true'"
     ) in workflow
-    assert (
-        "TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}"
-        in workflow
-    )
-    assert "PR_HEAD_SHA: ${{ steps.validate_dispatch.outputs.head_sha }}" in workflow
     assert (
         "TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}"
-        in workflow
+        in publish_step
     )
-    assert "PR_HEAD_SHA: ${{ needs.strix.outputs.dispatch_head_sha }}" in workflow
-    assert workflow.count("success:true)") == 2
+    assert (
+        "PR_HEAD_SHA: ${{ needs.strix.outputs.dispatch_head_sha }}" in publish_step
+    )
+    assert "github.event.client_payload.target_repository" not in publish_step
+    assert "github.event.client_payload.pr_head_sha" not in publish_step
+    assert workflow.count("success:true)") == 1
 
 
 def test_strix_smoke_rejects_workflow_contract_expansion(tmp_path: Path) -> None:
@@ -1631,7 +1630,7 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
+    assert "(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
     assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
     assert 'exit "$strix_rc"' in workflow
@@ -1644,25 +1643,31 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     )
 
 
-def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
-    """Bind cross-repository Strix scans to the target PR and authorized token."""
+def test_strix_scan_cannot_read_target_pr_or_publish_status() -> None:
+    """Keep target reads and status authority outside the credentialed scan step."""
     workflow = workflow_text("strix.yml")
+    strix_job = workflow.split("\n  strix:", 1)[1].split(
+        "\n  publish-manual-pr-evidence-status:", 1
+    )[0]
+    dispatch_validation = workflow.split(
+        "      - name: Validate repository dispatch against live pull request metadata",
+        1,
+    )[1].split("      - name:", 1)[0]
     run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
         "      - name:", 1
     )[0]
+    publish_job = workflow.split("\n  publish-manual-pr-evidence-status:", 1)[1]
 
     assert "STRIX_TARGET_PATH:" in run_step
-    assert "github.event_name == 'repository_dispatch'" in run_step
-    assert "github.event.client_payload.pr_number != ''" in run_step
+    assert "GH_TOKEN:" not in run_step
+    assert "statuses: write" not in strix_job
     assert (
         "steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || "
         "github.token"
-    ) in run_step
-    assert "github.event_name == 'pull_request_target' && github.token" in run_step
-    assert (
-        "(github.event_name == 'pull_request_target' || "
-        "github.event.client_payload.pr_number != '') && github.token"
-    ) not in run_step
+    ) in dispatch_validation
+    assert 'echo "validated=true" >>"$GITHUB_OUTPUT"' in dispatch_validation
+    assert "statuses: write" in publish_job
+    assert "needs.strix.outputs.dispatch_metadata_validated == 'true'" in publish_job
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (

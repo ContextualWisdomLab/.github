@@ -202,8 +202,17 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "default-branch repository_dispatch evidence cannot cancel" "strix workflow documents manual evidence isolation from branch protection contexts"
 	assert_file_contains "$workflow_file" "PR-number scope keeps the queue on the current HEAD" "strix workflow documents current-head queue management"
 	assert_file_contains "$workflow_file" "refs/pull/<n>/head has already advanced before this queued run starts" "strix workflow documents stale scan queue avoidance"
-	status_token_count="$(grep -c '^[[:space:]]*GITHUB_STATUS_TOKEN:' "$workflow_file")"
-	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
+	status_token_count="$(grep -c '^[[:space:]]*GITHUB_STATUS_TOKEN:' "$workflow_file" || true)"
+	assert_equals "0" "$status_token_count" "strix scan job never receives a status-capable GitHub token"
+	local status_permission_count status_publish_step_count
+	status_permission_count="$(grep -c '^[[:space:]]*statuses: write' "$workflow_file")"
+	assert_equals "1" "$status_permission_count" "strix workflow grants status writes only to the isolated publication job"
+	status_publish_step_count="$(grep -c '^[[:space:]]*- name: Publish same-head manual Strix status' "$workflow_file")"
+	assert_equals "1" "$status_publish_step_count" "strix workflow publishes status only from the isolated publication job"
+	assert_file_contains "$workflow_file" 'dispatch_metadata_validated: ${{ steps.dispatch_metadata.outputs.validated }}' "strix scan job exports live dispatch validation evidence"
+	assert_file_contains "$workflow_file" 'id: dispatch_metadata' "strix repository dispatch validation has a stable output identity"
+	assert_file_contains "$workflow_file" 'echo "validated=true" >>"$GITHUB_OUTPUT"' "strix repository dispatch validation records success only after live metadata validation"
+	assert_file_contains "$workflow_file" "needs.strix.outputs.dispatch_metadata_validated == 'true'" "strix status publication requires live dispatch metadata validation"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "strix workflow must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
 	assert_file_contains "$workflow_file" "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0" "strix workflow pins actions/setup-python"
@@ -221,6 +230,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" 'trusted_lock_blob="$(git rev-parse "HEAD:$trusted_lock")"' "strix workflow binds its dependency lock to the trusted workflow commit"
 	assert_file_contains "$workflow_file" 'working_lock_blob="$(git hash-object --no-filters -- "$trusted_lock")"' "strix workflow hashes exact on-disk trusted dependency-lock bytes immediately before install"
 	assert_file_contains "$workflow_file" '--only-binary=:all:' "strix workflow installs only hash-verified wheels"
+	assert_file_contains "$workflow_file" 'Verify Strix sandbox credential boundary' "strix workflow verifies the installed scanner keeps target commands inside Docker"
+	assert_file_contains "$workflow_file" 'sandbox_environment - allowed_sandbox_environment' "strix workflow rejects unreviewed host environment keys in the target-command sandbox"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_SOURCE=$trusted_strix_source' "strix workflow exports the central Strix source path"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh' "strix workflow executes the central Strix gate script"
 	assert_file_contains "$workflow_file" "Materialize target workspace" "strix workflow materializes target repository data separately from trusted scripts"
@@ -240,6 +251,18 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'TRUSTED_WORKSPACE' "strix required-workflow smoke validates the fetched PR head workflow when available"
 	assert_file_not_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE_TEST\"" "strix required path does not execute the full long-form gate harness"
 	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE\"" "strix workflow executes trusted temp gate script"
+	local run_strix_block
+	run_strix_block="$(
+		awk '
+			/- name: Run Strix \(quick\)/ { in_block = 1 }
+			in_block && /- name: Collect Strix reports for artifact upload/ { exit }
+			in_block { print }
+		' "$workflow_file"
+	)"
+	if [[ "$run_strix_block" == *'GH_TOKEN:'* ]]; then
+		record_failure "strix scan step must not inherit a GitHub token"
+	fi
+	assert_file_contains "$workflow_file" 'find -P "$candidate_dir" -mindepth 1 -type l -print -quit' "strix artifact collection rejects symlinked scanner output"
 	assert_file_contains "$workflow_file" "Collect Strix reports for artifact upload" "strix workflow preserves reports from trusted workspace"
 	assert_file_contains "$workflow_file" "scan-summary.txt" "strix workflow creates a fallback artifact when Strix emits no report files"
 	local checkout_count
@@ -1136,20 +1159,19 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'Default-branch repository_dispatch Strix evidence passed' "opencode approval requires an explicit manual Strix evidence status description"
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix isolated follow-up job can publish same-repo manual status evidence"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'job_permissions != expected_job_permissions' "strix smoke enforces the exact approved job permission maps"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'Strix workflow actions must be pinned to full commit SHAs' "strix smoke rejects mutable action references"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}' "strix scan-job status publisher uses the live-validated target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}' "strix follow-up status publisher uses the live-validated target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'context="strix"' "strix manual evidence status uses the status context consumed by OpenCode"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}' "strix manual evidence status does not post private-target evidence to .github by mistake"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '"'"''"'"' }}' "strix manual evidence status can publish cross-repo evidence with the central mutation credential"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"' "strix manual evidence status retries the central mutation credential when the target app token cannot write statuses"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"' "strix manual evidence status retries the approval credential before declaring status publication unavailable"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"' "strix manual evidence status keeps the same-repository github-token fallback scoped to the scan job"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'check_existing_status "github-token" "$GITHUB_STATUS_READ_TOKEN"' "strix isolated follow-up can inspect an existing same-repository status"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"' "strix manual evidence status uses the target app token first"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Default-branch repository_dispatch Strix evidence failed' "strix manual evidence status records failed reruns so older success cannot mask newer failure"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Could not publish manual Strix status from scan job' "strix scan evidence does not fail solely because target status publication is unavailable"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Could not publish manual Strix status from follow-up job' "strix follow-up fails closed when non-successful evidence cannot be published"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" '[ "$STRIX_RESULT" = "success" ]' "strix follow-up distinguishes a successful scan from failed or inconclusive evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'Strix scan succeeded, but no configured credential could publish or read the target commit status.' "strix follow-up logs permission-specific status unavailability without failing a clean scan"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'after all configured credentials failed after a non-successful scan' "strix follow-up still fails loudly when failed or inconclusive scan evidence cannot be published"
@@ -3928,7 +3950,7 @@ REPORT
 			;;
 		esac
 		;;
-	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-before-next-success-continues | github-models-exhausted-after-baseline-vulnerability-fails-closed | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
+	github-models-fallback-provider-signal-tries-next | github-models-fallback-baseline-vulnerability-blocks | github-models-fallback-changed-vulnerability-before-next-success-blocks | github-models-fallback-dockerfile-test-baseline-before-next-success-continues)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
 			echo "LLM CONNECTION FAILED"
@@ -3937,8 +3959,7 @@ REPORT
 			exit 1
 			;;
 		openai/deepseek/deepseek-r1-0528)
-			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-before-next-success-continues" ] ||
-				[ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-fails-closed" ]; then
+			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-fallback-baseline-vulnerability-blocks" ]; then
 				mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities"
 				cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-provider-signal/vulnerabilities/vuln-0001.md" <<'EOS'
 Severity: CRITICAL
@@ -3967,12 +3988,6 @@ EOS
 			exit 2
 			;;
 		openai/deepseek/deepseek-v3-0324)
-			if [ "${FAKE_STRIX_SCENARIO:?}" = "github-models-exhausted-after-baseline-vulnerability-fails-closed" ]; then
-				echo "LLM CONNECTION FAILED"
-				echo "Could not establish connection to the language model."
-				echo "Error: provider retirement brownout"
-				exit 1
-			fi
 			echo "scan ok after second GitHub Models fallback"
 			exit 0
 			;;
@@ -4624,7 +4639,7 @@ EOS
 			;;
 		esac
 		;;
-	report-known-internal-warning-sanitized)
+	report-symlink-rejected-without-rewriting-target)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning/strix.log" <<'EOS'
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal agent coordination note
@@ -4856,12 +4871,8 @@ EOS
 		exit 1
 		;;
 	infra-error-sticky-flag)
-		# Sticky flag test: first call hits infra error (rate limit),
-		# second call fails on the first fallback model but produces a
-		# LOW finding report.  After exhausting retries, the gate checks
-		# has_only_below_threshold_vulnerabilities — which finds LOW
-		# findings but sees INFRA_ERROR_DETECTED=1 (set from the first
-		# call's rate-limit error) and refuses the below-threshold bypass.
+		# The first call hits a rate limit; the fallback then exits nonzero
+		# with a partial LOW report. Neither incomplete result may pass.
 		case "${STRIX_LLM:-}" in
 		vertex_ai/sticky-flag-primary)
 			touch "$FAKE_STRIX_STATE_FILE"
@@ -5008,6 +5019,15 @@ EOS
 		echo "Penetration test failed: baseline critical finding with narrowed subdir target"
 		exit 1
 		;;
+	pr-critical-outside-narrowed-subdir-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-outside-narrowed-subdir/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-outside-narrowed-subdir/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Target: /workspace/smart-crawling-server/backend/services/email_parser.py
+EOS
+		echo "Penetration test failed: finding outside narrowed scan target"
+		exit 1
+		;;
 	pr-baseline-critical-subdir-boxed-target)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-boxed-target/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-boxed-target/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -5078,8 +5098,7 @@ EOS
 		;;
 	pr-critical-changed-json-target)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-json-target/vulnerabilities"
-		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-json-target/vulnerabilities/vuln-0001.md" <<EOS
-**Severity:** MEDIUM
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-json-target/vulnerabilities/vuln-0001.json" <<EOS
 {
   "severity": "medium",
   "target": "/workspace/$(basename -- "$target_path")/frontend/src/components/CalendarLayout.tsx",
@@ -5765,7 +5784,7 @@ PY
 	if [ "$scenario" = "pr-executable-group-writable" ]; then
 		chmod 0775 "$fake_strix"
 	fi
-	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
+	if [ "$scenario" = "report-symlink-rejected-without-rewriting-target" ]; then
 		env_cmd+=(
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
@@ -5945,23 +5964,7 @@ PY
 			"scenario=$scenario runtime env forwarding"
 	fi
 
-	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
-		assert_file_not_contains \
-			"$repo_root_dir/strix_runs/fake-known-internal-warning/strix.log" \
-			"produced non-lifecycle final output" \
-			"scenario=$scenario strips the known internal Strix warning from published artifacts"
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/fake-known-internal-warning/strix.log" \
-			"finish_scan: completed scan with 0 vulnerability report(s)" \
-			"scenario=$scenario keeps non-warning Strix report evidence"
-		assert_file_not_contains \
-			"$repo_root_dir/strix_runs/fake-known-internal-warning-relative/strix.log" \
-			"produced non-lifecycle final output" \
-			"scenario=$scenario sanitizes relative scanner output before publication"
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/fake-known-internal-warning-relative/strix.log" \
-			"finish_scan: completed scan with 0 vulnerability report(s)" \
-			"scenario=$scenario publishes sanitized relative scanner evidence"
+	if [ "$scenario" = "report-symlink-rejected-without-rewriting-target" ]; then
 		assert_file_contains \
 			"$repo_root_dir/outside-strix-report/strix.log" \
 			"outside report should not be rewritten" \
@@ -6665,14 +6668,14 @@ run_filtered_gate_case_if_requested() {
 	pull-request-target-changed-backend-context)
 		run_pull_request_target_changed_backend_context_scope_case
 		;;
-	report-known-internal-warning-sanitized)
+	report-symlink-rejected-without-rewriting-target)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/report-known-internal-warning-sanitized" \
+		"vertex_ai/report-symlink-rejected" \
 		"" \
-		"0" \
-		"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
 		"1" \
-		"vertex_ai/report-known-internal-warning-sanitized" \
+		"Strix report artifact tree contains a symlink" \
+		"1" \
+		"vertex_ai/report-symlink-rejected" \
 		"<unset>"
 		;;
 	report-web-search-advisory-sanitized)
@@ -6739,46 +6742,15 @@ run_filtered_gate_case_if_requested() {
 	total-timeout)
 		run_total_timeout_case
 		;;
-	github-models-fallback-baseline-vulnerability-before-next-success-continues)
-		run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
-			"openai/gpt-5" \
-			"" \
-			"0" \
-			"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-			"3" \
-			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
-			"openai" \
-			"https://models.github.ai/inference" \
-			"" \
-			"0" \
-			"CRITICAL" \
-			"0" \
-			"" \
-			"" \
-			"1200" \
-			"0" \
-			"pull_request" \
-			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
-			"" \
-			"" \
-			"0" \
-			"" \
-			"" \
-			"" \
-			"__SAME_AS_FALLBACK_MODELS__" \
-			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
-			"1"
-		;;
-	github-models-exhausted-after-baseline-vulnerability-fails-closed)
-		run_gate_case "github-models-exhausted-after-baseline-vulnerability-fails-closed" \
+	github-models-fallback-baseline-vulnerability-blocks)
+		run_gate_case "github-models-fallback-baseline-vulnerability-blocks" \
 			"openai/gpt-5" \
 			"" \
 			"1" \
-			"STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." \
-			"3" \
-			"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-			"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+			"Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." \
+			"2" \
+			"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
 			"openai" \
 			"https://models.github.ai/inference" \
 			"" \
@@ -9463,15 +9435,16 @@ run_symlink_report_case() {
 
 	mkdir -p "$external_report_dir" "$repo_root_dir/strix_runs"
 	cat >"$external_report_dir/vuln-0001.md" <<'EOF'
-Severity: LOW
+Severity: CRITICAL
 EOF
-	ln -s "$tmp_dir/external" "$repo_root_dir/strix_runs/latest"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "Error: transport timeout"
-exit 1
+mkdir -p "$STRIX_REPORTS_DIR"
+ln -s "${FAKE_STRIX_EXTERNAL_REPORT_DIR:?}" "$STRIX_REPORTS_DIR/latest"
+echo "scan completed after creating a symlinked report run"
+exit 0
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
@@ -9484,6 +9457,7 @@ EOF
 		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
 			PATH="$tmp_dir:$PATH" \
 			STRIX_EXECUTABLE_PATH="$fake_strix" \
+			FAKE_STRIX_EXTERNAL_REPORT_DIR="$tmp_dir/external" \
 			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
 			STRIX_DISABLE_PR_SCOPING="0" \
 			STRIX_LLM_FILE="$strix_llm_file" \
@@ -9496,7 +9470,7 @@ EOF
 	set -e
 
 	assert_equals "1" "$rc" "case=symlink-report-does-not-bypass exit code"
-	assert_file_contains "$output_log" "Strix quick scan failed with a non-recoverable error." "case=symlink-report-does-not-bypass output"
+	assert_file_contains "$output_log" "Strix report artifact tree contains a symlink" "case=symlink-report-does-not-bypass output"
 
 	rm -rf "$tmp_dir"
 }
@@ -10347,44 +10321,14 @@ run_gate_case "github-models-fallback-provider-signal-tries-next" \
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-fallback-baseline-vulnerability-before-next-success-continues" \
-	"openai/gpt-5" \
-	"" \
-	"0" \
-	"REGEX:Strix quick scan succeeded with fallback model 'deepseek/deepseek-v3-0324' in [0-9]+s\\." \
-	"3" \
-	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
-	"openai" \
-	"https://models.github.ai/inference" \
-	"" \
-	"0" \
-	"CRITICAL" \
-	"0" \
-	"" \
-	"" \
-	"1200" \
-	"0" \
-	"pull_request" \
-	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" \
-	"" \
-	"" \
-	"0" \
-	"" \
-	"" \
-	"" \
-	"__SAME_AS_FALLBACK_MODELS__" \
-	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
-	"1"
-
-run_gate_case "github-models-exhausted-after-baseline-vulnerability-fails-closed" \
+run_gate_case "github-models-fallback-baseline-vulnerability-blocks" \
 	"openai/gpt-5" \
 	"" \
 	"1" \
-	"STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." \
-	"3" \
-	"openai/gpt-5|openai/deepseek/deepseek-r1-0528|openai/deepseek/deepseek-v3-0324" \
-	"https://models.github.ai/inference|https://models.github.ai/inference|https://models.github.ai/inference" \
+	"Strix model reported threshold vulnerabilities before fallback success; failing closed so every model-reported vulnerability is reviewed." \
+	"2" \
+	"openai/gpt-5|openai/deepseek/deepseek-r1-0528" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
 	"" \
@@ -10811,13 +10755,13 @@ run_gate_case "provider-report-rate-limit-fallback-success" \
 	"vertex_ai/report-rate-limit-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
-run_gate_case "report-known-internal-warning-sanitized" \
-	"vertex_ai/report-known-internal-warning-sanitized" \
+run_gate_case "report-symlink-rejected-without-rewriting-target" \
+	"vertex_ai/report-symlink-rejected" \
 	"" \
-	"0" \
-	"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
 	"1" \
-	"vertex_ai/report-known-internal-warning-sanitized" \
+	"Strix report artifact tree contains a symlink" \
+	"1" \
+	"vertex_ai/report-symlink-rejected" \
 	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
@@ -11125,8 +11069,8 @@ run_gate_case "pr-stale-report-plus-inline-changed-finding-blocks" \
 run_gate_case "high-vuln-below-threshold" \
 	"vertex_ai/high-vuln-primary" \
 	"" \
-	"0" \
-	"below configured fail threshold 'CRITICAL'" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"vertex_ai/high-vuln-primary" \
 	"<unset>"
@@ -11144,7 +11088,7 @@ run_gate_case "inline-medium-below-threshold" \
 	"vertex_ai/inline-medium-primary" \
 	"" \
 	"1" \
-	"No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"vertex_ai/inline-medium-primary" \
 	"<unset>"
@@ -11168,26 +11112,25 @@ run_gate_case "medium-vuln-default-threshold" \
 # rate-limit, transport failures) because the scan was likely incomplete.
 
 # Guard test 1: LOW finding + timeout → should fail (exit 1).
-# The below-threshold check runs first but detects infrastructure errors in the
-# strix log and refuses bypass.  The timeout is also vertex-retryable, so the
-# gate continues into the fallback loop.  All attempts see the same timeout.
+# Timeout is Vertex-retryable, but every nonzero attempt remains incomplete
+# evidence even when it emits only a below-threshold report.
 run_gate_case_allow_provider_signal "below-threshold-with-timeout" \
 	"vertex_ai/low-timeout-primary" \
 	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 	"1" \
-	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"Configured Vertex model and fallback models were unavailable." \
 	"3" \
 	"vertex_ai/low-timeout-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
 	"<unset>|<unset>|<unset>"
 
 # Guard test 2: LOW finding + rate-limit → should fail (exit 1).
-# Below-threshold check refuses bypass due to infra errors.
-# Rate-limit is vertex-retryable, so the gate also tries fallback models.
+# Rate-limit is Vertex-retryable, so the gate tries every fallback without
+# accepting the below-threshold report from a failed scanner process.
 run_gate_case_allow_provider_signal "below-threshold-with-ratelimit" \
 	"vertex_ai/low-ratelimit-primary" \
 	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 	"1" \
-	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"Configured Vertex model and fallback models were unavailable." \
 	"3" \
 	"vertex_ai/low-ratelimit-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
 	"<unset>|<unset>|<unset>"
@@ -11198,52 +11141,43 @@ run_gate_case_allow_provider_signal "below-threshold-with-connection-error" \
 	"vertex_ai/info-conn-primary" \
 	"" \
 	"1" \
-	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"vertex_ai/info-conn-primary" \
 	"<unset>"
 
 # Guard test 3b: INFO finding + ConnectionError WITHOUT provider marker → should
-# PASS (exit 0).  The two-grep infra-error detector requires both a transport
-# error class AND an LLM_PROVIDER_ONLY_REGEX marker (litellm, openai,
-# anthropic, VertexAI, etc.).  Note: transport libraries (requests, httpx,
-# httpcore) are intentionally excluded from LLM_PROVIDER_ONLY_REGEX to avoid
-# false positives — see guard test 3c below.
-# A bare "ConnectionError" from the target application lacks the marker, so
-# has_detected_infrastructure_error() returns 1 (no infra error) and the
-# below-threshold bypass succeeds.
+# fail closed. A nonzero scanner exit is incomplete evidence even when the
+# report contains only below-threshold findings and no provider marker.
 run_gate_case "below-threshold-with-connection-error-no-provider" \
 	"vertex_ai/info-conn-noprov-primary" \
 	"" \
-	"0" \
-	"below configured fail threshold" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"vertex_ai/info-conn-noprov-primary" \
 	"<unset>"
 
 # Guard test 3c: INFO finding + requests.exceptions.ConnectionError → should
-# PASS (exit 0).  The "requests" transport library matches the broad
-# PROVIDER_CONTEXT_REGEX but is intentionally excluded from LLM_PROVIDER_ONLY_REGEX.
-# Before commit 0e90d48 the connection-error path used PROVIDER_CONTEXT_REGEX
-# and would have mis-classified this as an LLM infrastructure error; now it
-# correctly uses LLM_PROVIDER_ONLY_REGEX, so below-threshold bypass succeeds.
+# fail closed for the same nonzero-exit reason; the transport-library
+# classifier no longer controls whether incomplete evidence can pass.
 run_gate_case "below-threshold-with-requests-connection-error" \
 	"vertex_ai/info-conn-requests-primary" \
 	"" \
-	"0" \
-	"below configured fail threshold" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"vertex_ai/info-conn-requests-primary" \
 	"<unset>"
 
 # Guard test 4: MEDIUM finding + MidStreamFallbackError → should fail (exit 1).
 # Midstream is vertex-retryable, so the gate also tries fallback models
-# (after the below-threshold check refuses bypass due to infra errors).
+# while every nonzero scanner result remains incomplete evidence.
 run_gate_case_allow_provider_signal "below-threshold-with-midstream" \
 	"vertex_ai/medium-midstream-primary" \
 	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 	"1" \
-	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"Configured Vertex model and fallback models were unavailable." \
 	"3" \
 	"vertex_ai/medium-midstream-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
 	"<unset>|<unset>|<unset>"
@@ -11515,15 +11449,13 @@ run_gate_case_allow_provider_signal "bare-timeout-provider-marker-exhausted-fall
 	"" \
 	"1"
 
-# Sticky INFRA_ERROR_DETECTED flag: first call hits rate-limit (infra error),
-# second call fails with a non-retryable error but leaves a partial LOW report.
-# The gate must refuse the below-threshold bypass because an infrastructure
-# error was detected during this pipeline run.
+# A rate-limited primary followed by a failed fallback with a partial LOW report
+# remains incomplete evidence and must fail closed.
 run_gate_case_allow_provider_signal "infra-error-sticky-flag" \
 	"vertex_ai/sticky-flag-primary" \
 	"" \
 	"1" \
-	"infrastructure errors occurred" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"3" \
 	"vertex_ai/sticky-flag-primary|vertex_ai/sticky-flag-primary|vertex_ai/gemini-2.5-pro" \
 	"<unset>|<unset>|<unset>" \
@@ -11831,8 +11763,8 @@ run_gate_case "pr-empty-diff-skip" \
 run_gate_case "pr-baseline-critical-unchanged" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -11852,8 +11784,8 @@ run_gate_case "pr-baseline-critical-unchanged" \
 run_gate_case "pr-baseline-critical-absolute-target" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -11896,6 +11828,30 @@ run_gate_case "pr-baseline-critical-subdir-target" \
 	"" \
 	"0" \
 	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-outside-narrowed-subdir-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12059,8 +12015,8 @@ run_gate_case "pr-critical-changed" \
 run_gate_case "pr-changed-file-nonintersecting-line" \
 	"openai/gpt-4o-mini" \
 	"" \
-	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \

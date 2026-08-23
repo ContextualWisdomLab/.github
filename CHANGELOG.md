@@ -75,6 +75,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Keep Strix target commands inside the pinned Docker sandbox environment,
+  isolate commit-status authority from the credential-bearing scan job, reject
+  nonzero low-severity and symlinked report evidence, classify JSON reports,
+  and fail closed when reported paths escape the active PR scan target.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
