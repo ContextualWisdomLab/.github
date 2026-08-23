@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Bound the Strix changed-path quality gate to the complete production hash
+  lock and mirrored production's deliberate `--no-deps` security-override
+  boundary without rejecting source distributions that production accepts.
 - Restored the hourly organization commercial-readiness loop after five
   consecutive startup failures caused by its mandatory but unprovisioned
   `PR_REVIEW_MERGE_TOKEN`. Protected scheduled jobs now prefer that maintainer
