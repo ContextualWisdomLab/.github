@@ -991,7 +991,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "trusted_pnpm_lock_matches_base()" "coverage validates the exact base and current lock before trusting it"
 	assert_file_contains "$workflow_file" '"$COVERAGE_SOURCE_WORKDIR/$relative_lock"' "coverage hashes nested pnpm locks from the validated worktree root"
 	assert_file_not_contains "$workflow_file" 'hash-object --no-filters -- "$relative_lock"' "coverage does not double-prefix nested package lock paths from the package working directory"
-	assert_file_contains "$workflow_file" "--trust-lockfile" "coverage suppresses registry attestation lookups only for an exact trusted-base lock"
+	assert_file_not_contains "$workflow_file" "--trust-lockfile" "coverage does not pass an unsupported pnpm install option after exact lock validation"
 	assert_file_contains "$workflow_file" "prepare_writable_pnpm_store()" "coverage prepares a sandbox-writable clone of the trusted pnpm store"
 	assert_file_contains "$workflow_file" 'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"' "coverage creates the writable pnpm store at an unpredictable root-owned path"
 	assert_file_contains "$workflow_file" 'cp -R /opt/pnpm-store/. "$destination/"' "coverage clones packages from the trusted image seed"
