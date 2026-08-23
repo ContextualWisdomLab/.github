@@ -307,6 +307,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
           set -euo pipefail
 
@@ -329,6 +330,13 @@ jobs:
             "") http_status="unavailable" ;;
             *) http_status="malformed" ;;
           esac
+
+          case "${REPOSITORY_VISIBILITY:-}" in
+            public | private | internal) repository_visibility="$REPOSITORY_VISIBILITY" ;;
+            *) repository_visibility="unknown" ;;
+          esac
+
+          echo "DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} curl_exit=${curl_status}"
 
           if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then
             echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."

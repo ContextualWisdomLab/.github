@@ -1231,6 +1231,17 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "set -e" in support_probe
     assert "|| true" not in support_probe
     assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
+    assert "REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}" in workflow
+    assert 'case "${REPOSITORY_VISIBILITY:-}" in' in support_probe
+    assert 'public | private | internal)' in support_probe
+    assert 'repository_visibility="$REPOSITORY_VISIBILITY"' in support_probe
+    assert 'repository_visibility="unknown"' in support_probe
+    assert (
+        'DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} '
+        'base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} '
+        'curl_exit=${curl_status}'
+        in support_probe
+    )
     assert "supported=false" not in workflow
     assert "skipping dependency-review hard gate" not in workflow
     assert (
