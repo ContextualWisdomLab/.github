@@ -47,12 +47,14 @@ def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
     source = (
         "build failed for package requests==2.31.0\n"
+        "token expired at: 2026-01-01\n"
         "Authorization: Bearer abc.def.ghi\n"
         "SERVICE_TOKEN=opaque_service_value_123456789\n"
     )
     cleaned = redactor.redact_text(source)
 
     assert "build failed for package requests==2.31.0" in cleaned
+    assert "token expired at: 2026-01-01" in cleaned
     assert "abc.def.ghi" not in cleaned
     assert "opaque_service_value_123456789" not in cleaned
     assert cleaned.count(redactor.REDACTED) >= 2
@@ -84,9 +86,31 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     for source, expected in cases.items():
         assert redactor.redact_text(source) == expected
 
+    assert redactor._consume_sensitive_assignment("=password=value", 0) is None
+    assert redactor._consume_sensitive_assignment("visible=value", 0) is None
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
+
+
+def test_sensitive_log_redaction_evaluates_each_invalid_key_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated sensitive substrings in one invalid key do not cause rescans."""
+    calls = 0
+    consume = redactor._consume_sensitive_assignment
+
+    def counted(text: str, start: int) -> tuple[str, int] | None:
+        """Count candidate parses while delegating to the real parser."""
+        nonlocal calls
+        calls += 1
+        return consume(text, start)
+
+    monkeypatch.setattr(redactor, "_consume_sensitive_assignment", counted)
+    source = "token" * 2_000 + " without an assignment"
+
+    assert redactor.redact_text(source) == source
+    assert calls == 1
 
 
 def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
