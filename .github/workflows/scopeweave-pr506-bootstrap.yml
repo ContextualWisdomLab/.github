@@ -127,7 +127,8 @@ jobs:
             scripts/ci/scopeweave_pr506_calendar_stack.py \
             tests/test_scopeweave_pr506_calendar_stack.py
 
-          mapfile -t final_paths < <(git diff --name-only "$BASE_SHA" | sort)
+          git add -A
+          mapfile -t final_paths < <(git diff --cached --name-only "$BASE_SHA" | sort)
           expected_paths=(
             .github/workflows/opencode-review.yml
             docs/doctoring/scopeweave-pr506-calendar-stack-audit.md
@@ -138,7 +139,6 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
           git diff --cached --quiet && {
             echo 'sealed payload produced no final changes' >&2
             exit 1
