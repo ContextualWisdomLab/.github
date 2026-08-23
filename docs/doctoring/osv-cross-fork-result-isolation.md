@@ -39,7 +39,9 @@ and copying from `RUNNER_TEMP`. Discard `source/old-results.json` and
 input. After the head checkout, never treat checkout-path JSON as scanner
 output. Missing or empty captured output remains a hard failure; a zero-finding
 head scan does not skip the base comparison. This change does not weaken
-vulnerability comparison.
+vulnerability comparison. The always-run debug upload reads the private runner
+captures directly rather than root-owned workspace results, so an early failure
+does not replace the primary diagnostic with an artifact permission error.
 
 ## Verification and rollback
 
@@ -50,6 +52,8 @@ vulnerability comparison.
 - The executable regression runs both production capture steps against an
   unreadable scanner result through a bounded privilege stand-in, then proves
   the capture contains the exact result and is runner-owned with mode `0600`.
+- The artifact contract uploads the runner-owned captures, including on failure,
+  and never asks the uploader to read root-owned workspace result files.
 - `actionlint` validates the edited workflow.
 - Rerun a fork PR's `Security Scan`; both captured result files must be
   non-empty before the reporter runs.

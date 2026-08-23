@@ -1297,6 +1297,7 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     require_block = workflow[
         require_output : workflow.index("      - name: Print OSV findings being compared")
     ]
+    debug_upload = workflow_step(workflow, "Upload OSV debug artifacts")
     assert "source/old-results.json" not in require_block
     assert "source/new-results.json" not in require_block
     assert 'cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
@@ -1304,6 +1305,10 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert "rm -f source/old-results.json source/new-results.json" in workflow
     assert 'test -s "${old}"' in require_block
     assert 'test -s "${new}"' in require_block
+    assert "${{ runner.temp }}/osv-old-results.json" in debug_upload
+    assert "${{ runner.temp }}/osv-new-results.json" in debug_upload
+    assert "\n            old-results.json\n" not in debug_upload
+    assert "\n            new-results.json\n" not in debug_upload
 
 
 @pytest.mark.parametrize(

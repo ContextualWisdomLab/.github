@@ -292,8 +292,8 @@ jobs:
         with:
           name: osv-scan-debug
           path: |
-            old-results.json
-            new-results.json
+            ${{ runner.temp }}/osv-old-results.json
+            ${{ runner.temp }}/osv-new-results.json
             results.sarif
           if-no-files-found: ignore
           retention-days: 5
