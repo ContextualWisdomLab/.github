@@ -159,7 +159,7 @@ def test_linter_uses_actionlint_schema_and_bounded_shfmt_parser(tmp_path: Path) 
 
 
 def test_linter_preserves_lines_inside_multiline_expressions(tmp_path: Path) -> None:
-    """Expression sanitizing keeps ShellCheck source and diagnostic lines aligned."""
+    """Expression sanitizing keeps shfmt source and diagnostic lines aligned."""
 
     environment, capture_dir = _tool_environment(tmp_path)
     workflow = tmp_path / "multiline-expression.yml"
@@ -192,7 +192,7 @@ jobs:
 
 
 def test_write_capable_autofix_always_uses_the_trusted_linter() -> None:
-    """Changed workflows fail closed through the dispatch-pinned helper."""
+    """Changed workflows use checksum-pinned tools and the trusted helper."""
 
     workflow = AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
     invocation = (
@@ -202,6 +202,16 @@ def test_write_capable_autofix_always_uses_the_trusted_linter() -> None:
 
     assert invocation in workflow
     assert "command -v actionlint" not in workflow
+    assert "actionlint_1.7.12_linux_amd64.tar.gz" in workflow
+    assert (
+        "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        in workflow
+    )
+    assert (
+        'tar -xzf "$actionlint_archive" -C "$RUNNER_TEMP" actionlint'
+        in workflow
+    )
+    assert 'PATH="${RUNNER_TEMP}:${PATH}"' in workflow
 
 
 def test_linter_invokes_fixed_tool_names_without_dynamic_command_selection() -> None:

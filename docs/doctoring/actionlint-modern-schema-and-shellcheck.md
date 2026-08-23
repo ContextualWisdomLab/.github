@@ -33,10 +33,13 @@ executable.
 shfmt is BSD-3-Clause, which satisfies the binding commercial/permissive
 license policy; the newly introduced direct GPL-3.0-or-later ShellCheck
 dependency has been removed. The write-capable worker downloads the official
-Linux amd64 shfmt 3.13.1 release only when a workflow changed, verifies its
-published SHA-256 digest, and exposes only that verified binary through the
-step-local `PATH`. Behavioral tests use an isolated temporary `PATH` to prove
-the same fixed executable and argv boundary.
+Linux amd64 actionlint 1.7.12 archive and shfmt 3.13.1 binary only when a
+workflow changed, verifies both published SHA-256 digests, extracts only the
+actionlint executable, and exposes only those verified executables through the
+step-local `PATH`. This avoids relying on an undocumented runner-image tool
+inventory while preserving fail-closed schema validation. Behavioral tests use
+an isolated temporary `PATH` to prove the same fixed executable and argv
+boundary.
 
 [Required Semgrep run 32637664667](https://github.com/ContextualWisdomLab/.github/actions/runs/32637664667)
 still classified the fixed `actionlint` invocation as dynamic because workflow
@@ -74,7 +77,9 @@ replacement.
 - The offline Python-only coverage sandbox records the Ruby subprocess
   contracts as unavailable instead of failing with `FileNotFoundError`; the
   hosted quality job, whose runner includes Ruby, executes those contracts and
-  the real all-workflow lint command.
+  the real all-workflow lint command. The write-capable runtime does not assume
+  that actionlint is preinstalled: its exact release archive is checksum-pinned
+  beside shfmt before the linter starts.
 
 ## References
 
@@ -89,6 +94,9 @@ August 23, 2026, from https://github.com/mvdan/sh/blob/master/LICENSE
 
 Murai, R. (2025). *Support queue: max in concurrency* [Pull request #654].
 GitHub. https://github.com/rhysd/actionlint/pull/654
+
+Murai, R. (2026, March 30). *actionlint v1.7.12* [Computer software]. GitHub.
+https://github.com/rhysd/actionlint/releases/tag/v1.7.12
 
 Murai, R. (2026). *Shellcheck integration deadlocks for run blocks greater than
 64 KiB* [Issue #712]. GitHub. https://github.com/rhysd/actionlint/issues/712

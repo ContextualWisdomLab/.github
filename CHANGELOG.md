@@ -74,11 +74,13 @@ Semantic Versioning where the repository publishes a release.
   LiteLLM's documented `openai/...` provider prefix before invocation, so a
   recoverable NVIDIA capacity failure can reach the configured cross-provider
   fallback without being misclassified as a successful scan.
-- Invoke actionlint and shfmt through fixed executable names supplied by the
-  pinned trusted `PATH`, removing unused environment-selected command overrides
-  while preserving the no-shell lint boundary; narrowly suppress Semgrep's
-  remaining false positive on the literal actionlint call, whose dynamic
-  workflow paths remain separate argv values.
+- Install actionlint 1.7.12 and shfmt 3.13.1 from their official release
+  artifacts with exact SHA-256 verification, then invoke both through fixed
+  executable names supplied by the trusted step-local `PATH`; this removes the
+  undocumented runner-image assumption and unused environment-selected command
+  overrides while preserving fail-closed, no-shell linting. Narrowly suppress
+  Semgrep's remaining false positive on the literal actionlint call, whose
+  dynamic workflow paths remain separate argv values.
 
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and
