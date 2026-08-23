@@ -351,7 +351,7 @@ jobs:
           base-ref: ${{ github.event.pull_request.base.sha }}
           head-ref: ${{ github.event.pull_request.head.sha }}
           fail-on-severity: moderate
-          comment-summary-in-pr: on-failure
+          comment-summary-in-pr: never
 
   trivy-fs:
     if: github.event.action != 'closed'

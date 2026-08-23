@@ -1247,6 +1247,9 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert (
         "steps.dependency_review_support.outputs.supported == 'true'" in workflow
     )
+    dependency_review = workflow_step(workflow, "Dependency review")
+    assert "comment-summary-in-pr: never" in dependency_review
+    assert "comment-summary-in-pr: on-failure" not in dependency_review
 
 
 def test_security_scan_binds_every_scan_to_immutable_pr_revisions() -> None:
