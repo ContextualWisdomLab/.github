@@ -8,6 +8,7 @@ import concurrent.futures
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Sequence
@@ -19,11 +20,28 @@ from agent_mention_router import (
     parse_event,
     parse_repository_allowlist,
 )
+from redact_sensitive_log import redact_text
 
 ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
+# The sweep-organization-agent-mentions job has a 900s (15-minute) GitHub
+# Actions timeout; a forced cancellation on that deadline loses the run's
+# log tail and metrics. Stop dispatching new work with margin to spare so
+# the sweep exits cleanly and reports what it completed.
+#
+# Returning early only stops NEW work: list_recent_pull_requests' generator
+# cleanup still blocks (executor.shutdown(wait=True)) until every currently
+# RUNNING repository fetch finishes on its own. GitHubClient's rate-limit
+# retry costs up to ~255s worst case for one repository (six attempts, each
+# up to the 30s subprocess timeout, plus ~75s of backoff between them), and
+# up to max_workers of those can be running concurrently at the moment the
+# deadline trips (bounded by that ceiling, not multiplied by it, since they
+# run in parallel). Budget = 900s job timeout - ~60s setup/checkout
+# overhead - ~255s worst-case cleanup wait, with a further margin still
+# unspent.
+DEFAULT_TIME_BUDGET_SECONDS = 480.0
 
 
 @dataclass
@@ -316,68 +334,109 @@ def sweep(
     dry_run: bool = False,
     now: datetime | None = None,
     metrics: SweepMetrics | None = None,
+    time_budget_seconds: float | None = DEFAULT_TIME_BUDGET_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Queue bounded new work while isolating candidate-local failures."""
 
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
+    if time_budget_seconds is not None and time_budget_seconds <= 0:
+        raise ValueError("time budget must be positive when set")
     current = now or datetime.now(timezone.utc)
     since = cutoff_timestamp(lookback_hours, now=current)
     rotation_offset = int(current.timestamp() // REPOSITORY_ROTATION_SECONDS)
     counters = metrics if metrics is not None else SweepMetrics()
     ledger_artifact_cache: dict[str, bool] = {}
     dispatched = 0
+    deadline = None if time_budget_seconds is None else clock() + time_budget_seconds
 
     def record_failure(scope: str, error: Exception) -> None:
         """Record one isolated error and preserve the remaining sweep."""
 
         counters.failures += 1
-        message = " ".join(str(error).split()) or error.__class__.__name__
+        message = redact_text(" ".join(str(error).split())) or (
+            error.__class__.__name__
+        )
         print(
             f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
         )
 
-    for issue in list_recent_pull_requests(
-        target_client,
-        organization=organization,
-        repository_source=repository_source,
-        since=since,
-        on_error=record_failure,
-        rotation_offset=rotation_offset,
-    ):
-        issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
-        try:
-            requests = build_requests_for_pull_request(
-                target_client,
-                issue=issue,
-                since=since,
-            )
-        except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
-            record_failure(issue_scope, exc)
-            continue
-        for request in requests:
-            request_scope = f"{issue_scope}/comment-{request.comment_id}"
-            try:
-                queued_agents = dispatch_request(
-                    request,
-                    target_client=target_client,
-                    dispatch_client=dispatch_client,
-                    opencode_allowlist=opencode_allowlist,
-                    dry_run=dry_run,
-                    ledger_artifact_cache=ledger_artifact_cache,
-                )
-            except Exception as exc:  # noqa: BLE001 - request isolation boundary
-                record_failure(request_scope, exc)
-                continue
-            if not queued_agents:
-                continue
-            dispatched += 1
-            if dispatched >= max_dispatches:
+    # list_recent_pull_requests submits every repository's fetch to a bounded
+    # ThreadPoolExecutor up front, on this generator's first advancement, and
+    # yields results via as_completed as they land — a later advancement
+    # starts no new fetch, the work is already running in background
+    # threads. Returning early (from either a `for` or manual loop) still
+    # matters: it closes this generator, whose `finally` block sets
+    # stop_event and cancels every future, so any repository whose fetch
+    # had not yet started (queued behind the worker cap) never begins one
+    # more retry-with-backoff cycle. Already-running fetches (up to
+    # max_workers) still run to completion during that cancellation/wait.
+    #
+    # The initial organization repository listing (list_accessible_
+    # repositories, called once at the top of list_recent_pull_requests,
+    # before its first yield) is NOT wrapped in per-repository isolation —
+    # unlike every per-repository fetch inside the executor, it has no
+    # on_error boundary of its own. If it exhausts GitHubClient's rate-limit
+    # retries, the resulting exception surfaces on this loop's first
+    # advancement. Without the try/except below, that would crash this
+    # entire cycle's dispatch (observed live: run 32586893733, 2026-08-22
+    # 17:09 UTC) instead of being treated as one isolated failure like every
+    # other fault in this sweep, wasting the whole cycle rather than
+    # leaving it to the next one 5 minutes later.
+    try:
+        for issue in list_recent_pull_requests(
+            target_client,
+            organization=organization,
+            repository_source=repository_source,
+            since=since,
+            on_error=record_failure,
+            rotation_offset=rotation_offset,
+        ):
+            if deadline is not None and clock() >= deadline:
                 print(
-                    "Agent mention sweep reached dispatch limit "
-                    f"{max_dispatches}; isolated failures={counters.failures}."
+                    "Agent mention sweep stopped before its time budget "
+                    f"({time_budget_seconds:.0f}s) to leave the job margin "
+                    f"to exit cleanly; {dispatched} dispatch(es) and "
+                    f"{counters.failures} isolated failure(s) so far."
                 )
                 return dispatched
+            issue_scope = f"{issue.get('repository')}#{issue.get('number')}"
+            try:
+                requests = build_requests_for_pull_request(
+                    target_client,
+                    issue=issue,
+                    since=since,
+                )
+            except Exception as exc:  # noqa: BLE001 - pull-request isolation boundary
+                record_failure(issue_scope, exc)
+                continue
+            for request in requests:
+                request_scope = f"{issue_scope}/comment-{request.comment_id}"
+                try:
+                    queued_agents = dispatch_request(
+                        request,
+                        target_client=target_client,
+                        dispatch_client=dispatch_client,
+                        opencode_allowlist=opencode_allowlist,
+                        dry_run=dry_run,
+                        ledger_artifact_cache=ledger_artifact_cache,
+                    )
+                except Exception as exc:  # noqa: BLE001 - request isolation boundary
+                    record_failure(request_scope, exc)
+                    continue
+                if not queued_agents:
+                    continue
+                dispatched += 1
+                if dispatched >= max_dispatches:
+                    print(
+                        "Agent mention sweep reached dispatch limit "
+                        f"{max_dispatches}; isolated failures={counters.failures}."
+                    )
+                    return dispatched
+    except Exception as exc:  # noqa: BLE001 - repository-listing isolation boundary
+        record_failure(f"{organization} repository listing", exc)
+        return dispatched
     print(
         "Agent mention sweep completed with "
         f"{dispatched} dispatch(es) and {counters.failures} isolated failure(s)."
@@ -397,6 +456,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--lookback-hours", type=int, default=168)
     parser.add_argument("--max-dispatches", type=int, default=20)
+    parser.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        default=DEFAULT_TIME_BUDGET_SECONDS,
+        help=(
+            "Stop dispatching new work after this many seconds so the job "
+            "exits cleanly instead of hitting its GitHub Actions timeout. "
+            "Pass a value <= 0 to disable (unbounded)."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     allowlist = parse_repository_allowlist(
@@ -415,6 +484,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         opencode_allowlist=allowlist,
         dry_run=args.dry_run,
         metrics=metrics,
+        time_budget_seconds=(
+            None if args.time_budget_seconds <= 0 else args.time_budget_seconds
+        ),
     )
     return 1 if metrics.failures else 0
 
