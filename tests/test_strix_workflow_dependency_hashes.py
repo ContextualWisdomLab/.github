@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+PR_WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -83,3 +84,11 @@ def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
     assert '      - "scripts/ci/test_strix_quick_gate.sh"' in workflow
     assert "bash scripts/ci/test_strix_quick_gate.sh" in workflow
     assert "bash -n scripts/ci/strix_quick_gate.sh" in workflow
+
+
+def test_privileged_strix_workflow_never_installs_pr_head_dependencies() -> None:
+    """Provider credentials must only reach code pinned by the trusted workflow."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "Materialize central Strix dependency lock from PR head" not in workflow
+    assert 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' not in workflow

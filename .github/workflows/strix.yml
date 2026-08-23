@@ -431,25 +431,6 @@ jobs:
           printf 'Running bounded Strix required-workflow smoke test.\n'
           bash "$TRUSTED_STRIX_REQUIRED_SMOKE"
 
-      - name: Materialize central Strix dependency lock from PR head
-        if: >-
-          github.event_name == 'pull_request_target'
-          && github.repository == 'ContextualWisdomLab/.github'
-          && github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github'
-          && github.event.pull_request.head.repo.full_name == 'ContextualWisdomLab/.github'
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::PR head SHA must be a 40-character git SHA."
-            exit 1
-          fi
-          if git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" 2>/dev/null; then
-            git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt" > "$TRUSTED_STRIX_SOURCE/requirements-strix-ci-hashes.txt"
-            printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
-          fi
-
       - name: Gate Strix secrets
         id: gate
         env:
