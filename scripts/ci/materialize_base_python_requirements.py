@@ -471,10 +471,13 @@ def _run_uv_export(
     """Run ``uv export`` for a reconstructed base project and return the result.
 
     ``--frozen`` forbids lock mutation and ``--offline`` forbids network access.
-    A minimal environment and ephemeral cache/config/home directories prevent
-    runner-level configuration, dotenv files, Python downloads, or persistent
-    cache state from selecting export behavior. Project metadata discovery stays
-    enabled so the reconstructed ``pyproject.toml`` remains authoritative.
+    ``--all-extras`` includes test/runtime dependencies declared as project
+    extras; otherwise a valid lock can install successfully while pytest cannot
+    import the governed project. A minimal environment and ephemeral
+    cache/config/home directories prevent runner-level configuration, dotenv
+    files, Python downloads, or persistent cache state from selecting export
+    behavior. Project metadata discovery stays enabled so the reconstructed
+    ``pyproject.toml`` remains authoritative.
     """
     return subprocess.run(
         [
@@ -486,6 +489,7 @@ def _run_uv_export(
             "--no-progress",
             "--color",
             "never",
+            "--all-extras",
             "--no-emit-project",
             "--no-editable",
             "--format",

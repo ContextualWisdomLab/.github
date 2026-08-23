@@ -37,6 +37,7 @@ def test_uv_export_runs_with_a_bounded_isolated_environment(
         "--no-progress",
         "--color",
         "never",
+        "--all-extras",
         "--no-emit-project",
         "--no-editable",
         "--format",

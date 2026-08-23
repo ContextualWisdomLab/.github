@@ -558,7 +558,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert 'hash-object --no-filters -- "$relative_lock"' not in measure_step
-    assert "refusing --trust-lockfile for PR-controlled dependency resolution" in measure_step
+    assert "refusing PR-controlled dependency resolution" in measure_step
     assert "prepare_writable_pnpm_store()" in measure_step
     assert (
         'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"'
@@ -2147,7 +2147,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "pnpm install \\" in coverage_job
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
-    assert "--trust-lockfile" in coverage_job
+    assert "--trust-lockfile" not in coverage_job
     assert "--ignore-scripts" in coverage_job
     assert "prepare_writable_pnpm_store" in coverage_job
     assert '--store-dir "$writable_pnpm_store_dir"' in coverage_job

@@ -1496,7 +1496,7 @@ jobs:
               return 1
             }
             if [ "$base_blob" != "$head_blob" ] || [ "$head_blob" != "$worktree_blob" ]; then
-              echo "::error::Current pnpm lock ${relative_lock} differs from the validated base; refusing --trust-lockfile for PR-controlled dependency resolution."
+              echo "::error::Current pnpm lock ${relative_lock} differs from the validated base; refusing PR-controlled dependency resolution."
               return 1
             fi
           }
@@ -1558,7 +1558,6 @@ jobs:
                   corepack pnpm install \
                     --offline \
                     --frozen-lockfile \
-                    --trust-lockfile \
                     --ignore-scripts \
                     --store-dir "$writable_pnpm_store_dir"
                 ;;
