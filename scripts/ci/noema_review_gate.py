@@ -424,21 +424,13 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract a JSON object from a strict or lightly wrapped LLM response."""
-    # ⚡ Bolt: 문자열 슬라이싱 복사(O(N))를 방지하고 후행 가비지 파싱 오류를 고치기 위해 json.JSONDecoder().raw_decode 사용
+    """Extract the first JSON object from a strict or lightly wrapped response."""
     stripped = text.strip()
-    if stripped.startswith("{"):
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            pass
     start = stripped.find("{")
     if start < 0:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
     try:
         value, _ = json.JSONDecoder().raw_decode(stripped, start)
-        if not isinstance(value, dict):
-            raise RuntimeError("Noema LLM response did not contain a JSON object")
         return value
     except json.JSONDecodeError:
         raise RuntimeError("Noema LLM response did not contain a JSON object")

@@ -225,13 +225,12 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
-    # ⚡ Bolt: 테스트 추가 - 후행 텍스트에 괄호가 포함된 경우 (기존 rfind 사용 시 에러 발생)
     assert noema.extract_json_object('{"decision":"comment"} and some extra trailing text } that could break rfind') == {"decision": "comment"}
-    # ⚡ Bolt: 테스트 추가 - 시작 부분이 괄호지만 올바른 JSON이 아닌 경우
     with pytest.raises(RuntimeError, match="did not contain"):
         noema.extract_json_object('{not a valid json}')
-    with pytest.raises(RuntimeError, match="did not contain"):
-        noema.extract_json_object("not-json")
+    for non_object in ("not-json", "[]"):
+        with pytest.raises(RuntimeError, match="did not contain"):
+            noema.extract_json_object(non_object)
 
 
 def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
