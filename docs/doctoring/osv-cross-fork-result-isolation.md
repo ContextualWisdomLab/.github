@@ -35,13 +35,15 @@ reporter privileged. Keep the base capture outside the workspace throughout
 the head scan; no consumer needs a pre-scan workspace copy. Materialize both
 reporter inputs exactly once by unlinking the scanner-created workspace files
 and copying from `RUNNER_TEMP`. Discard `source/old-results.json` and
-`source/new-results.json` before each scan so a fork cannot plant reporter
-input. After the head checkout, never treat checkout-path JSON as scanner
-output. Missing or empty captured output remains a hard failure; a zero-finding
-head scan does not skip the base comparison. This change does not weaken
-vulnerability comparison. The always-run debug upload reads the private runner
-captures directly rather than root-owned workspace results, so an early failure
-does not replace the primary diagnostic with an artifact permission error.
+`source/new-results.json` as exact paths before each scan, whether a fork plants
+a file, link, or directory there, so the planted entry cannot abort the scan or
+become reporter input. After the head checkout, never treat checkout-path JSON
+as scanner output. Missing or empty captured output remains a hard failure; a
+zero-finding head scan does not skip the base comparison. This change does not
+weaken vulnerability comparison. The always-run debug upload reads the private
+runner captures directly rather than root-owned workspace results, so an early
+failure does not replace the primary diagnostic with an artifact permission
+error.
 
 ## Verification and rollback
 

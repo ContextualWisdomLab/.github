@@ -1302,7 +1302,12 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert "source/new-results.json" not in require_block
     assert 'cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
     assert 'cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
-    assert "rm -f source/old-results.json source/new-results.json" in workflow
+    assert (
+        workflow.count(
+            "rm -rf -- source/old-results.json source/new-results.json"
+        )
+        == 2
+    )
     assert 'test -s "${old}"' in require_block
     assert 'test -s "${new}"' in require_block
     assert "${{ runner.temp }}/osv-old-results.json" in debug_upload
@@ -1317,6 +1322,11 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
         (
             "Preserve base OSV output outside the checkout path",
             "old-results.json",
+            "osv-old-results.json",
+        ),
+        (
+            "Preserve base OSV output outside the checkout path",
+            "source/old-results.json",
             "osv-old-results.json",
         ),
         (

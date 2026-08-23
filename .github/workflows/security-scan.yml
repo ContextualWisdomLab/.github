@@ -77,7 +77,7 @@ jobs:
       - name: Discard checkout-provided OSV result files
         run: |
           set -euo pipefail
-          rm -f source/old-results.json source/new-results.json
+          rm -rf -- source/old-results.json source/new-results.json
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
@@ -137,7 +137,7 @@ jobs:
       - name: Discard checkout-provided OSV result files
         run: |
           set -euo pipefail
-          rm -f source/old-results.json source/new-results.json
+          rm -rf -- source/old-results.json source/new-results.json
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
