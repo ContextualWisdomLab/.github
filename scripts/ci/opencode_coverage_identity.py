@@ -146,6 +146,7 @@ def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
             "api",
             f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100",
             "--paginate",
+            "--slurp",
         ],
         text=True,
         stdout=subprocess.PIPE,
