@@ -1344,12 +1344,32 @@ def test_review_state_and_failed_checks():
         )
     ) == "running"
     assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {
+                            "__typename": "CheckRun",
+                            "name": "coverage-evidence",
+                            "status": "IN_PROGRESS",
+                        }
+                    ]
+                }
+            }
+        )
+    ) == "running"
+    assert sched.coverage_evidence_state(
         make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
     ) == "missing"
     assert sched.coverage_evidence_state(
         make_pr(
             statusCheckRollup={
-                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "SUCCESS"}]}
+                "contexts": {
+                    "nodes": [
+                        {"name": "coverage-evidence", "state": "SUCCESS"},
+                        {"name": "lint", "state": "SUCCESS"},
+                    ]
+                }
             }
         )
     ) == "complete"
@@ -1762,6 +1782,33 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
         }
     )
     assert sched.failed_status_checks(missing_then_timestamped) == []
+
+
+def test_coverage_evidence_state_prefers_newest_rerun():
+    """An older failed rerun cannot hide newer successful coverage evidence."""
+
+    def coverage_check(started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check("2026-08-24T02:00:00Z", "SUCCESS"),
+                    coverage_check("2026-08-24T01:00:00Z", "FAILURE"),
+                ]
+            }
+        }
+    )
+
+    assert sched.coverage_evidence_state(pr) == "complete"
 
 
 def test_run_command_failure_scrubs_secrets(monkeypatch):

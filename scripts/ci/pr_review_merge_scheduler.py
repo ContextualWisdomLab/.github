@@ -1098,6 +1098,39 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the newest check run for each workflow and check-name pair."""
+    latest: dict[
+        tuple[str, str],
+        tuple[datetime | None, int, dict[str, Any]],
+    ] = {}
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun":
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest.get(key)
+        if previous is None:
+            latest[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest[key] = (started_at, index, node)
+    return [node for _, _, node in sorted(latest.values(), key=lambda item: item[1])]
+
+
 def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
     """Return whether a review is valid evidence for the current head commit."""
     head = pr.get("headRefOid")
@@ -1306,15 +1339,22 @@ def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
 
 def coverage_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, complete, or failed for the latest coverage gate."""
+    for node in reversed(latest_check_runs(pr)):
+        if (node.get("name") or "").lower() != "coverage-evidence":
+            continue
+        status = (node.get("status") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        return "complete" if (node.get("conclusion") or "").upper() == "SUCCESS" else "failed"
     for node in reversed(context_nodes(pr)):
+        if node.get("__typename") == "CheckRun":
+            continue
         name = (node.get("name") or node.get("context") or "").lower()
         if name != "coverage-evidence":
             continue
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
-        if node.get("__typename") == "CheckRun":
-            return "complete" if (node.get("conclusion") or "").upper() == "SUCCESS" else "failed"
         return "complete" if status == "SUCCESS" else "failed"
     return "missing"
 
@@ -1513,43 +1553,18 @@ def failed_status_checks(
     published the current-head coverage change request being retried.
     """
     failed: list[str] = []
-    latest_check_runs: dict[
-        tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
-    ] = {}
-    status_contexts: list[dict[str, Any]] = []
-    for index, node in enumerate(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun":
-            status_contexts.append(node)
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest_check_runs.get(key)
-        if previous is None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest_check_runs[key] = (started_at, index, node)
+    status_contexts = [
+        node
+        for node in context_nodes(pr)
+        if node.get("__typename") != "CheckRun"
+    ]
 
     successful_status_contexts = {
         node.get("context")
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+    for node in latest_check_runs(pr):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if ignore_opencode and is_opencode_check_run(node):
