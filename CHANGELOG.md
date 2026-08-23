@@ -55,6 +55,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Redact Stripe secret-key prefixes in unstructured CI evidence while
+  preserving unlabeled 40-character commit SHAs and other fixed-length
+  evidence; generic AWS and Azure values remain protected by the existing
+  sensitive-assignment parser instead of an overbroad length-only pattern.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

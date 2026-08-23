@@ -98,6 +98,7 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
             "openai sk-" + ("C" * 24),
             "slack xoxb-" + ("D" * 24),
             "aws AKIA" + ("E" * 16),
+            "stripe sk_test_" + ("F" * 24),
         ]
     )
     cleaned = redactor.redact_text(source)
@@ -107,7 +108,23 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
     assert "sk-" not in cleaned
     assert "xoxb-" not in cleaned
     assert "AKIA" not in cleaned
-    assert cleaned.count(redactor.REDACTED) == 5
+    assert "sk_test_" not in cleaned
+    assert cleaned.count(redactor.REDACTED) == 6
+
+
+def test_sensitive_log_redaction_requires_context_for_fixed_length_secrets() -> None:
+    """Generic fixed-length values need a secret label so evidence stays usable."""
+    commit_sha = "a" * 40
+    opaque_evidence = "B" * 88
+
+    cleaned = redactor.redact_text(
+        f"head={commit_sha}\nevidence {opaque_evidence}\n"
+        f"AWS_SECRET_ACCESS_KEY={commit_sha}\nAZURE_STORAGE_KEY={opaque_evidence}\n"
+    )
+
+    assert commit_sha in cleaned
+    assert opaque_evidence in cleaned
+    assert cleaned.count(redactor.REDACTED) == 2
 
 
 def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: pytest.MonkeyPatch) -> None:
