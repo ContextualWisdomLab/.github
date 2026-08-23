@@ -565,20 +565,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     ) in measure_step
     assert 'test "$(/usr/local/bin/node --version)" = "v24.18.0"' in measure_step
     assert "/usr/local/bin/npm --version >/dev/null" in measure_step
-    assert (
-        "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz"
-    ) in measure_step
-    assert (
-        "7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134"
-        "a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed"
-        "  /tmp/pnpm.tgz"
-    ) in measure_step
-    assert (
-        "tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm "
-        "--strip-components=1"
-    ) in measure_step
-    assert "ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm" in measure_step
-    assert 'test "$(/usr/local/bin/pnpm --version)" = "11.5.3"' in measure_step
+    assert "ENV COREPACK_HOME=/opt/corepack" in measure_step
+    assert "corepack --version >/dev/null" in measure_step
+    assert "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz" not in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
@@ -590,8 +579,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
     assert "npm cache verify --cache /opt/npm-cache" in measure_step
-    assert "pnpm fetch" in measure_step
+    assert "pnpm@*)" in measure_step
+    assert "corepack pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
+    assert "chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store" in measure_step
     assert "trusted_npm_lock_is_materialized()" in measure_step
     assert (
         'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
@@ -682,6 +673,26 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
+    assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
+    assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
+    assert 'rev-parse HEAD)" = "$commit"' in measure_step
+    assert "opencode-base-vcs-dependencies.pth" in measure_step
+    assert 'vcs-manifest.json >"$dependency_list"' in measure_step
+    assert 'done <"$dependency_list"' in measure_step
+    assert 'candidate_count=$((candidate_count + 1))' in measure_step
+    assert '[ "$candidate_count" -ne 1 ]' in measure_step
+    assert "has a missing or ambiguous import root" in measure_step
+    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
+    assert "has a namespace or linked import root" in measure_step
+    assert 'find "$destination" -type l -print -quit' in measure_step
+    assert "contains a symbolic-link layout" in measure_step
+    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
+    assert "contains a compiled extension" in measure_step
+    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
+    assert "contains installed distribution metadata" in measure_step
+    assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
+    assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
     assert '"$coverage_build_dir"' in measure_step
     assert measure_step.index("docker build --pull --no-cache") < measure_step.index(
@@ -964,6 +975,27 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert "return" in declared_pnpm_block
 
 
+def test_opencode_coverage_uses_corepack_for_all_pnpm_package_scripts():
+    """Every generic pnpm script runs through the pinned Corepack boundary."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+
+    assert "run_package_script_and_capture()" in measure_step
+    assert (
+        'pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;'
+        in measure_step
+    )
+    assert 'npm) run_and_capture "$label" npm run "$script" ;;' in measure_step
+    assert 'yarn) run_and_capture "$label" yarn run "$script" ;;' in measure_step
+    assert '"$package_runner" run' not in measure_step
+
+
 def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     """An existing coverage flag/tool must run once instead of receiving a duplicate flag."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -984,13 +1016,17 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
         in measure_step
     )
     assert (
-        'pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;'
+        'pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;'
         in measure_step
     )
     assert "pnpm test --coverage" not in measure_step
     assert "pnpm test -- --coverage" not in measure_step
     assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
     assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
+    assert "corepack pnpm install" in measure_step
+    assert 'corepack pnpm --filter "$package_name" run build' in measure_step
+    assert "corepack pnpm test" in measure_step
+    assert "corepack pnpm run test --coverage" in measure_step
 
 
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
@@ -1968,14 +2004,16 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
     assert "secrets.OPENCODE_APPROVE_TOKEN" in workflow
     assert "steps.scheduler_app_token.outputs.token" in workflow
-    assert (
-        "SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' "
-        "&& github.event.client_payload.target_repository != '' && "
-        "(secrets.PR_REVIEW_MERGE_TOKEN || "
-        "secrets.OPENCODE_APPROVE_TOKEN || "
-        "steps.scheduler_app_token.outputs.token) || github.token }}"
-        in workflow
-    )
+    for token_name in ("SCHEDULER_ACTIONS_TOKEN", "SCHEDULER_READ_TOKEN"):
+        assert (
+            f"{token_name}: ${{{{ github.event_name == 'repository_dispatch' "
+            "&& github.event.client_payload.target_repository != '' && "
+            "github.event.client_payload.target_repository != github.repository && "
+            "(secrets.PR_REVIEW_MERGE_TOKEN || "
+            "secrets.OPENCODE_APPROVE_TOKEN || "
+            "steps.scheduler_app_token.outputs.token) || github.token }}"
+            in workflow
+        )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
@@ -2200,6 +2238,16 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow
+    metadata_step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert (
+        '! [[ "$live_head_repository" =~ '
+        '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
+    ) in metadata_step
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
     trust_step = target_job.split(
         "      - name: Validate pull request head repository trust", 1
     )[1].split("\n      - name:", 1)[0]
@@ -2208,6 +2256,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "metadata changed before OIDC" in trust_step
     assert 'live_head_sha="$(jq -r' in trust_step
     assert '[ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]' in trust_step
+    assert (
+        '! [[ "$head_repository" =~ '
+        '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
+    ) in trust_step
+    assert '[ "$head_repository" != "$GH_REPOSITORY" ]' not in trust_step
     assert (
         "EXPECTED_IS_PRIVATE: "
         "${{ needs.validate-pr-metadata.outputs.is_private }}"

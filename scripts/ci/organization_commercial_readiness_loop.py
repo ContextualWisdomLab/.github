@@ -47,6 +47,9 @@ MAX_WORKFLOW_RECORDS_PER_REPOSITORY = 1_000
 MAX_WORKFLOW_SOURCES_PER_REPOSITORY = 100
 MAX_WORKFLOW_SOURCE_BYTES_PER_FILE = 1_048_576
 MAX_WORKFLOW_SOURCE_BYTES_PER_REPOSITORY = 10 * 1_048_576
+SAFE_DIAGNOSTIC_METHODS = frozenset(
+    {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"}
+)
 
 
 class GitHubError(RuntimeError):
@@ -239,7 +242,7 @@ class GitHubClient:
     """Use the GitHub CLI as an authenticated, bounded REST transport."""
 
     def __init__(self, token: str, *, timeout_seconds: int = 60) -> None:
-        """Configure the client with an explicit review-control credential."""
+        """Initialize one authenticated GitHub credential with a bounded timeout."""
         if not token:
             raise GitHubError("GH_TOKEN is required for organization coordination")
         self._token = token
@@ -267,6 +270,11 @@ class GitHubClient:
     ) -> Any:
         """Call one GitHub REST endpoint and decode a bounded JSON response."""
         normalized_method = method.upper()
+        safe_method = (
+            normalized_method
+            if normalized_method in SAFE_DIAGNOSTIC_METHODS
+            else "[REDACTED_METHOD]"
+        )
         safe_path = self._redact_credential(path)
         args = ["gh", "api"]
         if normalized_method != "GET":
@@ -292,7 +300,7 @@ class GitHubClient:
             raw = (completed.stderr or completed.stdout or "GitHub API request failed").strip()
             bounded = self._redact_credential(raw)[-900:]
             raise GitHubError(
-                f"GitHub API {normalized_method} {safe_path} failed: {bounded}"
+                f"GitHub API {safe_method} {safe_path} failed: {bounded}"
             )
         text = completed.stdout.strip()
         if not text:

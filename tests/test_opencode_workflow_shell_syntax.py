@@ -153,7 +153,7 @@ def test_merge_scheduler_targeted_dispatch_run_block_is_valid_bash():
 
 
 def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
-    """Only an allowlisted open PR with a target base reaches scheduler outputs."""
+    """Allowlisted open PRs keep exact outputs even when their head is a fork."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -270,13 +270,43 @@ esac
         env=cross_repo_env,
     )
 
-    assert cross_repo.returncode == 1
-    assert "cross-repository" in cross_repo.stdout
+    assert cross_repo.returncode == 0, cross_repo.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "repository=ContextualWisdomLab/naruon",
+        "base_branch=develop",
+        "default_branch=main",
+        "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+    ]
+
+    output.unlink()
+    malformed_head_env = {
+        **env,
+        "FAKE_PULL_JSON": json.dumps(
+            {
+                **cross_repo_pull,
+                "head": {
+                    **cross_repo_pull["head"],
+                    "repo": {"full_name": "outside/fork/extra"},
+                },
+            }
+        ),
+    }
+    malformed_head = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=malformed_head_env,
+    )
+
+    assert malformed_head.returncode == 1
+    assert "malformed, or base-repository-mismatched live PR metadata" in malformed_head.stdout
     assert not output.exists()
 
 
-def test_opencode_dispatch_validation_rejects_external_head(tmp_path):
-    """The privileged central metadata gate rejects a fork before review tooling."""
+def test_opencode_dispatch_validation_accepts_exact_external_head(tmp_path):
+    """A canonical fork remains exact-head review data, never workflow source."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -345,6 +375,13 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         env=env,
     )
 
-    assert result.returncode == 1
-    assert "cross-repository" in result.stdout
-    assert not output.exists()
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "target_repository=ContextualWisdomLab/naruon",
+        "pr_number=1179",
+        "base_ref=develop",
+        f"base_sha={'1' * 40}",
+        "head_ref=feature/fork-review",
+        f"head_sha={'2' * 40}",
+        "is_private=false",
+    ]
