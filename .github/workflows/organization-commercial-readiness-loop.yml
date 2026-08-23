@@ -80,6 +80,8 @@ jobs:
 
             if ! oidc_response="$(
               curl -fsS \
+                --connect-timeout 10 \
+                --max-time 30 \
                 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
                 "${request_url}${separator}audience=${OIDC_AUDIENCE}"
             )"; then
@@ -96,6 +98,8 @@ jobs:
 
             if ! token_response="$(
               curl -fsS \
+                --connect-timeout 10 \
+                --max-time 30 \
                 -X POST \
                 -H "Authorization: Bearer ${oidc_token}" \
                 "${OPENCODE_API_BASE_URL}/exchange_github_app_token"

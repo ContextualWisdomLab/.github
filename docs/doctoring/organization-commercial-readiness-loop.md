@@ -60,7 +60,10 @@ coordinator shell step now performs the exchange only when its preferred
 diagnostic, and masks the OIDC JWT immediately after validation. Keeping
 selection and exchange in that final first-party shell step preserves the rule
 that no checkout, setup, artifact, or other third-party action receives either
-credential, and neither response body is logged.
+credential, and neither response body is logged. Both HTTP calls reuse the
+central scheduler's 10-second connection and 30-second total request bounds, so
+an unavailable identity or exchange endpoint cannot consume the entire
+25-minute coordinator budget.
 
 Each run writes one deterministic JSON receipt and the same bounded evidence to the GitHub Actions job summary. The JSON is uploaded through the immutable, SHA-pinned artifact action with a three-day retention period. Artifact upload receives no maintainer or model credential. The receipt proves only coordinator observations and downstream dispatch acceptance; it is not merge, release, or product-quality evidence.
 
