@@ -74,3 +74,18 @@ def test_baseline_records_the_ui_adr_boundary() -> None:
     assert "Figma File ID" in doctoring
     assert "APA 7th" in doctoring
     assert "ISO/IEC 27001:2022" in doctoring
+
+
+def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
+    """Section 10 must send agents to the live snapshot and UI-scope ADR.
+
+    This pins narrative pointers, not inventory SHAs or merge authorization.
+    """
+    source = Path("docs/CWL-MASTER-CONTEXT.md").read_text(encoding="utf-8")
+    assert "product-technical-gap-baseline.md" in source
+    assert "Figma File ID" in source
+    assert "N/A" in source
+    assert "ContextualWisdomLab/naruon#974" in source
+    assert "ContextualWisdomLab/naruon#975" in source
+    assert "Done" in source
+    assert "merge authorization" in source

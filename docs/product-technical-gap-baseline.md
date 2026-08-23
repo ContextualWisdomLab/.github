@@ -1,9 +1,9 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-23 22:01 KST**
+작성 기준일: **2026-08-23 22:59 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `885f2cd251999f21cf562cab3e2d9cc3cc3ec737`
-현재 열린 PR 수: **108** (아래 표에 이 스냅샷의 전체 목록 포함)
+현재 열린 PR 수: **104** (아래 표에 이 스냅샷의 전체 목록 포함)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -74,12 +74,12 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR은 108개다. metadata상 CLEAN은 없고 DIRTY 77 / BLOCKED 16 / BEHIND 14 / UNSTABLE 1 / draft 17이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
+| G-01 | 열린 PR은 104개다. metadata상 CLEAN은 없고 DIRTY 77 / BLOCKED 15 / BEHIND 11 / UNSTABLE 1 / draft 17이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
 | G-02 | 리뷰 credential / same-repo status / agent dispatch PR(#1162, #1227, #1215)이 DIRTY로 남아 선행 main 경로와 어긋난다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
-| G-03 | Strix provider/fallback 스택이 #1254/#1255/#1256에 동시에 열려 있고, #1213은 UNSTABLE이며 #1153의 incomplete-scan fail-closed는 이미 main에 있다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
-| G-04 | 108개 live PR 중 대부분이 BEHIND/DIRTY/UNSTABLE/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
+| G-03 | Strix provider/fallback 중복 PR #1254/#1255/#1256은 병합 없이 닫혔고 #1213이 stacked successor다. #1213은 UNSTABLE이며 #1153의 incomplete-scan fail-closed는 이미 main에 있다. 0-vuln complete scans도 MODEL QUALITY WARNING 같은 비취약 권고를 provider failure-signal로 오분류하면 fail-closed 된다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
+| G-04 | 104개 live PR 중 대부분이 BEHIND/DIRTY/UNSTABLE/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
-| G-06 | naruon #974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다. Phase 0 Issue ContextualWisdomLab/naruon#975는 In Progress다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
+| G-06 | naruon #974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다. Phase 0 Issue ContextualWisdomLab/naruon#975는 Done(closed completed 2026-07-13)이다. 다음 순서 단계는 ContextualWisdomLab/naruon#976 (P1 Plugin SDK)이며 한 번에 한 phase만 진행한다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
 | G-07 | multi-level/multi-membership/temporal 관계 원칙은 master context에 있으나 모든 소비 저장소의 schema/API가 동일한 reified relationship contract를 보장하는지는 미확인이다 | 개인 단위로 집계하거나 전역 권한을 적용하는 atomistic/ecological fallacy 위험이 남는다 | relationship, membership, norm_group, validity window, evidence, confidence, disclosure를 정규화하고 cross-context golden tests를 만든다 |
 | G-08 | embedding·DOM·sender/receiver 의미 단위 chunking과 base64 image의 OCR/object/tag/position-index 설계가 ecosystem contract에 부분적으로만 반영됐다 | 검색은 되지만 실제 그림 위치와 의미를 회수하지 못해 편집·문서·메일 업무가 끊긴다 | semantic unit chunk schema와 image asset/region/ocr/tag embeddings를 별도 entity로 설계하고 source offset/DOM path를 보존한다 |
 | G-09 | 100% coverage/docstring은 중앙 PR별로 증거가 있으나 조직 소비 레포의 frontend interaction/i18n/design-token/real-data accuracy 증거가 동일한지 미확인이다 | “green CI”가 실제 고객 시나리오 정확성을 보장하지 않는다 | domain-specific RMSE/reproducibility/audio/visual/browser acceptance와 edge matrix를 required evidence로 만든다 |
@@ -91,31 +91,27 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 GitHub PR list가 2026-08-23 22:01 KST에 반환한 108개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
+아래는 GitHub PR list가 2026-08-23 22:59 KST에 반환한 104개 열린 PR의 number/title/head/base metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
 
-스냅샷 요약: CLEAN []; BLOCKED [1257, 1256, 1255, 1254, 1253, 1252, 1238, 1233, 1231, 1176, 1158, 1107, 1086, 1052, 941, 897]; UNSTABLE [1213]; DIRTY 77; BEHIND 14; draft 17.
+스냅샷 요약: CLEAN []; BLOCKED [1257, 1252, 1246, 1245, 1244, 1238, 1233, 1231, 1176, 1158, 1107, 1086, 1052, 941, 897]; UNSTABLE [1213]; DIRTY 77; BEHIND 11; draft 17.
 
 | PR | title | head SHA | base | metadata | mode |
 |---|---|---|---|---|---|
-| #1257 | fix(osv): keep base scan results across fork checkout | `2c82c366c668123ca63f27c29350213c2c047354` | main | BLOCKED | ready |
-| #1256 | fix(strix): recognize the hyphenated openai-direct fallback alias | `f2a6aab1fa7297c801b9aa324f52d8e979671ca0` | main | BLOCKED | ready |
-| #1255 | fix(strix): accept complete scans with benign model-quality advisory | `a1fc43a13085b4dbe9367a871e33461c4eea9ae0` | main | BLOCKED | ready |
-| #1254 | fix(strix): preserve NIM fallback evidence | `e21c149af5549fd63d9c8d53a342e0a8018273f3` | main | BLOCKED | ready |
-| #1253 | feat(opencode): audit ScopeWeave calendar stack after #506 merge | `1e4caae4528b62fa6d2fd557f73b251bba89680f` | main | BLOCKED | ready |
-| #1252 | docs: refresh live product and technical gap baseline | `42a0821827af9825d31c08e6b6e211721b551ce1` | main | BLOCKED | ready |
-| #1246 | fix(opencode-review): accept int-typed run_id/run_attempt in control JSON | `c82036c33bb64c3a81b765531d1f90704d8252da` | main | BEHIND | ready |
-| #1245 | fix(scheduler): retry and gracefully defer shared installation rate limits | `c895eec54b50119496cc9c962682d1fafc18c405` | main | BEHIND | ready |
-| #1244 | 🛡️ Sentinel: [CRITICAL/HIGH] Fix SSRF in sandboxed_web_e2e wait_for_url | `4b4ad37da919a2f9c1c18aa1fba8cbb1da79cd56` | main | BEHIND | ready |
+| #1257 | fix(osv): keep base scan results across fork checkout | `7b8fc201ed7d86f415568d0e8df5a9211e1c8ab0` | main | BLOCKED | ready |
+| #1252 | docs: refresh live product and technical gap baseline | `ceeaf192f689b456a05abd5537d4ae9b63350c1f` | main | BLOCKED | ready |
+| #1246 | fix(opencode-review): accept int-typed run_id/run_attempt in control JSON | `f88499b708a90edb6a538aeb2c397e14304681ad` | main | BLOCKED | ready |
+| #1245 | fix(scheduler): retry and gracefully defer shared installation rate limits | `d007bcec35f2057eda375c54e653a152f90881ec` | main | BLOCKED | ready |
+| #1244 | fix(e2e): restrict readiness polling to loopback destinations | `cadd69536062f400e98405fbab6e3e558080741e` | main | BLOCKED | ready |
 | #1243 | ⚡ Bolt: [병렬 처리를 통한 스냅샷 수집 성능 개선] | `68dcc64803f89665bfc161a3ee7eb018e2612f1f` | main | BEHIND | ready |
 | #1242 | ⚡ Bolt: 정규표현식 평가 병합 최적화 | `b27b834c60870f1b46cd719b0bcb4322a542946a` | main | BEHIND | ready |
 | #1238 | fix(scheduler): stop repository_dispatch defaulting review/merge/branch flags off | `21b4c58577d54aed299cf0d2dc30a0ee80ff0902` | main | BLOCKED | ready |
 | #1237 | ⚡ Bolt: JSON 추출 최적화 및 버그 수정 (`raw_decode` 적용) | `59b910d3a6efc15484a2ad63c4c2c2dfbad4f34b` | main | BEHIND | ready |
 | #1233 | fix(automation): restore hourly fleet coordination | `dfb8e261c81705841111dd4ad1712a9fb6c767d1` | main | BLOCKED | ready |
-| #1231 | fix(scheduler): isolate central Actions inventory quota | `e9001ce4c05467096728d70fcb89de70060d3395` | main | BLOCKED | ready |
+| #1231 | fix(scheduler): isolate central Actions inventory quota | `7b16617af04431a43f8f7528b8ac7db345e404a7` | main | BLOCKED | ready |
 | #1227 | fix(opencode): use same-repo status credential | `05b52e7617e87d2fd6892d8d387ff9d6707a110c` | main | DIRTY | ready |
 | #1218 | fix(coverage): admit protected-base test retirement | `a3e2dfca20cc76c1b8615df0f490fc5a1fc11e81` | main | DIRTY | ready |
 | #1215 | fix(security): redact agent-mention credential diagnostics | `6e17c3fb3f247c73dd55afcbf4f92a127549f345` | main | DIRTY | ready |
-| #1213 | fix(strix): route unsupported Azure sampling failures to a valid fallback | `9dcd1d6c4c11602163cb89edaad9540e9d6f461a` | fix/organization-loop-oidc-fallback | UNSTABLE | ready |
+| #1213 | fix(strix): make Azure and cross-provider fallbacks executable | `5ab583417053a122bd568e8295d3c25172dbac52` | fix/organization-loop-oidc-fallback | UNSTABLE | ready |
 | #1198 | fix(security): repair pip audit and schedule orchestrator review | `e5a7ac882559fe6d1ae1f91e27d79bc8e0aa1e77` | main | DIRTY | ready |
 | #1188 | fix: grant hourly callers reusable workflow OIDC scope | `1a0cc1f875db29492861006747ded2b6d9e93d09` | main | DIRTY | ready |
 | #1187 | fix(coverage): scope Rust evidence to changed packages | `0a88e24d9a1c92420f412d241f850aab8e72106e` | main | DIRTY | ready |
@@ -169,7 +165,7 @@ flowchart LR
 | #1060 | fix(opencode): prove asyncio coverage plugin without colliding #896 | `a27ae0ac907c04c300ed978e35538e26c094a682` | main | DIRTY | draft |
 | #1058 | fix(operability): reject impossible control-plane SLI counts | `0fd148a8fa2b7acc098eb9741b8d8cea92058ef1` | main | DIRTY | draft |
 | #1053 | fix(redaction): skip gh run view job/step prefixes | `15fa991d8a99743a640a26665d278bc159653065` | main | DIRTY | draft |
-| #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `9147dcffe65047291148e34c178a6a2881d187c1` | main | BLOCKED | ready |
+| #1052 | fix(opencode): split review surfaces, give NIM two hours, and remove GitHub Models | `766080a6b76dadb9fb861c5519f2ea82c14de34e` | main | BLOCKED | ready |
 | #1051 | fix(pip-audit): keep index-url locks hashed and reject symlink parents | `82629751751b82bee88d000ded32b6f141125849` | main | DIRTY | ready |
 | #1050 | fix(security): reject dot path components before dependency-review compare | `ee5c15711f0b0a346bb19a634288a49fcd981fab` | main | DIRTY | draft |
 | #1046 | fix(opencode): pass trusted visibility into the private free-model hook | `f053ba84ff7dc92c5dbdef2ca1597cd04372dd6b` | main | DIRTY | draft |
@@ -208,9 +204,12 @@ flowchart LR
 
 ### 4.1 Same-session open/close delta
 
-- ContextualWisdomLab/.github#1257 opened after the 107-row snapshot (`2c82c366c668123ca63f27c29350213c2c047354`, BLOCKED). The row is now in the inventory; it is not merge authorization.
-- ContextualWisdomLab/.github#1252 head advanced from `f7b0fd3253747efeef590859df150fd759aaf306` to `42a0821827af9825d31c08e6b6e211721b551ce1`, then to the commit that lands this refresh. The previous `quality` failure on `42a08218` was trailing whitespace on the baseline title line (`git diff --check`). Re-read `gh pr view 1252 --json headRefOid` before merge.
-- #1257 `osv-scan` failed on `cp` permission denied while overwriting a root-owned workspace `old-results.json`; that fix belongs on #1257, not this docs PR.
+- ContextualWisdomLab/.github#1256, #1255, #1254 closed unmerged at 2026-08-23T13:17Z as duplicates of stacked successor #1213 (`5ab583417053a122bd568e8295d3c25172dbac52`, UNSTABLE, base `fix/organization-loop-oidc-fallback`).
+- ContextualWisdomLab/.github#1253 closed unmerged at 2026-08-23T13:54Z after exact-scope audit (ScopeWeave calendar job was one-shot control-plane code for a still-open product PR).
+- ContextualWisdomLab/.github#1257 head advanced from `2c82c366c668123ca63f27c29350213c2c047354` through `8800253e0339a4dc434f6b5cb7d789ec2dc69d4e` to `7b8fc201ed7d86f415568d0e8df5a9211e1c8ab0` (preserve base OSV results in `RUNNER_TEMP`). Concurrent remote commits are kept; this docs PR does not repair #1257. Not merge authorization.
+- ContextualWisdomLab/.github#1252 head remains the commit that lands this 104-row refresh. Re-read `gh pr view 1252 --json headRefOid` before merge.
+- Open count moved 108 → 104. No `.github` PR merged this session.
+
 
 ## 5. 실행 루프와 고객의 다음 행동
 
@@ -230,11 +229,12 @@ flowchart LR
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1252 — 이 베이스라인. current-head OpenCode/Noema 승인 후 병합. `quality` trailing-whitespace는 이 refresh에서 제거한다.
-2. ContextualWisdomLab/.github#1257 — OSV base 결과를 fork checkout 밖으로 보존. workspace `old-results.json`을 덮어쓰지 말고 `RUNNER_TEMP`만 사용한다.
-3. Strix fallback/quality 스택 #1254/#1255/#1256 — BLOCKED. current-head 실패 Checks를 고치고 중복을 stack한다. #1256 Strix는 `pull_request_target`가 base `strix_quick_gate.sh`를 쓰므로 이 PR만으로는 self-verify할 수 없다.
-4. Hourly fleet/OIDC/scheduler #1233/#1231/#1238/#1176 — BLOCKED. 자격 증명 분리를 유지한 채 exact-head 수리.
-5. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#975 (Phase 0 dense KG)로 제품 Gap을 구현한다.
+1. ContextualWisdomLab/.github#1252 — 이 베이스라인. current-head OpenCode 승인과 unresolved `docs/CWL-MASTER-CONTEXT.md` thread 해소 후 병합. 인벤토리는 merge authorization이 아니다.
+2. ContextualWisdomLab/.github#1257 — OSV base 결과를 fork checkout 밖 `RUNNER_TEMP`에 보존. current-head Strix가 terminal이 되면 exact-head 승인 후 병합한다.
+3. Strix successor #1213 (stacked on #1233) — UNSTABLE. provider exhaustion/model-quality false fail-closed를 고치고, 취약점 marker는 neutralize하지 않는다. 닫힌 #1254/#1255/#1256을 되살리지 않는다.
+4. Hourly fleet/OIDC/scheduler #1233/#1231/#1238/#1176 — BLOCKED. 자격 증명 분리를 유지한 채 exact-head 수리. OpenCode/Strix 지연은 다음 PR을 막지 않는다.
+5. G-06는 naruon 소유. Phase 0 ContextualWisdomLab/naruon#975는 Done이다. 큐가 비면 한 phase씩 ContextualWisdomLab/naruon#976 (P1 Plugin SDK) 또는 남은 E1/E3 제품 slice를 naruon에서 구현한다.
+
 
 ## 6. Compliance and data boundary
 
