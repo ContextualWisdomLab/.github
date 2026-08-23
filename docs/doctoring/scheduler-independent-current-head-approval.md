@@ -27,7 +27,8 @@ The repair reuses the existing scheduler and review/head matcher:
 - the REST fallback records the author but remains fail closed because it does
   not provide an authoritative aggregate review decision;
 - one helper filters exact-head formal approvals by author and automation
-  identity;
+  identity, considering only each reviewer's latest approval-affecting state so
+  a later change request or dismissal revokes that reviewer's earlier approval;
 - both direct/automatic merge paths share the same authorization reason; and
 - an already armed auto-merge request is disabled when authorization is absent.
 
@@ -39,10 +40,11 @@ remain authoritative; the scheduler does not infer those identities.
 ## Verification and operations
 
 Regression cases cover missing author/reviewer identity, self-review, generic
-Actions review, OpenCode review, non-approval, stale head, missing aggregate
-approval, disarming existing auto-merge, and the complete authorized direct
-merge path. Before lifecycle action, refetch the live base, head, reviews,
-threads, checks, and rules. A head change invalidates all predecessor evidence.
+Actions review, OpenCode review, non-approval, stale head, a later same-head
+change request, missing aggregate approval, disarming existing auto-merge, and
+the complete authorized direct merge path. Before lifecycle action, refetch the
+live base, head, reviews, threads, checks, and rules. A head change invalidates
+all predecessor evidence.
 
 Rollback means reverting the reviewed scheduler change while keeping scheduler
 merge modes disabled until an equivalent fail-closed authorization control is

@@ -1451,6 +1451,32 @@ def test_independent_exact_head_approval_allows_direct_merge():
     assert inspect(pr, merge_mode="direct").action == "merge"
 
 
+def test_independent_approval_uses_reviewers_latest_policy_state():
+    """A later same-head change request revokes that reviewer's approval."""
+    pr = make_pr(
+        reviewDecision="CHANGES_REQUESTED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head"),
+                opencode_review(
+                    "APPROVED",
+                    "head",
+                    login="independent-reviewer",
+                    submitted_at="2026-06-25T07:01:00Z",
+                ),
+                opencode_review(
+                    "CHANGES_REQUESTED",
+                    "head",
+                    login="independent-reviewer",
+                    submitted_at="2026-06-25T07:02:00Z",
+                ),
+            ]
+        },
+    )
+
+    assert not sched.has_independent_current_head_approval(pr)
+
+
 @pytest.mark.parametrize("review_decision", ("", "REVIEW_REQUIRED"))
 def test_repository_review_policy_blocks_merge_and_disarms_auto_merge(review_decision):
     """Never leave merge authority armed while GitHub review policy is unsatisfied."""

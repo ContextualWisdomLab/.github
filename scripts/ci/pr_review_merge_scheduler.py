@@ -1275,20 +1275,26 @@ def has_current_head_approval(pr: dict[str, Any]) -> bool:
 
 
 def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
-    """Return whether a non-author, non-OpenCode reviewer approved the exact head."""
+    """Return whether an eligible reviewer's latest exact-head policy state approves."""
     author = ((pr.get("author") or {}).get("login") or "").lower()
     if not author:
         return False
+    seen_reviewers: set[str] = set()
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
         reviewer = review_author_login(review)
+        state = (review.get("state") or "").upper()
         if (
-            (review.get("state") or "").upper() == "APPROVED"
-            and review_matches_current_head(review, pr)
-            and reviewer
-            and reviewer != author
-            and not is_automated_opencode_review(review)
-            and reviewer not in {"github-actions", "github-actions[bot]"}
+            not reviewer
+            or reviewer == author
+            or is_automated_opencode_review(review)
+            or reviewer in {"github-actions", "github-actions[bot]"}
+            or not review_matches_current_head(review, pr)
+            or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+            or reviewer in seen_reviewers
         ):
+            continue
+        seen_reviewers.add(reviewer)
+        if state == "APPROVED":
             return True
     return False
 

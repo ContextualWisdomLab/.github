@@ -53,9 +53,10 @@ Semantic Versioning where the repository publishes a release.
 ### Changed
 
 - Require the PR Review Merge Scheduler to observe both GitHub's aggregate
-  `APPROVED` decision and a non-author, non-OpenCode formal approval bound to
-  the exact live head before direct merge or auto-merge. Existing auto-merge
-  is disarmed when either authorization is absent.
+  `APPROVED` decision and the latest effective non-author, non-OpenCode formal
+  approval bound to the exact live head before direct merge or auto-merge.
+  A later same-head change request revokes that reviewer's earlier approval,
+  and existing auto-merge is disarmed when either authorization is absent.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
