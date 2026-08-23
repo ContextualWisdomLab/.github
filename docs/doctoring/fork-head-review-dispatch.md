@@ -99,6 +99,28 @@ and all current-head checks, review identity, target reads needed for live PR
 validation, and explicit target mutations remain fail-closed. This removes two
 target Actions-list requests per inspected PR without widening any authority.
 
+Exact-head Strix [run 32579981586](https://github.com/ContextualWisdomLab/.github/actions/runs/32579981586)
+then reported a HIGH mismatch between the
+declared mutation-credential source and the token actually inherited by `gh`.
+Its illustrative fallback helper was not present in the scheduler, and the
+workflow expressions select `GH_TOKEN` and `SCHEDULER_MUTATION_TOKEN_SOURCE`
+from the same precedence chain. The executable boundary nevertheless relied on
+that expression-level coupling: a missing token or inconsistent GitHub App
+`available` output could select the runner `github.token` while the Python
+guard still trusted the stronger source label.
+
+Every scheduler mutation entrypoint now receives the runner token separately
+as `SCHEDULER_WORKFLOW_TOKEN`. A head update is authorized only when the source
+is allowlisted, the selected `GH_TOKEN` and comparison token are both present,
+and the two actual token values differ. Neither value is logged. Tests cover an
+empty selected token and a source-label/runner-token mismatch, while the offline
+self-test uses distinct synthetic values. Repository-host identity comparisons
+also use case-folded canonical names, so a case-only spelling difference cannot
+move central Actions inventory onto a shared App credential or skip
+same-repository stale-run cleanup. This is a zero-trust verification at the
+mutation boundary rather than trust in an upstream environment label (Rose et
+al., 2020).
+
 ## Draft merge defense in depth
 
 Exact-head Strix run `32573579932` reported `vuln-0001`, alleging that a draft
@@ -136,6 +158,10 @@ https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 
 GitHub, Inc. (n.d.-d). *GITHUB_TOKEN*. GitHub Docs. Retrieved August 22, 2026,
 from https://docs.github.com/en/actions/concepts/security/github_token
+
+Rose, S., Borchert, O., Mitchell, S., & Connelly, S. (2020). *Zero trust
+architecture* (NIST Special Publication 800-207). National Institute of
+Standards and Technology. https://doi.org/10.6028/NIST.SP.800-207
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure Software Development
 Framework (SSDF) version 1.1: Recommendations for mitigating the risk of

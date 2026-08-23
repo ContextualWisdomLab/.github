@@ -230,8 +230,8 @@ def mutation_token_label() -> str:
     return labels.get(source, "workflow GH_TOKEN")
 
 
-def head_mutation_credential_starts_workflows() -> bool:
-    """Return whether scheduler head mutations can start required workflow runs.
+def head_mutation_credential_problem() -> str | None:
+    """Explain why the selected mutation credential cannot start workflow runs.
 
     GitHub never creates a new workflow run for an event produced with the
     workflow ``GITHUB_TOKEN``, so a PR head moved with that credential can never
@@ -242,22 +242,41 @@ def head_mutation_credential_starts_workflows() -> bool:
         GitHub. (2025). *Automatic token authentication*.
         https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication
     """
-    return mutation_token_source() in WORKFLOW_STARTING_MUTATION_SOURCES
+    source = mutation_token_source()
+    if source == "github-token":
+        return "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
+    if source not in WORKFLOW_STARTING_MUTATION_SOURCES:
+        return f"{mutation_token_label()} is not allowlisted as workflow-starting"
+
+    selected_token = (os.environ.get("GH_TOKEN") or "").strip()
+    workflow_token = (os.environ.get("SCHEDULER_WORKFLOW_TOKEN") or "").strip()
+    if not selected_token:
+        return f"{mutation_token_label()} is missing and therefore not proven workflow-starting"
+    if not workflow_token:
+        return (
+            "workflow GITHUB_TOKEN comparison evidence is missing, so the selected mutation "
+            "credential is not proven workflow-starting"
+        )
+    if selected_token == workflow_token:
+        return (
+            f"{mutation_token_label()} resolved to the workflow GITHUB_TOKEN, whose head "
+            "mutations never start new workflow runs"
+        )
+    return None
+
+
+def head_mutation_credential_starts_workflows() -> bool:
+    """Return whether the actual scheduler mutation token can start workflow runs."""
+    return head_mutation_credential_problem() is None
 
 
 def non_triggering_head_mutation_reason(action: str) -> str:
     """Explain why a head mutation is withheld for a non-triggering credential."""
-    source = mutation_token_source()
-    if source == "github-token":
-        credential_reason = (
-            "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
-        )
-    else:
-        credential_reason = (
-            f"the {mutation_token_label()}, which is not allowlisted as workflow-starting"
-        )
+    credential_reason = head_mutation_credential_problem()
+    if credential_reason is None:
+        credential_reason = "the selected mutation credential is not proven workflow-starting"
     return (
-        f"{action} withheld because the scheduler mutation credential is {credential_reason}, "
+        f"{action} withheld because {credential_reason}, "
         "so the moved head would stay permanently "
         "BLOCKED without current-head required checks; configure PR_REVIEW_MERGE_TOKEN, "
         "OPENCODE_APPROVE_TOKEN, or the OpenCode app token for the scheduler job"
@@ -272,13 +291,11 @@ def require_workflow_starting_mutation_credential(action: str) -> None:
 
 def head_mutation_credential_guidance_text() -> tuple[str, str]:
     """Return operator-facing summary and limit text for a withheld head mutation."""
-    if mutation_token_source() == "github-token":
-        return (
-            "The scheduler withheld a head mutation because the workflow GITHUB_TOKEN cannot start the required current-head workflow runs.",
-            "Moving the head with the workflow GITHUB_TOKEN would leave the PR permanently BLOCKED, so the scheduler waits instead.",
-        )
+    problem = head_mutation_credential_problem()
+    if problem is None:
+        problem = "the selected mutation credential is not proven workflow-starting"
     return (
-        f"The scheduler withheld a head mutation because {mutation_token_label()} is not allowlisted as workflow-starting.",
+        f"The scheduler withheld a head mutation because {problem}.",
         "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
     )
 
@@ -609,7 +626,7 @@ def run_github_actions_for_repository(
     central_repo = (
         os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
     ).strip()
-    if central_repo and repo == central_repo:
+    if central_repo and repo.casefold() == central_repo.casefold():
         return run_github_dispatch(args)
     return run_github_actions(args)
 
@@ -2378,7 +2395,7 @@ def inspect_pr(
     # Central reviewers own their run lifecycle in the dispatch repository.
     # Target old-head CI is non-authoritative, and enumerating it can exhaust
     # the installation quota before the current-head review is dispatched.
-    if repository_dispatch_target(repo) == repo:
+    if repository_dispatch_target(repo).casefold() == repo.casefold():
         cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
@@ -3123,6 +3140,8 @@ def parse_non_triggering_head_mutation_reason(reason: str) -> bool:
     return (
         "whose head mutations never start new workflow runs" in reason
         or "which is not allowlisted as workflow-starting" in reason
+        or "is not allowlisted as workflow-starting" in reason
+        or "not proven workflow-starting" in reason
     )
 
 
@@ -3320,16 +3339,28 @@ def summarize_action_error(exc: RuntimeError) -> str:
 
 @contextlib.contextmanager
 def declared_mutation_token_source(source: str) -> Iterator[None]:
-    """Declare a scheduler mutation credential source for the enclosed block."""
-    previous = os.environ.get("SCHEDULER_MUTATION_TOKEN_SOURCE")
+    """Declare a coherent synthetic mutation credential for offline self-tests."""
+    keys = (
+        "SCHEDULER_MUTATION_TOKEN_SOURCE",
+        "GH_TOKEN",
+        "SCHEDULER_WORKFLOW_TOKEN",
+    )
+    previous = {key: os.environ.get(key) for key in keys}
     os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = source
+    os.environ["SCHEDULER_WORKFLOW_TOKEN"] = "self-test-workflow-token"
+    os.environ["GH_TOKEN"] = (
+        "self-test-workflow-token"
+        if source == "github-token"
+        else "self-test-selected-mutation-token"
+    )
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop("SCHEDULER_MUTATION_TOKEN_SOURCE", None)
-        else:
-            os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = previous
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def self_test() -> None:

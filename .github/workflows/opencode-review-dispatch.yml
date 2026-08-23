@@ -8020,6 +8020,7 @@ jobs:
           SCHEDULER_ACTIONS_TOKEN: ${{ github.token }}
           SCHEDULER_READ_TOKEN: ${{ (github.event_name == 'pull_request_target' || needs.validate-pr-metadata.outputs.target_repository == github.repository) && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          SCHEDULER_WORKFLOW_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}

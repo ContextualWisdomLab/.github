@@ -33,6 +33,8 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
 
 
 def fake_github_token(prefix, body):
@@ -1815,16 +1817,26 @@ def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
 
 
 def test_declared_mutation_token_source_restores_the_previous_environment(monkeypatch):
-    """The declaration helper restores both a set and an unset prior value."""
+    """The declaration helper restores source and token evidence after self-tests."""
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "opencode-app")
+    monkeypatch.setenv("GH_TOKEN", "prior-selected-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "prior-workflow-token")
     with sched.declared_mutation_token_source("github-token"):
         assert sched.mutation_token_source() == "github-token"
+        assert not sched.head_mutation_credential_starts_workflows()
     assert sched.mutation_token_source() == "opencode-app"
+    assert os.environ["GH_TOKEN"] == "prior-selected-token"
+    assert os.environ["SCHEDULER_WORKFLOW_TOKEN"] == "prior-workflow-token"
 
     monkeypatch.delenv("SCHEDULER_MUTATION_TOKEN_SOURCE", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("SCHEDULER_WORKFLOW_TOKEN", raising=False)
     with sched.declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
         assert sched.mutation_token_source() == "PR_REVIEW_MERGE_TOKEN"
+        assert sched.head_mutation_credential_starts_workflows()
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" not in os.environ
+    assert "GH_TOKEN" not in os.environ
+    assert "SCHEDULER_WORKFLOW_TOKEN" not in os.environ
 
 
 def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
@@ -1832,6 +1844,30 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
     for source in ("PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"):
         monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", source)
         assert sched.head_mutation_credential_starts_workflows()
+        sched.require_workflow_starting_mutation_credential("update-branch")
+
+
+@pytest.mark.parametrize(
+    ("selected_token", "workflow_token", "message"),
+    (
+        ("", "workflow-runner-token", "is missing"),
+        ("selected-mutation-token", "", "comparison evidence is missing"),
+        ("workflow-runner-token", "workflow-runner-token", "resolved to"),
+    ),
+)
+def test_declared_workflow_starting_source_cannot_mask_runner_token_fallback(
+    monkeypatch,
+    selected_token,
+    workflow_token,
+    message,
+):
+    """A missing credential that resolves to github.token cannot move a PR head."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", selected_token)
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", workflow_token)
+
+    assert not sched.head_mutation_credential_starts_workflows()
+    with pytest.raises(RuntimeError, match=message):
         sched.require_workflow_starting_mutation_credential("update-branch")
 
 
@@ -1998,7 +2034,7 @@ def test_central_workflow_runs_use_central_runner_token_for_central_dispatch(
     monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "central-runner-token")
     monkeypatch.setenv(
         "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
+        "contextualwisdomlab/.GITHUB",
     )
 
     sched.active_workflow_runs("ContextualWisdomLab/.github", statuses=("queued",))
@@ -3586,6 +3622,7 @@ def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr
 
 
 def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "OWNER/REPO")
     cancelled = []
     monkeypatch.setattr(
         sched,

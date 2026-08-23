@@ -494,6 +494,7 @@ jobs:
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.target_repository != github.repository && (secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token) || github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          SCHEDULER_WORKFLOW_TOKEN: ${{ github.token }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |
@@ -781,6 +782,7 @@ jobs:
           # "no cross-repository repository-dispatch credential".
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.sweep_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          SCHEDULER_WORKFLOW_TOKEN: ${{ github.token }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
           SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
         run: |

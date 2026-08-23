@@ -1996,6 +1996,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
             in workflow
         )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
+    assert workflow.count("SCHEDULER_WORKFLOW_TOKEN: ${{ github.token }}") == 2
     assert 'default: "1"' in workflow
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
@@ -2090,6 +2091,7 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && "
         "'opencode-app' || 'github-token' }}"
     ) in workflow
+    assert "SCHEDULER_WORKFLOW_TOKEN: ${{ github.token }}" in workflow
     assert "--no-trigger-reviews" in workflow
     assert "--enable-auto-merge" in workflow
     assert "--no-update-branches" in workflow
