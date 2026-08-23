@@ -1,9 +1,9 @@
 name: Materialize ScopeWeave PR 506 calendar-stack automation
 
 on:
-  push:
-    branches:
-      - feat/scopeweave-pr506-merge-event-calendar-stack
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
 
 concurrency:
   group: scopeweave-pr506-materializer
@@ -14,7 +14,10 @@ permissions:
 
 jobs:
   materialize:
-    if: github.repository == 'ContextualWisdomLab/.github'
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'feat/scopeweave-pr506-merge-event-calendar-stack'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -23,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Materialize the sealed final tree
         shell: bash
@@ -32,11 +35,13 @@ jobs:
           BASE_WORKFLOW_BLOB: 7f1ad6d00678663ed22f5050fe9c7a93955f4950
           B64_SHA256: 1e4893f00c59b8e369ca69fce10595e165366f239a2048d86437fa5268d9aa13
           ARCHIVE_SHA256: 63eb77c30661a1b59def17bc2f4e201f52d05695007a14bd2cb9a95fb85548fc
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
 
           [[ -f .bootstrap/ready ]] || exit 0
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_HEAD_SHA" ]]
           [[ "$(git hash-object .github/workflows/opencode-review.yml)" == \
              "$BASE_WORKFLOW_BLOB" ]]
           git merge-base --is-ancestor "$BASE_SHA" HEAD
@@ -139,4 +144,4 @@ jobs:
             exit 1
           }
           git commit -m 'feat(opencode): audit ScopeWeave calendar stack after #506 merge'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${HEAD_REF}"
