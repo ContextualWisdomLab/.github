@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -35,6 +36,8 @@ ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 RECEIPT_RE = re.compile(r"<!-- cwl-agent-mention-receipt:(\d+) -->")
 REPOSITORY_DISPATCH_CLIENT_PAYLOAD_MAX_KEYS = 10
 GITHUB_API_TIMEOUT_SECONDS = 30
+GITHUB_API_MAX_ATTEMPTS = 6
+RATE_LIMIT_DIAGNOSTIC_RE = re.compile(r"API rate limit exceeded", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -67,41 +70,64 @@ class GitHubClient:
         *,
         input_payload: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute one bounded ``gh api`` request and decode optional JSON."""
+        """Execute one bounded ``gh api`` request and decode optional JSON.
+
+        Retries only a completed request that failed on the shared GitHub
+        App installation-token rate limit, up to ``GITHUB_API_MAX_ATTEMPTS``
+        times with linear backoff, mirroring the established retry
+        convention in ``strix.yml``'s target-repository visibility lookup.
+        GitHub rejects a rate-limited request at admission time before it
+        mutates anything, so retrying it (including a POST, e.g. a
+        ``repository_dispatch`` or comment write) cannot double-apply an
+        already-completed write. Retry is intentionally NOT attempted for
+        other failures (permission errors, 404s, malformed requests): those
+        are not transient, and a non-idempotent write that failed for an
+        unknown reason must not be silently resent. A hung request
+        (``TimeoutExpired``) is likewise not retried; a stuck ``gh`` process
+        should fail immediately rather than compound the wait.
+        """
 
         command = ["gh", "api", *args]
         if input_payload is not None:
             command.extend(["--input", "-"])
         environment = os.environ.copy()
         environment["GH_TOKEN"] = self._token
-        try:
-            completed = subprocess.run(
-                command,
-                input=None if input_payload is None else json.dumps(input_payload),
-                text=True,
-                capture_output=True,
-                shell=False,
-                check=False,
-                env=environment,
-                timeout=GITHUB_API_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                "gh api timed out after "
-                f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
-            ) from exc
-        return_code = int(getattr(completed, "returncode", 0))
-        if return_code:
-            diagnostic = " ".join(
-                str(getattr(completed, "stderr", "") or "").split()
-            )
+        payload = None if input_payload is None else json.dumps(input_payload)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                completed = subprocess.run(
+                    command,
+                    input=payload,
+                    text=True,
+                    capture_output=True,
+                    shell=False,
+                    check=False,
+                    env=environment,
+                    timeout=GITHUB_API_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    "gh api timed out after "
+                    f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
+                ) from exc
+            return_code = int(getattr(completed, "returncode", 0))
+            if not return_code:
+                output = completed.stdout.strip()
+                return None if not output else json.loads(output)
+            diagnostic = " ".join(str(getattr(completed, "stderr", "") or "").split())
             if not diagnostic:
                 diagnostic = "no stderr output"
+            retryable = RATE_LIMIT_DIAGNOSTIC_RE.search(diagnostic) is not None
+            if retryable and attempt < GITHUB_API_MAX_ATTEMPTS:
+                time.sleep(attempt * 5)
+                continue
+            suffix = f" after {attempt} attempts" if attempt > 1 else ""
             raise RuntimeError(
-                f"gh api failed with exit code {return_code}: {diagnostic[:2000]}"
+                f"gh api failed with exit code {return_code}{suffix}: "
+                f"{diagnostic[:2000]}"
             )
-        output = completed.stdout.strip()
-        return None if not output else json.loads(output)
 
 
 def exact_mentions(body: str) -> tuple[str, ...]:
@@ -558,16 +584,24 @@ def dispatch_request(
         "are the durable dispatch ledger; existing review workflows remain "
         "authoritative for the final verdict and failure evidence."
     )
-    target_client.request(
-        [
-            f"{target_api}/issues/{request.pull_request_number}/comments",
-            "-X",
-            "POST",
-        ],
-        input_payload={"body": acknowledgement},
-    )
-    if ledger_artifact_cache is not None:
-        ledger_artifact_cache[acknowledgement_cache_key] = True
+    try:
+        target_client.request(
+            [
+                f"{target_api}/issues/{request.pull_request_number}/comments",
+                "-X",
+                "POST",
+            ],
+            input_payload={"body": acknowledgement},
+        )
+    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+        message = " ".join(str(exc).split()) or exc.__class__.__name__
+        print(
+            "::warning::Agent mention acknowledgement comment failed; "
+            f"durable dispatch state is preserved: {message[:1000]}"
+        )
+    else:
+        if ledger_artifact_cache is not None:
+            ledger_artifact_cache[acknowledgement_cache_key] = True
     return handles
 
 

@@ -17,6 +17,7 @@ on:
       - .github/workflows/orgmetra-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
+      - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
@@ -29,6 +30,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_afipc_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_control_files.py
@@ -54,6 +56,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/afipc-hourly-review-caller.md
   push:
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
@@ -70,6 +73,7 @@ on:
       - .github/workflows/orgmetra-hourly-review-repair.yml
       - .github/workflows/originweave-hourly-review-repair.yml
       - .github/workflows/quarantine-sandbox-hourly-review-repair.yml
+      - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
@@ -82,6 +86,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_afipc_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
       - tests/test_pr_review_conflict_scope_control_files.py
@@ -107,6 +112,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/afipc-hourly-review-caller.md
 
 permissions:
   contents: read
@@ -164,6 +170,7 @@ jobs:
             tests/test_orgmetra_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
             tests/test_quarantine_sandbox_hourly_review_caller.py \
+            tests/test_afipc_hourly_review_caller.py \
             tests/test_pr_review_conflict_scope_control_files.py \
             tests/test_hourly_autofix_context_quality_gate.py \
             tests/test_pr_review_conflict_scope_git_executable.py \
