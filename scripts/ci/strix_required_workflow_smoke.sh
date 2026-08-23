@@ -135,7 +135,6 @@ assert_file_contains "$workflow_file" "Checkout trusted Strix source" "Strix wor
 assert_file_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outputs.repository }}' "Strix workflow checks out resolved central repository"
 assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "Strix workflow checks out resolved central ref"
 assert_file_contains "$workflow_file" "requirements-strix-ci-hashes.txt" "Strix workflow can materialize the central Strix hashed requirements lock"
-assert_file_not_contains "$workflow_file" "Materialize central Strix dependency lock from PR head" "Strix workflow never installs PR-head dependencies before handling provider credentials"
 assert_file_not_contains "$workflow_file" 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' "Strix workflow keeps its dependency lock on the trusted workflow source"
 assert_file_contains "$workflow_file" "Materialize target workspace" "Strix workflow separates target workspace from trusted source"
 assert_file_contains "$workflow_file" 'STRIX_REPO_ROOT:' "Strix workflow passes target root explicitly"

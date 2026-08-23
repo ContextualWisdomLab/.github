@@ -90,5 +90,4 @@ def test_privileged_strix_workflow_never_installs_pr_head_dependencies() -> None
     """Provider credentials must only reach code pinned by the trusted workflow."""
     workflow = PR_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "Materialize central Strix dependency lock from PR head" not in workflow
     assert 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' not in workflow

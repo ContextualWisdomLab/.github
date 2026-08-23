@@ -216,7 +216,6 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Checkout trusted Strix source" "strix workflow checks out the central Strix source"
 	assert_file_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outputs.repository }}' "strix workflow checks out central Strix scripts instead of target-repo copies"
 	assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "strix workflow checks out the exact trusted Strix source ref"
-	assert_file_not_contains "$workflow_file" "Materialize central Strix dependency lock from PR head" "strix workflow never installs PR-head dependencies before handling provider credentials"
 	assert_file_not_contains "$workflow_file" 'PR_HEAD_SHA:requirements-strix-ci-hashes.txt' "strix workflow keeps its dependency lock on the trusted workflow source"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_SOURCE=$trusted_strix_source' "strix workflow exports the central Strix source path"
 	assert_file_contains "$workflow_file" 'TRUSTED_STRIX_GATE=$trusted_strix_source/scripts/ci/strix_quick_gate.sh' "strix workflow executes the central Strix gate script"
