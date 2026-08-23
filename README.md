@@ -103,7 +103,9 @@ jobs:
     with:
       project_name: example-marketing
       build_dir: ./public
-    secrets: inherit
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 ```
 
 5. If a repository cannot inherit the ruleset (for example a public fork

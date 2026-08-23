@@ -55,6 +55,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Replaced blanket inherited-secret guidance at the reusable Cloudflare Pages deployment boundary with an explicit two-secret, required caller contract, and fail-closed validated caller-controlled project, path, and domain inputs before Wrangler or Cloudflare API use.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
