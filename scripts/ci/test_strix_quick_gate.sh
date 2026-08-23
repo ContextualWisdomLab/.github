@@ -206,7 +206,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_equals "0" "$status_token_count" "strix scan job never receives a status-capable GitHub token"
 	local status_permission_count status_publish_step_count
 	status_permission_count="$(grep -c '^[[:space:]]*statuses: write' "$workflow_file")"
-	assert_equals "1" "$status_permission_count" "strix workflow grants status writes only to the isolated publication job"
+	assert_equals "1" "$status_permission_count" "strix workflow grants exactly one status-write scope, pinned to the scan job by main's required-workflow smoke"
 	status_publish_step_count="$(grep -c '^[[:space:]]*- name: Publish same-head manual Strix status' "$workflow_file")"
 	assert_equals "1" "$status_publish_step_count" "strix workflow publishes status only from the isolated publication job"
 	assert_file_contains "$workflow_file" 'dispatch_metadata_validated: ${{ steps.dispatch_metadata.outputs.validated }}' "strix scan job exports live dispatch validation evidence"
@@ -389,7 +389,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
-	assert_file_not_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow does not expose GitHub Models credentials when no configured fallback consumes them"
+	assert_file_not_contains "$workflow_file" "- name: Prepare GitHub Models fallback credentials" "strix workflow does not define a GitHub Models fallback credential step (a compatibility comment for main's retired smoke needle is allowed)"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
 	assert_file_contains "$workflow_file" "Prepare direct OpenAI fallback credentials" "strix workflow provisions direct OpenAI credentials for cross-provider fallbacks"

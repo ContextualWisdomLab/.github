@@ -1644,7 +1644,17 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
 
 
 def test_strix_scan_cannot_read_target_pr_or_publish_status() -> None:
-    """Keep target reads and status authority outside the credentialed scan step."""
+    """Keep target reads and status authority outside the credentialed scan step.
+
+    Protected main's trusted required-workflow smoke pins ``statuses: write``
+    to the strix scan job's token, so the workflow keeps that grant there.
+    What this contract actually protects is the scanner boundary: the Run
+    Strix step receives no GH_TOKEN, so the scan process (and anything it
+    spawns) cannot publish statuses regardless of the job token's scopes.
+    Manual-evidence publication stays in the isolated follow-up job, whose
+    own GITHUB_TOKEN carries no status scope; its writes use exchanged
+    app/secret tokens only.
+    """
     workflow = workflow_text("strix.yml")
     strix_job = workflow.split("\n  strix:", 1)[1].split(
         "\n  publish-manual-pr-evidence-status:", 1
@@ -1660,13 +1670,17 @@ def test_strix_scan_cannot_read_target_pr_or_publish_status() -> None:
 
     assert "STRIX_TARGET_PATH:" in run_step
     assert "GH_TOKEN:" not in run_step
-    assert "statuses: write" not in strix_job
+    assert "statuses: write" in strix_job
     assert (
         "steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || "
         "github.token"
     ) in dispatch_validation
     assert 'echo "validated=true" >>"$GITHUB_OUTPUT"' in dispatch_validation
-    assert "statuses: write" in publish_job
+    publish_permissions = publish_job.split("permissions:", 1)[1].split(
+        "steps:", 1
+    )[0]
+    assert "statuses: write" not in publish_permissions
+    assert "id-token: write" in publish_permissions
     assert "needs.strix.outputs.dispatch_metadata_validated == 'true'" in publish_job
 
 

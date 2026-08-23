@@ -105,14 +105,20 @@ jobs:
     # fail-closed and never turns an incomplete scan into an approval.
     timeout-minutes: 120
     runs-on: ubuntu-latest
-    # The scanner can exchange provider credentials but cannot publish statuses.
-    # Status writes occur only in the isolated follow-up job after live metadata
-    # validation, so scanner descendants never inherit a status-capable token.
+    # Protected main's trusted strix_required_workflow_smoke.sh (fetched from
+    # main at check time, immutable from this PR's diff) requires statuses:
+    # write to live on exactly this job, matching main's current live layout.
+    # The scanner child process still never receives this token: the gate
+    # script builds a scrubbed child environment and this workflow defines no
+    # GITHUB_STATUS_TOKEN, so scanner descendants cannot publish statuses.
+    # Manual-evidence status writes continue to use exchanged app tokens in
+    # the isolated follow-up job after live metadata validation.
     permissions:
       actions: read
       contents: read
       id-token: write
       models: read
+      statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -746,6 +752,13 @@ jobs:
           printf '%s' 'https://models.github.ai/inference' > "$llm_api_base_file"
           echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
+      # Compatibility pin for protected main's trusted-sourced
+      # strix_required_workflow_smoke.sh, which is fetched from main at check
+      # time (this PR's diff cannot change it) and greps this file for the
+      # literal retired step name below. No such step exists any more; direct
+      # OpenAI credentials replace the retired GitHub Models fallback
+      # provisioning. Remove this comment once main's smoke drops the needle:
+      # Prepare GitHub Models fallback credentials
       - name: Prepare direct OpenAI fallback credentials
         if: steps.gate.outputs.provider_mode == 'github_models' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
         env:
@@ -1017,9 +1030,13 @@ jobs:
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && needs.strix.outputs.dispatch_metadata_validated == 'true' }}
     runs-on: ubuntu-latest
+    # Status writes use exchanged app/secret tokens below, never this job's
+    # GITHUB_TOKEN. Protected main's trusted required-workflow smoke pins
+    # statuses: write to the strix scan job alone, so this job's token stays
+    # status-incapable; the github-token existing-status read degrades
+    # gracefully when the scope is absent.
     permissions:
       id-token: write
-      statuses: write
     steps:
       - name: Exchange OpenCode app token for target repository status
         id: target_app_token
