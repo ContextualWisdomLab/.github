@@ -718,6 +718,16 @@ TRANSIENT_GITHUB_API_ERRORS = (
     "unexpected EOF",
     "received from peer",
 )
+# The exact diagnostic GitHub emits when a GitHub App installation token's
+# shared primary rate limit (5,000-12,500 requests/hour, pooled across every
+# workflow that mints a token for the same installation -- at least eight
+# other central workflows in this repository alone) is exhausted. Matches
+# the pattern scripts/ci/agent_mention_router.py already retries on. Kept
+# distinct from TRANSIENT_GITHUB_API_ERRORS because this is routine
+# cross-workflow contention, not infrastructure flakiness, and needs a
+# reset-time-aware wait rather than a short fixed backoff.
+RATE_LIMIT_DIAGNOSTIC_RE = re.compile(r"API rate limit exceeded", re.IGNORECASE)
+GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS = 60
 
 
 def is_transient_github_api_error(exc: Exception) -> bool:
@@ -727,6 +737,50 @@ def is_transient_github_api_error(exc: Exception) -> bool:
     message = str(exc)
     folded = message.lower()
     return any(marker in message or marker.lower() in folded for marker in TRANSIENT_GITHUB_API_ERRORS)
+
+
+def is_rate_limited_error(exc: Exception) -> bool:
+    """Return whether a GitHub API failure is the shared installation rate limit.
+
+    Distinct from :func:`is_transient_github_api_error`: this is routine
+    contention from sibling workflows sharing one GitHub App installation's
+    request bucket, not an infrastructure error, so callers give it a
+    reset-time-aware wait via :func:`rate_limit_retry_delay_seconds` instead
+    of the short fixed backoff used for a passing transient failure.
+    """
+    return RATE_LIMIT_DIAGNOSTIC_RE.search(str(exc)) is not None
+
+
+def rate_limit_retry_delay_seconds(resource: str, attempt: int) -> int:
+    """Return how long to wait before retrying a rate-limited GitHub API call.
+
+    Prefers GitHub's own reported reset time for ``resource`` (``"core"``
+    for REST, ``"graphql"`` for GraphQL), read from ``GET /rate_limit`` --
+    which GitHub documents as exempt from the primary rate limit it reports,
+    so checking it does not deepen the exhaustion it is diagnosing. Falls
+    back to the same capped exponential backoff already used for other
+    transient errors when that lookup is itself unavailable or does not
+    confirm the bucket is empty, and never waits longer than
+    ``GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS`` so one repository's scheduler
+    invocation cannot stall the whole organization queue sweep; a bucket
+    that needs longer than that to refill is left for the calling
+    workflow's skip-and-defer handling to pick back up on the next sweep
+    rotation instead of blocking this process.
+    """
+    fallback = min(2 ** (attempt - 1), GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS)
+    try:
+        status = json.loads(run_github_read(["gh", "api", "rate_limit"]))
+        bucket = (status.get("resources") or {}).get(resource) or {}
+        remaining = bucket.get("remaining")
+        reset_epoch = bucket.get("reset")
+    except (RuntimeError, json.JSONDecodeError, AttributeError):
+        return fallback
+    if remaining != 0 or not isinstance(reset_epoch, int):
+        return fallback
+    delay = reset_epoch - int(time.time()) + 5
+    if delay <= 0:
+        return fallback
+    return min(delay, GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS)
 
 
 def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
@@ -740,13 +794,21 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
         try:
             return json.loads(run_github_read(cmd, stdin=query))
         except (RuntimeError, json.JSONDecodeError) as exc:
-            if attempt >= max_attempts or not is_transient_github_api_error(exc):
+            rate_limited = is_rate_limited_error(exc)
+            if attempt >= max_attempts or not (rate_limited or is_transient_github_api_error(exc)):
                 raise
-            delay = min(2 ** (attempt - 1), 8)
-            print(
-                f"Transient GitHub GraphQL error on attempt {attempt}/{max_attempts}; retrying in {delay}s",
-                file=sys.stderr,
-            )
+            if rate_limited:
+                delay = rate_limit_retry_delay_seconds("graphql", attempt)
+                print(
+                    f"Rate-limited GitHub GraphQL error on attempt {attempt}/{max_attempts}; retrying in {delay}s",
+                    file=sys.stderr,
+                )
+            else:
+                delay = min(2 ** (attempt - 1), 8)
+                print(
+                    f"Transient GitHub GraphQL error on attempt {attempt}/{max_attempts}; retrying in {delay}s",
+                    file=sys.stderr,
+                )
             time.sleep(delay)
 
 
@@ -757,9 +819,34 @@ def github_resource_inaccessible(exc: RuntimeError) -> bool:
 
 
 def gh_api_json(path: str) -> Any:
-    """Run a GitHub REST API request through gh and decode the JSON response."""
+    """Run a GitHub REST API request through gh and decode the JSON response.
 
-    return json.loads(run_github_read(["gh", "api", path]))
+    Retries the shared installation rate limit or another transient GitHub
+    API error up to ``max_attempts`` times, mirroring :func:`gh_graphql`'s
+    existing retry convention; any other failure raises immediately exactly
+    as before.
+    """
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):  # pragma: no branch - last failed attempt always raises
+        try:
+            return json.loads(run_github_read(["gh", "api", path]))
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            rate_limited = is_rate_limited_error(exc)
+            if attempt >= max_attempts or not (rate_limited or is_transient_github_api_error(exc)):
+                raise
+            if rate_limited:
+                delay = rate_limit_retry_delay_seconds("core", attempt)
+                print(
+                    f"Rate-limited GitHub REST error on attempt {attempt}/{max_attempts} for {path}; retrying in {delay}s",
+                    file=sys.stderr,
+                )
+            else:
+                delay = min(2 ** (attempt - 1), 8)
+                print(
+                    f"Transient GitHub REST error on attempt {attempt}/{max_attempts} for {path}; retrying in {delay}s",
+                    file=sys.stderr,
+                )
+            time.sleep(delay)
 
 
 def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
