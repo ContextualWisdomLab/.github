@@ -72,6 +72,11 @@ retains the secondary resource evidence without erasing the original failure.
 If service finalization fails, the wrapper performs another best-effort group
 kill, bounded reap, and capture join before publishing failure evidence.
 
+The verification consumer maps an executable lookup failure to exit code `127`,
+publishes its normal machine-readable failed result, and tells the operator to
+install the executable or correct `PATH`. Provider and host path details do not
+escape through an uncaught traceback.
+
 ## Security and availability properties
 
 - Parent retained memory is bounded independently for stdout and stderr.
@@ -86,6 +91,8 @@ kill, bounded reap, and capture join before publishing failure evidence.
 - Non-POSIX environments fail closed rather than using unmanaged capture.
 - UTF-8 replacement decoding cannot expand published text beyond the configured
   byte budget.
+- Bounded regular-file suffix reads account for both the truncation marker and
+  replacement-decoding expansion inside the caller's declared byte budget.
 
 MITRE CWE-770 identifies unbounded memory and other resource consumption as an availability weakness and recommends explicit minimum/maximum expectations, throttling, quotas, and safe failure when limits are reached. This implementation sets explicit per-stream ceilings, a finite finalization bound, and a stable failure result. NIST SP 800-218 supplies the secure-development framework used to define, test, and retain this control as reviewable evidence.
 
@@ -131,6 +138,11 @@ The finite reader join converts an inherited descriptor outside the managed
 process group into a deterministic failure, but it does not discover or
 terminate arbitrary processes in another session. Isolation beyond that
 boundary remains the responsibility of the surrounding container or runner.
+After the direct child is reaped, final same-group cleanup uses its numeric
+process-group identifier immediately. POSIX does not provide a retained
+process-group handle, so an extremely narrow identifier-reuse race remains a
+platform limitation; a stronger isolation boundary belongs in the surrounding
+container or runner.
 
 ## Rollback
 

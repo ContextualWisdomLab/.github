@@ -154,6 +154,29 @@ def test_stuck_capture_returns_bounded_failure_without_traceback(
     assert "Traceback" not in captured.err
 
 
+def test_missing_executable_returns_stable_failed_evidence(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """A missing command gives an actionable result instead of a traceback."""
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(_repository(tmp_path)),
+            "--",
+            "missing-verification-executable",
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = _result_payload(captured.out)
+
+    assert exit_code == sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+    assert payload["exit_code"] == sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+    assert "install the executable or correct command PATH" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_unsupported_resource_limit_fails_closed(
     monkeypatch,
     tmp_path: Path,

@@ -116,8 +116,10 @@ def _render_bounded_bytes(buffer: bytes, limit: int, truncated: bool) -> bytes:
     """Return evidence bytes no larger than the configured stream budget."""
 
     if not truncated:
-        return buffer
+        return buffer[-limit:]
     marker = TRUNCATION_MARKER.encode("utf-8")
+    if limit <= len(marker):
+        return marker[:limit]
     suffix_budget = limit - len(marker)
     suffix = buffer[-suffix_budget:]
     return marker + suffix
@@ -288,8 +290,8 @@ def read_bounded_suffix(path: Path, maximum_bytes: int) -> BoundedText:
         if truncated:
             captured_file.seek(stored_bytes - read_limit)
         data = captured_file.read(read_limit)
-    decoded = data.decode("utf-8", errors="replace")
-    text = f"{TRUNCATION_MARKER}{decoded}" if truncated else decoded
+    evidence = _render_bounded_bytes(data, read_limit, truncated)
+    text = _decode_bounded_bytes(evidence, read_limit)
     return BoundedText(
         text=text,
         truncated=truncated,

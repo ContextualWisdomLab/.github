@@ -21,8 +21,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Add a reusable POSIX subprocess boundary with continuously drained bounded
   stdout/stderr suffixes, finite reader joins, post-leader process-group cleanup,
-  and UTF-8 decoding that stays inside the declared byte budget. Consumer
-  sandbox integrations remain in separate stacked changes.
+  and stream or file-suffix UTF-8 decoding that stays inside the declared byte
+  budget. Consumer sandbox integrations remain in separate stacked changes.
 
 - Refresh the live product and technical gap baseline against the current
   open-PR queue, with SHA-bound snapshot rows, a same-session open/close
@@ -54,8 +54,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Route sandboxed verification commands through the bounded subprocess layer,
   reject copied-tree symlinks that leave the sandbox, and publish distinct
-  output-limit, unsupported-platform, and path-boundary evidence without
-  exposing host paths.
+  output-limit, unsupported-platform, missing-executable, and path-boundary
+  evidence without exposing host paths or uncaught tracebacks.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
