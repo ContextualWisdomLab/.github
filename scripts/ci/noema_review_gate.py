@@ -424,15 +424,15 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract the first JSON object from a strict or lightly wrapped response."""
-    start = text.find("{")
-    if start < 0:
+    """Extract a JSON object from a strict or lightly wrapped LLM response."""
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        return json.loads(stripped)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start < 0 or end < start:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
-    try:
-        value, _ = json.JSONDecoder().raw_decode(text, start)
-        return value
-    except json.JSONDecodeError:
-        raise RuntimeError("Noema LLM response did not contain a JSON object")
+    return json.loads(stripped[start : end + 1])
 
 
 def call_llm(
