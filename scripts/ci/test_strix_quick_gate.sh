@@ -4467,6 +4467,30 @@ EOS
 			;;
 		esac
 		;;
+	nim-primary-rate-limit-clean-fallback-quality-warning)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+			echo "LLM CONNECTION FAILED"
+			echo "Error: litellm.RateLimitError: Nvidia_nimException - Error code: 429"
+			exit 1
+			;;
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			echo "╭─ STRIX ──────────────────────────────────────────────────────────────────────╮"
+			echo "│  MODEL QUALITY WARNING                                                       │"
+			echo "│  'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' is not a recommended  │"
+			echo "│  frontier model for Strix.                                                   │"
+			echo "│  You can continue, but weaker models may miss vulnerabilities or produce     │"
+			echo "│  lower-quality findings.                                                     │"
+			echo "│  Vulnerabilities 0                                                           │"
+			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
+			exit 0
+			;;
+		*)
+			echo "Error: NIM quality-warning fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 62
+			;;
+		esac
+		;;
 	provider-fatal-success-signal)
 		echo "Fatal: provider stream aborted"
 		exit 0
@@ -10329,6 +10353,16 @@ run_gate_case "strict-zero-findings-timeout-fails-pr" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "nim-primary-rate-limit-clean-fallback-quality-warning" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+	"nvidia_nim"
 
 run_gate_case "provider-fatal-success-signal" \
 	"vertex_ai/provider-fatal-success-signal" \
