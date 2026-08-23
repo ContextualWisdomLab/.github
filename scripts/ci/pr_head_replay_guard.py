@@ -120,6 +120,7 @@ def git_output(repo_root: Path, args: Sequence[str]) -> str:
         command_args = [
             "diff",
             "--ignore-submodules=none",
+            "--find-renames",
             *(
                 argument
                 for argument in command_args[1:]
@@ -264,9 +265,18 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
             continue
         status = fields[0][:1]
         if status == "R":
-            if len(fields) < 3 or not all(is_test_path(path) for path in fields[-2:]):
+            if len(fields) < 3:
                 continue
             before_path, after_path = fields[-2:]
+            before_is_test = is_test_path(before_path)
+            after_is_test = is_test_path(after_path)
+            if not before_is_test:
+                if after_is_test:
+                    added_files += 1
+                continue
+            if not after_is_test:
+                regressed.add(before_path)
+                continue
             before_count = test_case_count(repo_root, start, before_path)
             after_count = test_case_count(repo_root, end, after_path)
             if before_count is None or after_count is None or after_count < before_count:

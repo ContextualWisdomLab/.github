@@ -35,6 +35,13 @@ the start revision and the new path at the end revision. A smaller or
 unevaluable declared-case inventory records the new path as regressed; the
 rename does not manufacture added-file replacement credit.
 
+Every replay-evidence `git diff` forces rename detection, so a repository-local
+`diff.renames=false` setting cannot degrade the comparison into independent
+delete/add records and manufacture replacement credit. A rename from a test
+path to a non-test path records the old test path as regressed because the file
+has left ordinary test discovery; the reverse direction counts as one added
+test file, and a rename wholly outside test paths remains irrelevant.
+
 ## Verification contract
 
 The permanent regression fixture models one existing test module losing a declared case while another existing module gains one. The old implementation cannot satisfy the fixture because it has no existing-file replacement signal. The repaired implementation reports the regressed path, zero added files, one added existing-file case, and does not classify that bounded refactor as stale replay.
@@ -42,9 +49,12 @@ The permanent regression fixture models one existing test module losing a declar
 A second fixture proves malformed numstat rows, binary entries, non-test files, unchanged case counts, missing before/after evidence, and case-count reductions cannot manufacture replacement credit.
 
 A real temporary Git repository also renames a Python test module and changes
-one declared `test_*` function into a non-test helper. The predecessor misses
-the regression because Git emits `R`; the repaired guard reports the renamed
-path, zero added test files, and a blocking test-regression signal.
+one declared `test_*` function into a non-test helper while local configuration
+disables rename detection. The predecessor degrades the change into a deletion
+plus a credited added test file; the repaired guard still reports the renamed
+path, zero added test files, and a blocking test-regression signal. A second
+fixture moves an unchanged test module outside test discovery and proves that
+boundary crossing is reported as test loss.
 
 Consumer acceptance requires rerunning the guard against the unchanged `ContextualWisdomLab.github.io#144` head and then regenerating its exact-head `coverage-evidence` and semantic review through protected organization workflows. A passing source test on this branch is not consumer or merge authority.
 

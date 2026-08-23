@@ -269,6 +269,7 @@ def test_shrunk_test_without_replacement_fails(tmp_path):
 def test_renamed_test_losing_case_without_replacement_fails(tmp_path):
     """Renaming a test module cannot hide a reduced declared-case inventory."""
     repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    git(repo, "config", "diff.renames", "false")
     git(repo, "mv", "tests/test_feature.py", "tests/test_feature_renamed.py")
     write(
         repo,
@@ -280,6 +281,20 @@ def test_renamed_test_losing_case_without_replacement_fails(tmp_path):
     evidence = guard.collect_evidence(repo, current_base, head)
 
     assert evidence.regressed_test_paths == ("tests/test_feature_renamed.py",)
+    assert evidence.added_test_files == 0
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
+
+
+def test_renaming_test_module_outside_test_paths_fails(tmp_path):
+    """Moving a discovered test to a non-test path is treated as test loss."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    git(repo, "mv", "tests/test_feature.py", "src/feature_checks.py")
+    head = commit(repo, "move test module outside discovery paths")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_feature.py",)
     assert evidence.added_test_files == 0
     assert evidence.suspicious_test_regression
     assert evidence.blocked
@@ -408,7 +423,9 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
             "A\ttests/test_new.py",
             "M\ttests/test_kept.py",
             "R100\ttests/test_same.py\ttests/test_same_renamed.py",
+            "R100\tsrc/old_check.py\ttests/test_promoted.py",
             "R100\tsrc/old.py\tsrc/new.py",
+            "R100\tonly-one-path.py",
             "D\tsrc/app_old.py",
             "badline",
         ]
@@ -434,7 +451,7 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
     regressed, added = guard.test_file_changes(tmp_path, "a", "b")
 
     assert regressed == ("tests/test_gone.py", "tests/test_shrunk.py")
-    assert added == 1
+    assert added == 2
 
 
 def test_invalid_commit_fails_closed_with_reason(tmp_path, capsys):
