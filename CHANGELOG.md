@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Aligned every central OSV-Scanner Action use to the official v2.5.1 commit,
+  preserving exact-base/head policy while applying the current namespace,
+  local-cache, and offline-vulnerability matching fixes.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
