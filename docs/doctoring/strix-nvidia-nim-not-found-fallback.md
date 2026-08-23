@@ -32,8 +32,9 @@ fallback produces complete evidence.
 
 A completed zero-vulnerability fallback may emit Strix's model-quality banner
 and Hugging Face's exact unauthenticated-download advisory while loading public
-scanner assets. Those two bounded advisories are not provider-failure evidence;
-all other warnings remain fail closed.
+scanner assets. The trusted gate removes only those two complete lines from both
+console and structured report logs. A suffix, prefix, or any other warning text
+remains fail-closed provider-failure evidence.
 
 Exhausted provider infrastructure remains fail-closed even when the trusted
 gate has classified every observed threshold finding as outside the pull
@@ -59,8 +60,10 @@ Regression evidence proves that:
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
 10. the exact model-quality and Hugging Face download advisories do not reject
-    an otherwise complete zero-vulnerability fallback; and
-11. the required-workflow smoke contract pins these properties.
+    an otherwise complete zero-vulnerability fallback when they appear in
+    console or report logs;
+11. appended warning text is not hidden by either exact advisory filter; and
+12. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 

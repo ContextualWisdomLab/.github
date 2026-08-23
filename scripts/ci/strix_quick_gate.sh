@@ -172,6 +172,11 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_clean_advisory = re.compile(
+    r"^(?:[ \t│]*MODEL QUALITY WARNING[ \t│]*"
+    r"|Warning: You are sending unauthenticated requests to the HF Hub\. "
+    r"Please set a HF_TOKEN to enable higher rate limits and faster downloads\.)$"
+)
 
 
 def iter_report_logs(root: Path):
@@ -194,7 +199,12 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_clean_advisory.fullmatch(line.rstrip("\r\n"))
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -3200,7 +3210,7 @@ is_llm_token_limit_error() {
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
 	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' \
-		< <(grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$|^Warning: You are sending unauthenticated requests to the HF Hub\.' "$STRIX_LOG"); then
+		< <(grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$' "$STRIX_LOG"); then
 		return 0
 	fi
 

@@ -3642,6 +3642,11 @@ REPORT
 		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
 			echo "│  MODEL QUALITY WARNING                                                       │"
 			echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads."
+			mkdir -p "$STRIX_REPORTS_DIR/run-clean-advisories"
+			{
+				echo "│  MODEL QUALITY WARNING                                                       │"
+				echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads."
+			} >"$STRIX_REPORTS_DIR/run-clean-advisories/scan.log"
 			echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
 			exit 0
 			;;
@@ -3650,6 +3655,11 @@ REPORT
 			exit 61
 			;;
 		esac
+		;;
+	hf-advisory-suffix-fails-closed)
+		echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads. Fatal: repository-derived suffix"
+		echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
+		exit 0
 		;;
 	vertex-primary-resource-exhausted-fallback-success)
 		case "${STRIX_LLM:-}" in
@@ -6563,6 +6573,16 @@ run_filtered_gate_case_if_requested() {
 			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 			"<unset>|<unset>" \
 			"openai"
+		;;
+	hf-advisory-suffix-fails-closed)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/hf-advisory-suffix-fails-closed" \
+			"" \
+			"1" \
+			"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+			"1" \
+			"vertex_ai/hf-advisory-suffix-fails-closed" \
+			"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -9912,6 +9932,15 @@ run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
 	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 	"<unset>|<unset>" \
 	"openai"
+
+run_gate_case "hf-advisory-suffix-fails-closed" \
+	"vertex_ai/hf-advisory-suffix-fails-closed" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/hf-advisory-suffix-fails-closed" \
+	"<unset>"
 
 run_gate_case_allow_provider_signal "vertex-primary-resource-exhausted-fallback-success" \
 	"vertex_ai/resource-exhausted-primary" \
