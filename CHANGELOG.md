@@ -40,9 +40,10 @@ Semantic Versioning where the repository publishes a release.
 - Route the exact single-line LiteLLM/Azure unsupported-temperature failure to
   an already-configured distinct Strix fallback without accepting split-line
   imitations, and normalize the workflow's `openai-direct/` fallback alias to
-  LiteLLM's `openai_direct/` provider prefix before dispatch, without turning
-  an incomplete provider scan into passing evidence. The incident and
-  fail-closed boundary are recorded in
+  LiteLLM's `openai_direct/` provider prefix before dispatch. Cross-provider
+  attempts now switch to the trusted OpenAI credential and clear the primary
+  provider API base, without turning an incomplete provider scan into passing
+  evidence. The incident and fail-closed boundary are recorded in
   `docs/doctoring/strix-unsupported-sampling-fallback.md`.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and

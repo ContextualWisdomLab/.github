@@ -27,11 +27,14 @@ That exact capability failure is infrastructure evidence and may move directly
 to an already-configured distinct outer fallback. It is not eligible for a
 same-model retry. The shared model normalizer also translates the workflow's
 human-readable `openai-direct/` selector into LiteLLM's `openai_direct/`
-provider prefix before dispatch; otherwise the configured fallback fails before
-it can make a provider request. If no distinct fallback exists or every
-fallback fails, the required Strix check remains non-passing. Existing changed,
-unmapped, manifest, `ModelBehaviorError`, and vulnerability-report boundaries
-remain fail closed.
+provider prefix before dispatch. A cross-provider direct OpenAI fallback reads
+the established OpenAI secret from a trusted runtime file and clears the
+primary provider's API base; otherwise a NVIDIA or OpenRouter run would send
+the fallback to the wrong endpoint with the wrong credential. If the fallback
+credential is unavailable, the attempted fallback fails configuration closed.
+If no distinct fallback exists or every fallback fails, the required Strix
+check remains non-passing. Existing changed, unmapped, manifest,
+`ModelBehaviorError`, and vulnerability-report boundaries remain fail closed.
 
 Cross-line signal assembly is deliberately rejected so unrelated target output
 cannot manufacture a provider capability error from separate log lines.
@@ -42,6 +45,8 @@ cannot manufacture a provider capability error from separate log lines.
   Models fallback exactly once and succeeds only when that scan completes.
 - The configured `openai-direct/gpt-5.6-luna` fallback normalizes to the
   LiteLLM-compatible `openai_direct/gpt-5.6-luna` selector.
+- A NVIDIA-primary run dispatches that fallback with the OpenAI credential and
+  no inherited NVIDIA API base.
 - A split-line imitation is non-recoverable and never dispatches the fallback.
 - The full Python suite, native workflow validation, Bash syntax checks, and
   complete Strix shell regression suite run on the final tree.
