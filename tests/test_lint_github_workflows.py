@@ -1,4 +1,4 @@
-"""Behavioral regressions for bounded actionlint and ShellCheck execution."""
+"""Behavioral regressions for bounded actionlint and shfmt execution."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _tool_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         """,
     )
     _write_executable(
-        binary_dir / "shellcheck",
+        binary_dir / "shfmt",
         """
         #!/usr/bin/env python3
         import json
@@ -56,25 +56,19 @@ def _tool_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         import sys
 
         root = Path(os.environ["LINT_CAPTURE_DIR"])
-        index = len(list(root.glob("shellcheck-*.json")))
-        script = Path(sys.argv[-1]).read_text(encoding="utf-8")
-        (root / f"shellcheck-{index}.json").write_text(
+        index = len(list(root.glob("shfmt-*.json")))
+        script = sys.stdin.read()
+        (root / f"shfmt-{index}.json").write_text(
             json.dumps({"args": sys.argv[1:], "script": script}),
             encoding="utf-8",
         )
-        if "FINDING_MARKER" in script:
-            print(json.dumps([{
-                "line": 3,
-                "column": 7,
-                "level": "warning",
-                "code": 2086,
-                "message": "Double quote to prevent globbing.",
-            }]))
-            raise SystemExit(1)
-        if os.environ.get("SHELLCHECK_MALFORMED") == "1":
+        if "SYNTAX_ERROR_MARKER" in script:
+            print("standard input:2:7: expected command", file=sys.stderr)
+            raise SystemExit(3)
+        if os.environ.get("SHFMT_MALFORMED") == "1":
             print("not-json")
             raise SystemExit(0)
-        print("[]")
+        print("{}")
         """,
     )
     environment = {
@@ -99,8 +93,8 @@ def _run_linter(workflow: Path, environment: dict[str, str]) -> subprocess.Compl
     )
 
 
-def test_linter_uses_actionlint_schema_and_file_based_shellcheck(tmp_path: Path) -> None:
-    """Large Bash and explicit sh scripts use files while other shells stay excluded."""
+def test_linter_uses_actionlint_schema_and_bounded_shfmt_parser(tmp_path: Path) -> None:
+    """Large Bash and explicit sh scripts reach shfmt without content loss."""
 
     environment, capture_dir = _tool_environment(tmp_path)
     workflow = tmp_path / "large.yml"
@@ -116,6 +110,7 @@ def test_linter_uses_actionlint_schema_and_file_based_shellcheck(tmp_path: Path)
                 "concurrency:",
                 "  group: exact",
                 "  queue: max",
+                "  cancel-in-progress: false",
                 "jobs:",
                 "  linux:",
                 "    runs-on: ubuntu-24.04",
@@ -146,30 +141,21 @@ def test_linter_uses_actionlint_schema_and_file_based_shellcheck(tmp_path: Path)
     actionlint_args = json.loads(
         (capture_dir / "actionlint.json").read_text(encoding="utf-8")
     )
-    shellcheck_records = [
+    shfmt_records = [
         json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(capture_dir.glob("shellcheck-*.json"))
+        for path in sorted(capture_dir.glob("shfmt-*.json"))
     ]
     assert result.returncode == 0, result.stderr
     assert actionlint_args[0] == "-shellcheck="
     assert actionlint_args[-1] == str(workflow)
-    assert len(shellcheck_records) == 2
-    assert shellcheck_records[0]["args"][:7] == [
-        "--norc",
-        "-f",
-        "json",
-        "-x",
-        "--shell",
-        "bash",
-        "-e",
-    ]
-    assert shellcheck_records[0]["args"][-1] != "-"
-    assert shellcheck_records[0]["script"].startswith(
+    assert len(shfmt_records) == 2
+    assert shfmt_records[0]["args"] == ["-ln", "bash", "-tojson"]
+    assert shfmt_records[0]["script"].startswith(
         'set -eo pipefail\necho "_________________"\n'
     )
-    assert len(shellcheck_records[0]["script"].encode()) > 65_536
-    assert shellcheck_records[1]["args"][5] == "sh"
-    assert shellcheck_records[1]["script"] == "set -e\necho ok\n"
+    assert len(shfmt_records[0]["script"].encode()) > 65_536
+    assert shfmt_records[1]["args"] == ["-ln", "posix", "-tojson"]
+    assert shfmt_records[1]["script"] == "set -e\necho ok\n"
 
 
 def test_linter_preserves_lines_inside_multiline_expressions(tmp_path: Path) -> None:
@@ -196,7 +182,7 @@ jobs:
     result = _run_linter(workflow, environment)
 
     record = json.loads(
-        (capture_dir / "shellcheck-0.json").read_text(encoding="utf-8")
+        (capture_dir / "shfmt-0.json").read_text(encoding="utf-8")
     )
     lines = record["script"].splitlines()
     assert result.returncode == 0, result.stderr
@@ -224,16 +210,29 @@ def test_linter_invokes_fixed_tool_names_without_dynamic_command_selection() -> 
     source = LINTER.read_text(encoding="utf-8")
 
     assert 'ENV.fetch("ACTIONLINT"' not in source
-    assert 'ENV.fetch("SHELLCHECK"' not in source
+    assert 'ENV.fetch("SHFMT"' not in source
     assert 'Open3.capture3("actionlint", *arguments)' in source
-    assert 'Open3.capture3(\n      "shellcheck",' in source
+    assert 'Open3.capture3("shfmt", "-ln", "bash", "-tojson"' in source
+    assert 'Open3.capture3("shfmt", "-ln", "posix", "-tojson"' in source
     assert source.count(
         "# nosemgrep: ruby.lang.security.dangerous-exec.dangerous-exec"
     ) == 1
 
 
-def test_linter_reports_shellcheck_findings_with_workflow_context(tmp_path: Path) -> None:
-    """A delegated finding remains actionable without exposing a temporary filename."""
+def test_linter_uses_permissive_pinned_shfmt_instead_of_shellcheck() -> None:
+    """The write-capable linter must not add a GPL tool dependency."""
+
+    source = LINTER.read_text(encoding="utf-8")
+    workflow = AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'Open3.capture3("shfmt",' in source
+    assert 'Open3.capture3("shellcheck",' not in source
+    assert "shfmt_v3.13.1_linux_amd64" in workflow
+    assert "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1" in workflow
+
+
+def test_linter_reports_shfmt_syntax_failures_with_workflow_context(tmp_path: Path) -> None:
+    """A parser failure identifies the governed workflow job and step."""
 
     environment, _capture_dir = _tool_environment(tmp_path)
     workflow = tmp_path / "finding.yml"
@@ -246,19 +245,18 @@ jobs:
     steps:
       - name: Unsafe expansion
         run: |
-          echo FINDING_MARKER
+          echo SYNTAX_ERROR_MARKER
 """,
         encoding="utf-8",
     )
 
     result = _run_linter(workflow, environment)
 
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert str(workflow) in result.stderr
     assert "job=verify" in result.stderr
     assert "step=Unsafe expansion" in result.stderr
-    assert "SC2086:warning:2:7" in result.stderr
-    assert "Double quote to prevent globbing" in result.stderr
+    assert "standard input:2:7: expected command" in result.stderr
 
 
 def test_linter_rejects_unsupported_queue_before_actionlint(tmp_path: Path) -> None:
@@ -285,10 +283,51 @@ jobs: {}
 
 
 @pytest.mark.parametrize(
+    "workflow_source",
+    (
+        """name: cancelled-workflow-queue
+on: push
+concurrency:
+  group: exact
+  queue: max
+  cancel-in-progress: true
+jobs: {}
+""",
+        """name: cancelled-job-queue
+on: push
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: exact
+      queue: max
+      cancel-in-progress: true
+    steps: []
+""",
+    ),
+)
+def test_linter_rejects_queue_max_with_static_cancellation(
+    tmp_path: Path,
+    workflow_source: str,
+) -> None:
+    """GitHub permits an expanded queue only when cancellation is disabled."""
+
+    environment, capture_dir = _tool_environment(tmp_path)
+    workflow = tmp_path / "cancelled-queue.yml"
+    workflow.write_text(workflow_source, encoding="utf-8")
+
+    result = _run_linter(workflow, environment)
+
+    assert result.returncode == 2
+    assert "queue max requires cancel-in-progress to be false or absent" in result.stderr
+    assert not (capture_dir / "actionlint.json").exists()
+
+
+@pytest.mark.parametrize(
     ("environment_update", "expected"),
     (
         ({"ACTIONLINT_STATUS": "3", "ACTIONLINT_OUTPUT": "schema failure\n"}, "schema failure"),
-        ({"SHELLCHECK_MALFORMED": "1"}, "invalid ShellCheck JSON"),
+        ({"SHFMT_MALFORMED": "1"}, "invalid shfmt JSON"),
     ),
 )
 def test_linter_fails_closed_on_tool_failures(

@@ -510,7 +510,16 @@ jobs:
             python3 -m py_compile "${changed_python_files[@]}"
           fi
           if [ "${#changed_workflows[@]}" -gt 0 ]; then
-            ruby "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/lint_github_workflows.rb" \
+            shfmt_path="${RUNNER_TEMP}/shfmt"
+            curl -fsSL \
+              -o "$shfmt_path" \
+              https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+            printf '%s  %s\n' \
+              'fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1' \
+              "$shfmt_path" | sha256sum -c -
+            chmod 0755 "$shfmt_path"
+            PATH="${RUNNER_TEMP}:${PATH}" \
+              ruby "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/lint_github_workflows.rb" \
               "${changed_workflows[@]}"
           fi
 

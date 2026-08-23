@@ -55,12 +55,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Separate actionlint schema/expression/Pyflakes validation from file-based
-  ShellCheck execution so workflow shell blocks larger than 64 KiB cannot
-  deadlock the write-capable autofix verifier, preserve actionlint's shell and
-  expression semantics, and narrowly accept GitHub's native
-  `concurrency.queue: max` while rejecting every other queue value until
-  upstream actionlint schema support is released.
+- Separate actionlint schema/expression/Pyflakes validation from its deadlocking
+  ShellCheck transport, replace the newly added GPL dependency with the
+  checksum-pinned BSD-3-Clause shfmt 3.13.1 syntax parser, preserve effective
+  shell and expression semantics for workflow blocks larger than 64 KiB, and
+  accept GitHub's native `concurrency.queue: max` only when
+  `cancel-in-progress` is false or absent.
 - Bound head-mutation authorization to the actual selected `GH_TOKEN` as well
   as its declared source, failing closed when it is missing or resolves to the
   workflow `github.token`; case-fold repository host comparisons so casing
@@ -74,11 +74,11 @@ Semantic Versioning where the repository publishes a release.
   LiteLLM's documented `openai/...` provider prefix before invocation, so a
   recoverable NVIDIA capacity failure can reach the configured cross-provider
   fallback without being misclassified as a successful scan.
-- Invoke actionlint and ShellCheck through fixed argv executable names supplied
-  by the pinned trusted `PATH`, removing unused environment-selected command
-  overrides while preserving the no-shell, file-backed lint boundary; narrowly
-  suppress Semgrep's remaining false positive on the literal actionlint call,
-  whose dynamic workflow paths remain separate argv values.
+- Invoke actionlint and shfmt through fixed executable names supplied by the
+  pinned trusted `PATH`, removing unused environment-selected command overrides
+  while preserving the no-shell lint boundary; narrowly suppress Semgrep's
+  remaining false positive on the literal actionlint call, whose dynamic
+  workflow paths remain separate argv values.
 
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and

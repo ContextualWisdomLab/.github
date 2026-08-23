@@ -1,20 +1,17 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Run actionlint without its oversized-stdin ShellCheck transport, then apply
-# the same ShellCheck policy directly to regular temporary files. This keeps
-# schema, expression, Python, and shell validation while avoiding the deadlock
-# tracked by rhysd/actionlint#712.
+# Run actionlint without its oversized-stdin ShellCheck transport, then parse
+# shell steps with the permissively licensed shfmt parser. This keeps schema,
+# expression, Python, and shell-syntax validation without the transport
+# deadlock tracked by rhysd/actionlint#712 or a GPL tool dependency.
 
 require "json"
 require "open3"
-require "tempfile"
 require "yaml"
 
 QUEUE_DIAGNOSTIC =
   'unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"'
-SHELLCHECK_EXCLUSIONS = "SC1091,SC2194,SC2050,SC2153,SC2154,SC2157,SC2043"
-
 class WorkflowLintError < StandardError; end
 
 def load_workflow(path)
@@ -33,10 +30,14 @@ end
 
 def validate_concurrency_queue!(path, label, concurrency)
   return unless concurrency.is_a?(Hash) && concurrency.key?("queue")
-  return if concurrency["queue"] == "max"
+  unless concurrency["queue"] == "max"
+    raise WorkflowLintError,
+          "#{path}: #{label} concurrency queue must be exactly max, got #{concurrency['queue'].inspect}"
+  end
+  return unless concurrency["cancel-in-progress"] == true
 
   raise WorkflowLintError,
-        "#{path}: #{label} concurrency queue must be exactly max, got #{concurrency['queue'].inspect}"
+        "#{path}: #{label} concurrency queue max requires cancel-in-progress to be false or absent"
 end
 
 def validate_queue_contract!(path, workflow)
@@ -125,54 +126,31 @@ rescue SystemCallError => error
   raise WorkflowLintError, "actionlint could not start: #{error.message}"
 end
 
-def run_shellcheck(path, job_name, step_name, dialect, script)
+def run_shfmt(path, job_name, step_name, dialect, script)
   setup = dialect == "bash" ? "set -eo pipefail" : "set -e"
   source = "#{setup}\n#{sanitize_expressions(script)}\n"
-  stdout = stderr = nil
-  status = nil
-
-  Tempfile.create(["actionlint-shellcheck-", ".#{dialect}"]) do |file|
-    file.chmod(0o600)
-    file.write(source)
-    file.flush
-    stdout, stderr, status = Open3.capture3(
-      "shellcheck",
-      "--norc",
-      "-f",
-      "json",
-      "-x",
-      "--shell",
-      dialect,
-      "-e",
-      SHELLCHECK_EXCLUSIONS,
-      file.path
-    )
+  stdout, stderr, status = if dialect == "bash"
+    Open3.capture3("shfmt", "-ln", "bash", "-tojson", stdin_data: source)
+  else
+    Open3.capture3("shfmt", "-ln", "posix", "-tojson", stdin_data: source)
   end
 
-  unless [0, 1].include?(status.exitstatus)
+  unless status.success?
     detail = stderr.to_s.strip
     detail = "exit #{status.exitstatus}" if detail.empty?
-    raise WorkflowLintError, "#{path}: ShellCheck failed for job=#{job_name} step=#{step_name}: #{detail}"
+    raise WorkflowLintError,
+          "#{path}: shfmt could not parse job=#{job_name} step=#{step_name}: #{detail}"
   end
 
-  findings = JSON.parse(stdout)
-  raise JSON::ParserError, "top-level result is not an array" unless findings.is_a?(Array)
+  syntax_tree = JSON.parse(stdout)
+  raise JSON::ParserError, "top-level result is not an object" unless syntax_tree.is_a?(Hash)
 
-  findings.each do |finding|
-    script_line = [finding.fetch("line").to_i - 1, 1].max
-    message = finding.fetch("message").to_s.delete_suffix(".")
-    warn(
-      "#{path}: shellcheck reported issue in job=#{job_name} step=#{step_name}: " \
-      "SC#{finding.fetch('code')}:#{finding.fetch('level')}:#{script_line}:" \
-      "#{finding.fetch('column')}: #{message}"
-    )
-  end
-  findings.length
-rescue JSON::ParserError, KeyError => error
+  0
+rescue JSON::ParserError => error
   raise WorkflowLintError,
-        "#{path}: invalid ShellCheck JSON for job=#{job_name} step=#{step_name}: #{error.message}"
+        "#{path}: invalid shfmt JSON for job=#{job_name} step=#{step_name}: #{error.message}"
 rescue SystemCallError => error
-  raise WorkflowLintError, "ShellCheck could not start: #{error.message}"
+  raise WorkflowLintError, "shfmt could not start: #{error.message}"
 end
 
 def lint(paths)
@@ -188,7 +166,7 @@ def lint(paths)
 
   findings = workflows.sum do |path, workflow|
     shell_scripts(path, workflow).sum do |script_path, job_name, step_name, dialect, script|
-      run_shellcheck(script_path, job_name, step_name, dialect, script)
+      run_shfmt(script_path, job_name, step_name, dialect, script)
     end
   end
   findings.zero? ? 0 : 1

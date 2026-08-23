@@ -101,7 +101,7 @@ def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
     """A slow repository cannot hide a completed sibling repository result."""
 
     sweep = module()
-    second_completed = threading.Event()
+    second_observed = threading.Event()
 
     class CompletionOrderClient(PagingClient):
         """Hold the first repository until the second one has completed."""
@@ -111,11 +111,8 @@ def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
 
             endpoint = args[0]
             if endpoint == "repos/ContextualWisdomLab/first/pulls":
-                assert second_completed.wait(timeout=5)
-            response = super().request(args, input_payload=input_payload)
-            if endpoint == "repos/ContextualWisdomLab/second/pulls":
-                second_completed.set()
-            return response
+                assert second_observed.wait(timeout=30)
+            return super().request(args, input_payload=input_payload)
 
     client = CompletionOrderClient(
         {
@@ -139,14 +136,15 @@ def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
         "ThreadPoolExecutor",
         recording_executor,
     )
-    results = list(
-        sweep.list_recent_pull_requests(
-            client,
-            organization="ContextualWisdomLab",
-            repository_source="organization",
-            since="2026-08-05T00:00:00Z",
-        )
+    issues = sweep.list_recent_pull_requests(
+        client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T00:00:00Z",
     )
+    first_result = next(issues)
+    second_observed.set()
+    results = [first_result, *issues]
     assert [result["repository"] for result in results] == [
         "ContextualWisdomLab/second",
         "ContextualWisdomLab/first",

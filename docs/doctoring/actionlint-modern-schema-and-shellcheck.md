@@ -1,4 +1,4 @@
-# Actionlint modern-schema and large-shell compatibility
+# Actionlint modern-schema and permissive shell-parser compatibility
 
 Decision date: **2026-08-22**
 
@@ -22,20 +22,21 @@ validation or shell analysis.
 ## Decision
 
 Keep actionlint as the schema, expression, and Pyflakes validator, but disable
-only its ShellCheck subprocess integration with `-shellcheck=`. The trusted
+its ShellCheck subprocess integration with `-shellcheck=`. The trusted
 `lint_github_workflows.rb` boundary uses Ruby's standard-library Psych parser to
 read the same YAML scalar values, reproduces actionlint 1.7.12's workflow/job/
-runner/step shell precedence, expression normalization, implicit shell setup,
-and narrow rule exclusions, and invokes the installed ShellCheck against unique
-regular temporary files. It parses ShellCheck JSON, restores the workflow job
-and step identity in every diagnostic, preserves findings as a failing status,
-and fails closed on malformed output or a missing executable.
+runner/step shell precedence, expression normalization, and implicit shell
+setup. It streams each Bash or POSIX sh program into shfmt 3.13.1's syntax-tree
+JSON mode and fails closed on syntax errors, malformed JSON, or a missing
+executable.
 
-The helper invokes the fixed `actionlint` and `shellcheck` executable names as
-argv, never a repository- or environment-selected command and never a shell
-string. The pinned hosted setup supplies those names through its trusted
-`PATH`; behavioral tests use an isolated temporary `PATH` to prove the same
-argv boundary without introducing a second executable-selection channel.
+shfmt is BSD-3-Clause, which satisfies the binding commercial/permissive
+license policy; the newly introduced direct GPL-3.0-or-later ShellCheck
+dependency has been removed. The write-capable worker downloads the official
+Linux amd64 shfmt 3.13.1 release only when a workflow changed, verifies its
+published SHA-256 digest, and exposes only that verified binary through the
+step-local `PATH`. Behavioral tests use an isolated temporary `PATH` to prove
+the same fixed executable and argv boundary.
 
 [Required Semgrep run 32637664667](https://github.com/ContextualWisdomLab/.github/actions/runs/32637664667)
 still classified the fixed `actionlint` invocation as dynamic because workflow
@@ -43,27 +44,33 @@ paths remain argv values. Ruby's `Open3.capture3` passes these separate
 arguments directly to the literal executable and does not invoke a shell. The
 single inline Semgrep suppression therefore applies only to that reviewed
 false positive; the executable-name regression, isolated `PATH` execution, and
-fail-closed actionlint status handling remain mandatory. The separate
-ShellCheck invocation remains unsuppressed.
+fail-closed actionlint status handling remain mandatory. shfmt uses only
+literal command arguments and receives the governed shell source through
+standard input, so it needs no scanner suppression.
 
 The autofix worker ignores only actionlint's exact released-schema diagnostic
 for the concurrency `queue` key. Before linting, it rejects every changed
 workflow whose `queue` value is not exactly `max`; therefore the compatibility
-exception cannot admit an invented queue mode.
+exception cannot admit an invented queue mode. GitHub permits `queue: max` only
+when `cancel-in-progress` is false or absent, so a statically true cancellation
+setting is also rejected at both workflow and job scope before actionlint runs.
 
 This is a temporary compatibility boundary. Remove the queue diagnostic
 exception after an actionlint release containing pull request 654 is pinned.
-Remove the stdin spool only after issue 712 is fixed and a greater-than-64-KiB
-regression passes directly through the pinned actionlint/ShellCheck pair.
+Remove the shfmt parser boundary only after issue 712 is fixed, actionlint ships
+the corrected transport, its effective shell dependency satisfies the binding
+license policy, and a greater-than-64-KiB regression passes through that
+replacement.
 
 ## Verification
 
-- A greater-than-64-KiB synthetic shell program reaches the delegated
-  ShellCheck executable through a regular file, without content loss.
+- A greater-than-64-KiB synthetic shell program reaches the delegated shfmt
+  parser through the bounded Ruby subprocess transport without content loss.
 - Bash, sh, Windows/PowerShell, Python, workflow defaults, and GitHub expression
   normalization retain actionlint's effective-shell behavior.
-- ShellCheck findings, malformed result JSON, actionlint failures, and invalid
-  concurrency queue values all fail closed with actionable workflow context.
+- shfmt syntax failures, malformed result JSON, actionlint failures, invalid
+  concurrency queue values, and `queue: max` plus static cancellation all fail
+  closed with actionable workflow context.
 - The offline Python-only coverage sandbox records the Ruby subprocess
   contracts as unavailable instead of failing with `FileNotFoundError`; the
   hosted quality job, whose runner includes Ruby, executes those contracts and
@@ -73,6 +80,12 @@ regression passes directly through the pinned actionlint/ShellCheck pair.
 
 GitHub. (2026, May 7). *GitHub Actions concurrency groups now allow larger
 queues*. https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues/
+
+Martí, D. (2026, April 6). *shfmt v3.13.1* [Computer software]. GitHub.
+https://github.com/mvdan/sh/releases/tag/v3.13.1
+
+Martí, D. (n.d.). *mvdan/sh license* [BSD 3-Clause license]. GitHub. Retrieved
+August 23, 2026, from https://github.com/mvdan/sh/blob/master/LICENSE
 
 Murai, R. (2025). *Support queue: max in concurrency* [Pull request #654].
 GitHub. https://github.com/rhysd/actionlint/pull/654
