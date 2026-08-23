@@ -11,7 +11,8 @@ newer (`trustLockfile` landed in pnpm 11.3; Kochan, 2026). pnpm 11.0,
 remains mandatory before any offline install. The sandbox never invents a
 JavaScript coverage instrumenter when the package did not declare one,
 except that a bare `jest` test script still receives Jest's documented
-`--coverage` flag.
+`--coverage` flag and a Vitest script receives it only when a compatible
+Vitest coverage provider is lock-pinned.
 
 This keeps LineageWeave and other pnpm 9.x products measurable after
 Corepack started activating the repository pin instead of a central
@@ -44,12 +45,17 @@ required. Python still never runs `uv sync --project`.
 - When the version is below 11.3, omit that flag. pnpm 9, 10, and
   11.0–11.2 already treat `--frozen-lockfile` plus `--offline` as the
   integrity boundary.
-- When `package.json` has a test script but no coverage script, coverage
-  collector in `scripts.test`, declared provider
-  (`@vitest/coverage-v8`, `@vitest/coverage-istanbul`, `c8`, `nyc`,
-  `istanbul`), or a bare `jest` runner, run the tests without synthesizing
-  an undeclared instrumenter. A `jest` script still receives `--coverage`
-  because Jest documents that native flag (Jest, n.d.).
+- When `package.json` has a test script but no coverage script or compatible
+  coverage-collecting runner, run the tests without synthesizing an undeclared
+  instrumenter and fail the coverage result with the next action: add a
+  lock-pinned provider and repository-owned coverage command. Plain passing
+  tests are not 100% frontend coverage evidence.
+- A bare Jest script receives `--coverage` because Jest documents that native
+  flag (Jest, n.d.). Vitest receives `--coverage` only with
+  `@vitest/coverage-v8` or `@vitest/coverage-istanbul`. A generic `c8`, `nyc`,
+  or Istanbul dependency is not proof that an arbitrary runner accepts the
+  flag; those collectors count only when the test script actually invokes
+  them.
 
 Independent OpenCode, Strix, and Noema review remain authorization
 gates. This change does not approve, merge, or weaken hash-pinned

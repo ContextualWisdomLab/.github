@@ -1232,26 +1232,22 @@ jobs:
           }
 
           javascript_test_script_collects_coverage() {
-            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)")' \
+            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)|istanbul([[:space:]]|$)")' \
               package.json >/dev/null 2>&1
           }
 
           javascript_test_runner_accepts_coverage_flag() {
-            jq -e '(.scripts.test // "") | test("(^|[[:space:]])jest([[:space:]]|$)")' \
-              package.json >/dev/null 2>&1
-          }
-
-          javascript_coverage_provider_declared() {
-            if javascript_test_script_collects_coverage; then
-              return 0
-            fi
             jq -e '
-              ((.devDependencies // {}) + (.dependencies // {}))
-              | has("@vitest/coverage-v8")
-                or has("@vitest/coverage-istanbul")
-                or has("c8")
-                or has("nyc")
-                or has("istanbul")
+              (.scripts.test // "") as $test
+              | ((.devDependencies // {}) + (.dependencies // {})) as $dependencies
+              | ($test | test("(^|[[:space:]])jest([[:space:]]|$)"))
+                or (
+                  ($test | test("(^|[[:space:]])vitest([[:space:]]|$)"))
+                  and (
+                    ($dependencies | has("@vitest/coverage-v8"))
+                    or ($dependencies | has("@vitest/coverage-istanbul"))
+                  )
+                )
             ' package.json >/dev/null 2>&1
           }
 
@@ -2081,7 +2077,7 @@ jobs:
                 run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                if javascript_test_script_collects_coverage || javascript_coverage_provider_declared || javascript_test_runner_accepts_coverage_flag; then
+                if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
                   if javascript_test_script_collects_coverage; then
                     case "$package_runner" in
                       npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
@@ -2104,9 +2100,10 @@ jobs:
                   esac
                   append "### JavaScript/TypeScript coverage threshold"
                   append ""
-                  append "- Result: PASS"
-                  append "- Reason: package.json defines a test script but no coverage provider or coverage-collecting test script; the networkless sandbox ran the tests without synthesizing a coverage instrumenter. Line-coverage remains repository-owned."
+                  append "- Result: FAIL"
+                  append "- Reason: package.json defines a test script but no compatible coverage provider or coverage-collecting test script. The networkless sandbox ran the tests without inventing an instrumenter, but plain tests cannot satisfy the required frontend coverage gate. Add a lock-pinned provider and a repository-owned coverage command."
                   append ""
+                  failures=$((failures + 1))
                 fi
               else
                 append "### JavaScript/TypeScript test coverage"

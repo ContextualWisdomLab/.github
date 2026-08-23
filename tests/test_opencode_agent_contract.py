@@ -1003,13 +1003,13 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     measure_step = workflow[measure_start:measure_end]
 
     assert "javascript_test_script_collects_coverage()" in measure_step
-    assert "javascript_coverage_provider_declared()" in measure_step
     assert "javascript_test_runner_accepts_coverage_flag()" in measure_step
     assert "if javascript_test_script_collects_coverage; then" in measure_step
     assert (
-        "if javascript_test_script_collects_coverage || javascript_coverage_provider_declared || javascript_test_runner_accepts_coverage_flag; then"
+        "if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then"
         in measure_step
     )
+    assert "javascript_coverage_provider_declared" not in measure_step
     assert (
         'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
         in measure_step
@@ -1029,8 +1029,9 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     assert "pnpm test --coverage" not in measure_step
     assert "pnpm test -- --coverage" not in measure_step
     assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
-    assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
+    assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)|istanbul([[:space:]]|$)")' in measure_step
     assert 'test("(^|[[:space:]])jest([[:space:]]|$)"' in measure_step
+    assert 'test("(^|[[:space:]])vitest([[:space:]]|$)"' in measure_step
     assert "corepack pnpm install" in measure_step
     assert 'corepack pnpm --filter "$package_name" run build' in measure_step
     assert "corepack pnpm test" in measure_step
@@ -1040,6 +1041,83 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     assert "[ \"$pnpm_major\" -gt 11 ]" in measure_step
     assert "[ \"$pnpm_major\" -eq 11 ] && [ \"$pnpm_minor\" -ge 3 ]" in measure_step
     assert "[ \"$pnpm_major\" -ge 11 ]" not in measure_step
+
+
+@pytest.mark.parametrize(
+    ("test_script", "dev_dependencies", "expected_status"),
+    (
+        ("jest", {}, 0),
+        ("vitest run", {"@vitest/coverage-v8": "4.1.10"}, 0),
+        ("vitest run", {"@vitest/coverage-istanbul": "4.1.10"}, 0),
+        ("vitest run", {}, 1),
+        ("node --test", {"c8": "10.1.3"}, 1),
+        ("mocha", {"nyc": "17.1.0"}, 1),
+        ("node --test", {"@vitest/coverage-v8": "4.1.10"}, 1),
+    ),
+)
+def test_opencode_coverage_only_adds_flag_for_compatible_runner(
+    tmp_path: Path,
+    test_script: str,
+    dev_dependencies: dict[str, str],
+    expected_status: int,
+) -> None:
+    """A merely installed coverage package must not authorize runner flags."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required for the extracted workflow regression")
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+    helper_start = measure_step.index(
+        "          javascript_test_runner_accepts_coverage_flag() {\n"
+    )
+    helper_end = measure_step.index("\n\n          declared_package_manager()", helper_start)
+    helper = textwrap.dedent(measure_step[helper_start:helper_end])
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {"test": test_script},
+                "devDependencies": dev_dependencies,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [bash, "-c", f"set -euo pipefail\n{helper}\njavascript_test_runner_accepts_coverage_flag"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == expected_status, result.stderr
+
+
+def test_opencode_missing_javascript_coverage_fails_closed() -> None:
+    """Plain tests cannot satisfy the organization's frontend coverage gate."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    missing_provider_start = workflow.index(
+        'run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)"'
+    )
+    missing_provider_end = workflow.index(
+        "              else\n"
+        '                append "### JavaScript/TypeScript test coverage"',
+        missing_provider_start,
+    )
+    missing_provider_block = workflow[missing_provider_start:missing_provider_end]
+
+    assert 'append "- Result: FAIL"' in missing_provider_block
+    assert "failures=$((failures + 1))" in missing_provider_block
 
 
 def test_opencode_coverage_gates_trust_lockfile_on_pnpm_11_3(tmp_path):
@@ -2278,9 +2356,10 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "[ \"$pnpm_major\" -gt 11 ]" in coverage_job
     assert "[ \"$pnpm_minor\" -ge 3 ]" in coverage_job
     assert "[ \"$pnpm_major\" -ge 11 ]" not in coverage_job
-    assert "javascript_coverage_provider_declared()" in coverage_job
     assert "javascript_test_runner_accepts_coverage_flag()" in coverage_job
+    assert "javascript_coverage_provider_declared" not in coverage_job
     assert "coverage provider not declared" in coverage_job
+    assert "plain tests cannot satisfy the required frontend coverage gate" in coverage_job
     assert "--ignore-scripts" in coverage_job
     assert "prepare_writable_pnpm_store" in coverage_job
     assert '--store-dir "$writable_pnpm_store_dir"' in coverage_job

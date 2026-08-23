@@ -18,8 +18,10 @@ Semantic Versioning where the repository publishes a release.
   tests could run. Jest test scripts still receive `--coverage` because Jest
   documents a native coverage flag.
 - Run declared JavaScript test scripts without synthesizing `--coverage` when
-  the package does not declare a coverage provider, so networkless evidence
-  still records passing tests instead of failing on a missing instrumenter.
+  the package does not declare a compatible coverage command, but keep the
+  coverage result failed until the repository adds a lock-pinned provider and
+  owned coverage command. A generic `c8`, `nyc`, or Istanbul dependency no
+  longer makes an unrelated test runner receive an unsupported flag.
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
   dependencies without weakening registry hashes or the networkless PR sandbox,
   reject namespace, ambiguous, linked, native-extension, and installed-metadata
