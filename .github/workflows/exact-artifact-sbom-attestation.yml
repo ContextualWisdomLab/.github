@@ -313,13 +313,13 @@ jobs:
           EOF
           {
             printf '\n## Exact signed identity\n\n'
-            printf -- '- Source repository: `%s`\n' "$SOURCE_REPOSITORY"
-            printf -- '- Source SHA: `%s`\n' "$SOURCE_SHA"
-            printf -- '- Signer repository: `%s`\n' "$SIGNER_REPOSITORY"
-            printf -- '- Signer workflow: `%s`\n' "$signer_workflow"
-            printf -- '- Predicate type: `%s`\n' "$PREDICATE_TYPE"
-            printf -- '- Wheel: `%s`\n' "$WHEEL_FILENAME"
-            printf -- '- Source distribution: `%s`\n' "$SDIST_FILENAME"
+            printf -- "- Source repository: \`%s\`\n" "$SOURCE_REPOSITORY"
+            printf -- "- Source SHA: \`%s\`\n" "$SOURCE_SHA"
+            printf -- "- Signer repository: \`%s\`\n" "$SIGNER_REPOSITORY"
+            printf -- "- Signer workflow: \`%s\`\n" "$signer_workflow"
+            printf -- "- Predicate type: \`%s\`\n" "$PREDICATE_TYPE"
+            printf -- "- Wheel: \`%s\`\n" "$WHEEL_FILENAME"
+            printf -- "- Source distribution: \`%s\`\n" "$SDIST_FILENAME"
             cat <<EOF
 
           ## Online verification commands
@@ -361,11 +361,14 @@ jobs:
           } >> offline-attestation-evidence/README.md
           (
             cd offline-attestation-evidence
+            evidence_file_list="$(mktemp "${RUNNER_TEMP}/offline-attestation-files.XXXXXX")"
             LC_ALL=C find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
-              | LC_ALL=C sort \
-              | while IFS= read -r evidence_file; do
-                  sha256sum "$evidence_file"
-                done > SHA256SUMS
+              | LC_ALL=C sort > "$evidence_file_list"
+            mapfile -t evidence_files < "$evidence_file_list"
+            rm -f "$evidence_file_list"
+            for evidence_file in "${evidence_files[@]}"; do
+              sha256sum "$evidence_file"
+            done > SHA256SUMS
           )
           chmod 0444 \
             offline-attestation-evidence/README.md \

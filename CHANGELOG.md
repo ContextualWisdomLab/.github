@@ -55,6 +55,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Separate actionlint schema/expression/Pyflakes validation from file-based
+  ShellCheck execution so workflow shell blocks larger than 64 KiB cannot
+  deadlock the write-capable autofix verifier, preserve actionlint's shell and
+  expression semantics, and narrowly accept GitHub's native
+  `concurrency.queue: max` while rejecting every other queue value until
+  upstream actionlint schema support is released.
 - Bound head-mutation authorization to the actual selected `GH_TOKEN` as well
   as its declared source, failing closed when it is missing or resolves to the
   workflow `github.token`; case-fold repository host comparisons so casing

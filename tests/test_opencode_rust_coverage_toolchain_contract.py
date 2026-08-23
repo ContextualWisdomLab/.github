@@ -67,6 +67,19 @@ def test_trusted_coverage_image_provisions_verified_llvm_19_tools() -> None:
     assert 'RUN test -x "$LLVM_PROFDATA"\n' in dispatch
 
 
+def test_software_vulkan_adapter_uses_stable_glob_order() -> None:
+    """Select the first matching lavapipe adapter in stable pathname order."""
+
+    dispatch = _dispatch_text()
+    adapter = dispatch.split("ensure_rust_gpu_adapter() {", 1)[1].split(
+        "\n          }", 1
+    )[0]
+    assert "for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do" in adapter
+    assert 'if [ -f "$candidate" ]; then' in adapter
+    assert 'lvp_icd="$candidate"' in adapter
+    assert "-print -quit" not in adapter
+
+
 def test_isolated_runtime_receives_reviewed_llvm_constants() -> None:
     """Require exact LLVM 19 path constants at the Docker sandbox boundary."""
 
