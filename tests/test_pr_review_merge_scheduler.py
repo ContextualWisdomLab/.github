@@ -1465,6 +1465,22 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(failed) == ["strix", "lint"]
+    assert sched.failed_status_checks(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {
+                            "__typename": "StatusContext",
+                            "context": "opencode-review",
+                            "state": "FAILURE",
+                        }
+                    ]
+                }
+            }
+        ),
+        ignore_opencode=True,
+    ) == []
     action_required = make_pr(
         statusCheckRollup={
             "contexts": {
