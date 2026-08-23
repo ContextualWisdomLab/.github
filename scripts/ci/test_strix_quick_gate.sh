@@ -367,6 +367,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
+	assert_file_contains "$workflow_file" "Prepare direct OpenAI fallback credentials" "strix workflow provisions direct OpenAI credentials for cross-provider fallbacks"
+	assert_file_contains "$workflow_file" 'OPENAI_FALLBACK_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}' "strix workflow reads the established direct OpenAI secret only at the credential boundary"
+	assert_file_contains "$workflow_file" "STRIX_OPENAI_FALLBACK_KEY_FILE" "strix workflow passes the direct OpenAI fallback key through a trusted file"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_OPENAI_FALLBACK_KEY_FILE" "strix gate reads the direct OpenAI fallback key from a trusted file"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
 	assert_file_contains "$workflow_file" "openai_direct/%s" "strix workflow keeps manual direct OpenAI scans distinct from GitHub Models openai/gpt-* routing"
@@ -3416,6 +3420,55 @@ REPORT
 			;;
 		esac
 		;;
+	openai-direct-unsupported-temperature-github-models-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5.6-sol)
+			echo "litellm.BadRequestError: AzureException BadRequestError - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found for original model_group=gpt-5.6-sol."
+			exit 1
+			;;
+		openai/o3)
+			echo "scan ok with GitHub Models fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
+	openai-direct-unsupported-temperature-split-lines-nonrecoverable)
+		echo "litellm.BadRequestError: request rejected"
+		echo "AzureException - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found."
+		exit 1
+		;;
+	nvidia-openai-direct-fallback-credential-success | nvidia-openai-direct-fallback-missing-key-fails-closed)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/primary)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected NVIDIA primary key (${LLM_API_KEY:-<unset>})" >&2
+				exit 17
+			fi
+			echo "Penetration test failed: LLM request failed: RateLimitError"
+			exit 1
+			;;
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
+				echo "unexpected direct OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
+				exit 18
+			fi
+			if [ -n "${LLM_API_BASE:-}" ]; then
+				echo "direct OpenAI fallback inherited primary API base: $LLM_API_BASE" >&2
+				exit 19
+			fi
+			echo "scan ok with direct OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -3579,6 +3632,34 @@ REPORT
 			exit 21
 			;;
 		esac
+		;;
+	nvidia-ratelimit-model-quality-warning-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+			echo "litellm.RateLimitError: Nvidia_nimException - Error code: 429 - Too Many Requests"
+			exit 1
+			;;
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			echo "│  MODEL QUALITY WARNING                                                       │"
+			echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads."
+			mkdir -p "$STRIX_REPORTS_DIR/run-clean-advisories"
+			{
+				echo "│  MODEL QUALITY WARNING                                                       │"
+				echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads."
+			} >"$STRIX_REPORTS_DIR/run-clean-advisories/scan.log"
+			echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
+			exit 0
+			;;
+		*)
+			echo "Error: NVIDIA model-quality fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 61
+			;;
+		esac
+		;;
+	hf-advisory-suffix-fails-closed)
+		echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads. Fatal: repository-derived suffix"
+		echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
+		exit 0
 		;;
 	vertex-primary-resource-exhausted-fallback-success)
 		case "${STRIX_LLM:-}" in
@@ -4472,6 +4553,9 @@ EOS
 		exit 0
 		;;
 	provider-warning-success-signal)
+		for _ in {1..10000}; do
+			echo "benign scanner output"
+		done
 		echo "Warning: provider response included incomplete scan state"
 		exit 0
 		;;
@@ -4527,6 +4611,15 @@ EOS
 2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
+		exit 0
+		;;
+	report-web-search-advisory-sanitized | report-web-search-advisory-suffix-fails)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-web-search-advisory"
+		cat >"$STRIX_REPORTS_DIR/fake-web-search-advisory/strix.log" <<EOS
+2026-08-23 14:00:33.382 WARNING strix-pr-scope-example - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured${FAKE_STRIX_SCENARIO#report-web-search-advisory-sanitized}
+2026-08-23 14:00:34.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		echo "scan completed with optional web search advisory"
 		exit 0
 		;;
 	report-unknown-warning-fails)
@@ -5637,11 +5730,16 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
-	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
+	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ] ||
+		[ "$scenario" = "openai-direct-unsupported-temperature-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
 		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
 		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
 		env_cmd+=(STRIX_GITHUB_MODELS_KEY_FILE="$tmp_dir/github_models_key.txt")
+	fi
+	if [ "$scenario" = "nvidia-openai-direct-fallback-credential-success" ]; then
+		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
 	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
@@ -5841,6 +5939,17 @@ PY
 			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
+	if [ "$scenario" = "report-web-search-advisory-sanitized" ]; then
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-web-search-advisory/strix.log" \
+			"web_search invoked without PERPLEXITY_API_KEY configured" \
+			"scenario=$scenario strips only the known optional web search advisory"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-web-search-advisory/strix.log" \
+			"finish_scan: completed scan with 0 vulnerability report(s)" \
+			"scenario=$scenario keeps non-warning Strix report evidence"
+	fi
+
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
 		assert_file_contains \
 			"$output_log" \
@@ -5933,6 +6042,45 @@ run_github_models_http410_case() {
 		"" \
 		"__SAME_AS_FALLBACK_MODELS__" \
 		"deepseek/deepseek-r1-0528" \
+		"1"
+}
+
+run_nvidia_openai_direct_fallback_case() {
+	local scenario="${1:-nvidia-openai-direct-fallback-credential-success}"
+	local expected_exit="${2:-0}"
+	local expected_message="${3:-REGEX:Strix quick scan succeeded with fallback model 'openai_direct/gpt-5.6-luna' in [0-9]+s\\.}"
+	local expected_calls="${4:-2}"
+	local expected_models="${5:-nvidia_nim/nvidia/primary|openai/gpt-5.6-luna}"
+	local expected_api_bases="${6:-https://integrate.api.nvidia.com/v1|<unset>}"
+
+	run_gate_case "$scenario" \
+		"nvidia_nim/nvidia/primary" \
+		"" \
+		"$expected_exit" \
+		"$expected_message" \
+		"$expected_calls" \
+		"$expected_models" \
+		"$expected_api_bases" \
+		"nvidia_nim" \
+		"https://integrate.api.nvidia.com/v1" \
+		"" \
+		"0" \
+		"CRITICAL" \
+		"0" \
+		"" \
+		"" \
+		"1200" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"" \
+		"openai-direct/gpt-5.6-luna" \
 		"1"
 }
 
@@ -6118,6 +6266,78 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/openai/o3"
+		;;
+	openai-direct-unsupported-temperature-github-models-fallback-success)
+		run_gate_case "openai-direct-unsupported-temperature-github-models-fallback-success" \
+			"openai_direct/gpt-5.6-sol" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+			"2" \
+			"openai/gpt-5.6-sol|openai/o3" \
+			"<unset>|https://models.github.ai/inference" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/o3"
+		;;
+	openai-direct-unsupported-temperature-split-lines-nonrecoverable)
+		run_gate_case "openai-direct-unsupported-temperature-split-lines-nonrecoverable" \
+			"openai_direct/gpt-5.6-sol" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/gpt-5.6-sol" \
+			"<unset>" \
+			"vertex_ai" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"github_models/openai/o3"
+		;;
+	nvidia-openai-direct-fallback-credential-success)
+		run_nvidia_openai_direct_fallback_case
+		;;
+	nvidia-openai-direct-fallback-missing-key-fails-closed)
+		run_nvidia_openai_direct_fallback_case \
+			"$STRIX_TEST_CASE_FILTER" \
+			"2" \
+			"direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+			"1" \
+			"nvidia_nim/nvidia/primary" \
+			"https://integrate.api.nvidia.com/v1"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -6362,6 +6582,47 @@ run_filtered_gate_case_if_requested() {
 		"1" \
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
+		;;
+	report-web-search-advisory-sanitized)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-web-search-advisory-sanitized" \
+		"" \
+		"0" \
+		"Strix run succeeded for model 'vertex_ai/report-web-search-advisory-sanitized'" \
+		"1" \
+		"vertex_ai/report-web-search-advisory-sanitized" \
+		"<unset>"
+		;;
+	report-web-search-advisory-suffix-fails)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-web-search-advisory-suffix-fails" \
+		"" \
+		"1" \
+		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+		"1" \
+		"vertex_ai/report-web-search-advisory-suffix-fails" \
+		"<unset>"
+		;;
+	nvidia-ratelimit-model-quality-warning-fallback-success)
+		run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"<unset>|<unset>" \
+			"openai"
+		;;
+	hf-advisory-suffix-fails-closed)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/hf-advisory-suffix-fails-closed" \
+			"" \
+			"1" \
+			"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+			"1" \
+			"vertex_ai/hf-advisory-suffix-fails-closed" \
+			"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -9702,6 +9963,25 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-fallback-success" 
 	"vertex_ai/ratelimit-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
+run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"<unset>|<unset>" \
+	"openai"
+
+run_gate_case "hf-advisory-suffix-fails-closed" \
+	"vertex_ai/hf-advisory-suffix-fails-closed" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/hf-advisory-suffix-fails-closed" \
+	"<unset>"
+
 run_gate_case_allow_provider_signal "vertex-primary-resource-exhausted-fallback-success" \
 	"vertex_ai/resource-exhausted-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
@@ -10457,6 +10737,24 @@ run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "report-web-search-advisory-sanitized" \
+	"vertex_ai/report-web-search-advisory-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/report-web-search-advisory-sanitized'" \
+	"1" \
+	"vertex_ai/report-web-search-advisory-sanitized" \
+	"<unset>"
+
+run_gate_case "report-web-search-advisory-suffix-fails" \
+	"vertex_ai/report-web-search-advisory-suffix-fails" \
+	"" \
+	"1" \
+	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+	"1" \
+	"vertex_ai/report-web-search-advisory-suffix-fails" \
+	"<unset>"
 
 run_gate_case "report-unknown-warning-fails" \
 	"vertex_ai/report-unknown-warning-fails" \
@@ -12313,6 +12611,12 @@ assert_normalized_model \
 	"vertex_ai" \
 	"vertex_ai/gemini-2.5-pro"
 
+assert_normalized_model \
+	"direct-openai-workflow-alias" \
+	"openai-direct/gpt-5.6-luna" \
+	"openai" \
+	"openai_direct/gpt-5.6-luna"
+
 assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "vertex-resource-path" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" "vertex_ai" "0"
@@ -12508,6 +12812,82 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 	"" \
 	"" \
 	"github_models/openai/o3"
+
+# Strix currently reaches LiteLLM with a sampling default and exposes no
+# documented generation-parameter override. Azure reasoning deployments reject
+# that temperature before Strix's internal model-group fallback can run, so the
+# trusted outer gate must try its already-configured distinct provider.
+run_gate_case "openai-direct-unsupported-temperature-github-models-fallback-success" \
+	"openai_direct/gpt-5.6-sol" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
+	"2" \
+	"openai/gpt-5.6-sol|openai/o3" \
+	"<unset>|https://models.github.ai/inference" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/o3"
+
+# Cross-line assembly is deliberately rejected: target/source text cannot
+# manufacture a provider capability signal from independent log lines.
+run_gate_case "openai-direct-unsupported-temperature-split-lines-nonrecoverable" \
+	"openai_direct/gpt-5.6-sol" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-5.6-sol" \
+	"<unset>" \
+	"vertex_ai" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"github_models/openai/o3"
+
+# Cross-provider fallbacks must switch both the API key and endpoint. Reusing
+# NVIDIA credentials or its API base makes a normalized direct-OpenAI model
+# fail before producing security evidence.
+run_nvidia_openai_direct_fallback_case
+run_nvidia_openai_direct_fallback_case \
+	"nvidia-openai-direct-fallback-missing-key-fails-closed" \
+	"2" \
+	"direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+	"1" \
+	"nvidia_nim/nvidia/primary" \
+	"https://integrate.api.nvidia.com/v1"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \

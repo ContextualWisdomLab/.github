@@ -172,6 +172,16 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_clean_advisory = re.compile(
+    r"^(?:[ \t│]*MODEL QUALITY WARNING[ \t│]*"
+    r"|Warning: You are sending unauthenticated requests to the HF Hub\. "
+    r"Please set a HF_TOKEN to enable higher rate limits and faster downloads\.)$"
+)
+known_optional_web_search_advisory = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"[^ ]+ - strix\.tools\.web_search\.tool: "
+    r"web_search invoked without PERPLEXITY_API_KEY configured$"
+)
 
 
 def iter_report_logs(root: Path):
@@ -194,7 +204,13 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_clean_advisory.fullmatch(line.rstrip("\r\n"))
+        and not known_optional_web_search_advisory.fullmatch(line.rstrip("\r\n"))
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -376,6 +392,23 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	STRIX_GITHUB_MODELS_KEY="$(trim_whitespace "$(cat -- "$STRIX_GITHUB_MODELS_KEY_FILE")")"
 	if [ -z "$STRIX_GITHUB_MODELS_KEY" ]; then
 		echo "ERROR: STRIX_GITHUB_MODELS_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
 		exit 2
 	fi
 fi
@@ -2380,6 +2413,12 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
+	case "$(normalize_model "$model"):$PRIMARY_MODEL" in
+	openai_direct/*:openai_direct/*) ;;
+	openai_direct/*:*)
+		return 0
+		;;
+	esac
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
@@ -2490,20 +2529,32 @@ run_strix_once() {
 	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
 		return 2
 	fi
-	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	local normalized_model
+	normalized_model="$(normalize_model "$model")"
+	child_model="$(child_model_for_api_base "$normalized_model" "$llm_api_base_value")"
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	if ! is_vertex_model "$(normalize_model "$model")"; then
+	if ! is_vertex_model "$normalized_model"; then
 		child_llm_api_key="$LLM_API_KEY"
-		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+		if is_github_models_model "$normalized_model" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
+		case "$normalized_model:$PRIMARY_MODEL" in
+		openai_direct/*:openai_direct/*) ;;
+		openai_direct/*:*)
+			if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+				echo "ERROR: direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE." >&2
+				return 2
+			fi
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+			;;
+		esac
 	fi
 	set -o pipefail
 	set +e
@@ -2815,6 +2866,19 @@ is_nvidia_nim_not_found_error() {
 	if grep -Ei 'litellm(\.exceptions)?\.NotFoundError' "$STRIX_LOG" |
 		grep -Ei '(Nvidia_nimException|nvidia[_ -]?nim|integrate\.api\.nvidia\.com)' |
 		grep -Eiq '(Error code:[[:space:]]*404|(^|[^0-9])404([^0-9]|$)|model[^[:alnum:]]+not found)'; then
+		return 0
+	fi
+
+	return 1
+}
+
+is_unsupported_model_parameter_error() {
+	# Strix currently has no generation-parameter override. Match the exact
+	# single-line LiteLLM/Azure capability failure so a reasoning model that
+	# rejects Strix's temperature can move to the already-configured fallback.
+	if grep -Ei 'litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" |
+		grep -Ei '(AzureException|OpenAIException)' |
+		grep -Eiq "Unsupported value:[[:space:]]*['\"]temperature['\"].*Only the default[[:space:]]*\\(1\\)[[:space:]]*value is supported.*No fallback model group found"; then
 		return 0
 	fi
 
@@ -3151,7 +3215,8 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' \
+		< <(grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$' "$STRIX_LOG"); then
 		return 0
 	fi
 
@@ -3180,6 +3245,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 
@@ -4073,6 +4142,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 
