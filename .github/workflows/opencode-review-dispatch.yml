@@ -1499,6 +1499,36 @@ jobs:
             writable_pnpm_store_dir="$destination"
           }
 
+          pnpm_supports_trust_lockfile() {
+            local pnpm_version
+            local pnpm_major
+            local pnpm_minor
+            pnpm_version="$(corepack pnpm --version 2>/dev/null || printf '0')"
+            pnpm_major="${pnpm_version%%.*}"
+            case "$pnpm_version" in
+              *.*)
+                pnpm_minor="${pnpm_version#*.}"
+                pnpm_minor="${pnpm_minor%%.*}"
+                ;;
+              *)
+                pnpm_minor=0
+                ;;
+            esac
+            case "$pnpm_major" in
+              ''|*[!0-9]*) pnpm_major=0 ;;
+            esac
+            case "$pnpm_minor" in
+              ''|*[!0-9]*) pnpm_minor=0 ;;
+            esac
+            if [ "$pnpm_major" -gt 11 ]; then
+              return 0
+            fi
+            if [ "$pnpm_major" -eq 11 ] && [ "$pnpm_minor" -ge 3 ]; then
+              return 0
+            fi
+            return 1
+          }
+
           install_package_dependencies() {
             local package_runner="$1"
             case "$package_runner" in
@@ -1533,8 +1563,7 @@ jobs:
               pnpm)
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
-                pnpm_major="$(corepack pnpm --version | cut -d. -f1 || printf '0')"
-                if [ "$pnpm_major" -ge 11 ] 2>/dev/null; then
+                if pnpm_supports_trust_lockfile; then
                   run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
                     corepack pnpm install \
                       --offline \

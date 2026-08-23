@@ -12,10 +12,10 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
-- Keep `--trust-lockfile` only for pnpm major versions 11 and newer
-  (`trustLockfile` landed in pnpm 11.3). pnpm 9 and 10 reject that flag
-  and previously failed LineageWeave JavaScript coverage before tests
-  could run. Jest test scripts still receive `--coverage` because Jest
+- Keep `--trust-lockfile` only for pnpm 11.3 and newer
+  (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
+  that flag and previously failed LineageWeave JavaScript coverage before
+  tests could run. Jest test scripts still receive `--coverage` because Jest
   documents a native coverage flag.
 - Run declared JavaScript test scripts without synthesizing `--coverage` when
   the package does not declare a coverage provider, so networkless evidence

@@ -5,12 +5,13 @@
 ## Decision
 
 OpenCode coverage-evidence honors the repository-owned `packageManager`
-pin through Corepack. `--trust-lockfile` is valid only on pnpm major
-version 11 and newer (`trustLockfile` landed in pnpm 11.3; Kochan, 2026).
-Exact trusted-base lock matching remains mandatory before any offline
-install. The sandbox never invents a JavaScript coverage instrumenter
-when the package did not declare one, except that a bare `jest` test
-script still receives Jest's documented `--coverage` flag.
+pin through Corepack. `--trust-lockfile` is valid only on pnpm 11.3 and
+newer (`trustLockfile` landed in pnpm 11.3; Kochan, 2026). pnpm 11.0,
+11.1, and 11.2 still reject the flag. Exact trusted-base lock matching
+remains mandatory before any offline install. The sandbox never invents a
+JavaScript coverage instrumenter when the package did not declare one,
+except that a bare `jest` test script still receives Jest's documented
+`--coverage` flag.
 
 This keeps LineageWeave and other pnpm 9.x products measurable after
 Corepack started activating the repository pin instead of a central
@@ -24,7 +25,7 @@ otherwise see every frontend head blocked on `Unknown option:
 1. Coverage images now activate the exact `packageManager` from the
    validated base (for LineageWeave, `pnpm@9.15.9`).
 2. The install command still passed `--trust-lockfile`, a pnpm 11.3 flag.
-   pnpm 9 and pnpm 10 exit before reading the store.
+   pnpm 9, pnpm 10, and pnpm 11.0–11.2 exit before reading the store.
 3. After a successful install, coverage appended `--coverage` to `vitest run`
    even when no coverage provider was declared, so tests never became
    evidence.
@@ -36,11 +37,13 @@ required. Python still never runs `uv sync --project`.
 
 ## Remediation
 
-- When `corepack pnpm --version` reports major version 11 or newer, keep
-  `--trust-lockfile` so registry attestation lookups stay suppressed for
-  an exact trusted-base lock (Kochan, 2026; pnpm, n.d.).
-- When the major version is below 11, omit that flag. pnpm 9 and 10 already
-  treat `--frozen-lockfile` plus `--offline` as the integrity boundary.
+- When `corepack pnpm --version` reports 11.3 or newer (major greater
+  than 11, or major 11 with minor 3 or greater), keep `--trust-lockfile`
+  so registry attestation lookups stay suppressed for an exact
+  trusted-base lock (Kochan, 2026; pnpm, n.d.).
+- When the version is below 11.3, omit that flag. pnpm 9, 10, and
+  11.0–11.2 already treat `--frozen-lockfile` plus `--offline` as the
+  integrity boundary.
 - When `package.json` has a test script but no coverage script, coverage
   collector in `scripts.test`, declared provider
   (`@vitest/coverage-v8`, `@vitest/coverage-istanbul`, `c8`, `nyc`,

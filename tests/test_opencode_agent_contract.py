@@ -1035,7 +1035,74 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     assert 'corepack pnpm --filter "$package_name" run build' in measure_step
     assert "corepack pnpm test" in measure_step
     assert "corepack pnpm run test --coverage" in measure_step
-    assert "[ \"$pnpm_major\" -ge 11 ]" in measure_step
+    assert "pnpm_supports_trust_lockfile()" in measure_step
+    assert "if pnpm_supports_trust_lockfile; then" in measure_step
+    assert "[ \"$pnpm_major\" -gt 11 ]" in measure_step
+    assert "[ \"$pnpm_major\" -eq 11 ] && [ \"$pnpm_minor\" -ge 3 ]" in measure_step
+    assert "[ \"$pnpm_major\" -ge 11 ]" not in measure_step
+
+
+def test_opencode_coverage_gates_trust_lockfile_on_pnpm_11_3(tmp_path):
+    """Pass --trust-lockfile only when corepack pnpm --version is 11.3 or newer."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip(
+            "bash is required for the extracted workflow function regression test"
+        )
+    try:
+        subprocess.run(
+            [bash, "--version"], capture_output=True, text=True, timeout=5, check=True
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+    helper_start = measure_step.index("          pnpm_supports_trust_lockfile() {\n")
+    helper_end = measure_step.index(
+        "\n\n          install_package_dependencies()", helper_start
+    )
+    helper = textwrap.dedent(measure_step[helper_start:helper_end])
+    fake_corepack = tmp_path / "bin"
+    fake_corepack.mkdir()
+    (fake_corepack / "corepack").write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"${FAKE_PNPM_VERSION:-0}\"\n",
+        encoding="utf-8",
+    )
+    (fake_corepack / "corepack").chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_corepack}{os.pathsep}{env.get('PATH', '')}"
+
+    cases = (
+        ("9.15.9", 1),
+        ("10.28.1", 1),
+        ("11.0.0", 1),
+        ("11.2.3", 1),
+        ("11.3.0", 0),
+        ("11.5.3", 0),
+        ("12.0.0", 0),
+        ("0", 1),
+    )
+    for version, expected_status in cases:
+        env["FAKE_PNPM_VERSION"] = version
+        result = subprocess.run(
+            [bash, "-c", f"set -euo pipefail\n{helper}\npnpm_supports_trust_lockfile"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == expected_status, (
+            f"pnpm {version} expected status {expected_status}, "
+            f"got {result.returncode}: {result.stderr}"
+        )
+
 
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
     """A changed JS file must select its nearest nested package.json for coverage."""
@@ -2206,7 +2273,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
     assert "--trust-lockfile" in coverage_job
-    assert "[ \"$pnpm_major\" -ge 11 ]" in coverage_job
+    assert "pnpm_supports_trust_lockfile()" in coverage_job
+    assert 'if pnpm_supports_trust_lockfile; then' in coverage_job
+    assert "[ \"$pnpm_major\" -gt 11 ]" in coverage_job
+    assert "[ \"$pnpm_minor\" -ge 3 ]" in coverage_job
+    assert "[ \"$pnpm_major\" -ge 11 ]" not in coverage_job
     assert "javascript_coverage_provider_declared()" in coverage_job
     assert "javascript_test_runner_accepts_coverage_flag()" in coverage_job
     assert "coverage provider not declared" in coverage_job
