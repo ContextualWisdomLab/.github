@@ -1004,9 +1004,10 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
 
     assert "javascript_test_script_collects_coverage()" in measure_step
     assert "javascript_coverage_provider_declared()" in measure_step
+    assert "javascript_test_runner_accepts_coverage_flag()" in measure_step
     assert "if javascript_test_script_collects_coverage; then" in measure_step
     assert (
-        "if javascript_test_script_collects_coverage || javascript_coverage_provider_declared; then"
+        "if javascript_test_script_collects_coverage || javascript_coverage_provider_declared || javascript_test_runner_accepts_coverage_flag; then"
         in measure_step
     )
     assert (
@@ -1029,11 +1030,12 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     assert "pnpm test -- --coverage" not in measure_step
     assert 'test("(^|[[:space:]])--coverage([.=[:space:]]|$)' in measure_step
     assert '|c8([[:space:]]|$)|nyc([[:space:]]|$)")' in measure_step
+    assert 'test("(^|[[:space:]])jest([[:space:]]|$)"' in measure_step
     assert "corepack pnpm install" in measure_step
     assert 'corepack pnpm --filter "$package_name" run build' in measure_step
     assert "corepack pnpm test" in measure_step
     assert "corepack pnpm run test --coverage" in measure_step
-    assert "[ \"$pnpm_major\" -ge 10 ]" in measure_step
+    assert "[ \"$pnpm_major\" -ge 11 ]" in measure_step
 
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
     """A changed JS file must select its nearest nested package.json for coverage."""
@@ -2204,8 +2206,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "--offline" in coverage_job
     assert "--frozen-lockfile" in coverage_job
     assert "--trust-lockfile" in coverage_job
-    assert "[ \"$pnpm_major\" -ge 10 ]" in coverage_job
+    assert "[ \"$pnpm_major\" -ge 11 ]" in coverage_job
     assert "javascript_coverage_provider_declared()" in coverage_job
+    assert "javascript_test_runner_accepts_coverage_flag()" in coverage_job
     assert "coverage provider not declared" in coverage_job
     assert "--ignore-scripts" in coverage_job
     assert "prepare_writable_pnpm_store" in coverage_job

@@ -1236,6 +1236,11 @@ jobs:
               package.json >/dev/null 2>&1
           }
 
+          javascript_test_runner_accepts_coverage_flag() {
+            jq -e '(.scripts.test // "") | test("(^|[[:space:]])jest([[:space:]]|$)")' \
+              package.json >/dev/null 2>&1
+          }
+
           javascript_coverage_provider_declared() {
             if javascript_test_script_collects_coverage; then
               return 0
@@ -1529,7 +1534,7 @@ jobs:
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
                 pnpm_major="$(corepack pnpm --version | cut -d. -f1 || printf '0')"
-                if [ "$pnpm_major" -ge 10 ] 2>/dev/null; then
+                if [ "$pnpm_major" -ge 11 ] 2>/dev/null; then
                   run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
                     corepack pnpm install \
                       --offline \
@@ -2047,7 +2052,7 @@ jobs:
                 run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                if javascript_test_script_collects_coverage || javascript_coverage_provider_declared; then
+                if javascript_test_script_collects_coverage || javascript_coverage_provider_declared || javascript_test_runner_accepts_coverage_flag; then
                   if javascript_test_script_collects_coverage; then
                     case "$package_runner" in
                       npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
