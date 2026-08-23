@@ -15,7 +15,7 @@ def test_baseline_binds_current_governance_sources_and_buyer_contract() -> None:
 
     for marker in (
         "CWL Master Context",
-        "naruon #974",
+        "ContextualWisdomLab/naruon#974",
         "GitHub Project #1",
         "PRD acceptance",
         "TRD target",
