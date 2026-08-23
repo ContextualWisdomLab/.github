@@ -36,8 +36,20 @@ def test_read_bounded_suffix_preserves_unicode_and_marks_partial_suffix(
     partial = bounded.read_bounded_suffix(partial_path, 2)
     assert partial.truncated is True
     assert partial.stored_bytes == len(partial_path.read_bytes())
-    assert partial.text.startswith(bounded.TRUNCATION_MARKER)
-    assert "�" in partial.text
+    assert partial.text == bounded.TRUNCATION_MARKER[:2]
+
+    invalid_path = tmp_path / "invalid.log"
+    invalid_path.write_bytes(b"\xff" * 4097)
+    invalid = bounded.read_bounded_suffix(invalid_path, 4096)
+    assert invalid.truncated is True
+    assert invalid.text.startswith(bounded.TRUNCATION_MARKER)
+    assert len(invalid.text.encode("utf-8")) <= 4096
+
+    exact_path = tmp_path / "exact-invalid.log"
+    exact_path.write_bytes(b"\xff" * 4096)
+    exact = bounded.read_bounded_suffix(exact_path, 4096)
+    assert exact.truncated is False
+    assert len(exact.text.encode("utf-8")) <= 4096
 
 
 def test_bounded_capture_retains_final_suffix_and_writes_bounded_file(

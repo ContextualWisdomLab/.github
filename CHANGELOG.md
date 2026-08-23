@@ -21,8 +21,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Add a reusable POSIX subprocess boundary with continuously drained bounded
   stdout/stderr suffixes, finite reader joins, post-leader process-group cleanup,
-  and UTF-8 decoding that stays inside the declared byte budget. Consumer
-  sandbox integrations remain in separate stacked changes.
+  and stream or file-suffix UTF-8 decoding that stays inside the declared byte
+  budget. Consumer sandbox integrations remain in separate stacked changes.
 
 - Refresh the live product and technical gap baseline against the current
   open-PR queue, with SHA-bound snapshot rows, a same-session open/close
