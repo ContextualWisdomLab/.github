@@ -3609,6 +3609,7 @@ REPORT
 			;;
 		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
 			echo "│  MODEL QUALITY WARNING                                                       │"
+			echo "Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads."
 			echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
 			exit 0
 			;;

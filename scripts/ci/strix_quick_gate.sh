@@ -3164,7 +3164,7 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
-	if grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$' "$STRIX_LOG" |
+	if grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$|^Warning: You are sending unauthenticated requests to the HF Hub\.' "$STRIX_LOG" |
 		grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)'; then
 		return 0
 	fi
