@@ -71,3 +71,21 @@ jobs:
           python -m compileall -q tests/test_strix_changed_path_policy.py tests/test_strix_workflow_dependency_hashes.py tests/test_strix_quality_timeout_fixture_budget.py
           bash -n scripts/ci/strix_quick_gate.sh
           git diff --exit-code
+
+      - name: Set up production Strix lock Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Preflight exact hashed Strix dependency closure
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pip install \
+            --dry-run \
+            --ignore-installed \
+            --only-binary=:all: \
+            --require-hashes \
+            -r requirements-strix-ci-hashes.txt

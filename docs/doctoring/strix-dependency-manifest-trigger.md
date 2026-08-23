@@ -12,8 +12,11 @@ and full-suite contract.
 
 Add the exact repository-root manifest path to
 `.github/workflows/strix-changed-path-quality-ci.yml` and bind it with
-`test_strix_workflow_reruns_when_dependency_manifest_changes`. Scanner
-models, credentials, timeouts, and result semantics are unchanged.
+`test_strix_workflow_reruns_when_dependency_manifest_changes`. The same gate
+uses production Python 3.13 to perform a binary-only, hash-enforced dry-run of
+the complete lock, so a corrupt, incomplete, or incompatible manifest cannot
+pass merely because it triggered the workflow. Scanner models, credentials,
+timeouts, and result semantics are unchanged.
 
 ## References
 
