@@ -9,6 +9,7 @@ commit and exposed without running build hooks; a lone `--require-hashes`
 directive is not trust evidence. See
 [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
+Strix classifies a trusted same-line LiteLLM or agents-SDK `ModelBehaviorError` as backend-unavailable only when the log has no `Vulnerabilities [1-9]`. See [`docs/doctoring/strix-model-behavior-error-fallback.md`](docs/doctoring/strix-model-behavior-error-fallback.md).
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 

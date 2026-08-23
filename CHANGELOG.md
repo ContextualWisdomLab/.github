@@ -6,6 +6,11 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Classify a trusted same-line LiteLLM or OpenAI Agents SDK
+  `ModelBehaviorError` as Strix backend-unavailable infrastructure when the
+  scan reported no `Vulnerabilities [1-9]`, so the job 95148793283-shaped
+  flake becomes a neutral skip without weakening fail-closed findings.
+
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification

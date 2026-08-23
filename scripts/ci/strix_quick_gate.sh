@@ -2664,14 +2664,31 @@ is_nvidia_nim_not_found_error() {
 	return 1
 }
 
+is_model_behavior_error() {
+	# Classify only one bounded LiteLLM or OpenAI Agents SDK error line
+	# that names ModelBehaviorError. Observed in LineageWeave PR #74
+	# (job 95148793283): the scan printed Vulnerabilities 0, then the
+	# agents SDK aborted on a malformed tool call. Target-source text
+	# that merely mentions ModelBehaviorError, or splits the SDK marker
+	# and the exception name across lines, stays non-retryable so a
+	# real finding cannot spoof infrastructure fallback.
+	if grep -Ei '(litellm(\.exceptions)?\.[A-Za-z]+Error|agents\.exceptions\.ModelBehaviorError)' "$STRIX_LOG" |
+		grep -Eiq 'ModelBehaviorError'; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
-## Five error families qualify:
+## Six error families qualify:
 ##   - RateLimit / RESOURCE_EXHAUSTED / HTTP 429
 ##   - litellm API connection failures with LLM-provider evidence
 ##   - litellm service-unavailable / high-demand provider failures
 ##   - MidStreamFallbackError (litellm mid-stream provider switch)
 ##   - Caido bootstrap timing failures (guest login before the local proxy is up)
+##   - ModelBehaviorError (agents SDK / LiteLLM malformed-tool-call abort)
 ## Timeouts are infrastructure failures. In strict CI mode they fail closed;
 ## otherwise the caller may still move to fallback model evaluation.
 is_transient_same_model_retry_error() {
@@ -2692,6 +2709,9 @@ is_transient_same_model_retry_error() {
 		return 0
 	fi
 	if is_caido_bootstrap_timing_error; then
+		return 0
+	fi
+	if is_model_behavior_error; then
 		return 0
 	fi
 	return 1
@@ -3000,6 +3020,10 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 
@@ -3854,6 +3878,10 @@ is_model_retryable_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
 		return 0
 	fi
 

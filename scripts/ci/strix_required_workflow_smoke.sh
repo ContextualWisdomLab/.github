@@ -160,6 +160,8 @@ assert_file_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-supe
 assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
+assert_file_contains "$workflow_file" "ModelBehaviorError" "Strix workflow recognizes ModelBehaviorError as backend-unavailable"
+assert_file_contains "$gate_script" "is_model_behavior_error" "Strix gate classifies ModelBehaviorError infrastructure flakes"
 
 if [ "$failures" -ne 0 ]; then
 	echo "Strix required workflow smoke test failed with $failures failure(s)." >&2
