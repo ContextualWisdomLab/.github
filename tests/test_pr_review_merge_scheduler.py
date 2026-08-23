@@ -47,6 +47,7 @@ def make_pr(**overrides):
     value = {
         "number": 1,
         "title": "Central review",
+        "author": {"login": "pull-request-author"},
         "isDraft": False,
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "CLEAN",
@@ -91,6 +92,16 @@ def opencode_review(
         "author": {"login": login},
         "submittedAt": submitted_at,
         "commit": {"oid": commit},
+    }
+
+
+def merge_approved_reviews(commit="head"):
+    """Return exact-head OpenCode and independent formal approvals."""
+    return {
+        "nodes": [
+            opencode_review("APPROVED", commit),
+            opencode_review("APPROVED", commit, login="independent-reviewer"),
+        ]
     }
 
 
@@ -141,7 +152,7 @@ def last_push_restamp_candidate(**overrides):
         restMergeableState="BLOCKED",
         reviewDecision="APPROVED",
         autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviews=merge_approved_reviews(),
         statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
         commits={
             "nodes": [
@@ -1384,6 +1395,107 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(manual_opencode_supersedes_pr_target_failure) == ["lint"]
 
 
+def test_scheduler_query_requests_pull_request_author():
+    """Fetch the authoritative author identity used by the independent-review gate."""
+    assert "\n  author { login }\n" in sched.PULL_REQUEST_FIELDS_FRAGMENT
+
+
+@pytest.mark.parametrize(
+    ("author", "reviewer", "state", "commit"),
+    (
+        ("", "independent-reviewer", "APPROVED", "head"),
+        ("pull-request-author", "", "APPROVED", "head"),
+        ("pull-request-author", "pull-request-author", "APPROVED", "head"),
+        ("pull-request-author", "opencode-agent", "APPROVED", "head"),
+        ("pull-request-author", "github-actions[bot]", "APPROVED", "head"),
+        ("pull-request-author", "independent-reviewer", "COMMENTED", "head"),
+        ("pull-request-author", "independent-reviewer", "APPROVED", "old"),
+    ),
+)
+def test_independent_approval_fails_closed_for_invalid_evidence(
+    author,
+    reviewer,
+    state,
+    commit,
+):
+    """Reject missing, self, automation, non-approval, and stale-head evidence."""
+    pr = make_pr(
+        author={"login": author},
+        reviewDecision="APPROVED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head"),
+                opencode_review(state, commit, login=reviewer),
+            ]
+        },
+    )
+
+    assert not sched.has_independent_current_head_approval(pr)
+    assert "independent" in sched.merge_approval_block_reason(pr).lower()
+
+
+def test_independent_exact_head_approval_allows_direct_merge():
+    """Preserve direct merge only when GitHub and independent evidence both pass."""
+    pr = make_pr(
+        reviewDecision="APPROVED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head"),
+                opencode_review("APPROVED", "head", login="independent-reviewer"),
+            ]
+        },
+    )
+
+    assert sched.has_independent_current_head_approval(pr)
+    assert sched.merge_approval_block_reason(pr) is None
+    assert inspect(pr, merge_mode="direct").action == "merge"
+
+
+@pytest.mark.parametrize("review_decision", ("", "REVIEW_REQUIRED"))
+def test_repository_review_policy_blocks_merge_and_disarms_auto_merge(review_decision):
+    """Never leave merge authority armed while GitHub review policy is unsatisfied."""
+    reviews = {
+        "nodes": [
+            opencode_review("APPROVED", "head"),
+            opencode_review("APPROVED", "head", login="independent-reviewer"),
+        ]
+    }
+    blocked = make_pr(reviewDecision=review_decision, reviews=reviews)
+    blocked_mergeability = make_pr(
+        mergeStateStatus="BLOCKED",
+        reviewDecision=review_decision,
+        reviews=reviews,
+    )
+    armed = make_pr(
+        reviewDecision=review_decision,
+        reviews=reviews,
+        autoMergeRequest={"enabledAt": "now"},
+    )
+
+    decision = inspect(blocked, merge_mode="direct")
+    disarm = inspect(armed, merge_mode="direct")
+
+    assert decision.action == "wait"
+    assert "reviewDecision" in decision.reason
+    assert inspect(blocked_mergeability, merge_mode="direct").action == "wait"
+    assert disarm.action == "disable_auto_merge"
+    assert "reviewDecision" in disarm.reason
+
+
+def test_missing_independent_approval_blocks_and_disarms_auto_merge():
+    """Do not let aggregate GitHub state substitute for exact independent evidence."""
+    reviews = {"nodes": [opencode_review("APPROVED", "head")]}
+    blocked = make_pr(reviewDecision="APPROVED", reviews=reviews)
+    armed = make_pr(
+        reviewDecision="APPROVED",
+        reviews=reviews,
+        autoMergeRequest={"enabledAt": "now"},
+    )
+
+    assert inspect(blocked, merge_mode="direct").action == "wait"
+    assert inspect(armed, merge_mode="direct").action == "disable_auto_merge"
+
+
 def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
     head = "a" * 40
     fallback_review = {
@@ -1437,9 +1549,11 @@ def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
                 {
                     **opencode_review("APPROVED", ""),
                     "body": f"## Gate evidence\n\n- Head SHA: `{head}`",
-                }
+                },
+                opencode_review("APPROVED", head, login="independent-reviewer"),
             ]
         },
+        reviewDecision="APPROVED",
         statusCheckRollup={
             "contexts": {
                 "nodes": [
@@ -1495,11 +1609,13 @@ def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
                 {
                     **opencode_review("CHANGES_REQUESTED", "old"),
                     "databaseId": 301,
-                },
-                opencode_review("APPROVED", "head"),
-            ]
-        }
-    )
+                    },
+                    opencode_review("APPROVED", "head"),
+                    opencode_review("APPROVED", "head", login="independent-reviewer"),
+                ]
+            },
+            reviewDecision="APPROVED",
+        )
 
     decision = inspect(pr)
 
@@ -3053,7 +3169,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         make_pr(
             mergeStateStatus="BEHIND",
             restMergeableState="CLEAN",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         )
     )
     assert rest_clean.action == "auto_merge"
@@ -3061,7 +3178,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     outdated_only = inspect(
         make_pr(
             reviewThreads={"nodes": [{"id": "outdated-thread", "isResolved": False, "isOutdated": True}]},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         )
     )
     assert outdated_only.action == "auto_merge"
@@ -3162,7 +3280,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "workflow action required: opencode-review" in action_required_auto.reason
     same_head_auto = make_pr(
         autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": [opencode_review("APPROVED", "head", submitted_at="2026-06-25T06:59:59Z")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     disabled = []
     monkeypatch.setattr(sched, "disable_auto_merge", lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)))
@@ -3179,11 +3298,9 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
     blocked_auto_decision = inspect(blocked_auto)
-    assert blocked_auto_decision.action == "wait"
-    assert "GitHub mergeability is BLOCKED" in blocked_auto_decision.reason
+    assert blocked_auto_decision.action == "disable_auto_merge"
     assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
-    assert "required approving review" in blocked_auto_decision.reason
-    assert "rerun the scheduler" in blocked_auto_decision.reason
+    assert disabled == [("owner/repo", 1, True)]
 
     assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
     restamp_candidate = last_push_restamp_candidate()
@@ -3210,6 +3327,13 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert not sched.should_restamp_for_last_push_approval(
         "owner/repo",
         last_push_restamp_candidate(statusCheckRollup={"contexts": {"nodes": []}}),
+        "BLOCKED",
+        current_head_approved=True,
+        auto_merge_enabled=True,
+    )
+    assert not sched.should_restamp_for_last_push_approval(
+        "owner/repo",
+        last_push_restamp_candidate(reviewDecision="REVIEW_REQUIRED"),
         "BLOCKED",
         current_head_approved=True,
         auto_merge_enabled=True,
@@ -3360,7 +3484,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     called.clear()
     behind_auto_merge_enabled = make_pr(
         mergeStateStatus="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         autoMergeRequest={"enabledAt": "now"},
     )
     disabled.clear()
@@ -3373,7 +3498,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     rest_behind = make_pr(
         mergeStateStatus="CLEAN",
         restMergeableState="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         autoMergeRequest={"enabledAt": "now"},
     )
     rest_behind_decision = inspect(rest_behind)
@@ -3391,7 +3517,8 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",
         compareBehindBy=2,
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         autoMergeRequest={"enabledAt": "now"},
         statusCheckRollup={
             "contexts": {
@@ -3565,7 +3692,8 @@ def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
 
     approved_conflict = make_pr(
         mergeStateStatus="DIRTY",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     decision = inspect(approved_conflict)
     assert decision.action == "block"
@@ -3576,10 +3704,11 @@ def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
     assert disables == []
 
     already_queued = inspect(
-        make_pr(
-            mergeStateStatus="CONFLICTING",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
-            autoMergeRequest={"enabledAt": "now"},
+            make_pr(
+                mergeStateStatus="CONFLICTING",
+                reviewDecision="APPROVED",
+                reviews=merge_approved_reviews(),
+                autoMergeRequest={"enabledAt": "now"},
         )
     )
     assert already_queued.action == "disable_auto_merge"
@@ -3684,7 +3813,8 @@ def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monke
     dispatched = []
     old_head_pr = make_pr(
         mergeStateStatus="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         autoMergeRequest={"enabledAt": "now"},
     )
     new_head_pr = make_pr(headRefOid="new-head", reviews={"nodes": []})
@@ -3990,17 +4120,19 @@ def test_update_branch_summary_includes_followup_notes():
 
 
 def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
-    approved = make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
     failed = make_pr(
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
     )
     assert inspect(failed).reason == "failed check(s): strix"
-    assert inspect(make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]}, autoMergeRequest={"enabledAt": "now"})).reason == (
+    assert inspect(make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews(), autoMergeRequest={"enabledAt": "now"})).reason == (
         "current head is approved; auto-merge already enabled"
     )
     approved_with_auto_merge = make_pr(
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
         autoMergeRequest={"enabledAt": "now"},
     )
     assert inspect(approved_with_auto_merge, enable_auto_merge_flag=False).reason == (
@@ -4020,7 +4152,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     )
     blocked_approved = make_pr(
         mergeStateStatus="BLOCKED",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     assert inspect(blocked_approved, enable_auto_merge_flag=False).reason == (
         "current head is approved; auto-merge disabled by scheduler inputs"
@@ -4034,7 +4167,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     blocked_unmergeable = make_pr(
         mergeable="UNKNOWN",
         mergeStateStatus="BLOCKED",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     assert inspect(blocked_unmergeable, enable_auto_merge_flag=False).reason == (
         "current head is approved; auto-merge disabled by scheduler inputs"
@@ -4057,7 +4191,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
             mergeStateStatus="BLOCKED",
             isCrossRepository=True,
             headRepository={"nameWithOwner": "fork/repo"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4073,7 +4208,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     blocked_direct = inspect(
         make_pr(
             mergeStateStatus="BLOCKED",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct",
     )
@@ -4094,7 +4230,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     already_auto_direct_or_auto = inspect(
         make_pr(
             autoMergeRequest={"enabledAt": "now"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4110,7 +4247,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         make_pr(
             mergeStateStatus="CLEAN",
             compareBehindBy=20,
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4127,7 +4265,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         make_pr(
             mergeStateStatus="BLOCKED",
             compareBehindBy=20,
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4148,7 +4287,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     blocked_direct_or_auto = inspect(
         make_pr(
             mergeStateStatus="BLOCKED",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4167,15 +4307,14 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         make_pr(
             mergeStateStatus="BLOCKED",
             autoMergeRequest={"enabledAt": "now"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
     assert blocked_already_auto.action == "wait"
     assert "auto-merge is already enabled" in blocked_already_auto.reason
     assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_already_auto.reason
-    assert "required approving review" in blocked_already_auto.reason
     assert direct_merges == [
         ("owner/repo", 1, True),
         ("owner/repo", 1, True),
@@ -4195,7 +4334,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
         make_pr(
             isCrossRepository=True,
             headRepository={"nameWithOwner": "fork/repo"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4207,7 +4347,8 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
             mergeStateStatus="BLOCKED",
             isCrossRepository=True,
             headRepository={"nameWithOwner": "fork/repo"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4319,7 +4460,7 @@ def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch
 
 
 def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direct_merge(monkeypatch):
-    approved = make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
     auto_merges = []
 
     def policy_blocked_merge(repo, pr, dry_run):
@@ -4347,7 +4488,8 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
     already_queued = inspect(
         make_pr(
             autoMergeRequest={"enabledAt": "now"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
         ),
         merge_mode="direct_or_auto",
     )
@@ -4358,7 +4500,8 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
 
     blocked = make_pr(
         mergeStateStatus="BLOCKED",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     blocked_decision = inspect(blocked, merge_mode="direct_or_auto")
 
@@ -4383,7 +4526,8 @@ def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direc
 def test_direct_or_auto_attempts_direct_merge_when_mergeability_is_blocked(monkeypatch):
     approved = make_pr(
         mergeStateStatus="BLOCKED",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
     )
     direct_merges = []
 

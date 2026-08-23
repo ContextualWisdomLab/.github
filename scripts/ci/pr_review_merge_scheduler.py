@@ -24,6 +24,7 @@ PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
   title
+  author { login }
   isDraft
   mergeable
   mergeStateStatus
@@ -807,6 +808,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": number,
         "title": pr.get("title"),
+        "author": {"login": ((pr.get("user") or {}).get("login"))},
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
         "mergeStateStatus": rest_merge_state,
@@ -1270,6 +1272,41 @@ def current_head_review_state(pr: dict[str, Any], state: str) -> bool:
 def has_current_head_approval(pr: dict[str, Any]) -> bool:
     """Return whether OpenCode approved the exact current head commit."""
     return current_head_review_state(pr, "APPROVED")
+
+
+def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
+    """Return whether a non-author, non-OpenCode reviewer approved the exact head."""
+    author = ((pr.get("author") or {}).get("login") or "").lower()
+    if not author:
+        return False
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        reviewer = review_author_login(review)
+        if (
+            (review.get("state") or "").upper() == "APPROVED"
+            and review_matches_current_head(review, pr)
+            and reviewer
+            and reviewer != author
+            and not is_automated_opencode_review(review)
+            and reviewer not in {"github-actions", "github-actions[bot]"}
+        ):
+            return True
+    return False
+
+
+def merge_approval_block_reason(pr: dict[str, Any]) -> str | None:
+    """Return the fail-closed repository and independent approval blocker."""
+    review_decision = str(pr.get("reviewDecision") or "").upper()
+    if review_decision != "APPROVED":
+        return (
+            "current-head OpenCode review approved, but GitHub reviewDecision is "
+            f"{review_decision or '<missing>'}; repository approval policy is unsatisfied"
+        )
+    if not has_independent_current_head_approval(pr):
+        return (
+            "current-head OpenCode review approved, but no independent non-author "
+            "exact-current-head formal APPROVED review exists"
+        )
+    return None
 
 
 def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
@@ -2504,6 +2541,7 @@ def inspect_pr(
         return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
+    approval_reason = merge_approval_block_reason(pr) if current_head_approved else None
     if current_head_approved:
         stale_review_cleanup_count = dismiss_stale_opencode_change_requests(
             repo,
@@ -2511,6 +2549,18 @@ def inspect_pr(
             dry_run=dry_run,
         )
     auto_merge_enabled = bool(pr.get("autoMergeRequest"))
+    if approval_reason and auto_merge_enabled:
+        return finish(
+            disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason=(
+                    f"{approval_reason}; obtain fresh independent approval before "
+                    "re-enabling auto-merge"
+                ),
+            )
+        )
     if merge_state in {"DIRTY", "CONFLICTING"}:
         conflict_reason = merge_conflict_guidance(pr, merge_state)
         if current_head_approved:
@@ -2579,6 +2629,8 @@ def inspect_pr(
         merge_state == "CLEAN" or merge_mode in {"direct", "direct_or_auto"}
     )
     if current_head_approved and merge_before_update:
+        if approval_reason:
+            return decide("wait", approval_reason)
         if not same_repository_head(repo, pr):
             return decide("wait", external_head_merge_reason(repo, pr))
         if not enable_auto_merge_flag:
@@ -2739,6 +2791,8 @@ def inspect_pr(
         return decide("wait", "mergeability is still being calculated and no branch freshness evidence is available")
 
     if current_head_approved:
+        if approval_reason:
+            return decide("wait", approval_reason)
         if pr.get("autoMergeRequest"):
             return decide("wait", auto_merge_wait_reason(merge_state, pr))
         if not same_repository_head(repo, pr):
@@ -3336,6 +3390,7 @@ def self_test_scheduler_invariants() -> None:
         pass
     sample = {
         "number": 1,
+        "author": {"login": "pull-request-author"},
         "headRefOid": "abc",
         "baseRefName": "main",
         "baseRefOid": "base",
@@ -3346,7 +3401,7 @@ def self_test_scheduler_invariants() -> None:
         "isCrossRepository": False,
         "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
-        "reviewDecision": "REVIEW_REQUIRED",
+        "reviewDecision": "APPROVED",
         "commits": {
             "nodes": [
                 {
@@ -3367,7 +3422,13 @@ def self_test_scheduler_invariants() -> None:
                     "body": "OpenCode Agent approved this head.",
                     "submittedAt": "2026-06-25T15:42:19Z",
                     "commit": {"oid": "abc"},
-                }
+                },
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "independent-reviewer"},
+                    "submittedAt": "2026-06-25T15:43:19Z",
+                    "commit": {"oid": "abc"},
+                },
             ]
         },
         "statusCheckRollup": {"contexts": {"nodes": []}},
@@ -3601,6 +3662,13 @@ def self_test_scheduler_invariants() -> None:
     sample["isCrossRepository"] = False
     sample["maintainerCanModify"] = False
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
+    sample["reviews"]["nodes"].append(
+        {
+            "state": "APPROVED",
+            "author": {"login": "independent-reviewer"},
+            "commit": {"oid": "abc"},
+        }
+    )
     decision = inspect_pr(
         "owner/repo",
         sample,
@@ -3705,6 +3773,7 @@ def self_test_scheduler_invariants() -> None:
     assert "git status --short" in conflict_guidance["commands"]
     blocked_sample = {
         "number": 2,
+        "author": {"login": "pull-request-author"},
         "headRefOid": "abc",
         "baseRefName": "main",
         "baseRefOid": "base",
@@ -3733,14 +3802,20 @@ def self_test_scheduler_invariants() -> None:
         "reviewThreads": {"nodes": []},
         "reviews": {
             "nodes": [
-                {
-                    "state": "APPROVED",
-                    "author": {"login": "opencode-agent"},
+                    {
+                        "state": "APPROVED",
+                        "author": {"login": "opencode-agent"},
                     "body": "OpenCode Agent approved this head.",
                     "submittedAt": "2026-06-25T15:42:19Z",
-                    "commit": {"oid": "abc"},
-                }
-            ]
+                        "commit": {"oid": "abc"},
+                    },
+                    {
+                        "state": "APPROVED",
+                        "author": {"login": "independent-reviewer"},
+                        "submittedAt": "2026-06-25T15:43:19Z",
+                        "commit": {"oid": "abc"},
+                    },
+                ]
         },
         "statusCheckRollup": {
             "contexts": {
