@@ -57,6 +57,31 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
         assert len(refs) == 1, f"{filename} mixes CodeQL action refs: {sorted(refs)}"
 
 
+def test_all_codeql_actions_share_the_reviewed_current_release() -> None:
+    """Pin every central CodeQL action use to the reviewed v4.37.7 commit."""
+    expected = ("ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd", "v4.37.7")
+    pattern = re.compile(
+        r"github/codeql-action/(?P<action>init|analyze|upload-sarif)@"
+        r"(?P<sha>[^\s]+)\s+#\s+(?P<tag>v[^\s]+)"
+    )
+    actions: set[str] = set()
+    observed: set[tuple[str, str]] = set()
+
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if "github/codeql-action/" not in line:
+                continue
+            match = pattern.search(line)
+            assert match is not None, f"malformed CodeQL pin: {path}:{line_number}"
+            actions.add(match.group("action"))
+            observed.add((match.group("sha"), match.group("tag")))
+
+    assert actions == {"init", "analyze", "upload-sarif"}
+    assert observed == {expected}
+
+
 def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
     tmp_path: Path,
 ) -> None:

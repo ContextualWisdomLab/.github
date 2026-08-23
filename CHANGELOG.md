@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Aligned every central `github/codeql-action` `init`, `analyze`, and
+  `upload-sarif` use to the official v4.37.7 commit so analyzer and evidence
+  upload steps run one immutable, reviewed release across security workflows.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
