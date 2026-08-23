@@ -191,30 +191,42 @@ def _repository_contract_paths(
     *,
     repo_root_path: Path | None,
     pyproject_path: Path,
+    logical_pyproject_path: Path | None = None,
     manifest_path: PurePosixPath,
     python_source: PurePosixPath,
 ) -> tuple[PurePosixPath, PurePosixPath, PurePosixPath] | None:
-    """Return repository-relative PyO3 contract paths for one project."""
+    """Return repository-relative PyO3 paths without rereading mutable metadata."""
 
     candidate_root = pyproject_path.parent if repo_root_path is None else repo_root_path
     try:
         if not candidate_root.is_dir() or candidate_root.is_symlink():
             return None
         repository_root = candidate_root.resolve()
-        project_root = pyproject_path.parent.resolve()
-        resolved_pyproject = pyproject_path.resolve()
-        if resolved_pyproject.parent != project_root:
-            return None
-        project_prefix_path = project_root.relative_to(repository_root)
     except (OSError, ValueError):
         return None
 
-    project_prefix = (
-        PurePosixPath(".")
-        if not project_prefix_path.parts
-        else PurePosixPath(project_prefix_path.as_posix())
-    )
-    relative_pyproject = project_prefix / pyproject_path.name
+    if logical_pyproject_path is not None:
+        if repo_root_path is None:
+            return None
+        relative_pyproject = _safe_relative_path(logical_pyproject_path.as_posix())
+        if relative_pyproject is None:
+            return None
+        project_prefix = relative_pyproject.parent
+    else:
+        try:
+            project_root = pyproject_path.parent.resolve()
+            resolved_pyproject = pyproject_path.resolve()
+            if resolved_pyproject.parent != project_root:
+                return None
+            project_prefix_path = project_root.relative_to(repository_root)
+        except (OSError, ValueError):
+            return None
+        project_prefix = (
+            PurePosixPath(".")
+            if not project_prefix_path.parts
+            else PurePosixPath(project_prefix_path.as_posix())
+        )
+        relative_pyproject = project_prefix / pyproject_path.name
     if relative_pyproject.name != "pyproject.toml":
         return None
     relative_manifest = project_prefix / manifest_path
@@ -314,6 +326,7 @@ def classify_pytest_inputs(
     *,
     log_path: Path,
     pyproject_path: Path,
+    logical_pyproject_path: Path | None = None,
     changed_files_path: Path,
     repo_root_path: Path | None = None,
 ) -> str | None:
@@ -329,6 +342,7 @@ def classify_pytest_inputs(
     repository_paths = _repository_contract_paths(
         repo_root_path=repo_root_path,
         pyproject_path=pyproject_path,
+        logical_pyproject_path=logical_pyproject_path,
         manifest_path=manifest_path,
         python_source=python_source,
     )
@@ -435,6 +449,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     classify = subparsers.add_parser("classify-pytest")
     classify.add_argument("--log", type=Path, required=True)
     classify.add_argument("--pyproject", type=Path, required=True)
+    classify.add_argument("--logical-pyproject", type=Path)
     classify.add_argument("--changed-files", type=Path, required=True)
     classify.add_argument("--repo-root", type=Path)
 
@@ -458,6 +473,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         module_name = classify_pytest_inputs(
             log_path=args.log,
             pyproject_path=args.pyproject,
+            logical_pyproject_path=args.logical_pyproject,
             changed_files_path=args.changed_files,
             repo_root_path=args.repo_root,
         )

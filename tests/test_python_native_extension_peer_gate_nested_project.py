@@ -153,6 +153,36 @@ def test_repository_contract_rejects_a_rebound_pyproject_path(
     ) is None
 
 
+def test_repository_contract_rejects_root_resolution_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An unresolvable repository anchor cannot define logical path identity."""
+
+    repository_root, log_path, pyproject_path, changed_files_path = _nested_inputs(
+        tmp_path,
+        "services/nested_project/python/nested_package/reporting.py\n",
+    )
+    original_resolve = Path.resolve
+
+    def fail_root(path: Path, *args, **kwargs):
+        """Raise only while the classifier resolves the repository anchor."""
+
+        if path == repository_root:
+            raise OSError("unavailable")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fail_root)
+    assert gate.classify_pytest_inputs(
+        log_path=log_path,
+        pyproject_path=pyproject_path,
+        logical_pyproject_path=Path(
+            "services/nested_project/pyproject.toml"
+        ),
+        changed_files_path=changed_files_path,
+        repo_root_path=repository_root,
+    ) is None
+
+
 def test_classifier_requires_the_canonical_pyproject_filename(tmp_path: Path) -> None:
     """A differently named TOML file cannot define repository trust paths."""
 

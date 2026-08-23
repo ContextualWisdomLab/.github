@@ -57,6 +57,10 @@ installed package.
 failure only when every condition below is true:
 
 1. `pyproject.toml` is a bounded, regular, non-symlink UTF-8 file.
+   The workflow reads those bytes from a sealed pre-test snapshot and passes
+   the separately validated repository-relative `pyproject.toml` location as
+   logical path data; a temporary snapshot path never becomes repository
+   identity.
 2. The build backend is exactly `maturin` and bindings are exactly `pyo3`.
 3. `module-name`, `manifest-path`, and `python-source` are safe relative values.
 4. The pytest log is bounded, complete, and contains only collection errors.
@@ -119,6 +123,13 @@ not load the target project as Python code. TOML and JSON are parsed as data.
 Repository paths reject absolute paths, parent traversal, current-directory
 aliases, Windows separators, NUL, and duplicates.
 
+Untrusted pytest executes only after the metadata snapshot is sealed. The
+classifier therefore reads maturin configuration from that immutable copy and
+derives change-boundary paths from a distinct, traversal-free logical path
+anchored to the validated coverage repository. It never resolves the temporary
+snapshot as though it lived inside the repository and never rereads mutable
+post-test project metadata.
+
 The classifier does not make arbitrary `ModuleNotFoundError` safe. Missing
 third-party dependencies, syntax/import defects in Python modules, mixed
 exceptions, runtime crashes, and ordinary test failures remain blocking.
@@ -137,10 +148,12 @@ adversarial cases for:
 - stale, pending, failed, status-only, wrong-workflow, and misleading checks;
 - malformed SHAs, duplicate requirements, unsafe JSON, and missing files;
 - flat and GraphQL-shaped workflow metadata;
-- both CLI success and fail-closed paths.
+- both CLI success and fail-closed paths;
+- the exact embedded workflow command with an outside-repository sealed
+  snapshot plus a canonical logical `pyproject.toml` path.
 
-Current-main reconciliation verification reported 109 focused tests passing
-with 261/261 production statements and 116/116 production branches covered.
+Exact-head verification reported 115 focused tests passing with 272/272
+production statements and 122/122 production branches covered.
 Permanent central quality and security workflows remain authoritative after the
 branch is pushed.
 

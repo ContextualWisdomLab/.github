@@ -347,6 +347,66 @@ def test_classify_inputs_accepts_python_only_change(tmp_path: Path) -> None:
     ) == "fast_mlsirm._core"
 
 
+def test_classify_inputs_separates_sealed_metadata_from_logical_path(
+    tmp_path: Path,
+) -> None:
+    """A sealed TOML copy retains its independently validated repository path."""
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    log = write(tmp_path / "pytest.log", LOG)
+    snapshot = write(tmp_path / "sealed-metadata", PYPROJECT)
+    changed = write(
+        tmp_path / "changed.txt",
+        "python/fast_mlsirm/scoring/reporting.py\n",
+    )
+
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=snapshot,
+        logical_pyproject_path=Path("pyproject.toml"),
+        changed_files_path=changed,
+        repo_root_path=repository,
+    ) == "fast_mlsirm._core"
+
+
+@pytest.mark.parametrize(
+    "logical_pyproject",
+    [Path("../pyproject.toml"), Path("project.toml")],
+)
+def test_classify_inputs_rejects_unsafe_logical_metadata_paths(
+    tmp_path: Path,
+    logical_pyproject: Path,
+) -> None:
+    """Logical paths must be traversal-free canonical repository metadata."""
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    log, snapshot, changed = valid_inputs(tmp_path)
+
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=snapshot,
+        logical_pyproject_path=logical_pyproject,
+        changed_files_path=changed,
+        repo_root_path=repository,
+    ) is None
+
+
+def test_classify_inputs_requires_repo_root_for_a_logical_path(
+    tmp_path: Path,
+) -> None:
+    """A logical location without an anchoring repository cannot defer."""
+
+    log, snapshot, changed = valid_inputs(tmp_path)
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=snapshot,
+        logical_pyproject_path=Path("pyproject.toml"),
+        changed_files_path=changed,
+    ) is None
+
+
 def test_classify_inputs_rejects_unsafe_input_files(tmp_path: Path) -> None:
     """Missing or malformed inputs block classification."""
 

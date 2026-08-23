@@ -57,6 +57,66 @@ def test_failed_python_suite_uses_bounded_repo_root_aware_classifier() -> None:
     assert "if run_python_native_extension_classifier" in workflow
 
 
+def test_workflow_classifier_executes_sealed_snapshot_with_logical_path(
+    tmp_path: Path,
+) -> None:
+    """The real workflow command must separate trusted bytes from repo location."""
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    pyproject_text = """\
+[build-system]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "pyo3"
+manifest-path = "crates/native/Cargo.toml"
+module-name = "native_demo._core"
+python-source = "python"
+"""
+    (repository / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
+    pytest_log = tmp_path / "pytest.log"
+    pytest_log.write_text(
+        """\
+____________ ERROR collecting tests/test_api.py ____________
+tests/test_api.py:3: in <module>
+    import native_demo._core
+E   ModuleNotFoundError: No module named 'native_demo._core'
+!!!!!!!! Interrupted: 1 error during collection !!!!!!!!
+""",
+        encoding="utf-8",
+    )
+    changed_files = tmp_path / "changed-files.txt"
+    changed_files.write_text("python/native_demo/api.py\n", encoding="utf-8")
+    sealed_snapshot = tmp_path / "sealed-metadata"
+    sealed_snapshot.write_text(pyproject_text, encoding="utf-8")
+
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            _workflow_function("run_python_native_extension_classifier"),
+            (
+                "run_python_native_extension_classifier . "
+                f"{pytest_log!s} {changed_files!s} {sealed_snapshot!s}"
+            ),
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=repository,
+        env={
+            **os.environ,
+            "GITHUB_WORKSPACE": str(_ROOT),
+            "COVERAGE_SOURCE_WORKDIR": str(repository),
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged declared native module native_demo._core" in result.stdout
+
+
 def test_python_coverage_executes_classifier_path_and_publishes_peer_requirement() -> None:
     """Every pytest path must classify failures and serialize the peer gate."""
 

@@ -61,6 +61,13 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Restored the PyO3 source-only coverage deferral by teaching its classifier
+  CLI to accept the workflow's sealed metadata snapshot and distinct logical
+  repository path. The gate now reads immutable pre-test TOML bytes while
+  deriving native/package change boundaries from a traversal-free canonical
+  `pyproject.toml` location, with an integration test executing the exact
+  embedded workflow command.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
