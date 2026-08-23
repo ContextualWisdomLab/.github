@@ -47,3 +47,6 @@
 ## 2026-08-09 - [대용량 로그 스캔 시 정규표현식 실행 전 O(N) 서브스트링 검증 선행]
 **Learning:** `classify_testthat_failure`에서 테스트 실패 내역이 없는 2MB 로그 파일을 대상으로 정규표현식을 실행하면 약 20ms가 소요되지만, 단순 문자열 검색은 약 1ms만 소요됩니다. 문자열 존재 여부가 정규표현식 매칭의 전제 조건일 때, 콜드 패스(Cold Path)에서 순서 최적화는 매우 큰 성능 차이를 만듭니다.
 **Action:** 대용량 텍스트 입력(CI 로그 등)에서 복잡한 정규표현식을 파싱하기 전에 항상 빠른 O(N) 문자열 존재 여부 확인을 먼저 수행하십시오.
+## 2026-08-22 - JSONDecoder().raw_decode()를 사용한 JSON 추출 최적화
+**Learning:** `scripts/ci/noema_review_gate.py`의 `extract_json_object` 함수에서 `rfind`와 문자열 슬라이싱을 사용하는 기존 방식을 대체할 기회를 발견했습니다. `json.JSONDecoder().raw_decode()`를 사용하면 부분 문자열을 위한 O(N) 메모리 할당을 안전하게 방지하면서, 후행 가비지 텍스트로 인해 발생하는 버그를 완벽하게 차단할 수 있습니다.
+**Action:** LLM 응답과 같이 후행에 JSON이 아닌 텍스트가 포함될 수 있는 문자열에서 JSON을 추출할 때는, `rfind("}")` 대신 `json.JSONDecoder().raw_decode()`를 사용하여 파싱 속도를 높이고 더 견고한 코드를 작성하십시오.
