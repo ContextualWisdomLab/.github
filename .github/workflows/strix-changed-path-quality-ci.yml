@@ -86,6 +86,6 @@ jobs:
           python -m pip install \
             --dry-run \
             --ignore-installed \
-            --only-binary=:all: \
+            --no-deps \
             --require-hashes \
             -r requirements-strix-ci-hashes.txt

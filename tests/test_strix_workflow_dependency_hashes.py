@@ -53,14 +53,18 @@ def test_strix_workflow_preflights_dependency_manifest_hashes() -> None:
     """The specialized gate resolves the production lock with enforced hashes."""
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    preflight = workflow.split(
+        "      - name: Preflight exact hashed Strix dependency closure\n", 1
+    )[1].split("\n      - name:", 1)[0]
 
     assert 'python-version: "3.13"' in workflow
-    assert "python -m pip install \\" in workflow
-    assert "--dry-run \\" in workflow
-    assert "--ignore-installed \\" in workflow
-    assert "--only-binary=:all: \\" in workflow
-    assert "--require-hashes \\" in workflow
-    assert "-r requirements-strix-ci-hashes.txt" in workflow
+    assert "python -m pip install \\" in preflight
+    assert "--dry-run \\" in preflight
+    assert "--ignore-installed \\" in preflight
+    assert "--no-deps \\" in preflight
+    assert "--only-binary=:all:" not in preflight
+    assert "--require-hashes \\" in preflight
+    assert "-r requirements-strix-ci-hashes.txt" in preflight
 
 
 def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
