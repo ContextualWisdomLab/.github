@@ -71,6 +71,7 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name }}
           ref: ${{ github.event.pull_request.base.sha }}
+          path: source
           fetch-depth: 0
           persist-credentials: false
       - name: Install trusted OSV result evidence classifier
@@ -161,7 +162,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Classify base OSV result evidence
         id: osv_base_evidence
         if: always()
@@ -202,7 +203,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Classify retried base OSV result evidence
         id: osv_base_retry_evidence
         if: steps.osv_base_evidence.outputs.complete != 'true'
@@ -224,20 +225,20 @@ jobs:
             exit 1
           fi
           cp -- old-results.json "$RUNNER_TEMP/osv-base-provenance/old-results.json"
-          if [ -L pnpm-lock.yaml ]; then
+          if [ -L source/pnpm-lock.yaml ]; then
             echo "::error::Base pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
             exit 1
           fi
-          if [ -f pnpm-lock.yaml ]; then
-            cp -- pnpm-lock.yaml "$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+          if [ -f source/pnpm-lock.yaml ]; then
+            cp -- source/pnpm-lock.yaml "$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
           fi
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          path: source
           fetch-depth: 0
-          clean: false
           persist-credentials: false
       - name: Prepare head OSV output boundary
         shell: python3 {0}
@@ -262,7 +263,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Classify head OSV result evidence
         id: osv_head_evidence
         if: always()
@@ -303,7 +304,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Classify retried head OSV result evidence
         id: osv_head_retry_evidence
         if: steps.osv_head_evidence.outputs.complete != 'true'
@@ -363,20 +364,20 @@ jobs:
             python3 "$reconciler" \
               --results old-results.json \
               --lockfile "$base_lock" \
-              --source-path pnpm-lock.yaml \
+              --source-path source/pnpm-lock.yaml \
               --audit "$audit" \
               --label base
           fi
 
-          if [ -L pnpm-lock.yaml ]; then
+          if [ -L source/pnpm-lock.yaml ]; then
             echo "::error::Head pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
             exit 1
           fi
-          if [ -f pnpm-lock.yaml ]; then
+          if [ -f source/pnpm-lock.yaml ]; then
             python3 "$reconciler" \
               --results new-results.json \
-              --lockfile pnpm-lock.yaml \
-              --source-path pnpm-lock.yaml \
+              --lockfile source/pnpm-lock.yaml \
+              --source-path source/pnpm-lock.yaml \
               --audit "$audit" \
               --label head
           fi

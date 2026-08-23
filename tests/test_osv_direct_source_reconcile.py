@@ -607,7 +607,8 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertIn("osv_direct_source_reconcile.py", workflow)
         self.assertIn("osv-provenance-audit.json", workflow)
-        self.assertEqual(workflow.count("--source-path pnpm-lock.yaml"), 2)
+        self.assertEqual(workflow.count("--source-path source/pnpm-lock.yaml"), 2)
+        self.assertIn("--lockfile source/pnpm-lock.yaml", workflow)
 
 
 if __name__ == "__main__":

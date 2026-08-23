@@ -36,6 +36,13 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
     r"==[^\s;]+(?:\s*;\s*\S(?:.*\S)?)?"
 )
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
+UV_EXACT_ORG_VCS_RE = re.compile(
+    r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?)\s+@\s+"
+    r"git\+https://github\.com/ContextualWisdomLab/"
+    r"(?P<repository>[A-Za-z0-9_.-]{1,100})\.git@"
+    r"(?P<commit>[0-9a-fA-F]{40})"
+)
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
@@ -286,6 +293,42 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
+def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
+    """Separate registry hash pins from exact organization VCS source pins."""
+    registry_requirements: list[str] = []
+    vcs_by_repository: dict[str, dict[str, str]] = {}
+    for line in _requirement_lines(content):
+        if _is_fully_hash_pinned_requirement(line):
+            registry_requirements.append(line)
+            continue
+        match = UV_EXACT_ORG_VCS_RE.fullmatch(line)
+        if match is None:
+            raise ValueError("uv export contains an unsupported dependency line")
+        dependency = {
+            "package": match.group("package"),
+            "import_name": re.sub(
+                r"[-_.]+", "_", match.group("package").partition("[")[0]
+            ).lower(),
+            "repository": match.group("repository"),
+            "commit": match.group("commit").lower(),
+        }
+        repository_key = dependency["repository"].casefold()
+        previous = vcs_by_repository.get(repository_key)
+        if previous is not None and previous["commit"] != dependency["commit"]:
+            raise ValueError("uv export pins one VCS repository to conflicting commits")
+        vcs_by_repository[repository_key] = dependency
+
+    registry_content = (
+        ("\n".join(registry_requirements) + "\n").encode("utf-8")
+        if registry_requirements
+        else b""
+    )
+    return registry_content, sorted(
+        vcs_by_repository.values(),
+        key=lambda dependency: dependency["repository"].casefold(),
+    )
+
+
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     """Run one read-only git command in the materialized repository."""
     completed = subprocess.run(
@@ -492,7 +535,7 @@ def _reject_unsupported_uv_workspace(
 
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
-) -> bytes | None:
+) -> tuple[bytes, list[dict[str, str]]] | None:
     """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
     The caller proves that the sibling ``pyproject.toml`` is a regular blob in
@@ -534,11 +577,14 @@ def _export_uv_lock(
     exported = completed.stdout
     if not _requirement_lines(exported):
         return None
-    if not _is_fully_hash_pinned_export(exported):
+    try:
+        partitioned = _partition_uv_export(exported)
+    except ValueError as exc:
         raise RuntimeError(
-            f"uv export for tracked base lock {lock_path} was not fully hash-pinned"
-        )
-    return exported
+            f"uv export for tracked base lock {lock_path} was not fully hash-pinned "
+            "or exact organization VCS-pinned"
+        ) from exc
+    return partitioned
 
 
 def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosixPath]]:
@@ -569,8 +615,10 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
     return regular_blobs
 
 
-def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
-    """Return regular hash-lock blobs from the exact validated base commit."""
+def _base_python_inputs(
+    repo_root: pathlib.Path, base_sha: str
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
+    """Return hash locks and exact VCS sources from one validated base commit."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -578,6 +626,7 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     regular_blobs = _regular_base_blob_paths(entries)
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
+    vcs_by_repository: dict[str, dict[str, str]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
@@ -588,8 +637,34 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                locks.append((path, exported))
-    return sorted(locks, key=lambda item: item[0])
+                registry_content, vcs_dependencies = exported
+                if registry_content:
+                    locks.append((path, registry_content))
+                for dependency in vcs_dependencies:
+                    dependency = {**dependency, "source": path}
+                    repository_key = dependency["repository"].casefold()
+                    previous = vcs_by_repository.get(repository_key)
+                    if (
+                        previous is not None
+                        and previous["commit"] != dependency["commit"]
+                    ):
+                        raise RuntimeError(
+                            "base uv locks pin one VCS repository "
+                            "to conflicting commits"
+                        )
+                    vcs_by_repository[repository_key] = dependency
+    return (
+        sorted(locks, key=lambda item: item[0]),
+        sorted(
+            vcs_by_repository.values(),
+            key=lambda dependency: dependency["repository"].casefold(),
+        ),
+    )
+
+
+def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
+    """Return regular hash-lock blobs from the exact validated base commit."""
+    return _base_python_inputs(repo_root, base_sha)[0]
 
 
 def _included_base_lock_blobs(
@@ -661,10 +736,9 @@ def materialize(
     regular_paths = {
         path for path, _candidate in _regular_base_blob_paths(entries)
     }
+    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
     manifest: list[dict[str, str]] = []
-    for index, (source_path, content) in enumerate(
-        base_hash_locks(resolved_repo, base_sha)
-    ):
+    for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
         include_directory = f"includes-{index:03d}"
         included = _included_base_lock_blobs(
@@ -690,6 +764,10 @@ def materialize(
     )
     (output_dir / "manifest.txt").write_text(
         "".join(f"{entry['file']}\n" for entry in manifest),
+        encoding="utf-8",
+    )
+    (output_dir / "vcs-manifest.json").write_text(
+        json.dumps(vcs_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return manifest
@@ -719,7 +797,9 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print(
-            "No tracked hash-bearing Python requirement candidates exist at the validated base SHA."
+            "No tracked hash-bearing Python requirement candidates exist at the "
+            "validated base SHA; any exact VCS source pins are listed in "
+            "vcs-manifest.json."
         )
     return 0
 

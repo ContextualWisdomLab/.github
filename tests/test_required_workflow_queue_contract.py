@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,35 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
         in workflow
     )
+
+
+def test_organization_readiness_does_not_echo_untrusted_http_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep arbitrary HTTP method text out of organization-loop diagnostics."""
+    from types import SimpleNamespace
+
+    from scripts.ci.organization_commercial_readiness_loop import (
+        GitHubClient,
+        GitHubError,
+    )
+
+    token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB"
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="request rejected",
+        ),
+    )
+
+    with pytest.raises(GitHubError) as raised:
+        GitHubClient("client-token").request("/repos/example", method=token)
+
+    message = str(raised.value)
+    assert token.upper() not in message
+    assert "[REDACTED_METHOD]" in message
 
 
 def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
@@ -102,7 +132,7 @@ def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
 
 
 def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> None:
-    """Central single-PR dispatch must validate live metadata before cross-repo use."""
+    """Central single-PR dispatch accepts a bounded fork head without trusting it."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     validation = workflow_step(workflow, "Validate targeted repository dispatch")
     inspect = workflow_step(workflow, "Inspect PR review and merge queue")
@@ -119,7 +149,11 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
     assert '[ "$live_state" != "open" ]' in validation
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
-    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert (
+        '! [[ "$live_head_repository" =~ '
+        '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
+    ) in validation
+    assert '[ "$live_head_repository" != "$TARGET_REPOSITORY_INPUT" ]' not in validation
     assert "Targeted scheduler dispatch base branch does not match the live PR" in validation
     assert "TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}" in inspect
     assert (
@@ -132,6 +166,7 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert (
         "github.event_name == 'repository_dispatch' && "
         "github.event.client_payload.target_repository != '' && "
+        "github.event.client_payload.target_repository != github.repository && "
         "(secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || "
         "steps.scheduler_app_token.outputs.token) || github.token"
     ) in inspect
@@ -788,6 +823,324 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     assert "current_head=closed-or-no-open-pr" in result.stdout
 
 
+def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
+    """Return only the rotation-offset bash block, without the surrounding
+    `gh api`/dispatch logic that would require live network credentials."""
+
+    start_marker = "          sweep_target_count=${#sweep_targets[@]}\n"
+    end_marker = 'rotation tick ${ORG_SWEEP_ROTATION_INDEX})."\n'
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start) + len(end_marker)
+    return textwrap.dedent(workflow[start:end])
+
+
+def test_org_queue_sweep_rotation_offset_is_deterministic_and_reorders_targets() -> None:
+    """Rotating the sweep walk order must preserve every target and only reorder them."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_snippet(workflow)
+
+    for rotation_index, expected_first in (
+        ("0", "repo-a"),
+        ("1", "repo-b"),
+        ("2", "repo-c"),
+        ("5", "repo-a"),  # 5 % 5 == 0: wraps back to unrotated order
+        ("7", "repo-c"),  # 7 % 5 == 2
+    ):
+        script = (
+            "sweep_targets=($'repo-a\\tmain' $'repo-b\\tmain' $'repo-c\\tmain' "
+            "$'repo-d\\tmain' $'repo-e\\tmain')\n"
+            + snippet
+            + '\nprintf "%s\\n" "${sweep_targets[@]}"\n'
+        )
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", script],
+            env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": rotation_index},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        rotated = [
+            line.split("\t")[0]
+            for line in result.stdout.strip().splitlines()
+            if "\t" in line
+        ]
+        assert len(rotated) == 5
+        assert set(rotated) == {"repo-a", "repo-b", "repo-c", "repo-d", "repo-e"}
+        assert rotated[0] == expected_first, (rotation_index, result.stdout)
+
+
+def test_org_queue_sweep_rotation_offset_is_safe_with_no_targets() -> None:
+    """An org with no sweepable repositories must not crash the rotation arithmetic."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_snippet(workflow)
+    script = "sweep_targets=()\n" + snippet
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "3"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "starting at rotation offset 0" in result.stdout
+
+
+def _extract_org_sweep_rotation_default_snippet(workflow: str) -> str:
+    """Return only the wall-clock-default/validation block for the rotation index,
+    without the surrounding `gh api` calls that would require network credentials."""
+
+    start_marker = "          if [ -z \"${ORG_SWEEP_ROTATION_INDEX:-}\" ]; then\n"
+    end_marker = "            exit 1\n          fi\n\n          repositories_json="
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start) + len("            exit 1\n          fi\n")
+    return textwrap.dedent(workflow[start:end])
+
+
+def _fake_gh_script(*, get_ok: bool, get_value: str, patch_ok: bool, post_ok: bool) -> str:
+    """A stand-in `gh` executable simulating the repository-variable API.
+
+    ``get_ok`` controls whether `gh api .../variables/NAME --jq .value`
+    exits zero at all -- a real "does the variable exist and is it
+    readable" outcome, kept distinct from what value it prints on success
+    (``get_value``), so tests can simulate a *failed* read (transient error
+    or a genuinely missing variable) separately from a *successful* read
+    of an empty/malformed value. ``patch_ok``/``post_ok`` control whether
+    the corresponding mutation exits zero, so tests can force the
+    PATCH-then-POST-create fallback or the full-failure wall-clock
+    fallback without a real GitHub API call.
+    """
+    get_exit = "0" if get_ok else "1"
+    patch_exit = "0" if patch_ok else "1"
+    post_exit = "0" if post_ok else "1"
+    return textwrap.dedent(
+        f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$1" != "api" ]; then
+          echo "unsupported fake gh invocation: $*" >&2
+          exit 2
+        fi
+        shift
+        if [[ "$1" == *"/variables/"* ]] && [[ "$*" == *"-X PATCH"* || "$*" == *"PATCH"* ]]; then
+          exit {patch_exit}
+        fi
+        if [[ "$1" == "repos/"*"/actions/variables" ]]; then
+          exit {post_exit}
+        fi
+        if [[ "$1" == *"/variables/"* ]]; then
+          if [ "{get_exit}" = "0" ]; then
+            printf '%s' "{get_value}"
+          fi
+          exit {get_exit}
+        fi
+        echo "unsupported fake gh api path: $1" >&2
+        exit 2
+        """
+    )
+
+
+def _run_rotation_default_snippet(
+    snippet: str,
+    tmp_path: Path,
+    *,
+    get_ok: bool = True,
+    get_value: str,
+    patch_ok: bool,
+    post_ok: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the extracted default/validation block with a fake `gh` on PATH."""
+
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        _fake_gh_script(get_ok=get_ok, get_value=get_value, patch_ok=patch_ok, post_ok=post_ok),
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+    env = dict(os.environ)
+    env.pop("ORG_SWEEP_ROTATION_INDEX", None)
+    env["GITHUB_REPOSITORY"] = "ContextualWisdomLab/.github"
+    env["PATH"] = f"{tmp_path}{os.pathsep}{env.get('PATH', '')}"
+    return subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True
+    )
+
+
+def test_org_queue_sweep_rotation_index_uses_persistent_counter_when_available(
+    tmp_path: Path,
+) -> None:
+    """The primary source increments a persistent counter by exactly one per
+    actual sweep execution — immune to how much wall-clock time a prior
+    slow (up to 60-minute, non-cancelling) run consumed, which a wall-clock
+    tick alone cannot guarantee (CodeRabbit review finding on #1223)."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="7", patch_ok=True, post_ok=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "8"  # incremented by exactly one
+
+
+def test_org_queue_sweep_rotation_index_counter_increment_forces_base_10(
+    tmp_path: Path,
+) -> None:
+    """A manually-seeded leading-zero value ("08") must not be parsed as
+    octal, where it would error under set -e (Devin review finding on
+    #1223) — unprefixed bash arithmetic treats a leading zero as an octal
+    literal, and "08"/"09" are not valid octal digits."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_value="08", patch_ok=True, post_ok=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "9"
+
+
+def test_org_queue_sweep_rotation_index_creates_counter_on_first_run(tmp_path: Path) -> None:
+    """A failed read (variable does not exist yet) falls back to creating it."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=False, post_ok=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
+
+
+def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path) -> None:
+    """If the persistent counter is entirely unavailable (both the read and
+    the create-on-first-run POST fail), degrade to a wall-clock tick rather
+    than failing the whole sweep over a fairness mechanism."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=False, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])  # last line: the printed value; earlier: the warning
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
+    assert "could not read/write" in result.stdout  # a `::warning::` workflow command
+
+
+def test_org_queue_sweep_rotation_index_transient_read_failure_does_not_reset_counter(
+    tmp_path: Path,
+) -> None:
+    """A *failed* read must never be treated as "the counter is 0 and safe to
+    PATCH": that would silently reset an already-accumulated counter value
+    back down to 1, restarting the rotation sequence instead of degrading to
+    the wall-clock fallback (Devin review finding on #1223). Simulated here
+    as: the read fails, and the create-on-first-run POST also fails (as it
+    should when the variable genuinely already exists and this run simply
+    could not see it) -- landing on the wall-clock fallback rather than a
+    PATCH that would have clobbered the real value."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=False, get_value="", patch_ok=True, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1
+    # Critically: never "1" -- that would mean the failed read was treated
+    # as a fresh-start reset rather than an unreadable existing value.
+    assert stdout_lines[-1] != "1"
+
+
+def test_org_queue_sweep_rotation_index_successful_read_but_failed_patch_falls_back(
+    tmp_path: Path,
+) -> None:
+    """A successful read of an existing value, followed by a failed PATCH,
+    must fall back to the wall-clock tick and log the value that could not
+    be written -- not silently drop the accumulated counter."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+
+    result = _run_rotation_default_snippet(
+        snippet, tmp_path, get_ok=True, get_value="41", patch_ok=False, post_ok=False
+    )
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    computed_tick = int(stdout_lines[-1])
+    expected_tick = int(time.time()) // 900
+    assert abs(computed_tick - expected_tick) <= 1
+    assert "read ORG_SWEEP_ROTATION_COUNTER=41 but could not PATCH it" in result.stdout
+
+
+def test_org_queue_sweep_rotation_index_override_is_preserved() -> None:
+    """An explicitly injected value (as tests do) is never overwritten."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "42"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "42"
+
+
+def test_org_queue_sweep_rotation_index_rejects_malformed_override() -> None:
+    """A malformed override still fails closed rather than reaching arithmetic."""
+
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    snippet = _extract_org_sweep_rotation_default_snippet(workflow)
+    script = snippet + '\nprintf "%s\\n" "$ORG_SWEEP_ROTATION_INDEX"\n'
+
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ORG_SWEEP_ROTATION_INDEX": "not-a-number"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "ORG_SWEEP_ROTATION_INDEX must be a non-negative integer" in result.stdout
+
+
+def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> None:
+    """Record why rotation exists and keep the new input on the same fail-closed contract."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert "ContextualWisdomLab/.github#1219" in workflow
+    assert (
+        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))'
+    ) in workflow
+    assert (
+        'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
+    ) in workflow
+    assert (
+        "rotation_offset=$(( ORG_SWEEP_ROTATION_INDEX % sweep_target_count ))"
+    ) in workflow
+    # `github.run_number` increments on every trigger of this workflow, not
+    # only the sweep schedule, so it cannot give the per-sweep-tick rotation
+    # guarantee the fix is meant to provide (ContextualWisdomLab/.github#1220
+    # review finding). The env-block default must not reintroduce it.
+    assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
+    # The fix must not change the org-wide budget itself, only which
+    # repositories consume it — otherwise it reintroduces the exact
+    # cost/rate-limit risk #1219 explicitly declined to guess at.
+    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+
+
 def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     """Manual full-sweep cadence must override repository variables and defaults."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
@@ -911,8 +1264,8 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
     assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
 
 
-def test_security_scan_allows_repositories_without_supported_lockfiles() -> None:
-    """Allow manifestless repositories while still requiring scan artifacts."""
+def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
+    """Limit cross-fork replacement to a child checkout directory."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
@@ -922,6 +1275,9 @@ def test_security_scan_allows_repositories_without_supported_lockfiles() -> None
     assert "--output-file=results.sarif" not in workflow
     assert "--output=old-results.json" not in workflow
     assert "--output=new-results.json" not in workflow
+    assert workflow.count("path: source") == 2
+    assert workflow.count("\n            source/\n") == 4
+    assert "clean: false" not in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
 
@@ -1307,21 +1663,28 @@ def test_optional_strix_workflow_absence_is_logged_without_failing_lookup() -> N
     assert 'if target_workflow_available "strix.yml"; then' in failed_check_evidence
 
 
-def test_strix_provider_outage_without_findings_is_neutralized() -> None:
-    """Keep provider outages non-blocking only when no vulnerability finding exists."""
+def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
+    """Keep provider outages typed and non-passing until authoritative evidence exists."""
     workflow = workflow_text("strix.yml")
 
     assert "RateLimitError|Too many requests" in workflow
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
+    assert "model_behavior_error_signal=" in workflow
+    assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
+    assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
-    assert "before producing a vulnerability report" in workflow
-    assert "genuine findings still fail the check" in workflow
+    assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
+    assert 'exit "$strix_rc"' in workflow
+    assert "Treating as a neutral skip" not in workflow
+    assert "authoritative vulnerability analysis" in workflow
+    assert "incomplete scan into passing security evidence" in workflow
     assert (
-        '&& ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"' in workflow
+        '&& ! grep -Eiq "$reported_vulnerability_signal" '
+        '"$strix_neutralization_scope_log"' in workflow
     )
 
 
