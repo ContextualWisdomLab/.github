@@ -7,7 +7,8 @@ failure and logs "Strix scan failed after provider infrastructure or
 failure-signal output; failing closed." (scripts/ci/strix_quick_gate.sh's
 `run_current_target_scan`, no fallback attempted because
 `is_model_retryable_error` doesn't recognize a local proxy-login failure as
-an LLM-provider error). Before this fix, the workflow's neutral-skip regex
+an LLM-provider error). Before this fix, the workflow's provider-failure
+classification regex
 only matched the "emitted ..." wording variant of that message family, so
 this specific "scan failed after ..." wording fell through to a hard
 required-check failure even though zero vulnerabilities were reported.
@@ -16,8 +17,8 @@ Observed live in ContextualWisdomLab/LineageWeave PR #392 (job
 97019252804): `loginAsGuest failed after 10 attempts: curl exit 7: ...
 Failed to connect to 127.0.0.1 port 48080`, "Vulnerabilities 0", then
 "Strix scan failed after provider infrastructure or failure-signal output;
-failing closed." -- a pure CI-infrastructure hiccup that still failed the
-required check.
+failing closed." -- a pure CI-infrastructure hiccup. Classification is
+diagnostic only: the incomplete scan must still fail the required check.
 """
 
 from __future__ import annotations
@@ -59,8 +60,8 @@ def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     return match.group(1)
 
 
-def _workflow_neutralizes(log_text: str) -> bool:
-    """Execute the outer workflow's backend-neutralization condition."""
+def _workflow_classifies_provider_failure(log_text: str) -> bool:
+    """Evaluate the outer workflow's provider-failure classification inputs."""
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
     backend_pattern = _workflow_signal_pattern(workflow, "backend_unavailable_signal")
@@ -92,18 +93,15 @@ def _workflow_neutralizes(log_text: str) -> bool:
 class StrixLocalProxyBootstrapFailureTests(unittest.TestCase):
     """Protect the PR #392-shaped local-proxy failure without weakening the gate."""
 
-    def test_workflow_recognizes_the_scan_failed_after_wording_variant(self) -> None:
+    def test_workflow_recognizes_the_authenticated_caido_failure_shape(self) -> None:
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("provider infrastructure or failure-signal output", workflow)
-        # The narrower "emitted ..." wording must not have silently regressed
-        # back in as the only recognized variant.
-        self.assertNotIn(
-            "emitted provider infrastructure or failure-signal output",
-            workflow,
-        )
+        self.assertIn("Error during penetration test: loginAsGuest failed after", workflow)
+        self.assertIn("Failed to connect to 127\\.0\\.0\\.1 port 48080", workflow)
 
-    def test_neutralizes_local_proxy_bootstrap_failure_with_zero_findings(self) -> None:
-        self.assertTrue(_workflow_neutralizes(LOCAL_PROXY_BOOTSTRAP_FAILURE))
+    def test_classifies_local_proxy_bootstrap_failure_with_zero_findings(self) -> None:
+        self.assertTrue(
+            _workflow_classifies_provider_failure(LOCAL_PROXY_BOOTSTRAP_FAILURE)
+        )
 
     def test_still_fails_closed_when_a_real_vulnerability_is_also_reported(
         self,
@@ -111,7 +109,7 @@ class StrixLocalProxyBootstrapFailureTests(unittest.TestCase):
         log = LOCAL_PROXY_BOOTSTRAP_FAILURE + (
             "Vulnerability Report\nSeverity: CRITICAL\nVulnerabilities 1\n"
         )
-        self.assertFalse(_workflow_neutralizes(log))
+        self.assertFalse(_workflow_classifies_provider_failure(log))
 
 
 if __name__ == "__main__":
