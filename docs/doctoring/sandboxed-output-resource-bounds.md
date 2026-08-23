@@ -13,7 +13,11 @@ The default retained budgets are:
 - 1,048,576 bytes for each short-lived command stream; and
 - 4,194,304 bytes for each backend or frontend combined service stream.
 
-Configurations below 4,096 bytes or above 67,108,864 bytes are rejected before repository code executes. Every normal-path output-reader join also has a finite 30-second bound.
+Configurations below 4,096 bytes or above 67,108,864 bytes are rejected before
+repository code executes. Each of the two normal-path output-reader joins has a
+finite 30-second bound. Because sibling readers are finalized sequentially so
+one failure cannot skip the other, the worst-case two-reader finalization bound
+is 60 seconds.
 
 ## Why complete capture was unsafe
 
