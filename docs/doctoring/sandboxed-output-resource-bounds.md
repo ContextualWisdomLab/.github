@@ -77,6 +77,10 @@ publishes its normal machine-readable failed result, and tells the operator to
 install the executable or correct `PATH`. Provider and host path details do not
 escape through an uncaught traceback.
 
+The web E2E consumer applies the same exit code and machine-readable failure to
+backend, frontend, and E2E executable lookup. Services that started before a
+later lookup failure still pass through the ordinary bounded cleanup path.
+
 ## Security and availability properties
 
 - Parent retained memory is bounded independently for stdout and stderr.

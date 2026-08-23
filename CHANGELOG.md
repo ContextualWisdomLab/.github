@@ -56,6 +56,9 @@ Semantic Versioning where the repository publishes a release.
   reject copied-tree symlinks that leave the sandbox, and publish distinct
   output-limit, unsupported-platform, missing-executable, and path-boundary
   evidence without exposing host paths or uncaught tracebacks.
+- Classify missing backend, frontend, and E2E executables with the same stable
+  exit code and operator recovery action while still cleaning up services that
+  started before the failure.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and

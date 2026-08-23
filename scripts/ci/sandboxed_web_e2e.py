@@ -38,6 +38,10 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+class CommandExecutableNotFoundError(RuntimeError):
+    """Report that one declared service or E2E executable is unavailable."""
+
+
 @dataclass
 class Service:
     """A long-running web service process and its bounded combined log capture."""
@@ -154,16 +158,19 @@ def start_service(
         "service log limit",
     )
     log_path = logs_dir / f"{label}.log"
-    process = subprocess.Popen(
-        shlex.split(command),
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=0,
-        start_new_session=True,
-        shell=False,
-    )
+    try:
+        process = subprocess.Popen(
+            shlex.split(command),
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+            start_new_session=True,
+            shell=False,
+        )
+    except FileNotFoundError as error:
+        raise CommandExecutableNotFoundError from error
     if process.stdout is None:
         bounded_subprocess.kill_process_group(process)
         process.wait()
@@ -226,13 +233,16 @@ def run_shell(
     output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
 ) -> bounded_subprocess.BoundedCompletedProcess:
     """Run one shell-style command without a shell and with bounded pipe drains."""
-    return bounded_subprocess.run_bounded_command(
-        shlex.split(command),
-        cwd=cwd,
-        env=env,
-        timeout=timeout,
-        evidence_limit_bytes=output_limit_bytes,
-    )
+    try:
+        return bounded_subprocess.run_bounded_command(
+            shlex.split(command),
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            evidence_limit_bytes=output_limit_bytes,
+        )
+    except FileNotFoundError as error:
+        raise CommandExecutableNotFoundError from error
 
 
 def stop_service(service: Service) -> None:
@@ -406,6 +416,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_limited = bool(getattr(exc, "output_limited", False))
                     print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
                     exit_code = 124
+        except CommandExecutableNotFoundError:
+            print(
+                "sandboxed-web-e2e: install each executable or correct command PATH",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
         except bounded_subprocess.OutputLimitUnsupportedError:
             output_limit_unsupported = True
             print(

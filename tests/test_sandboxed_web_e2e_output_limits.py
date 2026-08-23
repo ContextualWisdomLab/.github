@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import bounded_subprocess as bounded
+from scripts.ci import sandboxed_verify
 from scripts.ci import sandboxed_web_e2e
 
 
@@ -280,6 +281,41 @@ def test_unsupported_resource_boundary_fails_closed(
     assert payload["output_limited"] is False
     assert payload["output_limit_unsupported"] is True
     assert payload["service_capture_failed"] is False
+
+
+@pytest.mark.parametrize("missing_role", ["backend", "frontend", "e2e"])
+def test_missing_executable_returns_stable_failed_evidence(
+    tmp_path: Path,
+    capsys,
+    missing_role: str,
+) -> None:
+    """Every command role reports a missing executable without a traceback."""
+
+    commands = {
+        "backend": _command("import time; time.sleep(30)"),
+        "frontend": _command("import time; time.sleep(30)"),
+        "e2e": _command("print('ready')"),
+    }
+    commands[missing_role] = "missing-web-e2e-executable"
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(_repository(tmp_path)),
+            "--backend-cmd",
+            commands["backend"],
+            "--frontend-cmd",
+            commands["frontend"],
+            "--e2e-cmd",
+            commands["e2e"],
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = _result_payload(captured.out)
+
+    assert exit_code == sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+    assert payload["exit_code"] == sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+    assert "install each executable or correct command PATH" in captured.err
+    assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize(
