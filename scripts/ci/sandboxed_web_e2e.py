@@ -117,6 +117,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--startup-timeout must be positive")
     if args.e2e_timeout <= 0:
         parser.error("--e2e-timeout must be positive")
+    for option, url in (
+        ("--backend-ready-url", args.backend_ready_url),
+        ("--frontend-ready-url", args.frontend_ready_url),
+    ):
+        if url and not (url.startswith("http://") or url.startswith("https://")):
+            parser.error(f"{option} must start with http:// or https://")
     try:
         args.output_limit_bytes = bounded_subprocess.validate_output_limit(
             args.output_limit_bytes,

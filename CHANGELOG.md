@@ -59,6 +59,8 @@ Semantic Versioning where the repository publishes a release.
 - Classify missing or non-executable backend, frontend, and E2E commands with
   stable exit codes and operator recovery actions while still cleaning up
   services that started before the failure.
+- Reject non-HTTP readiness URLs during argument parsing with the exact option
+  to correct, instead of starting services and exposing a runtime traceback.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and

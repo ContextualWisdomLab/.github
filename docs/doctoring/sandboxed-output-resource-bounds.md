@@ -91,6 +91,10 @@ boundary to backend, frontend, and E2E command launch. Services that started
 before a later launch failure still pass through the ordinary bounded cleanup
 path.
 
+Backend and frontend readiness URLs are rejected during argument parsing unless
+they are empty or use `http://` or `https://`. The parser names the option the
+operator must correct before any workspace copy or service launch occurs.
+
 ## Security and availability properties
 
 - Parent retained memory is bounded independently for stdout and stderr.

@@ -559,6 +559,33 @@ def test_parse_args_rejects_invalid_inputs():
         )
 
 
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-ready-url", "--frontend-ready-url"],
+)
+def test_parse_args_rejects_non_http_readiness_urls(option, capsys):
+    """Invalid readiness schemes fail in argument parsing without a traceback."""
+
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "e2e",
+                option,
+                "file:///runner/private",
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} must start with http:// or https://" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_module_main_entrypoint_parse_error(monkeypatch):
     """The module entrypoint reaches main and propagates argument errors."""
     runpy.run_path(str(Path(sandboxed_web_e2e.__file__)), run_name="not_main")
