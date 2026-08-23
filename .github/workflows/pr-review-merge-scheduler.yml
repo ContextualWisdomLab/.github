@@ -618,11 +618,17 @@ jobs:
       # order every tick (the org repos API response order), so the same early
       # repositories always exhaust the shared budget and every later repository
       # starves indefinitely even with zero-open-thread, all-green PRs
-      # (ContextualWisdomLab/.github#1219). `github.run_number` increments on
-      # every run of this workflow, so rotating the walk order by it spreads the
-      # same fixed total budget across repositories over successive ticks instead
-      # of raising it.
-      ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}
+      # (ContextualWisdomLab/.github#1219). Left unset here so the sweep step
+      # below derives it from a persistent per-execution counter (or, as a
+      # fallback, wall-clock time) instead of `github.run_number`: run_number
+      # increments on every trigger of this workflow (push,
+      # pull_request_target, pull_request_review, workflow_run), not only the
+      # sweep schedule, so it cannot give the "bounded by repository_count
+      # ticks" guarantee a rotation is meant to provide. Wall-clock time alone
+      # is also insufficient, since this single-flight/non-cancelling job can
+      # run up to 60 minutes and a delayed real execution can let more than
+      # one 900s window elapse, occasionally repeating a modulo offset
+      # (ContextualWisdomLab/.github#1223 review finding).
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
       # HTTP 403 "Resource not accessible by integration". That is an access-grant
@@ -828,8 +834,95 @@ jobs:
             echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
             exit 1
           fi
+          # Unset in production (see the env-block comment above). Primary
+          # source: a persistent `ORG_SWEEP_ROTATION_COUNTER` repository
+          # variable on this (.github) repository, incremented by exactly
+          # one at the start of every actual org-queue-sweep execution. A
+          # wall-clock tick (one per 900s) is *not* sufficient on its own:
+          # this job is single-flight/non-cancelling with up to a 60-minute
+          # timeout, so a delayed or backlogged execution can let more than
+          # one 900s window elapse between two real sweep runs, and if that
+          # gap happens to be an exact multiple of the repository count the
+          # modulo offset repeats -- reintroducing the exact starvation
+          # #1220 fixed (CodeRabbit review finding on #1223). A persistent
+          # per-execution counter advances by exactly one every time the
+          # sweep body actually runs, regardless of how much wall-clock time
+          # a slow prior run consumed. Falls back to the wall-clock tick,
+          # which still strictly improves on the pre-#1220 fixed order, only
+          # if the counter read/write itself is unavailable (permissions,
+          # transient API failure) -- a fairness mechanism must never fail
+          # the sweep's much more important review-dispatch/merge work.
+          # Tests inject ORG_SWEEP_ROTATION_INDEX directly for determinism,
+          # which this only fills in when absent.
+          #
+          # Two known, accepted limitations of this counter (Devin review on
+          # #1223), neither of which is fixed here:
+          # - Read-modify-write is not atomic. A schedule-triggered run and a
+          #   manual `repository_dispatch` org_sweep run use different
+          #   concurrency groups and can therefore execute concurrently, in
+          #   which case both could read the same counter value and pick the
+          #   same rotation offset for that one pair of runs. The REST
+          #   Variables API has no compare-and-swap primitive to close this
+          #   without a broader concurrency-group redesign shared across
+          #   every trigger type this workflow serves; the consequence is
+          #   bounded and self-correcting (one occasionally-repeated offset,
+          #   not a stuck one), so it is accepted rather than redesigned.
+          # - Whether the PATCH/POST below ever succeeds in production
+          #   depends on the resolved token actually holding repository
+          #   Variables-write scope, which is not independently verifiable
+          #   from inside this workflow. If it does not, every run silently
+          #   but safely degrades to the wall-clock fallback below (logged
+          #   via ::warning:: each time), which is still strictly better
+          #   than the pre-#1220 fixed order -- never a hard failure, and
+          #   observable in the run log for whoever holds that token.
+          if [ -z "${ORG_SWEEP_ROTATION_INDEX:-}" ]; then
+            counter_variable_name="ORG_SWEEP_ROTATION_COUNTER"
+            # Distinguish a *successful* read (the variable exists; its
+            # value, valid or not, is authoritative) from a *failed* read
+            # (transient error, permissions, or the variable genuinely
+            # doesn't exist yet -- indistinguishable from here). Only a
+            # successful read may PATCH: a transient failure that silently
+            # became "treat as 0" would let the PATCH below clobber an
+            # already-accumulated counter value back down to 1, restarting
+            # the rotation sequence instead of degrading to the wall-clock
+            # fallback the design intends (Devin review finding on #1223).
+            if counter_current="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/variables/${counter_variable_name}" \
+                --jq '.value' 2>/dev/null
+            )"; then
+              if ! [[ "$counter_current" =~ ^[0-9]+$ ]]; then
+                counter_current=0
+              fi
+              # Force base-10: a manually-seeded value with a leading zero
+              # (e.g. "08") passes the digit-only check above but bash's
+              # unprefixed arithmetic parses a leading-zero literal as
+              # octal, and "08"/"09" are not valid octal digits -- errors
+              # under set -e. $((10#...)) is the same guard already used
+              # elsewhere in this file (STALE_OPENCODE_MINUTES).
+              counter_next=$(( 10#$counter_current + 1 ))
+              if gh api "repos/${GITHUB_REPOSITORY}/actions/variables/${counter_variable_name}" \
+                   -X PATCH -f "value=${counter_next}" >/dev/null 2>&1; then
+                ORG_SWEEP_ROTATION_INDEX="$counter_next"
+              else
+                echo "::warning::read ${counter_variable_name}=${counter_current} but could not PATCH it; falling back to a wall-clock rotation tick for this run only"
+                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+              fi
+            elif gh api "repos/${GITHUB_REPOSITORY}/actions/variables" \
+                   -X POST -f "name=${counter_variable_name}" -f "value=1" >/dev/null 2>&1; then
+              # The read failed, so this is only safe as a first-run
+              # create: POST fails on its own if the variable actually
+              # already exists (a real read outage rather than a genuinely
+              # missing variable), which correctly falls through to the
+              # wall-clock branch below instead of resetting a value this
+              # run could not see.
+              ORG_SWEEP_ROTATION_INDEX=1
+            else
+              echo "::warning::could not read/write ${counter_variable_name}; falling back to a wall-clock rotation tick for this run only"
+              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+            fi
+          fi
           if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then
-            echo "::error::ORG_SWEEP_ROTATION_INDEX must be a non-negative integer; got '${ORG_SWEEP_ROTATION_INDEX}'. This is derived from github.run_number and should never be malformed."
+            echo "::error::ORG_SWEEP_ROTATION_INDEX must be a non-negative integer; got '${ORG_SWEEP_ROTATION_INDEX}'."
             exit 1
           fi
 
@@ -847,10 +940,12 @@ jobs:
             ' <<<"$repositories_json"
           )
           sweep_target_count=${#sweep_targets[@]}
-          # Rotate the fixed walk order by the run number so the same
-          # organization-wide review-dispatch/branch-update budget lands on a
-          # different starting repository each tick instead of always exhausting
-          # on the same early repositories (#1219). Total dispatches per tick are
+          # Rotate the fixed walk order by ORG_SWEEP_ROTATION_INDEX (see
+          # above: a persistent per-execution counter, falling back to a
+          # wall-clock tick) so the same organization-wide review-dispatch
+          # /branch-update budget lands on a different starting repository
+          # each execution instead of always exhausting on the same early
+          # repositories (#1219). Total dispatches per execution are
           # unchanged; only which repositories receive them rotates over time.
           rotation_offset=0
           if [ "$sweep_target_count" -gt 0 ]; then
@@ -862,7 +957,7 @@ jobs:
               )
             fi
           fi
-          echo "Sweeping ${sweep_target_count} repositories starting at rotation offset ${rotation_offset} (run number ${ORG_SWEEP_ROTATION_INDEX})."
+          echo "Sweeping ${sweep_target_count} repositories starting at rotation offset ${rotation_offset} (rotation tick ${ORG_SWEEP_ROTATION_INDEX})."
 
           failures=0
           unavailable=0

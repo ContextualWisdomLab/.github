@@ -1847,6 +1847,16 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
         sched.require_workflow_starting_mutation_credential("update-branch")
 
 
+def test_withheld_mutation_messages_reject_a_workflow_starting_credential(monkeypatch):
+    """Withheld-mutation helpers reject callers that have no credential problem."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+
+    with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
+        sched.non_triggering_head_mutation_reason("update-branch")
+    with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
+        sched.head_mutation_credential_guidance_text()
+
+
 @pytest.mark.parametrize(
     ("selected_token", "workflow_token", "message"),
     (

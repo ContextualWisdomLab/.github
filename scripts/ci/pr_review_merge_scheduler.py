@@ -274,7 +274,7 @@ def non_triggering_head_mutation_reason(action: str) -> str:
     """Explain why a head mutation is withheld for a non-triggering credential."""
     credential_reason = head_mutation_credential_problem()
     if credential_reason is None:
-        credential_reason = "the selected mutation credential is not proven workflow-starting"
+        raise RuntimeError("withheld-mutation messaging requires a non-triggering mutation credential")
     return (
         f"{action} withheld because {credential_reason}, "
         "so the moved head would stay permanently "
@@ -293,7 +293,7 @@ def head_mutation_credential_guidance_text() -> tuple[str, str]:
     """Return operator-facing summary and limit text for a withheld head mutation."""
     problem = head_mutation_credential_problem()
     if problem is None:
-        problem = "the selected mutation credential is not proven workflow-starting"
+        raise RuntimeError("withheld-mutation messaging requires a non-triggering mutation credential")
     return (
         f"The scheduler withheld a head mutation because {problem}.",
         "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
