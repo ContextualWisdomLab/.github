@@ -115,7 +115,7 @@ def run_actionlint(paths)
     QUEUE_DIAGNOSTIC,
     *paths
   ]
-  stdout, stderr, status = Open3.capture3("actionlint", *arguments)
+  stdout, stderr, status = Open3.capture3("actionlint", *arguments) # nosemgrep: ruby.lang.security.dangerous-exec.dangerous-exec
   return 0 if status.success?
 
   warn stdout unless stdout.empty?

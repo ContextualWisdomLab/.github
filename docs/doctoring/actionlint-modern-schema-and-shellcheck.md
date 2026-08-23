@@ -37,6 +37,15 @@ string. The pinned hosted setup supplies those names through its trusted
 `PATH`; behavioral tests use an isolated temporary `PATH` to prove the same
 argv boundary without introducing a second executable-selection channel.
 
+[Required Semgrep run 32637664667](https://github.com/ContextualWisdomLab/.github/actions/runs/32637664667)
+still classified the fixed `actionlint` invocation as dynamic because workflow
+paths remain argv values. Ruby's `Open3.capture3` passes these separate
+arguments directly to the literal executable and does not invoke a shell. The
+single inline Semgrep suppression therefore applies only to that reviewed
+false positive; the executable-name regression, isolated `PATH` execution, and
+fail-closed actionlint status handling remain mandatory. The separate
+ShellCheck invocation remains unsuppressed.
+
 The autofix worker ignores only actionlint's exact released-schema diagnostic
 for the concurrency `queue` key. Before linting, it rejects every changed
 workflow whose `queue` value is not exactly `max`; therefore the compatibility

@@ -76,7 +76,9 @@ Semantic Versioning where the repository publishes a release.
   fallback without being misclassified as a successful scan.
 - Invoke actionlint and ShellCheck through fixed argv executable names supplied
   by the pinned trusted `PATH`, removing unused environment-selected command
-  overrides while preserving the no-shell, file-backed lint boundary.
+  overrides while preserving the no-shell, file-backed lint boundary; narrowly
+  suppress Semgrep's remaining false positive on the literal actionlint call,
+  whose dynamic workflow paths remain separate argv values.
 
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and

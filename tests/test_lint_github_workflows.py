@@ -227,6 +227,9 @@ def test_linter_invokes_fixed_tool_names_without_dynamic_command_selection() -> 
     assert 'ENV.fetch("SHELLCHECK"' not in source
     assert 'Open3.capture3("actionlint", *arguments)' in source
     assert 'Open3.capture3(\n      "shellcheck",' in source
+    assert source.count(
+        "# nosemgrep: ruby.lang.security.dangerous-exec.dangerous-exec"
+    ) == 1
 
 
 def test_linter_reports_shellcheck_findings_with_workflow_context(tmp_path: Path) -> None:
