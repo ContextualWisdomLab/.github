@@ -31,8 +31,10 @@ GitHub-hosted Linux runner's passwordless `/usr/bin/sudo` solely for a fixed
 `umask 077`. The resulting `RUNNER_TEMP` capture is therefore runner-owned and
 mode `0600`; the workflow verifies both ownership and non-empty content. It
 does not `chmod` the scanner output, grant other users read access, or make the
-reporter privileged. Restore by unlinking the workspace file first, then
-copying from `RUNNER_TEMP`. Discard `source/old-results.json` and
+reporter privileged. Keep the base capture outside the workspace throughout
+the head scan; no consumer needs a pre-scan workspace copy. Materialize both
+reporter inputs exactly once by unlinking the scanner-created workspace files
+and copying from `RUNNER_TEMP`. Discard `source/old-results.json` and
 `source/new-results.json` before each scan so a fork cannot plant reporter
 input. After the head checkout, never treat checkout-path JSON as scanner
 output. Missing or empty captured output remains a hard failure; a zero-finding
@@ -42,8 +44,9 @@ vulnerability comparison.
 ## Verification and rollback
 
 - The workflow contract proves both checkouts target `source/`, every scan reads
-  that same directory, captures land in `RUNNER_TEMP` before compare, restore
-  unlinks before copy, and post-checkout `source/*.json` is not reporter input.
+  that same directory, captures land in `RUNNER_TEMP` before compare, reporter
+  materialization unlinks before copy, and post-checkout `source/*.json` is not
+  reporter input.
 - The executable regression runs both production capture steps against an
   unreadable scanner result through a bounded privilege stand-in, then proves
   the capture contains the exact result and is runner-owned with mode `0600`.

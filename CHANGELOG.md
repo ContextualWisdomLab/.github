@@ -8,9 +8,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Preserve OSV scan output in private, runner-owned `RUNNER_TEMP` files before a
   fork head checkout, using a bounded privileged read so root-owned mode-`0600`
-  scanner output does not depend on world readability; restore by unlinking any
-  root-owned workspace copy first, discard checkout-provided result files before
-  each scan, and never treat post-checkout `source/*.json` as reporter input.
+  scanner output does not depend on world readability; keep the base capture
+  external during the head scan, materialize reporter inputs exactly once after
+  unlinking root-owned workspace files, discard checkout-provided result files
+  before each scan, and never treat post-checkout `source/*.json` as reporter
+  input.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification

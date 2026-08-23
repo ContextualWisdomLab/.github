@@ -1258,7 +1258,7 @@ def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavaila
 
 
 def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
-    """Limit cross-fork replacement to a child checkout directory."""
+    """Keep captures external until the reporter materializes its inputs."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
@@ -1268,7 +1268,7 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert workflow.count("-r\n            source/") == 4
     assert "clean: false" not in workflow
     assert "Preserve base OSV output outside the checkout path" in workflow
-    assert "Restore preserved base OSV output" in workflow
+    assert "Restore preserved base OSV output" not in workflow
     assert "Capture head OSV output outside the checkout path" in workflow
     assert "${RUNNER_TEMP}/osv-old-results.json" in workflow
     assert "${RUNNER_TEMP}/osv-new-results.json" in workflow
@@ -1278,24 +1278,29 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
         "      - name: Preserve base OSV output outside the checkout path"
     )
     checkout_head = workflow.index("      - name: Checkout head")
-    restore = workflow.index("      - name: Restore preserved base OSV output")
+    discard_after_checkout = workflow.index(
+        "      - name: Discard checkout-provided OSV result files", checkout_head
+    )
     scan_head = workflow.index("      - name: Scan head with OSV")
     capture_head = workflow.index(
         "      - name: Capture head OSV output outside the checkout path"
     )
     require_output = workflow.index("      - name: Require OSV scan output")
-    assert preserve < checkout_head < restore < scan_head < capture_head < require_output
-    discard_after_restore = workflow.index(
-        "      - name: Discard checkout-provided OSV result files", restore
+    assert (
+        preserve
+        < checkout_head
+        < discard_after_checkout
+        < scan_head
+        < capture_head
+        < require_output
     )
-    restore_block = workflow[restore:discard_after_restore]
     require_block = workflow[
         require_output : workflow.index("      - name: Print OSV findings being compared")
     ]
-    assert "source/old-results.json" not in restore_block
     assert "source/old-results.json" not in require_block
     assert "source/new-results.json" not in require_block
     assert 'cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
+    assert 'cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
     assert "rm -f source/old-results.json source/new-results.json" in workflow
     assert 'test -s "${old}"' in require_block
     assert 'test -s "${new}"' in require_block

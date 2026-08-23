@@ -134,13 +134,6 @@ jobs:
           path: source
           fetch-depth: 0
           persist-credentials: false
-      - name: Restore preserved base OSV output
-        run: |
-          set -euo pipefail
-          src="${RUNNER_TEMP}/osv-old-results.json"
-          test -s "${src}"
-          rm -f "${GITHUB_WORKSPACE}/old-results.json"
-          cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"
       - name: Discard checkout-provided OSV result files
         run: |
           set -euo pipefail
