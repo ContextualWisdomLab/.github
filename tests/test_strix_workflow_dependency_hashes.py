@@ -46,6 +46,7 @@ def test_strix_workflow_reruns_when_shared_runtime_or_doctoring_changes() -> Non
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     for path in (
+        "docs/doctoring/strix-nvidia-nim-not-found-fallback.md",
         "docs/doctoring/strix-unsupported-sampling-fallback.md",
         "scripts/ci/strix_model_utils.sh",
     ):

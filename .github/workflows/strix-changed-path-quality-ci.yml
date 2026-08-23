@@ -9,6 +9,7 @@ on:
       - "CHANGELOG.md"
       - "docs/doctoring/strix-legal-git-paths.md"
       - "docs/doctoring/strix-model-behavior-error.md"
+      - "docs/doctoring/strix-nvidia-nim-not-found-fallback.md"
       - "docs/doctoring/strix-unsupported-sampling-fallback.md"
       - "docs/doctoring/strix-quality-timeout-fixtures.md"
       - "scripts/ci/strix_model_utils.sh"
