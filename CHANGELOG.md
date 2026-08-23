@@ -49,8 +49,8 @@ Semantic Versioning where the repository publishes a release.
 
 - Route sandboxed verification commands through the bounded subprocess layer,
   reject copied-tree symlinks that leave the sandbox, and publish distinct
-  output-limit, unsupported-platform, and path-boundary evidence without
-  exposing host paths.
+  output-limit, unsupported-platform, missing-executable, and path-boundary
+  evidence without exposing host paths or uncaught tracebacks.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and

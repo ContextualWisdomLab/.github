@@ -62,6 +62,7 @@ SAFE_ENV_ALLOWLIST = (
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 PATH_BOUNDARY_EXIT_CODE = 122
+COMMAND_NOT_FOUND_EXIT_CODE = 127
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -328,6 +329,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
             else:
                 exit_code = completed.returncode
+        except FileNotFoundError:
+            print(
+                "sandboxed-verify: install the executable or correct command PATH",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_FOUND_EXIT_CODE
         except bounded_subprocess.OutputLimitUnsupportedError:
             output_limit_unsupported = True
             print(

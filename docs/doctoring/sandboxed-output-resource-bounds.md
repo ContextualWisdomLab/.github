@@ -58,6 +58,11 @@ evidence remains a separate layer. Keeping those integrations separate prevents
 a shared process primitive, workspace symlink policy, and E2E result schema from
 becoming one monolithic review.
 
+The verification consumer maps an executable lookup failure to exit code `127`,
+publishes its normal machine-readable failed result, and tells the operator to
+install the executable or correct `PATH`. Provider and host path details do not
+escape through an uncaught traceback.
+
 ## Security and availability properties
 
 - Parent retained memory is bounded independently for stdout and stderr.
