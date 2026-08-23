@@ -44,9 +44,9 @@ def test_baseline_inventory_contains_sha_bound_open_pr_rows() -> None:
     source = BASELINE.read_text(encoding="utf-8")
     rows = [line for line in source.splitlines() if line.startswith("| #")]
 
-    declared_count = int(
-        re.search(r"현재 열린 PR 수:\s*\*\*(\d+)\*\*", source).group(1)
-    )
+    declared = re.search(r"현재 열린 PR 수:\s*\*\*(\d+)\*\*", source)
+    assert declared is not None, "baseline header must declare the open PR count"
+    declared_count = int(declared.group(1))
     assert declared_count > 0
     assert len(rows) == declared_count
     allowed_merge_states = {
