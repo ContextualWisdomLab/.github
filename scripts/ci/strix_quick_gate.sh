@@ -2448,8 +2448,8 @@ child_model_for_api_base() {
 	fi
 
 	case "$model" in
-	openai_direct/*)
-		printf 'openai/%s\n' "${model#openai_direct/}"
+	openai_direct/* | openai-direct/*)
+		printf 'openai/%s\n' "${model#*/}"
 		return 0
 		;;
 	esac
