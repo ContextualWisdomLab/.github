@@ -1026,6 +1026,20 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
     return contexts.get("nodes") or []
 
 
+def is_opencode_check_run(node: dict[str, Any]) -> bool:
+    """Return whether a CheckRun carries the OpenCode workflow identity."""
+    if node.get("__typename") != "CheckRun":
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return (
+        node.get("name") == "opencode-review"
+        or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+    )
+
+
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
@@ -1034,11 +1048,7 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
             # status. Organization required-workflow CheckRuns are deliberately
             # non-authoritative placeholders and must not suppress that dispatch.
             return False
-        workflow = (
-            ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
-            or {}
-        )
-        return node.get("name") == "opencode-review" or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+        return is_opencode_check_run(node)
     return node.get("context") == "opencode-review"
 
 
@@ -1542,7 +1552,7 @@ def failed_status_checks(
     for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
-            if ignore_opencode and is_opencode_context(node):
+            if ignore_opencode and is_opencode_check_run(node):
                 continue
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue

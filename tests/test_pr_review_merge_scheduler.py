@@ -922,6 +922,7 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.context_nodes(make_pr()) == []
     assert sched.compare_behind_by({"compareBehindBy": "2"}) == 2
     assert sched.compare_behind_by({"compareBehindBy": "unknown"}) == 0
+    assert not sched.is_opencode_check_run({"context": "opencode-review"})
     assert sched.is_opencode_context({"__typename": "CheckRun", "name": "opencode-review"})
     assert sched.is_opencode_context(
         {
@@ -1093,6 +1094,61 @@ def test_central_progress_ignores_required_workflow_checkrun_placeholder(
     assert (
         sched.opencode_progress_state(central_status, stale_after_minutes=45)
         == "running"
+    )
+
+
+def test_central_coverage_retry_ignores_failed_required_workflow_placeholder(
+    monkeypatch,
+):
+    """A non-authoritative OpenCode CheckRun cannot self-block its retry."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        **opencode_check(status="COMPLETED"),
+                        "conclusion": "FAILURE",
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "review_dispatch"
+    assert decision.reason == (
+        "current-head OpenCode coverage blocker is cleared; "
+        "same-head OpenCode re-dispatched"
     )
 
 
