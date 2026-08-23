@@ -8,6 +8,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+PRIVILEGED_WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
+STRIX_REQUIREMENTS = ROOT / "requirements-strix-ci.txt"
+STRIX_LOCK = ROOT / "requirements-strix-ci-hashes.txt"
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -31,6 +34,26 @@ def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
     assert '-r "${RUNNER_TEMP}/strix-quality-requirements.txt"' in workflow
     for requirement, digest in EXPECTED_WHEEL_HASHES.items():
         assert f"{requirement} --hash=sha256:{digest}" in workflow
+
+
+def test_privileged_strix_install_uses_only_the_trusted_workflow_lock() -> None:
+    """PR content cannot select code installed beside provider credentials."""
+    workflow = PRIVILEGED_WORKFLOW.read_text(encoding="utf-8")
+    install_step = workflow.split("      - name: Install Strix\n", 1)[1].split(
+        "      - name: Mask LLM API key\n", 1
+    )[0]
+
+    assert "Materialize central Strix dependency lock from PR head" not in workflow
+    assert 'show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt"' not in workflow
+    assert 'trusted_lock_blob="$(git rev-parse "HEAD:$trusted_lock")"' in install_step
+    assert (
+        'working_lock_blob="$(git hash-object --no-filters -- "$trusted_lock")"'
+        in install_step
+    )
+    assert '"$trusted_lock_blob" != "$working_lock_blob"' in install_step
+    assert "--only-binary=:all:" in install_step
+    assert "litellm==1.94.2" in STRIX_REQUIREMENTS.read_text(encoding="utf-8")
+    assert "litellm==1.94.2 \\" in STRIX_LOCK.read_text(encoding="utf-8")
 
 
 def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
