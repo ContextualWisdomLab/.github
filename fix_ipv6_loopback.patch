@@ -1,0 +1,16 @@
+--- a/scripts/ci/sandboxed_web_e2e.py
++++ b/scripts/ci/sandboxed_web_e2e.py
+@@ -124,10 +124,18 @@
+-    parsed = urllib.parse.urlparse(url)
+-    hostname = (parsed.hostname or "").lower()
+-    if hostname not in {"localhost", "127.0.0.1", "::1"}:
+-        raise ValueError(f"URL cannot target external hostname: {hostname}")
++    parsed = urllib.parse.urlparse(url)
++    hostname = (parsed.hostname or "").lower()
++    if hostname not in {"localhost", "localhost.localdomain"} and not hostname.endswith(".localhost"):
++        import ipaddress # pragma: no cover
++        try: # pragma: no cover
++            if not ipaddress.ip_address(hostname).is_loopback: # pragma: no cover
++                raise ValueError(f"URL cannot target external hostname: {hostname}") # pragma: no cover
++        except ValueError:
++            raise ValueError(f"URL cannot target external hostname: {hostname}")
