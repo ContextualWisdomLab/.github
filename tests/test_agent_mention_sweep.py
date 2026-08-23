@@ -300,6 +300,47 @@ def mention_request(number: int, comment_id: int, agent: str):
     )
 
 
+def test_sweep_isolates_a_failed_repository_listing(monkeypatch, capsys) -> None:
+    """An exception from the initial repository listing does not crash the sweep.
+
+    list_accessible_repositories runs once, synchronously, before
+    list_recent_pull_requests' first yield, and has no on_error boundary of
+    its own — unlike every per-repository fetch inside the executor. A
+    rate-limit exhaustion there must be treated as one isolated failure
+    (record_failure + a clean return), not an uncaught crash that wastes
+    the whole cycle.
+    """
+
+    sweep = module()
+
+    def raise_on_listing(*args, **kwargs):
+        """Raise as if the organization repository listing exhausted retries."""
+
+        del args, kwargs
+        raise RuntimeError(
+            "gh api failed with exit code 1 after 6 attempts: "
+            "gh: API rate limit exceeded for installation ID 1"
+        )
+        yield  # pragma: no cover - makes this a generator function
+
+    monkeypatch.setattr(sweep, "list_recent_pull_requests", raise_on_listing)
+    result = sweep.sweep(
+        target_client=FakeClient(),
+        dispatch_client=FakeClient(),
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        lookback_hours=24,
+        max_dispatches=1,
+        opencode_allowlist=frozenset(),
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "ContextualWisdomLab repository listing" in output
+    assert "rate limit exceeded" in output
+
+
 def test_sweep_dispatches_with_limit_and_reports_empty(monkeypatch, capsys) -> None:
     """The sweep bounds source requests that actually queue new agent work."""
 
