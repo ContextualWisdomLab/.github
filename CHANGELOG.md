@@ -56,8 +56,10 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Bound the Strix changed-path quality gate to the complete production hash
-  lock and mirrored production's deliberate `--no-deps` security-override
-  boundary without rejecting source distributions that production accepts.
+  lock while keeping pull-request-controlled source distributions out of pip's
+  executable metadata/build boundary. Production lock resolution stays in the
+  trusted default-branch Strix workflow; lock changes still trigger the
+  permanent policy, regression, and security gates.
 - Restored the hourly organization commercial-readiness loop after five
   consecutive startup failures caused by its mandatory but unprovisioned
   `PR_REVIEW_MERGE_TOKEN`. Protected scheduled jobs now prefer that maintainer
@@ -65,10 +67,8 @@ Semantic Versioning where the repository publishes a release.
   existing short-lived OpenCode GitHub App installation token, without
   accepting `OPENCODE_APPROVE_TOKEN`, `GITHUB_TOKEN`, provider credentials, or
   exposing either cross-repository credential to checkout, setup, or artifact
-  actions. Declared `pip` in the project-local development environment so the
-  existing isolated wheel/hash preflight test no longer depends on an
-  accidentally pre-populated virtual environment. The exchange now runs only
-  when the preferred maintainer secret is absent, masks the OIDC JWT before the
+  actions. The exchange now runs only when the preferred maintainer secret is
+  absent, masks the OIDC JWT before the
   second request, and converts malformed successful JSON responses into the
   existing explicit unavailable output instead of exiting early under
   `errexit`. Both OIDC and App-token HTTP requests now use a 10-second connect

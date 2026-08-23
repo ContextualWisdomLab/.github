@@ -49,22 +49,13 @@ def test_strix_workflow_reruns_when_dependency_manifest_changes() -> None:
     assert '      - "docs/doctoring/strix-dependency-manifest-trigger.md"' in workflow
 
 
-def test_strix_workflow_preflights_dependency_manifest_hashes() -> None:
-    """The specialized gate resolves the production lock with enforced hashes."""
+def test_strix_workflow_does_not_execute_pr_dependency_build_hooks() -> None:
+    """The PR gate must not resolve its untrusted production lock with pip."""
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    preflight = workflow.split(
-        "      - name: Preflight exact hashed Strix dependency closure\n", 1
-    )[1].split("\n      - name:", 1)[0]
 
-    assert 'python-version: "3.13"' in workflow
-    assert "python -m pip install \\" in preflight
-    assert "--dry-run \\" in preflight
-    assert "--ignore-installed \\" in preflight
-    assert "--no-deps \\" in preflight
-    assert "--only-binary=:all:" not in preflight
-    assert "--require-hashes \\" in preflight
-    assert "-r requirements-strix-ci-hashes.txt" in preflight
+    assert "Preflight exact hashed Strix dependency closure" not in workflow
+    assert "-r requirements-strix-ci-hashes.txt" not in workflow
 
 
 def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
