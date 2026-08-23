@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -125,7 +126,11 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
 
     parsed = urllib.parse.urlparse(url)
     hostname = (parsed.hostname or "").lower()
-    if hostname not in {"localhost", "127.0.0.1", "::1"}:
+    try:
+        is_loopback = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
         raise ValueError(f"URL cannot target external hostname: {hostname}")
 
     deadline = time.monotonic() + timeout
