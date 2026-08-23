@@ -210,6 +210,9 @@ jobs:
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
           fi
+          if [ -z "${GITHUB_WORKFLOW_REF:-}" ]; then
+            fail_unavailable "Noema app token exchange unavailable: workflow identity is missing."
+          fi
 
           request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
           separator="&"
@@ -242,13 +245,20 @@ jobs:
             fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
-          if ! jq -e --arg target_repository "$TARGET_REPOSITORY" '
+          if ! jq -e \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" '
             .ok == true
             and (.data | type == "object")
             and (.data.token | type == "string" and length > 0)
             and .data.repository == $target_repository
-            and (.data.workflow_ref | type == "string" and length > 0)
+            and .data.workflow_ref == $workflow_ref
             and (.data.token_expires_at | type == "string" and length > 0)
+            and (
+              (try (.data.token_expires_at | fromdateiso8601) catch null) as $expires_at
+              | ($expires_at | type == "number") and $expires_at > now
+            )
+            and (.trace_id | type == "string" and length > 0)
           ' >/dev/null <<<"$token_response"; then
             fail_unavailable "Noema app token exchange unavailable: response envelope was invalid."
           fi

@@ -1,8 +1,6 @@
 # Noema OIDC exchange response-envelope contract
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
-검토 기준일: **2026-08-07**
+검토 기준일: **2026-08-24**
 
 ## 문제
 
@@ -31,12 +29,22 @@ OIDC consumer는 token field 하나만 permissive하게 조회하지 않고 다�
 2. `data`가 JSON object여야 합니다.
 3. `data.token`이 비어 있지 않은 string이어야 합니다.
 4. `data.repository`가 요청한 `TARGET_REPOSITORY`와 정확히 같아야 합니다.
-5. `data.workflow_ref`가 비어 있지 않은 string이어야 합니다.
-6. `data.token_expires_at`가 비어 있지 않은 string이어야 합니다.
-7. 검증된 뒤에만 `data.token`을 추출하고 즉시 GitHub Actions mask를 적용합니다.
-8. malformed response를 진단할 때 raw response나 token 값을 출력하지 않습니다.
+5. Actions가 제공한 `GITHUB_WORKFLOW_REF`가 존재하고,
+   `data.workflow_ref`가 그 실행 workflow ref와 정확히 같아야 합니다.
+6. `data.token_expires_at`가 RFC 3339 UTC timestamp로 해석 가능하고 현재
+   시각보다 뒤여야 합니다.
+7. top-level `trace_id`가 비어 있지 않은 string이어야 합니다.
+8. 검증된 뒤에만 `data.token`을 추출하고 즉시 GitHub Actions mask를 적용합니다.
+9. malformed response를 진단할 때 raw response나 token 값을 출력하지 않습니다.
 
-이 변경은 Noema의 reviewer App, PAT fallback, LLM provider, `NVIDIA_NIM_API_KEY`, repository permission 또는 merge authority를 변경하지 않습니다. OIDC path가 이미 발행된 stable response envelope를 정확히 소비하도록 고치는 interoperability repair입니다.
+이 변경은 Noema의 reviewer App, PAT fallback, LLM provider,
+`NVIDIA_NIM_API_KEY`, repository permission 또는 merge authority를 변경하지
+않습니다. OIDC path가 이미 발행된 stable response envelope를 정확히 소비하도록
+고치는 interoperability repair입니다. Noema producer는 원래 OIDC assertion의
+audience, repository, workflow ref 및 source SHA를 검증하고 제한된 GitHub App
+installation token을 발행합니다. 중앙 consumer는 그 assertion을 다시 검증한다고
+주장하지 않고, producer가 반환한 repository, workflow ref, expiry 및 trace binding을
+검증합니다.
 
 ## 표준 근거
 
@@ -46,15 +54,20 @@ NIST SP 800-218 SSDF Version 1.1은 소프트웨어 생산자가 vulnerability�
 
 RFC 6749 places an OAuth access token at the top-level `access_token` member
 (Hardt, 2012). Noema's public exchange instead wraps the GitHub App token under
-`data.token` with repository and expiry identity. NIST SP 800-63C requires a
-federation consumer to validate the assertion's intended audience and binding
-before accepting a credential (Grassi et al., 2017). Reading `.token` as if the
-response were RFC 6749 therefore treats a schema mismatch as a missing secret.
+`data.token` with repository, workflow, expiry, and trace evidence. NIST SP
+800-63C-4 requires relying parties to validate assertion audience and time
+windows and to preserve replay resistance (Temoshok et al., 2025). The Noema
+producer performs the assertion validation; this consumer accepts the returned
+credential only when its stable envelope is bound to this exact repository and
+executing workflow and remains unexpired. Reading `.token` as if the response
+were RFC 6749 instead treats a schema mismatch as a missing secret and discards
+the binding evidence.
 
 ## 회귀 계약
 
 - workflow가 `.token // empty`를 사용하지 않습니다.
-- `jq -e`가 stable envelope와 target repository를 검증합니다.
+- `jq -e`가 stable envelope, target repository, exact executing workflow ref,
+  future expiry 및 trace identifier를 검증합니다.
 - 추출 경로는 `.data.token`입니다.
 - malformed envelope는 `response envelope was invalid`로 실패합니다.
 - raw response는 diagnostic output으로 반사하지 않습니다.
@@ -68,9 +81,9 @@ response were RFC 6749 therefore treats a schema mismatch as a missing secret.
 
 Bray, T. (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
 
-Grassi, P. A., Garcia, M. E., & Fenton, J. L. (2017). *Digital identity
-guidelines: Federation and assertions* (NIST SP 800-63C). National Institute
-of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-63c
+ContextualWisdomLab. (2026). *Noema API specification* [Computer software
+documentation]. GitHub.
+https://github.com/ContextualWisdomLab/noema/blob/main/docs/api-spec.md
 
 Hardt, D. (Ed.). (2012). *The OAuth 2.0 authorization framework* (RFC 6749).
 Internet Engineering Task Force. https://doi.org/10.17487/RFC6749
@@ -78,3 +91,9 @@ Internet Engineering Task Force. https://doi.org/10.17487/RFC6749
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure Software Development Framework (SSDF) version 1.1: Recommendations for mitigating the risk of software vulnerabilities* (NIST Special Publication 800-218). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
 
 National Institute of Standards and Technology. (2025, December 17). *Secure Software Development Framework (SSDF) version 1.2 is available for public comment*. https://www.nist.gov/news-events/news/2025/12/secure-software-development-framework-ssdf-version-12-available-public
+
+Temoshok, D., Richer, J., Choong, Y.-Y., Fenton, J., Lefkovitz, N.,
+Regenscheid, A., & Galluzzo, R. (2025). *Digital identity guidelines:
+Federation and assertions* (NIST Special Publication 800-63C-4). National
+Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-63c-4
