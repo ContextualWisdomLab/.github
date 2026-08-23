@@ -260,9 +260,20 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
     added_files = 0
     for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
         fields = line.split("\t")
-        if len(fields) < 2 or not is_test_path(fields[-1]):
+        if len(fields) < 2:
             continue
         status = fields[0][:1]
+        if status == "R":
+            if len(fields) < 3 or not all(is_test_path(path) for path in fields[-2:]):
+                continue
+            before_path, after_path = fields[-2:]
+            before_count = test_case_count(repo_root, start, before_path)
+            after_count = test_case_count(repo_root, end, after_path)
+            if before_count is None or after_count is None or after_count < before_count:
+                regressed.add(after_path)
+            continue
+        if not is_test_path(fields[-1]):
+            continue
         if status == "D":
             regressed.add(fields[-1])
         elif status == "A":

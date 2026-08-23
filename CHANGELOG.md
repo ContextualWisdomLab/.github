@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Detect declared test-case loss when Git reports a test-module rename, so a
+  renamed file cannot bypass the post-merge replay guard's regression evidence.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

@@ -15,6 +15,11 @@ The same post-merge range strengthened the already-existing `tests/test_componen
 
 It did not represent a positive declared-test-case delta in an existing test file. The result was a filename-level replacement heuristic applied to a test-case-level regression signal.
 
+The same boundary originally evaluated declared-case loss only for `M` numstat
+records. A Git-detected `R` record carries both the old and new path and is
+excluded from that modified-file pass, so a renamed test module could lose a
+declared case without producing regression evidence.
+
 ## Bounded repair
 
 The existing `test_file_changes()` return contract remains unchanged so callers and focused tests do not need an unrelated API migration. A separate read-only helper counts only positive declared-test-case deltas for supported test files that exist at both revisions. `ReplayEvidence` records that count and classifies a test regression as suspicious only when all three conditions hold:
@@ -25,11 +30,21 @@ The existing `test_file_changes()` return contract remains unchanged so callers 
 
 Deleted files, malformed or unsupported test sources, unevaluable revisions, exact pre-merge tree replay, targeted unmerge of base work, and the conservative bulk-deletion signature remain fail-closed. The change does not infer semantic equivalence between old and new tests; it preserves the guard's existing coarse replacement policy while making file-level and case-level replacement evidence symmetric.
 
+For a Git-detected test-to-test rename, the guard now evaluates the old path at
+the start revision and the new path at the end revision. A smaller or
+unevaluable declared-case inventory records the new path as regressed; the
+rename does not manufacture added-file replacement credit.
+
 ## Verification contract
 
 The permanent regression fixture models one existing test module losing a declared case while another existing module gains one. The old implementation cannot satisfy the fixture because it has no existing-file replacement signal. The repaired implementation reports the regressed path, zero added files, one added existing-file case, and does not classify that bounded refactor as stale replay.
 
 A second fixture proves malformed numstat rows, binary entries, non-test files, unchanged case counts, missing before/after evidence, and case-count reductions cannot manufacture replacement credit.
+
+A real temporary Git repository also renames a Python test module and changes
+one declared `test_*` function into a non-test helper. The predecessor misses
+the regression because Git emits `R`; the repaired guard reports the renamed
+path, zero added test files, and a blocking test-regression signal.
 
 Consumer acceptance requires rerunning the guard against the unchanged `ContextualWisdomLab.github.io#144` head and then regenerating its exact-head `coverage-evidence` and semantic review through protected organization workflows. A passing source test on this branch is not consumer or merge authority.
 

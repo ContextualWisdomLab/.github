@@ -266,6 +266,25 @@ def test_shrunk_test_without_replacement_fails(tmp_path):
     assert "reduced declared test cases" in guard.format_report(evidence)
 
 
+def test_renamed_test_losing_case_without_replacement_fails(tmp_path):
+    """Renaming a test module cannot hide a reduced declared-case inventory."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    git(repo, "mv", "tests/test_feature.py", "tests/test_feature_renamed.py")
+    write(
+        repo,
+        "tests/test_feature_renamed.py",
+        "def test_feature():\n    assert True\n    assert True\n\n\ndef helper_edge():\n    assert True\n",
+    )
+    head = commit(repo, "rename and weaken regression test")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_feature_renamed.py",)
+    assert evidence.added_test_files == 0
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
+
+
 def test_duplicate_assertion_cleanup_without_test_case_loss_passes(tmp_path):
     """Removing duplicate assertions while preserving test cases is not stale replay."""
     repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
@@ -388,6 +407,8 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
             "D\ttests/test_gone.py",
             "A\ttests/test_new.py",
             "M\ttests/test_kept.py",
+            "R100\ttests/test_same.py\ttests/test_same_renamed.py",
+            "R100\tsrc/old.py\tsrc/new.py",
             "D\tsrc/app_old.py",
             "badline",
         ]
@@ -405,7 +426,9 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         guard,
         "test_case_count",
-        lambda _root, revision, _path: 2 if revision == "a" else 1,
+        lambda _root, revision, path: (
+            2 if "test_same" in path or revision == "a" else 1
+        ),
     )
 
     regressed, added = guard.test_file_changes(tmp_path, "a", "b")
