@@ -6387,6 +6387,17 @@ run_filtered_gate_case_if_requested() {
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
 		;;
+	nim-primary-rate-limit-clean-fallback-quality-warning)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+			"nvidia_nim"
+		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
