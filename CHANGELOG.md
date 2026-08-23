@@ -19,6 +19,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Added a dedicated LineageWeave hourly caller at minute 4 that invokes the product-neutral central scheduler with the exact repository, protected `main` branch, one-dispatch budget, two-hour same-head retry floor, non-cancelling single-flight heartbeat, job-scoped OIDC, and only the established scheduler credentials.
 - Classify Strix `ModelBehaviorError` and provider exhaustion as typed
   `STRIX_PROVIDER_UNAVAILABLE` evidence while preserving a nonzero required
   check. Incomplete scans and reported vulnerabilities both fail closed.

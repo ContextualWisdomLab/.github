@@ -32,6 +32,13 @@ flowchart LR
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
+## LineageWeave hourly caller
+
+`lineageweave-hourly-review-repair.yml` is a thin, read-only caller at minute
+4. It names `ContextualWisdomLab/LineageWeave` and protected `main`, maps
+only established scheduler credentials, and grants job-scoped
+`id-token: write`. The reusable engine stays product-neutral.
+
 ## nonnest2 hourly caller
 
 `nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
@@ -73,7 +80,7 @@ The worker checks out helpers at `${{ github.sha }}` so a later default-branch
 push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
 `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 
-Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
+Product callers stagger LineageWeave at minute 4, Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 

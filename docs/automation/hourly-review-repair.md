@@ -5,6 +5,8 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `lineageweave-hourly-review-repair.yml` owns LineageWeave's heartbeat at minute 4
+  of every hour against protected `main`.
 - `orgmetra-hourly-review-repair.yml` owns Orgmetra's heartbeat at minute 58
   of every hour against protected `develop`.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
