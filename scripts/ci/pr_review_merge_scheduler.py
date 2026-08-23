@@ -797,9 +797,18 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
-    reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
-    checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
-    files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
+
+    # ⚡ Bolt: Fetch independent PR details concurrently to prevent N+1 API bottlenecks.
+    # This reduces total I/O wait latency from ~3 network hops to 1 hop.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_reviews = executor.submit(gh_api_json, f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+        future_checks = executor.submit(gh_api_json, f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+        future_files = executor.submit(gh_api_json, f"repos/{repo}/pulls/{number}/files?per_page=20")
+
+        reviews = future_reviews.result()
+        checks = future_checks.result()
+        files = future_files.result()
+
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
         str(pr.get("mergeable_state") or "").upper(),

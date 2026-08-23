@@ -156,3 +156,7 @@ Semantic Versioning where the repository publishes a release.
 - Added an organization-owned reusable exact-artifact SBOM attestation boundary that validates inert six-file wheel/sdist evidence, binds CycloneDX 1.7 predicates to exact SHA-256 subjects, signs through least-privilege GitHub artifact attestations, and exports online and offline verification bundles.
 - Hardened exact-artifact SBOM verification with strict finite RFC 8259 JSON, integer CycloneDX document versions, deterministic UUIDv5 subject identities, exact filename properties and single SHA-256 root bindings, environment-only shell input transfer, pinned Ubuntu 24.04 quality runners, and checksum-sealed beginner-readable offline evidence. The decision record now cites Bray (2017) so NaN and Infinity cannot be treated as sealed SBOM numbers.
 - Recorded the org control-plane architecture, including exact-artifact SBOM attestation, so agents reconstruct the signing trust boundary from the repo instead of private memory.
+
+## 2026-08-23
+### 변경 사항
+- **성능 개선**: `scripts/ci/pr_review_merge_scheduler.py`의 `rest_pr_node` 함수에서 `reviews`, `checks`, `files`를 순차적으로 조회하던 것을 `concurrent.futures.ThreadPoolExecutor`를 사용하여 병렬로 가져오도록 수정했습니다. 이로 인해 I/O 대기 시간이 크게 단축됩니다.
