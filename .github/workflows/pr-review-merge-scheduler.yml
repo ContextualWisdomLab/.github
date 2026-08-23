@@ -1060,8 +1060,11 @@ jobs:
               # repository, and it self-heals on GitHub's own reset schedule;
               # treating it as a hard failure previously turned one exhausted
               # bucket into a permanently red */15 * * * * cron for as long as
-              # the contention lasted. The deferred repository is simply picked
-              # up again on the next sweep rotation once the bucket refills.
+              # the contention lasted. Because the installation bucket is shared
+              # by every remaining repository, the current rotation stops after
+              # recording the first exhausted request instead of repeating the
+              # same bounded retries and queue-hygiene calls for every target.
+              # Deferred work is picked up on a later rotation after reset.
               #
               # Any other non-zero exit is a genuine per-repository failure.
               if printf '%s' "$sweep_output" | grep -qF "Resource not accessible by integration"; then
@@ -1069,9 +1072,11 @@ jobs:
                 unavailable=$((unavailable + 1))
                 unavailable_repos+=("$repo_full_name")
               elif printf '%s' "$sweep_output" | grep -qiF "API rate limit exceeded"; then
-                echo "::warning::Deferring ${repo_full_name}: the shared GitHub App installation-token rate limit is exhausted (HTTP 403 API rate limit exceeded). This repository is retried automatically on the next sweep rotation once the bucket resets."
+                echo "::warning::Deferring ${repo_full_name} and stopping this rotation: the shared GitHub App installation-token rate limit is exhausted (HTTP 403 API rate limit exceeded). Deferred repositories are retried automatically on the next sweep rotation once the bucket resets."
                 rate_limited=$((rate_limited + 1))
                 rate_limited_repos+=("$repo_full_name")
+                echo "::endgroup::"
+                break
               else
                 echo "::error::Queue sweep failed for ${repo_full_name}; see the decision log above for the concrete per-PR reason."
                 failures=$((failures + 1))
@@ -1233,11 +1238,10 @@ jobs:
           fi
           if [ "$rate_limited" -gt 0 ]; then
             # No fail-closed ceiling here, unlike ORG_SWEEP_MAX_UNAVAILABLE below:
-            # a shared installation-token bucket exhausted by sibling workflows
-            # can legitimately affect most or all repositories in a single sweep
-            # tick, and that is the expected, self-healing failure mode this
-            # branch exists to absorb, not a credential regression to fail on.
-            echo "::warning::${rate_limited} repository(ies) were deferred this rotation because the shared GitHub App installation-token rate limit was exhausted: ${rate_limited_repos[*]}. These do not fail the sweep; they are retried automatically once the bucket resets."
+            # one exhausted shared installation-token bucket affects every
+            # remaining repository, so the rotation stops after the first
+            # observed exhaustion instead of multiplying retries and API calls.
+            echo "::warning::The organization sweep stopped after ${rate_limited} observed rate-limit exhaustion(s): ${rate_limited_repos[*]}. Deferred work does not fail this sweep and is retried automatically once the shared bucket resets."
           fi
           # Fail-closed guard: a handful of un-enrolled repositories is expected,
           # but if MORE than ORG_SWEEP_MAX_UNAVAILABLE repositories become

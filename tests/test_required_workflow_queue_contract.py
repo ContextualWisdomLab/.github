@@ -1251,10 +1251,10 @@ def test_org_queue_sweep_treats_rate_limited_repositories_as_non_fatal() -> None
     inaccessible-repository handling, and is retried on the next rotation.
 
     Unlike ``ORG_SWEEP_MAX_UNAVAILABLE``, there is deliberately no fail-closed
-    ceiling on the rate-limited count: contention from sibling workflows can
-    legitimately affect most or all repositories in one sweep tick, and that
-    is the expected failure mode this branch exists to absorb, not a
-    credential-scope regression to fail loudly on.
+    ceiling on the rate-limited count: one exhausted installation bucket is
+    shared by every remaining repository, so the sweep records the current
+    repository and stops the rotation instead of repeating the same bounded
+    retries and API calls for every later repository.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -1270,6 +1270,38 @@ def test_org_queue_sweep_treats_rate_limited_repositories_as_non_fatal() -> None
     assert (
         'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then'
         in workflow
+    )
+    rate_limited_branch = workflow.split(
+        'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then',
+        maxsplit=1,
+    )[1].split("\n              else\n", maxsplit=1)[0]
+    assert 'rate_limited_repos+=("$repo_full_name")' in rate_limited_branch
+    assert 'echo "::endgroup::"' in rate_limited_branch
+    assert "break" in rate_limited_branch
+    assert rate_limited_branch.index('rate_limited_repos+=("$repo_full_name")') < (
+        rate_limited_branch.index('echo "::endgroup::"')
+    ) < (
+        rate_limited_branch.index("break")
+    )
+    script = (
+        "rate_limited=0\n"
+        "rate_limited_repos=()\n"
+        "visited_repos=()\n"
+        "for repo_full_name in ContextualWisdomLab/first ContextualWisdomLab/second; do\n"
+        "  visited_repos+=(\"$repo_full_name\")\n"
+        + textwrap.indent(textwrap.dedent(rate_limited_branch).strip() + "\n", "  ")
+        + "done\n"
+        + "printf 'RESULT|%s|%s|%s\\n' \"$rate_limited\" "
+        '"${rate_limited_repos[*]}" "${visited_repos[*]}"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == (
+        "RESULT|1|ContextualWisdomLab/first|ContextualWisdomLab/first"
     )
     # A genuine (non-403, non-rate-limit) failure must still be a hard failure.
     assert "failures=$((failures + 1))" in workflow

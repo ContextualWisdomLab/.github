@@ -90,6 +90,36 @@ ceiling turns out to be conservative.
   strict per-execution guarantee for that one run, logged as a
   `::warning::`.
 
+## Shared-installation rate-limit boundary
+
+The scheduler and several sibling workflows use installation access tokens
+from one GitHub App installation. GitHub applies one primary request bucket to
+that installation: at least 5,000 requests per hour, scaling by organization
+users and repositories to at most 12,500 requests per hour outside GitHub
+Enterprise Cloud. In a 30-run scheduler sample, 5 runs failed with the same
+primary-limit diagnostic across more than 15 hours; 4 failed on the first of
+66 repositories within 5 to 18 seconds. That aggregate timing evidence is
+consistent with shared-bucket contention rather than one target repository
+consuming the budget.
+
+REST and GraphQL reads therefore make at most four attempts. Primary-limit
+failures use the reset epoch reported by `GET /rate_limit`, capped at 60
+seconds for each retry interval; other transient failures retain the shorter
+exponential backoff. GitHub documents that the rate-limit endpoint does not
+consume the primary REST budget, although it can consume secondary capacity,
+and recommends waiting until the reported reset rather than continuing to
+send requests after a primary limit is exhausted.
+
+If bounded retries still end with `API rate limit exceeded`, the workflow
+records the current repository as deferred and stops the organization loop.
+The bucket is shared, so visiting the remaining repositories cannot produce
+new authoritative state before reset; it would only repeat up to three
+one-minute waits per repository and add queue-hygiene requests that GitHub
+explicitly advises against. The capacity condition remains non-fatal and the
+rotating next execution retries unfinished work. Secondary-limit diagnostics
+remain outside this narrow classifier because GitHub gives them a different
+retry contract and may provide `Retry-After` instead of a primary reset epoch.
+
 ## Verification
 
 - `tests/test_required_workflow_queue_contract.py::test_org_queue_sweep_rotation_offset_is_deterministic_and_reorders_targets`
@@ -113,6 +143,10 @@ ceiling turns out to be conservative.
   locks the `#1219` cross-reference, confirms `github.run_number` is not
   reintroduced as the source, and confirms the shared budget constant itself
   is untouched.
+- `test_org_queue_sweep_treats_rate_limited_repositories_as_non_fatal`
+  confirms the primary-limit diagnostic is deferred without becoming a generic
+  hard failure and that the repository loop stops immediately after recording
+  the exhausted shared bucket.
 - `actionlint` (with `shellcheck` on `PATH`) reports no findings against the
   modified workflow.
 
@@ -125,3 +159,15 @@ per-execution-guarantee review discussion.
 `ContextualWisdomLab/.github#1223` — wall-clock correction, then the
 persistent-counter correction this document and the current workflow source
 reflect.
+
+GitHub, Inc. (n.d.-a). *Best practices for creating a GitHub App*. GitHub
+Docs. Retrieved August 24, 2026, from
+https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app
+
+GitHub, Inc. (n.d.-b). *Rate limits for GitHub Apps*. GitHub Docs. Retrieved
+August 24, 2026, from
+https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/rate-limits-for-github-apps
+
+GitHub, Inc. (n.d.-c). *Rate limits for the REST API*. GitHub Docs. Retrieved
+August 24, 2026, from
+https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api

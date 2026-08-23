@@ -55,6 +55,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Stop the organization PR sweep after the first exhausted shared GitHub App
+  installation bucket, rather than repeating up to three reset-aware waits and
+  follow-on queue-hygiene reads for every remaining repository. The current
+  target is recorded as deferred, the run remains non-fatal for this external
+  capacity condition, and later rotations retry the unfinished repository set.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
