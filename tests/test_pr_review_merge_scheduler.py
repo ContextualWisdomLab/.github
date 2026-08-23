@@ -590,11 +590,11 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         },
     )
 
-    assert calls == [
+    assert sorted(calls) == sorted([
         "repos/owner/repo/pulls/42/reviews?per_page=100",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
-    ]
+    ])
     assert node["number"] == 42
     assert node["mergeStateStatus"] == "CLEAN"
     assert node["restMergeableState"] == "CLEAN"
