@@ -6,8 +6,6 @@ The exact-head coverage-evidence job for `.github` pull request #799 reached the
 
 ## Decision
 
-Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
-
 Each bounded `opencode run` starts in a new session with `setsid` when that
 tool is present (Linux CI / util-linux). On a structured fatal-provider
 event, the launcher sends `SIGTERM` to the negative process-group
@@ -17,6 +15,12 @@ identifier, waits for bounded group disappearance, and then sends
 executes. The ordinary timeout contract remains
 `timeout --kill-after=30s`; only the early-fatal cleanup boundary
 changes.
+
+The launcher explicitly disables Bash job control before it starts an
+attempt. That preserves the POSIX identity relied on by the negative-PGID
+signal: the background `setsid` process executes directly, and its PID becomes
+the new session and process-group id. The implementation captures that id at
+launch time instead of probing `PATH` again during cleanup.
 
 The group signal is deliberately scoped to the session created for one model attempt. It does not target the workflow shell, unrelated model attempts, or the runner process. The production Ubuntu image already installs `util-linux`, which supplies `setsid`.
 
@@ -29,7 +33,14 @@ evidence; the negative process-group identifier is the contained unit.
 
 ## Verification
 
-The existing behavioral regression uses a fake provider that emits a fatal structured event and sleeps for 120 seconds. Before the change, the test exceeded its 30-second subprocess boundary because a descendant retained the capture pipes. With process-group termination, it completes in under 25 seconds and the complete model-pool test file remains eligible for the exact-head coverage job. Shell syntax validation and the repository-wide evidence command remain required before merge.
+The existing behavioral regressions in
+`tests/test_opencode_model_pool_runner.py` use fake providers that emit fatal
+structured events and sleep for 120 seconds. Before the change, the tests
+exceeded their subprocess boundary because a descendant retained the capture
+pipes. With process-group termination, both the context/quota and delisted-model
+cases complete in under 25 seconds. The focused workflow executes those real
+process tests on Ubuntu, and shell syntax plus the repository-wide evidence
+command remain required before merge.
 
 ## Rollback
 

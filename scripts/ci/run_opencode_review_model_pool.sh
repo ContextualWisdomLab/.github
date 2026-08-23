@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# This script owns each background attempt's PID. Keep Bash job control off so
+# `setsid` execs directly and that PID is also the new process-group id.
+set +m
 
 : "${GITHUB_OUTPUT:=/dev/null}"
 
@@ -456,7 +459,7 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_poll_seconds
+	local opencode_pid opencode_process_group fatal_poll_seconds
 
 	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
@@ -481,6 +484,8 @@ run_one_model_attempt() {
 			--format json \
 			--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
 			>"$opencode_json_file" 2>"$opencode_stderr_file" &
+		opencode_pid=$!
+		opencode_process_group="$opencode_pid"
 	else
 		timeout --kill-after=30s "${run_timeout_seconds}s" \
 			env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
@@ -492,8 +497,9 @@ run_one_model_attempt() {
 			--format json \
 			--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
 			>"$opencode_json_file" 2>"$opencode_stderr_file" &
+		opencode_pid=$!
+		opencode_process_group=""
 	fi
-	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and
 	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
 	# log while opencode runs and kill the process early so the pool falls
@@ -502,13 +508,13 @@ run_one_model_attempt() {
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
 				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-			if command -v setsid >/dev/null 2>&1; then
-				kill -TERM -- "-$opencode_pid" 2>/dev/null || true
+			if [ -n "$opencode_process_group" ]; then
+				kill -TERM -- "-$opencode_process_group" 2>/dev/null || true
 				for _ in $(seq 1 30); do
-					kill -0 -- "-$opencode_pid" 2>/dev/null || break
+					kill -0 -- "-$opencode_process_group" 2>/dev/null || break
 					sleep 1
 				done
-				kill -KILL -- "-$opencode_pid" 2>/dev/null || true
+				kill -KILL -- "-$opencode_process_group" 2>/dev/null || true
 			else
 				kill -TERM "$opencode_pid" 2>/dev/null || true
 				for _ in $(seq 1 30); do
