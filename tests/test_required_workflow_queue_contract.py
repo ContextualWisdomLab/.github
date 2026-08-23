@@ -32,6 +32,20 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
+def run_strix_smoke(tmp_path: Path, workflow: str) -> subprocess.CompletedProcess[str]:
+    """Run the trusted smoke checker against one candidate workflow."""
+    workflow_path = tmp_path / ".github" / "workflows" / "strix.yml"
+    workflow_path.parent.mkdir(parents=True)
+    workflow_path.write_text(workflow, encoding="utf-8")
+    return subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "ci" / "strix_required_workflow_smoke.sh")],
+        env={**os.environ, "TRUSTED_WORKSPACE": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     """Keep the default scheduler dispatch bounded to one review."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
@@ -543,6 +557,103 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     assert noema.returncode == 1
     assert "Noema LLM is unconfigured" in noema.stdout
     assert noema_probe.read_text() == "synthetic-openai-key"
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "gpt-5.6-luna\nforged<<enabled=true",
+        "gpt-5.6-luna\rforged=true",
+    ),
+)
+def test_strix_gate_rejects_multiline_model_outputs(
+    tmp_path: Path,
+    model: str,
+) -> None:
+    """Untrusted dispatch data cannot inject GitHub output records."""
+    output_path = tmp_path / "strix-output"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            textwrap.dedent(
+                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                .split("        run: |\n", 1)[1]
+            ),
+        ],
+        env={
+            **os.environ,
+            "GITHUB_OUTPUT": str(output_path),
+            "STRIX_MODEL": model,
+            "STRIX_MODEL_REQUESTED": model,
+            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
+            "STRIX_OPENROUTER_API_KEY": "",
+            "STRIX_NVIDIA_NIM_API_KEY": "",
+            "STRIX_VERTEX_CREDENTIALS": "",
+            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
+            "TARGET_REPOSITORY_PRIVATE": "false",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "must not contain carriage returns or newlines" in result.stdout
+    assert not output_path.exists()
+
+
+def test_strix_manual_status_uses_only_live_validated_identifiers() -> None:
+    """Failed dispatch validation cannot write a caller-selected commit status."""
+    workflow = workflow_text("strix.yml")
+
+    assert "id: validate_dispatch" in workflow
+    assert "dispatch_validation: ${{ steps.validate_dispatch.outcome }}" in workflow
+    assert (
+        "github.event_name == 'repository_dispatch' && "
+        "steps.validate_dispatch.outcome == 'success'"
+    ) in workflow
+    assert (
+        "github.event_name == 'repository_dispatch' && "
+        "needs.strix.outputs.dispatch_validation == 'success'"
+    ) in workflow
+    assert (
+        "TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}"
+        in workflow
+    )
+    assert "PR_HEAD_SHA: ${{ steps.validate_dispatch.outputs.head_sha }}" in workflow
+    assert (
+        "TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}"
+        in workflow
+    )
+    assert "PR_HEAD_SHA: ${{ needs.strix.outputs.dispatch_head_sha }}" in workflow
+    assert workflow.count("success:true)") == 2
+
+
+def test_strix_smoke_rejects_workflow_contract_expansion(tmp_path: Path) -> None:
+    """Unknown jobs, broader permissions, and mutable actions fail closed."""
+    workflow = workflow_text("strix.yml")
+    baseline = run_strix_smoke(tmp_path / "baseline", workflow)
+    assert baseline.returncode == 0, baseline.stderr
+
+    variants = {
+        "unknown-job": workflow
+        + "\n  attacker-persistence:\n    runs-on: ubuntu-latest\n    steps:\n"
+        + "      - uses: attacker/persistence-action@main\n",
+        "broader-permission": workflow.replace(
+            "    permissions:\n      actions: read\n      contents: read",
+            "    permissions:\n      actions: read\n      contents: write",
+            1,
+        ),
+        "mutable-action": workflow.replace(
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+            "actions/setup-python@main",
+            1,
+        ),
+    }
+    for name, candidate in variants.items():
+        result = run_strix_smoke(tmp_path / name, candidate)
+        assert result.returncode != 0, name
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:

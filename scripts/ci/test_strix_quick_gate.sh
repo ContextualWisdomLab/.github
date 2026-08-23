@@ -1137,8 +1137,10 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
-	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'status_write_jobs != ["strix"]' "strix smoke keeps status write permission scoped to the scan job"
-	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}' "strix manual evidence status publishes to the requested target repository"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'job_permissions != expected_job_permissions' "strix smoke enforces the exact approved job permission maps"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'Strix workflow actions must be pinned to full commit SHAs' "strix smoke rejects mutable action references"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}' "strix scan-job status publisher uses the live-validated target repository"
+	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}' "strix follow-up status publisher uses the live-validated target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'context="strix"' "strix manual evidence status uses the status context consumed by OpenCode"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}' "strix manual evidence status does not post private-target evidence to .github by mistake"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '"'"''"'"' }}' "strix manual evidence status can publish cross-repo evidence with the central mutation credential"
@@ -3321,9 +3323,24 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
+emit_synthetic_completion_evidence() {
+	local rc=$?
+	if [ "$rc" -eq 0 ] &&
+		[ "${FAKE_STRIX_SCENARIO:?}" != "success-without-evidence" ] &&
+		[ "${FAKE_STRIX_SCENARIO:?}" != "success-with-critical-report" ]; then
+		echo "Vulnerabilities 0"
+	fi
+	trap - EXIT
+	exit "$rc"
+}
+trap emit_synthetic_completion_evidence EXIT
+
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
+		exit 0
+		;;
+	success-without-evidence)
 		exit 0
 		;;
 	scan-working-directory-isolated)
@@ -6110,6 +6127,16 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	success-without-evidence)
+		run_gate_case "success-without-evidence" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"without an authoritative vulnerability report or zero-findings marker" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
 	pr-rust-workspace-context)
 		run_gate_case "pr-rust-workspace-context" \
 			"openai/gpt-4o-mini" \
@@ -6985,6 +7012,7 @@ else
 	fi
 fi
 echo "scan ok with PR head content"
+echo "Vulnerabilities 0"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7229,6 +7257,7 @@ if [ -e "$context_file" ]; then
 	exit 66
 fi
 echo "scan ok with bounded PR head backend context"
+echo "Vulnerabilities 0"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7362,6 +7391,7 @@ if [ "$attempt" -eq 1 ]; then
 		exit 70
 	fi
 	echo "scan ok with changed PR head backend context"
+	echo "Vulnerabilities 0"
 	exit 0
 fi
 
@@ -7605,10 +7635,12 @@ if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
 fi
 
 if [ "$matched_backend_context" -eq 1 ]; then
+	echo "Vulnerabilities 0"
 	exit 0
 fi
 
 echo "scan ok with non-email backend scope"
+echo "Vulnerabilities 0"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7850,6 +7882,7 @@ if grep -Fq -- 'HEAD_THREADING_SERVICE_SHOULD_NOT_BE_SCANNED' "$target_path/back
 fi
 
 echo "scan ok with frontend email trusted backend authorization context"
+echo "Vulnerabilities 0"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7938,6 +7971,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 echo "scan ok"
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -8458,6 +8492,7 @@ if [ -e "$target_path/vendor/newsdom-api" ]; then
 	exit 69
 fi
 echo "scan ok with PR head content"
+echo "Vulnerabilities 0"
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -8723,6 +8758,7 @@ if [ "${LLM_API_BASE+x}" = "x" ]; then
 fi
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 echo "vertex scan ok without external LLM_API_BASE"
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -8951,6 +8987,7 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9001,6 +9038,7 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9093,10 +9131,11 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
-	cat >"$fake_strix" <<'EOF'
+cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9283,6 +9322,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
+echo "Vulnerabilities 0"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9805,6 +9845,15 @@ run_gate_case "success" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"0" \
 	"scan ok" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "success-without-evidence" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"without an authoritative vulnerability report or zero-findings marker" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"

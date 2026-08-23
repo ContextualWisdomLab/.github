@@ -108,6 +108,11 @@ jobs:
       id-token: write
       models: read
       statuses: write
+    outputs:
+      dispatch_validation: ${{ steps.validate_dispatch.outcome }}
+      dispatch_target_repository: ${{ steps.validate_dispatch.outputs.target_repository }}
+      dispatch_head_sha: ${{ steps.validate_dispatch.outputs.head_sha }}
+      scan_enabled: ${{ steps.gate.outputs.enabled }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -308,6 +313,7 @@ jobs:
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
 
       - name: Validate repository dispatch against live pull request metadata
+        id: validate_dispatch
         if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
@@ -346,6 +352,10 @@ jobs:
               "${live_head_repository:-missing}" "${live_head_sha:-missing}"
             exit 1
           fi
+          {
+            echo "target_repository=$live_base_repository"
+            echo "head_sha=$live_head_sha"
+          } >> "$GITHUB_OUTPUT"
 
           trusted_workspace="$RUNNER_TEMP/trusted-workspace"
           mkdir -p "$trusted_workspace"
@@ -446,6 +456,11 @@ jobs:
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
+          set -euo pipefail
+          if [[ "$STRIX_MODEL" == *$'\n'* || "$STRIX_MODEL" == *$'\r'* ]]; then
+            echo '::error::STRIX_MODEL must not contain carriage returns or newlines.'
+            exit 1
+          fi
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
             strix_model="gpt-5.6-luna"
@@ -962,15 +977,16 @@ jobs:
           retention-days: 5
 
       - name: Publish same-head manual Strix status
-        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
+        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && steps.validate_dispatch.outcome == 'success' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           GITHUB_STATUS_TOKEN: ${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
-          PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+          TARGET_REPOSITORY: ${{ steps.validate_dispatch.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ steps.validate_dispatch.outputs.head_sha }}
           STRIX_RESULT: ${{ job.status }}
+          STRIX_SCAN_ENABLED: ${{ steps.gate.outputs.enabled }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -978,12 +994,12 @@ jobs:
             exit 1
           fi
 
-          case "$STRIX_RESULT" in
-            success)
+          case "$STRIX_RESULT:$STRIX_SCAN_ENABLED" in
+            success:true)
               state="success"
               description="Default-branch repository_dispatch Strix evidence passed"
               ;;
-            failure|cancelled|skipped)
+            failure:*|cancelled:*|skipped:*)
               state="failure"
               description="Default-branch repository_dispatch Strix evidence failed"
               ;;
@@ -1041,7 +1057,7 @@ jobs:
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && needs.strix.outputs.dispatch_validation == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -1118,9 +1134,10 @@ jobs:
           GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
-          PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+          TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}
+          PR_HEAD_SHA: ${{ needs.strix.outputs.dispatch_head_sha }}
           STRIX_RESULT: ${{ needs.strix.result }}
+          STRIX_SCAN_ENABLED: ${{ needs.strix.outputs.scan_enabled }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -1128,12 +1145,12 @@ jobs:
             exit 1
           fi
 
-          case "$STRIX_RESULT" in
-            success)
+          case "$STRIX_RESULT:$STRIX_SCAN_ENABLED" in
+            success:true)
               state="success"
               description="Default-branch repository_dispatch Strix evidence passed"
               ;;
-            failure|cancelled|skipped)
+            failure:*|cancelled:*|skipped:*)
               state="failure"
               description="Default-branch repository_dispatch Strix evidence failed"
               ;;

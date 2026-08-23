@@ -64,50 +64,105 @@ except ValueError as exc:
     print(f"Strix workflow is missing the required top-level block: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-top_level_permissions = lines[permissions_index + 1 : jobs_index]
-expected_read_permissions = {
-    "actions: read",
-    "contents: read",
-    "models: read",
+top_level_permissions: dict[str, str] = {}
+for line in lines[permissions_index + 1 : jobs_index]:
+    permission_match = re.match(r"^  ([A-Za-z0-9_-]+):\s*([A-Za-z]+)\s*$", line)
+    if permission_match:
+        top_level_permissions[permission_match.group(1)] = permission_match.group(2)
+
+expected_top_level_permissions = {
+    "actions": "read",
+    "contents": "read",
+    "models": "read",
 }
-missing = sorted(expected_read_permissions - {line.strip() for line in top_level_permissions})
-if missing:
+if top_level_permissions != expected_top_level_permissions:
     print(
-        "Strix workflow top-level permissions are missing read-only scopes: "
-        + ", ".join(missing),
+        "Strix workflow top-level permissions must be exactly read-only actions, contents, and models; "
+        f"found: {top_level_permissions}",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
-if any(line.strip() == "statuses: write" for line in top_level_permissions):
-    print("Strix workflow top-level GITHUB_TOKEN must not grant statuses: write.", file=sys.stderr)
-    raise SystemExit(1)
-
-status_write_jobs: list[str] = []
+allowed_jobs = {
+    "cancel-closed-pr-runs",
+    "publish-manual-pr-evidence-status",
+    "strix",
+}
+expected_job_permissions = {
+    "cancel-closed-pr-runs": {},
+    "publish-manual-pr-evidence-status": {"id-token": "write"},
+    "strix": {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+        "models": "read",
+        "statuses": "write",
+    },
+}
+job_names: list[str] = []
+job_permissions: dict[str, dict[str, str]] = {}
 current_job = ""
 inside_permissions = False
 for line in lines[jobs_index + 1 :]:
     job_match = re.match(r"^  ([A-Za-z0-9_-]+):$", line)
     if job_match:
         current_job = job_match.group(1)
+        if current_job in job_names:
+            print(f"Strix workflow defines duplicate job '{current_job}'.", file=sys.stderr)
+            raise SystemExit(1)
+        job_names.append(current_job)
+        job_permissions[current_job] = {}
         inside_permissions = False
         continue
-    if current_job and line == "    permissions:":
-        inside_permissions = True
+    if not current_job:
+        continue
+    permissions_match = re.match(r"^    permissions:\s*(.*)$", line)
+    if permissions_match:
+        inline_permissions = permissions_match.group(1).strip()
+        inside_permissions = not inline_permissions
+        if inline_permissions and inline_permissions != "{}":
+            job_permissions[current_job] = {"__invalid__": inline_permissions}
         continue
     if not inside_permissions:
         continue
-    if line.startswith("      "):
-        if line.strip() == "statuses: write":
-            status_write_jobs.append(current_job)
+    permission_match = re.match(r"^      ([A-Za-z0-9_-]+):\s*([A-Za-z]+)\s*$", line)
+    if permission_match:
+        job_permissions[current_job][permission_match.group(1)] = permission_match.group(2)
         continue
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs != ["strix"]:
+unknown_jobs = sorted(set(job_names) - allowed_jobs)
+missing_jobs = sorted(allowed_jobs - set(job_names))
+if unknown_jobs or missing_jobs:
     print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
-        + (", ".join(status_write_jobs) if status_write_jobs else "none"),
+        "Strix workflow jobs must be exactly the approved required jobs; "
+        f"unknown: {unknown_jobs or 'none'}, missing: {missing_jobs or 'none'}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if job_permissions != expected_job_permissions:
+    print(
+        "Strix workflow job permissions do not match the approved contract; "
+        f"found: {job_permissions}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+unpinned_actions: list[str] = []
+for line_number, line in enumerate(lines, start=1):
+    action_match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
+    if action_match and not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-fA-F]{40}",
+        action_match.group(1),
+    ):
+        unpinned_actions.append(f"{line_number}:{action_match.group(1)}")
+
+if unpinned_actions:
+    print(
+        "Strix workflow actions must be pinned to full commit SHAs; found: "
+        + ", ".join(unpinned_actions),
         file=sys.stderr,
     )
     raise SystemExit(1)

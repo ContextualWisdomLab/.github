@@ -2811,6 +2811,11 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
+		if ! has_any_reported_severity_markers && ! strix_reported_zero_vulnerabilities; then
+			INFRA_ERROR_DETECTED=1
+			echo "Strix exited successfully without an authoritative vulnerability report or zero-findings marker; failing closed." >&2
+			return 1
+		fi
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
