@@ -31,6 +31,10 @@ AFFECTED_RANGE_RE = re.compile(
     r"^[ \t]*(?P<operator><=|<)[ \t]*(?P<version>\d+\.\d+\.\d+)[ \t]*$"
 )
 SHEETJS_EXCEPTION_VERSION = "0.20.3"
+SHEETJS_EXCEPTION_INTEGRITY = (
+    "sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/"
+    "BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA=="
+)
 SHEETJS_URL_RE = re.compile(
     r"^/xlsx-(?P<version>\d+\.\d+\.\d+)/xlsx-(?P=version)\.tgz$"
 )
@@ -102,6 +106,8 @@ def validate_sheetjs_source(
         return False, "pnpm package key and resolution tarball disagree"
     if not valid_sha512_integrity(integrity):
         return False, "direct source lacks one valid SHA-512 integrity receipt"
+    if integrity != SHEETJS_EXCEPTION_INTEGRITY:
+        return False, "direct source integrity does not match the governed SheetJS artifact"
     return True, "exact official immutable SheetJS release"
 
 

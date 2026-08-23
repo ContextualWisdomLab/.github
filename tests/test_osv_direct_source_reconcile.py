@@ -356,6 +356,8 @@ class DirectSourceReconcileTests(unittest.TestCase):
         self.assertFalse(OSV.valid_sha512_integrity("sha512-%%%"))
         self.assertFalse(OSV.valid_sha512_integrity("sha512-YQ=="))
         valid_url = OFFICIAL_URL.format(version="0.20.3")
+        well_formed_but_untrusted_integrity = "sha512-" + ("A" * 86) + "=="
+        self.assertTrue(OSV.valid_sha512_integrity(well_formed_but_untrusted_integrity))
         cases = (
             ("other", valid_url, valid_url, "0.20.3", INTEGRITY),
             ("xlsx", "https://cdn.sheetjs.com:bad/x.xlsx", "", "0.20.3", INTEGRITY),
@@ -370,6 +372,13 @@ class DirectSourceReconcileTests(unittest.TestCase):
             ("xlsx", valid_url, valid_url, "0.20.2", INTEGRITY),
             ("xlsx", valid_url, valid_url.replace("0.20.3", "0.20.2"), "0.20.3", INTEGRITY),
             ("xlsx", valid_url, valid_url, "0.20.3", "missing"),
+            (
+                "xlsx",
+                valid_url,
+                valid_url,
+                "0.20.3",
+                well_formed_but_untrusted_integrity,
+            ),
         )
         for arguments in cases:
             with self.subTest(arguments=arguments):
