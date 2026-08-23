@@ -1603,6 +1603,91 @@ def test_valid_control_filters_shape_head_and_review_contract():
     assert norm.valid_control(approve_without_findings_key, **kwargs)["findings"] == []
 
 
+def test_numeric_identity_field_accepts_only_str_and_non_bool_int():
+    assert norm.numeric_identity_field("32601740155") == "32601740155"
+    assert norm.numeric_identity_field(32601740155) == "32601740155"
+    assert norm.numeric_identity_field(0) == "0"
+    assert norm.numeric_identity_field(True) is None
+    assert norm.numeric_identity_field(False) is None
+    assert norm.numeric_identity_field(3.0) is None
+    assert norm.numeric_identity_field(None) is None
+    assert norm.numeric_identity_field([32601740155]) is None
+    assert norm.numeric_identity_field({"run_id": 1}) is None
+
+
+def test_current_run_control_candidate_accepts_a_bare_json_number_run_identity():
+    # A model may copy the sentinel line's bare digits (`run_id=32601740155`)
+    # into JSON without adding quotes, producing an int instead of the
+    # documented string. The candidate is still the correct current-run
+    # control block and must not be silently dropped, since main() rejects
+    # the whole output with "no top-level current-run control JSON object
+    # was found" when zero candidates match.
+    kwargs = {
+        "expected_head_sha": "deadbeef",
+        "expected_run_id": "32601740155",
+        "expected_run_attempt": "1",
+    }
+    numeric_identity = control(
+        head_sha="deadbeef", run_id=32601740155, run_attempt=1
+    )
+    assert norm.current_run_control_candidate(numeric_identity, **kwargs) is True
+
+    quoted_identity = control(
+        head_sha="deadbeef", run_id="32601740155", run_attempt="1"
+    )
+    assert norm.current_run_control_candidate(quoted_identity, **kwargs) is True
+
+    wrong_run = control(head_sha="deadbeef", run_id=1, run_attempt=1)
+    assert norm.current_run_control_candidate(wrong_run, **kwargs) is False
+
+    bool_run = control(head_sha="deadbeef", run_id=True, run_attempt=1)
+    assert norm.current_run_control_candidate(bool_run, **kwargs) is False
+
+
+def test_valid_control_accepts_a_bare_json_number_run_identity(tmp_path, monkeypatch):
+    # Same coercion, exercised through the second, independent enforcement
+    # point (`valid_control`, used directly by `check_structural_approval`
+    # / the approve-gate script) rather than the `current_run_control_candidate`
+    # pre-filter, so both call sites are proven consistent.
+    changed_files = tmp_path / "opencode-changed-files.txt"
+    changed_files.write_text("scripts/ci/example.py\n", encoding="utf-8")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    manifest = tmp_path / norm.TRUSTED_ARTIFACT_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "head_sha": "deadbeef",
+                "run_id": "32601740155",
+                "run_attempt": "1",
+                "artifacts": {
+                    changed_files.name: hashlib.sha256(
+                        changed_files.read_bytes()
+                    ).hexdigest()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    anchor_manifest(manifest)
+    changed_files.chmod(0o600)
+    norm.trusted_execution_receipts.cache_clear()
+
+    kwargs = {
+        "expected_head_sha": "deadbeef",
+        "expected_run_id": "32601740155",
+        "expected_run_attempt": "1",
+    }
+    numeric_identity = control(
+        head_sha="deadbeef", run_id=32601740155, run_attempt=1
+    )
+    assert norm.valid_control(numeric_identity, **kwargs) is not None
+
+    wrong_attempt = control(head_sha="deadbeef", run_id=32601740155, run_attempt=2)
+    assert norm.valid_control(wrong_attempt, **kwargs) is None
+
+
 def test_valid_control_canonicalizes_known_safe_finding_field_drift():
     kwargs = {
         "expected_head_sha": "head",

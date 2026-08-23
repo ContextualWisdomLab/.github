@@ -459,6 +459,30 @@ def trusted_artifact_path(env_name: str) -> Path | None:
     return path if actual_digest == expected_digest else None
 
 
+def numeric_identity_field(value: Any) -> str | None:
+    """Return an untrusted ``run_id``/``run_attempt`` candidate as a decimal string.
+
+    The prompt template shows these fields quoted (``"run_id":"..."``) but the
+    sentinel line a model copies them from renders the digits bare
+    (``run_id=32601740155``), so a model may emit a JSON number instead of the
+    documented string. A bare ``==`` against the trusted ``str`` expected value
+    then always rejects, even when the underlying identity is correct. Widening
+    acceptance to ``int`` (and its exact decimal string) closes that gap without
+    weakening the check: an ``int`` only ever stringifies to its own digit
+    string, so no two distinct run identities can collide and no candidate that
+    would have failed the strict string comparison can newly pass. Booleans are
+    excluded (``bool`` is a subclass of ``int`` in Python) since a run identity
+    is never legitimately ``true``/``false``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
 def artifact_identity_error(
     expected_head_sha: str,
     expected_run_id: str,
@@ -1310,9 +1334,9 @@ def valid_control(
 
     if value.get("head_sha") != expected_head_sha:
         return reject("head_sha does not match the current pull request head")
-    if value.get("run_id") != expected_run_id:
+    if numeric_identity_field(value.get("run_id")) != expected_run_id:
         return reject("run_id does not match the current workflow run")
-    if value.get("run_attempt") != expected_run_attempt:
+    if numeric_identity_field(value.get("run_attempt")) != expected_run_attempt:
         return reject("run_attempt does not match the current workflow attempt")
 
     provenance_error = artifact_identity_error(
@@ -1489,8 +1513,8 @@ def current_run_control_candidate(
     return bool(
         isinstance(value, dict)
         and value.get("head_sha") == expected_head_sha
-        and value.get("run_id") == expected_run_id
-        and value.get("run_attempt") == expected_run_attempt
+        and numeric_identity_field(value.get("run_id")) == expected_run_id
+        and numeric_identity_field(value.get("run_attempt")) == expected_run_attempt
     )
 
 
