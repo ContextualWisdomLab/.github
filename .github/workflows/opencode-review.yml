@@ -57,3 +57,56 @@ jobs:
       - run: >-
           echo "Review approval remains a separate current-head PR review
           requirement produced by the authenticated dispatch workflow."
+
+  scopeweave-pr506-calendar-stack:
+    name: scopeweave-pr506-calendar-stack
+    if: >-
+      github.repository == 'ContextualWisdomLab/scopeweave' &&
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.number == 506 &&
+      github.event.pull_request.merged == true
+    permissions:
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Resolve immutable central workflow source
+        id: source
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          case "${WORKFLOW_REF}" in
+            ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@*) ;;
+            *) echo "unexpected workflow source: ${WORKFLOW_REF}" >&2; exit 1 ;;
+          esac
+          [[ "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          printf 'sha=%s\n' "${WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out trusted central control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ steps.source.outputs.sha }}
+          path: trusted-control-plane
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Audit ScopeWeave calendar stack after actual #506 merge
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3
+          trusted-control-plane/scripts/ci/scopeweave_pr506_calendar_stack.py
+          --event-path "${GITHUB_EVENT_PATH}"
