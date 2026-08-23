@@ -761,11 +761,10 @@ def rate_limit_retry_delay_seconds(resource: str, attempt: int) -> int:
     back to the same capped exponential backoff already used for other
     transient errors when that lookup is itself unavailable or does not
     confirm the bucket is empty, and never waits longer than
-    ``GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS`` so one repository's scheduler
-    invocation cannot stall the whole organization queue sweep; a bucket
-    that needs longer than that to refill is left for the calling
-    workflow's skip-and-defer handling to pick back up on the next sweep
-    rotation instead of blocking this process.
+    ``GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS`` for any one retry interval.
+    After the bounded attempts are exhausted, the error reaches the calling
+    workflow's skip-and-defer handling so the repository can be picked back
+    up on the next sweep rotation.
     """
     fallback = min(2 ** (attempt - 1), GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS)
     try:
