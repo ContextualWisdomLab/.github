@@ -1215,6 +1215,8 @@ pull_request_scope_context_files() {
 	if [ "$needs_backend_python" -eq 1 ]; then
 		cat <<'EOF'
 backend/requirements.txt
+backend/app/__init__.py
+backend/app/auth.py
 backend/api/__init__.py
 backend/api/accounts.py
 backend/api/auth.py
