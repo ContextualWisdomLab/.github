@@ -160,6 +160,9 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert 'MAX_REVIEW_DISPATCHES: "1"' in workflow_source
     assert 'MAX_DEVELOPMENT_DISPATCHES: "1"' in workflow_source
     assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in workflow_source
+    assert 'export GH_TOKEN="$app_token"' in workflow_source
+    assert "id-token: write" in workflow_source
+    assert "OIDC_AUDIENCE: opencode-github-action" in workflow_source
     assert "OPENCODE_APPROVE_TOKEN" not in workflow_source
     assert "workflow_dispatch:" not in workflow_source
     assert "|| github.token" not in workflow_source
