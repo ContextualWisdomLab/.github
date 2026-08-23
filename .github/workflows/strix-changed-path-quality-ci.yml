@@ -12,6 +12,7 @@ on:
       - "docs/doctoring/strix-nvidia-nim-not-found-fallback.md"
       - "docs/doctoring/strix-unsupported-sampling-fallback.md"
       - "docs/doctoring/strix-quality-timeout-fixtures.md"
+      - "docs/doctoring/strix-trusted-dependency-lock.md"
       - "scripts/ci/strix_model_utils.sh"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"

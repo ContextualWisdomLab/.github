@@ -73,6 +73,7 @@ def test_strix_workflow_reruns_when_shared_runtime_or_doctoring_changes() -> Non
 
     for path in (
         "docs/doctoring/strix-nvidia-nim-not-found-fallback.md",
+        "docs/doctoring/strix-trusted-dependency-lock.md",
         "docs/doctoring/strix-unsupported-sampling-fallback.md",
         "scripts/ci/strix_model_utils.sh",
     ):
