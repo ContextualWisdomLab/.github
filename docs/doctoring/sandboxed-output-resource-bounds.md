@@ -52,11 +52,11 @@ A truncation marker is included inside, not in addition to, the declared retaine
 
 ## Deferred consumer integration
 
-This first stack layer does not change `sandboxed_verify.py` or
-`sandboxed_web_e2e.py`. The next layers adopt the library for short-lived
-verification commands and long-running service evidence respectively. Keeping
-those integrations separate prevents a shared process primitive, workspace
-symlink policy, and E2E result schema from becoming one monolithic review.
+The second stack layer adopts the library in `sandboxed_verify.py` for
+short-lived verification commands. Long-running `sandboxed_web_e2e.py` service
+evidence remains a separate layer. Keeping those integrations separate prevents
+a shared process primitive, workspace symlink policy, and E2E result schema from
+becoming one monolithic review.
 
 ## Security and availability properties
 
