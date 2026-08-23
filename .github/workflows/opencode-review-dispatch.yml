@@ -660,7 +660,6 @@ jobs:
             && rm -rf /var/lib/apt/lists/*
           ENV LLVM_COV=/usr/bin/llvm-cov-19
           ENV LLVM_PROFDATA=/usr/bin/llvm-profdata-19
-          ENV COREPACK_HOME=/opt/corepack
           RUN test -x "$LLVM_COV"
           RUN test -x "$LLVM_PROFDATA"
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/node-linux-x64.tar.xz \
@@ -669,7 +668,6 @@ jobs:
             && tar --no-same-owner -xJf /tmp/node-linux-x64.tar.xz -C /usr/local --strip-components=1 \
             && test "$(/usr/local/bin/node --version)" = "v24.18.0" \
             && /usr/local/bin/npm --version >/dev/null \
-            && corepack --version >/dev/null \
             && rm -f /tmp/node-linux-x64.tar.xz
           RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/cargo-llvm-cov.tar.gz \
               https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
@@ -677,9 +675,18 @@ jobs:
             && tar -xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin cargo-llvm-cov \
             && chmod 0755 /usr/local/bin/cargo-llvm-cov \
             && rm -f /tmp/cargo-llvm-cov.tar.gz
+          RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/pnpm.tgz \
+              https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz \
+            && echo '7ac1c919341c213a34dc0d02afb7143c5c26ac26ee8c4782deea821b8ac64d2134a081fd8941dae6e29bbb48f58dfc2b7fbceeccc07cb2f09d219d342a4969ed  /tmp/pnpm.tgz' | sha512sum -c - \
+            && mkdir -p /opt/pnpm \
+            && tar --no-same-owner -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1 \
+            && chmod 0755 /opt/pnpm/bin/pnpm.cjs \
+            && ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+            && test "$(/usr/local/bin/pnpm --version)" = "11.5.3" \
+            && rm -f /tmp/pnpm.tgz
           COPY base-javascript-packages /tmp/base-javascript-packages
           RUN set -eu; \
-              mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
+              mkdir -p /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
@@ -696,8 +703,8 @@ jobs:
                           --no-fund; \
                         rm -rf node_modules; \
                         ;; \
-                      pnpm@*) \
-                        corepack pnpm fetch \
+                      pnpm@11.5.3) \
+                        pnpm fetch \
                           --frozen-lockfile \
                           --ignore-scripts \
                           --store-dir /opt/pnpm-store; \
@@ -709,7 +716,7 @@ jobs:
                     esac; \
                   done; \
               npm cache verify --cache /opt/npm-cache; \
-              chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
+              chmod -R a+rX /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
           RUN python3 -m pip install \
@@ -1256,9 +1263,6 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
-            if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
-              return 0
-            fi
             if command -v "$runner" >/dev/null 2>&1; then
               return 0
             fi
@@ -1297,17 +1301,6 @@ jobs:
             elif command -v npm >/dev/null 2>&1; then
               printf '%s\n' "npm"
             fi
-          }
-
-          run_package_script_and_capture() {
-            local label="$1"
-            local package_runner="$2"
-            local script="$3"
-            case "$package_runner" in
-              npm) run_and_capture "$label" npm run "$script" ;;
-              pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
-              yarn) run_and_capture "$label" yarn run "$script" ;;
-            esac
           }
 
           run_python_docstring_coverage() {
@@ -1515,7 +1508,7 @@ jobs:
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
                 run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
-                  corepack pnpm install \
+                  pnpm install \
                     --offline \
                     --frozen-lockfile \
                     --trust-lockfile \
@@ -1625,9 +1618,9 @@ jobs:
                 ;;
               pnpm)
                 if [ -n "$package_name" ] && [ -f pnpm-workspace.yaml ]; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack pnpm --filter "$package_name" run build
+                  run_and_capture "Tauri frontendDist build (${package_dir})" pnpm --filter "$package_name" run build
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack pnpm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && pnpm run build' bash "$package_dir"
                 fi
                 ;;
               yarn)
@@ -2004,11 +1997,11 @@ jobs:
               fi
 
               if [ -n "$package_runner" ] && jq -e '.scripts["check:python-docstrings"] // empty' package.json >/dev/null; then
-                run_package_script_and_capture "Repository docstring coverage" "$package_runner" check:python-docstrings
+                run_and_capture "Repository docstring coverage" "$package_runner" run check:python-docstrings
               elif [ -n "$package_runner" ] && jq -e '.scripts["docstring:coverage"] // empty' package.json >/dev/null; then
-                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docstring:coverage
+                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docstring:coverage
               elif [ -n "$package_runner" ] && jq -e '.scripts["docs:coverage"] // empty' package.json >/dev/null; then
-                run_package_script_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" docs:coverage
+                run_and_capture "JavaScript/TypeScript docstring coverage" "$package_runner" run docs:coverage
               else
                 append "### JavaScript/TypeScript docstring coverage"
                 append ""
@@ -2020,19 +2013,19 @@ jobs:
               if [ -z "$package_runner" ]; then
                 :
               elif jq -e '.scripts.coverage // empty' package.json >/dev/null; then
-                run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
+                run_and_capture "JavaScript/TypeScript coverage script" "$package_runner" run coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
                 if javascript_test_script_collects_coverage; then
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                   esac
                 else
                   case "$package_runner" in
                     npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" pnpm run test --coverage ;;
                     yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                   esac
                 fi
