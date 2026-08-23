@@ -167,6 +167,7 @@ assert_strix_pr_scope_includes_deployment_context() {
 	assert_file_contains "$GATE_SCRIPT" "Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile" "strix gate treats deployment files as source files"
 	assert_file_contains "$GATE_SCRIPT" "backend/scripts/docker_entrypoint.sh" "strix gate includes the combined Docker image entrypoint with deployment context"
 	assert_file_contains "$GATE_SCRIPT" "backend/api/auth.py" "strix gate includes backend auth context for deployment scans"
+	assert_file_contains "$GATE_SCRIPT" "backend/app/auth.py" "strix gate includes app-package auth context for backend scans"
 	assert_file_contains "$GATE_SCRIPT" "frontend/package-lock.json" "strix gate includes frontend dependency lock context"
 	assert_file_contains "$GATE_SCRIPT" "frontend/postcss.config.mjs" "strix gate includes frontend build config context"
 	assert_file_contains "$GATE_SCRIPT" "VERSION" "strix gate includes release version context for workflow scans"
@@ -6973,6 +6974,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 matched_backend_context=0
+if [ ! -f "$target_path/backend/app/auth.py" ]; then
+	echo "Error: app-package auth context missing from backend PR scope ($target_path)" >&2
+	exit 78
+fi
+if ! grep -Fq -- 'BASE_APP_AUTH_SHOULD_BE_SCANNED' "$target_path/backend/app/auth.py"; then
+	echo "Error: app-package auth context did not use trusted base content" >&2
+	cat -- "$target_path/backend/app/auth.py" >&2
+	exit 79
+fi
 if [ -f "$target_path/backend/api/calendar.py" ]; then
 	if [ ! -f "$target_path/backend/services/calendar_service.py" ]; then
 		echo "Error: calendar service backend dependency context missing from PR scope ($target_path)" >&2
@@ -7054,7 +7064,9 @@ EOF
 		git config user.name 'Strix Test'
 		git config user.email 'strix-test@example.invalid'
 		echo 'seed' >README.md
-		mkdir -p backend/api backend/services
+		mkdir -p backend/app backend/api backend/services
+		: >backend/app/__init__.py
+		printf '%s\n' 'BASE_APP_AUTH_SHOULD_BE_SCANNED' >backend/app/auth.py
 		printf '%s\n' 'BASE_AUTH_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/auth.py
 		printf '%s\n' 'BASE_EMAILS_CONTENT_SHOULD_NOT_BE_SCANNED' >backend/api/emails.py
 		printf '%s\n' 'BASE_CALENDAR_SERVICE_SHOULD_BE_SCANNED' >backend/services/calendar_service.py
