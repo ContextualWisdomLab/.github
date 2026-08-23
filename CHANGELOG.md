@@ -19,6 +19,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Classify Strix `ModelBehaviorError` and provider exhaustion as typed
+  `STRIX_PROVIDER_UNAVAILABLE` evidence while preserving a nonzero required
+  check. Incomplete scans and reported vulnerabilities both fail closed.
+
 - Added an hourly organization commercial-readiness coordinator that discovers writable repositories, honors enabled dedicated writer leases and fully paginated live writer runs, refetches exact repository/workflow/run/PR state before dispatch, rotates bounded review-repair and opt-in NVIDIA OpenCode product-development targets, fails nonzero on fleet-wide inspection or dispatch outages, retains three-day JSON receipts, and keeps the existing 15-minute merge scheduler authoritative.
 - Added a dedicated Quarantine Sandbox Runtime hourly caller at minute 14 that targets protected `develop`, dispatches at most one exact-head repair, applies a two-hour same-head retry floor, preserves non-cancelling single-flight execution, and maps only the established scheduler credentials with job-scoped OIDC.
 - Added a dedicated OriginWeave hourly caller that invokes the product-neutral central scheduler with the exact repository, protected `main` branch, one-dispatch budget, two-hour same-head retry floor, non-cancelling single-flight heartbeat, job-scoped OIDC, and only the established scheduler credentials.
@@ -65,6 +69,36 @@ Semantic Versioning where the repository publishes a release.
   second request, and converts malformed successful JSON responses into the
   existing explicit unavailable output instead of exiting early under
   `errexit`.
+- Publish only the sanitized cumulative Strix report tree, avoiding a later
+  copy of relative scanner output that could reintroduce known internal warning
+  text into uploaded security evidence.
+
+- Retry configured Strix fallback models when the primary provider records a
+  rate-limit or infrastructure failure only in its structured report log, and
+  evaluate each fallback against its newest report without letting an older
+  failed attempt poison a complete later report.
+
+- Include the exact `backend/app/*.py` package context in PR-scoped Strix
+  scans when a module in that package changes. The trusted resolver uses a
+  NUL-delimited exact-head tree listing, copies unchanged dependencies from
+  the trusted base, and keeps changed-file attribution and provider failures
+  fail-closed.
+- Include the exact `contextual_orchestrator/*.py` sibling-import context under
+  the same NUL-delimited exact-head and fail-closed path boundary without
+  expanding changed-file finding attribution.
+- Treat Rust source and Cargo manifests as governed Strix inputs and include
+  trusted Cargo, toolchain, and `deny.toml` context when a workflow change
+  scopes a Rust workspace.
+- Run Strix with an explicit canonical scan target from a temporary working
+  directory outside that target, so scanner state and relative reports cannot
+  become self-scanned source findings; preserve those reports as gate evidence.
+  PR-scoped Python scans also include the PostgreSQL introspection security
+  helpers when that package exists in the target repository. PR scopes now live
+  below the gate's private runtime directory so unrelated temporary-file
+  cleanup cannot remove scan input during PR-head materialization.
+- Classify Strix `ModelBehaviorError` with zero reported vulnerabilities as
+  retryable model-protocol evidence, while keeping `Vulnerabilities [1-9]` and
+  other severity signals fail-closed.
 - Derived `org-queue-sweep`'s rotation index (added in `ContextualWisdomLab/.github#1220` to stop the walk-order starvation from `ContextualWisdomLab/.github#1219`) from a persistent `ORG_SWEEP_ROTATION_COUNTER` repository variable incremented by exactly one at the start of every actual sweep execution, instead of `github.run_number` (which increments on every trigger of this workflow, not only the sweep schedule — Devin review finding on `#1220`) or a wall-clock tick alone (which can repeat an offset when this single-flight, up-to-60-minute job runs behind schedule by an exact multiple of the repository count — CodeRabbit review finding on `#1223`). Falls back to the wall-clock tick only if the persistent counter itself is unavailable, so a fairness mechanism never blocks the sweep's review-dispatch/merge work.
 - Retried the Strix scan up to `STRIX_TRANSIENT_RETRY_PER_MODEL` times, same model, when the log shows the upstream strix-agent Caido sandbox bootstrap timing race (`loginAsGuest failed after N attempts` / `Failed to connect to 127.0.0.1 port <port>`; tracked upstream as usestrix/strix#1036, #1037, #1056). A slow CI runner can exceed strix-agent's fixed 10-attempt sandbox-login budget before its local intercepting proxy is reachable, even though the penetration test itself never started and no vulnerability evidence was produced or lost; the Docker image is already cached from the failed attempt, so a same-model retry is cheap and typically clears the one-off boot race. Not wired into cross-model fallback, since switching LLM models cannot change local sandbox container boot timing.
 - Replaced nonexistent `job.workflow_repository` / `job.workflow_sha` / `job.workflow_ref` / `job.workflow_file_path` context references (actionlint: "property ... is not defined in object type") in `pr-review-fix-scheduler.yml`'s called-workflow source verification and `exact-artifact-sbom-attestation.yml`'s trusted-verifier checkout. Both always failed closed on the missing properties (ContextualWisdomLab/.github#1212) or, for the SBOM attestation checkout, silently resolved an empty repository/ref instead of the pinned trusted source (downstream `gh attestation verify --signer-repo`/`--signer-workflow`, using the separately hardcoded `SIGNER_REPOSITORY` constant rather than any workflow_ref, still failed closed on the resulting empty signer identity). `github.workflow_ref`/`github.workflow_sha` are real, documented properties, but for a `workflow_call` target they reflect the top-level *calling* workflow, not the reusable workflow's own file — a prefix match against the reusable workflow's own path can never succeed. `exact-artifact-sbom-attestation.yml`'s checkout now uses `github.workflow_sha` (correct today: it has no callers yet); `pr-review-fix-scheduler.yml`'s identity check instead validates `github.repository`, since every current caller uses a local, same-repo `uses: ./...` where caller and callee share one commit and `github.workflow_sha` is still the right pin. Tracked follow-up for the SBOM attestation checkout once a real (potentially cross-repo) caller exists: ContextualWisdomLab/.github#1228.
