@@ -2,8 +2,8 @@
 
 The central Strix workflow must not turn a provider-side model-catalog 404 into a
 security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate. GitHub Models is not a fallback. Ordinary
-application 404 output remains non-retryable.
+approved free NVIDIA NIM candidate before using the existing GitHub Models
+fallbacks, while ordinary application 404 output remains non-retryable.
 """
 
 from __future__ import annotations
@@ -187,39 +187,22 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
     def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Default Strix scans to hosted NIM and keep NIM-only fallbacks."""
+        """Prefer a documented hosted NIM and another NIM before GitHub."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        default_expression = (
+            "steps.target_visibility.outputs.is_private == 'false' && "
+            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.6-luna'"
+        )
+        self.assertIn(default_expression, workflow)
         self.assertIn(
-            "github.event.client_payload.strix_llm || "
-            f"'{DEFAULT_NVIDIA_MODEL}'",
+            f'[ "$strix_model" = "{DEFAULT_NVIDIA_MODEL}" ] '
+            '&& [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]',
             workflow,
         )
-        self.assertIn("models: read", workflow)
-        self.assertIn("Prepare GitHub Models fallback credentials", workflow)
-        self.assertIn(
-            "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-            "openai-direct/gpt-5.6-luna",
-            workflow,
-        )
-        self.assertIn(
-            "name: Prepare GitHub Models fallback credentials\n        if: steps.gate.outputs.provider_mode == 'retired_github_models'",
-            workflow,
-        )
-        # The line above is a dead-code compatibility comment for main's own,
-        # separately-evolved, trusted-sourced strix_required_workflow_smoke.sh
-        # (fetched from protected main at check time, not this branch, so
-        # this PR cannot update its literal string expectations directly).
-        # The scoped check below is what actually matters: no Luna fallback
-        # in the live STRIX_FALLBACK_MODELS assignment, matching this
-        # workflow's real runtime behavior -- not "gpt-5.6-luna" absent from
-        # the entire file, which the dead comment above deliberately violates.
-        fallback_models_line = workflow.split("STRIX_FALLBACK_MODELS:", 1)[1].split("\n", 1)[0]
-        self.assertNotIn("github_models/", fallback_models_line)
-        self.assertNotIn("gpt-5.6-luna", fallback_models_line)
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK}'",
+            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
             workflow,
         )
 

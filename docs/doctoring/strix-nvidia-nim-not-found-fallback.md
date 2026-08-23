@@ -5,12 +5,14 @@
 Strix treats an authenticated NVIDIA NIM model-catalog `404 Not Found` as
 provider availability evidence, not as a target-application vulnerability. The
 gate does not retry the same unavailable model. It proceeds to a distinct
-reviewed NVIDIA hosted model. GitHub Models is not a fallback.
+reviewed NVIDIA hosted model and only then to the existing GitHub Models
+candidates.
 
-Every scan defaults to `nvidia/nemotron-3-super-120b-a12b`. The first fallback
-is `nvidia/llama-3.3-nemotron-super-49b-v1.5`. `NVIDIA_NIM_API_KEY` is
-required; if it is unset, Strix fails closed instead of falling through to
-Luna or GitHub Models.
+Public-repository scans now default to
+`nvidia/nemotron-3-super-120b-a12b`. The first fallback is
+`nvidia/llama-3.3-nemotron-super-49b-v1.5`. Private repositories retain the
+contracted provider because NVIDIA hosted trial inputs are restricted to public
+repositories by the central workflow.
 
 ## Trust boundary
 
@@ -47,9 +49,11 @@ Regression evidence proves that:
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
-7. GitHub Models and Luna are not cross-provider fallbacks when NIM is unset;
-8. vulnerability signals prevent neutral infrastructure classification; and
-9. the required-workflow smoke contract pins these properties.
+7. GitHub Models remain later cross-provider fallbacks;
+8. provider exhaustion remains non-passing after unchanged baseline findings;
+9. changed, unmapped, and changed-manifest findings also block after provider
+   exhaustion; and
+10. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 

@@ -35,13 +35,14 @@ For this merge-aid hotfix only:
 - **Do not** flip OpenCode agent `permission.edit` / `bash` from `deny` to
   `allow` permanently; review agents remain read-only.
 - Org secret `NVIDIA_NIM_API_KEY` must be set on ContextualWisdomLab for NIM
-  pool entries to execute; without it the pool and Strix fail closed.
+  review-pool entries to execute; without it the OpenCode pool fails closed.
 
 ## Rollback
 
 Remove the `nvidia-nim/*` prefixes from `OPENCODE_MODEL_CANDIDATES` only if a
-later policy names a different required provider. Do not restore GitHub
-Models. Delete this note once the NIM-only catalog is the standing contract.
+later policy names a different required review provider. Do not restore GitHub
+Models to the OpenCode review catalog. Delete this note once the NIM-only
+review catalog is the standing contract.
 
 ## Secret name
 
@@ -60,12 +61,14 @@ dispatch now sets:
 - generic / cadence / dynamic-cap / central-fallback run timeouts to **7200**
 - free-tier at **3600s** (unchanged short cap; no GitHub Models GPT-5 path)
 
-GitHub Models is removed from the review catalog and Strix path. If
-`NVIDIA_NIM_API_KEY` is unset, OpenCode and Strix fail closed (skip /
+GitHub Models is removed from the OpenCode review catalog. If
+`NVIDIA_NIM_API_KEY` is unset, OpenCode fails closed (skip /
 REQUEST_CHANGES / status) instead of falling through to GitHub Models or
-Luna. Concurrency stays PR-number scoped with `cancel-in-progress: true`;
-pool max cycles and attempts stay at 1 so the dispatch queue does not
-multiply unbounded parallel two-hour jobs.
+Luna. Strix remains a separately governed protected-main contract and keeps
+its authenticated multi-provider fail-closed fallback policy. Concurrency
+stays PR-number scoped with `cancel-in-progress: true`; pool max cycles and
+attempts stay at 1 so the dispatch queue does not multiply unbounded parallel
+two-hour jobs.
 
 ## Next provider: contextual-orchestrator
 

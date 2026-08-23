@@ -78,9 +78,6 @@ concurrency:
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
-# models: read is unused. GitHub Models is not a provider or fallback. The
-# required-workflow smoke on main still requires that exact permission line
-# until this NIM-only smoke replacement merges (ContextualWisdomLab/.github#1052).
 permissions:
   actions: read
   contents: read
@@ -109,6 +106,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
+      models: read
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -455,26 +453,38 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna') }}
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           STRIX_NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           STRIX_VERTEX_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
+            strix_model="gpt-5.6-luna"
+          fi
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           case "$strix_model" in
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
             openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
-            github_models/* | github-models/*)
-              echo '::error::STRIX_LLM must not select GitHub Models or mini/nano GPT-5 variants for security evidence.'
+            github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
+              echo '::error::STRIX_LLM must not select mini or nano GPT-5 variants for security evidence.'
               exit 1
               ;;
             openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
-            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]*)
-              echo '::error::STRIX_LLM must not select GitHub Models. Use NVIDIA NIM Nemotron or an approved explicit provider.'
-              exit 1
+            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]* | \
+            github_models/openai/gpt-5* | github_models/openai/gpt-[6-9]* | github_models/openai/gpt-[1-9][0-9]*)
+              echo 'enabled=true' >> "$GITHUB_OUTPUT"
+              echo 'provider_mode=github_models' >> "$GITHUB_OUTPUT"
+              sanitized_github_models_token="$(printf '%s' "$STRIX_GITHUB_MODELS_TOKEN" | tr -d '\r\n')"
+              trimmed_github_models_token="$(printf '%s' "$sanitized_github_models_token" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+              if [ -z "$trimmed_github_models_token" ]; then
+                echo '::error::STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans.'
+                exit 1
+              fi
               ;;
             gpt-5.[4-9]* | gpt-5.[1-9][0-9]* | gpt-[6-9]* | gpt-[1-9][0-9]* | \
             openai-direct/gpt-5.[4-9]* | openai-direct/gpt-5.[1-9][0-9]* | openai-direct/gpt-[6-9]* | openai-direct/gpt-[1-9][0-9]*)
@@ -497,7 +507,11 @@ jobs:
                 exit 1
               fi
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+              if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ]; then
+                echo '::error::NVIDIA NIM hosted trial scans are limited to public repositories.'
+                exit 1
+              fi
               echo 'enabled=true' >> "$GITHUB_OUTPUT"
               echo 'provider_mode=nvidia_nim' >> "$GITHUB_OUTPUT"
               sanitized_nvidia_key="$(printf '%s' "$STRIX_NVIDIA_NIM_API_KEY" | tr -d '\r\n')"
@@ -518,7 +532,7 @@ jobs:
               fi
               ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
               exit 1
               ;;
           esac
@@ -593,7 +607,7 @@ jobs:
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
+          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
         run: |
           # Sanitize CR/LF before masking to prevent broken ::add-mask::
           # commands and potential workflow command injection.
@@ -609,11 +623,15 @@ jobs:
       - name: Prepare LLM API key input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
+          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
           sanitized="$(printf '%s' "$LLM_API_KEY_SECRET" | tr -d '\r\n')"
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
+            echo '::error::STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans.'
+            exit 1
+          fi
           if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "openai_direct" ]; then
             echo '::error::STRIX_OPENAI_API_KEY is required for Strix OpenAI Platform scans.'
             exit 1
@@ -647,19 +665,36 @@ jobs:
           printf '%s' 'https://integrate.api.nvidia.com/v1' > "$llm_api_base_file"
           echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
-      # pull_request_target self-test still executes main's
-      # strix_required_workflow_smoke.sh against this file. Keep the step
-      # name and the exact fallback list that smoke greps for -- update
-      # this comment whenever that upstream, trusted-sourced smoke test's
-      # own expected string changes, since it is fetched from protected
-      # main at check time and cannot be updated by this PR's own diff.
-      # Runtime fallback stays NIM-only; this step never provisions
-      # credentials.
-      # nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna
-      - name: Prepare GitHub Models fallback credentials
-        if: steps.gate.outputs.provider_mode == 'retired_github_models'
+      - name: Prepare GitHub Models API base
+        if: steps.gate.outputs.provider_mode == 'github_models'
         run: |
-          echo "GitHub Models fallback is retired; this step does not provision credentials."
+          umask 077
+          llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
+          printf '%s' 'https://models.github.ai/inference' > "$llm_api_base_file"
+          echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
+
+      - name: Prepare GitHub Models fallback credentials
+        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
+        env:
+          GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+        run: |
+          # Direct-OpenAI scans keep GitHub Models candidates as fallbacks, so
+          # a provider quota outage degrades to a slower model instead of a
+          # neutral skip with no security evidence. github_models/* fallback
+          # models read this token and endpoint; the primary keeps its own key.
+          umask 077
+          sanitized="$(printf '%s' "$GITHUB_MODELS_FALLBACK_TOKEN" | tr -d '\r\n')"
+          trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ]; then
+            echo '::notice::No GitHub Models token available; direct-OpenAI Strix scans run without GitHub Models fallbacks.'
+            exit 0
+          fi
+          github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
+          printf '%s' "$sanitized" > "$github_models_key_file"
+          echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
+          github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
+          printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
+          echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
 
       - name: Prepare Vertex AI credentials
         if: steps.gate.outputs.provider_mode == 'vertex_ai'
@@ -722,14 +757,14 @@ jobs:
           case "$strix_model" in
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
             openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
-            github_models/* | github-models/*)
-              echo '::error::STRIX_LLM must not select GitHub Models or mini/nano GPT-5 variants for security evidence.'
+            github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
+              echo '::error::STRIX_LLM must not select mini or nano GPT-5 variants for security evidence.'
               exit 1
               ;;
             openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
-            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]*)
-              echo '::error::STRIX_LLM must not select GitHub Models. Use NVIDIA NIM Nemotron or an approved explicit provider.'
-              exit 1
+            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]* | \
+            github_models/openai/gpt-5* | github_models/openai/gpt-[6-9]* | github_models/openai/gpt-[1-9][0-9]*)
+              printf '%s' "${strix_model#github_models/}" > "$strix_llm_file"
               ;;
             openai/*)
               printf '%s' "$strix_model" > "$strix_llm_file"
@@ -743,14 +778,14 @@ jobs:
             openrouter/free | openrouter/openrouter/free)
               printf '%s' 'openrouter/free' > "$strix_llm_file"
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
               exit 1
               ;;
           esac
@@ -787,7 +822,9 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna' || '' }}
+          STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
+          STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
