@@ -67,6 +67,11 @@ publishes its normal machine-readable failed result, and tells the operator to
 install the executable or correct `PATH`. Provider and host path details do not
 escape through an uncaught traceback.
 
+A path that exists but is a directory or lacks execute permission is distinct:
+the consumer returns exit code `126` and tells the operator to select an
+executable file or correct its permissions. The stable failed result remains
+available without exposing the operating-system exception traceback.
+
 ## Security and availability properties
 
 - Parent retained memory is bounded independently for stdout and stderr.

@@ -62,6 +62,7 @@ SAFE_ENV_ALLOWLIST = (
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 PATH_BOUNDARY_EXIT_CODE = 122
+COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
 COMMAND_NOT_FOUND_EXIT_CODE = 127
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -335,6 +336,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = COMMAND_NOT_FOUND_EXIT_CODE
+        except (PermissionError, IsADirectoryError):
+            print(
+                "sandboxed-verify: select an executable file or correct its permissions",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_EXECUTABLE_EXIT_CODE
         except bounded_subprocess.OutputLimitUnsupportedError:
             output_limit_unsupported = True
             print(
