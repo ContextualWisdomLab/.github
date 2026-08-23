@@ -39,8 +39,9 @@ Semantic Versioning where the repository publishes a release.
 
 - Route the exact single-line LiteLLM/Azure unsupported-temperature failure to
   an already-configured distinct Strix fallback without accepting split-line
-  imitations, and normalize the workflow's `openai-direct/` fallback alias to
-  LiteLLM's `openai_direct/` provider prefix before dispatch. Cross-provider
+  imitations. The workflow's `openai-direct/` alias now normalizes to the
+  canonical `openai_direct/` selector, while LiteLLM dispatch uses its `openai/`
+  provider form. Cross-provider
   attempts now switch to the trusted OpenAI credential and clear the primary
   provider API base, without turning an incomplete provider scan into passing
   evidence. Exact clean model-quality and Hugging Face advisories are filtered

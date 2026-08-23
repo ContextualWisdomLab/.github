@@ -3423,7 +3423,7 @@ REPORT
 	openai-direct-unsupported-temperature-github-models-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5.6-sol)
-			echo "litellm.BadRequestError: AzureException BadRequestError - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found for original model_group=gpt-5.6-sol."
+			echo "Error: litellm.BadRequestError: AzureException BadRequestError - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found for original model_group=gpt-5.6-sol."
 			exit 1
 			;;
 		openai/o3)
@@ -3437,11 +3437,15 @@ REPORT
 		esac
 		;;
 	openai-direct-unsupported-temperature-split-lines-nonrecoverable)
-		echo "litellm.BadRequestError: request rejected"
+		echo "Error: litellm.BadRequestError: request rejected"
 		echo "AzureException - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found."
 		exit 1
 		;;
-	nvidia-openai-direct-fallback-credential-success | nvidia-openai-direct-fallback-missing-key-fails-closed)
+	openai-direct-unsupported-temperature-prefixed-target-nonrecoverable)
+		echo "TARGET OUTPUT: Error: litellm.BadRequestError: AzureException - Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported. No fallback model group found."
+		exit 1
+		;;
+	nvidia-openai-direct-fallback-credential-success | nvidia-openai-direct-fallback-missing-key-fails-closed | nvidia-openai-direct-missing-key-next-fallback-success)
 		case "${STRIX_LLM:-}" in
 		nvidia_nim/nvidia/primary)
 			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
@@ -3461,6 +3465,10 @@ REPORT
 				exit 19
 			fi
 			echo "scan ok with direct OpenAI fallback"
+			exit 0
+			;;
+		nvidia_nim/nvidia/fallback-two)
+			echo "scan ok with later NVIDIA fallback"
 			exit 0
 			;;
 		*)
@@ -6052,6 +6060,7 @@ run_nvidia_openai_direct_fallback_case() {
 	local expected_calls="${4:-2}"
 	local expected_models="${5:-nvidia_nim/nvidia/primary|openai/gpt-5.6-luna}"
 	local expected_api_bases="${6:-https://integrate.api.nvidia.com/v1|<unset>}"
+	local fallback_models="${7:-openai-direct/gpt-5.6-luna}"
 
 	run_gate_case "$scenario" \
 		"nvidia_nim/nvidia/primary" \
@@ -6080,7 +6089,7 @@ run_nvidia_openai_direct_fallback_case() {
 		"" \
 		"" \
 		"" \
-		"openai-direct/gpt-5.6-luna" \
+		"$fallback_models" \
 		"1"
 }
 
@@ -6267,6 +6276,17 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"github_models/openai/o3"
 		;;
+	openai-direct-unsupported-temperature-prefixed-target-nonrecoverable)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"openai_direct/gpt-5.6-sol" \
+			"github_models/openai/o3" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/gpt-5.6-sol" \
+			"https://example.invalid" \
+			"vertex_ai"
+		;;
 	openai-direct-unsupported-temperature-github-models-fallback-success)
 		run_gate_case "openai-direct-unsupported-temperature-github-models-fallback-success" \
 			"openai_direct/gpt-5.6-sol" \
@@ -6333,11 +6353,21 @@ run_filtered_gate_case_if_requested() {
 	nvidia-openai-direct-fallback-missing-key-fails-closed)
 		run_nvidia_openai_direct_fallback_case \
 			"$STRIX_TEST_CASE_FILTER" \
-			"2" \
-			"direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+			"1" \
+			"STRIX_OPENAI_FALLBACK_KEY_FILE is unavailable" \
 			"1" \
 			"nvidia_nim/nvidia/primary" \
 			"https://integrate.api.nvidia.com/v1"
+		;;
+	nvidia-openai-direct-missing-key-next-fallback-success)
+		run_nvidia_openai_direct_fallback_case \
+			"$STRIX_TEST_CASE_FILTER" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-two' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/primary|nvidia_nim/nvidia/fallback-two" \
+			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+			"openai-direct/gpt-5.6-luna nvidia_nim/nvidia/fallback-two"
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -9963,7 +9993,7 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-fallback-success" 
 	"vertex_ai/ratelimit-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
-run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
+LC_ALL=C run_gate_case "nvidia-ratelimit-model-quality-warning-fallback-success" \
 	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 	"0" \
@@ -12877,17 +12907,37 @@ run_gate_case "openai-direct-unsupported-temperature-split-lines-nonrecoverable"
 	"" \
 	"github_models/openai/o3"
 
+# Repository-derived text containing a valid provider error as a substring
+# must not trigger credential-bearing fallback.
+run_gate_case "openai-direct-unsupported-temperature-prefixed-target-nonrecoverable" \
+	"openai_direct/gpt-5.6-sol" \
+	"github_models/openai/o3" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-5.6-sol" \
+	"https://example.invalid" \
+	"vertex_ai"
+
 # Cross-provider fallbacks must switch both the API key and endpoint. Reusing
 # NVIDIA credentials or its API base makes a normalized direct-OpenAI model
 # fail before producing security evidence.
 run_nvidia_openai_direct_fallback_case
 run_nvidia_openai_direct_fallback_case \
 	"nvidia-openai-direct-fallback-missing-key-fails-closed" \
-	"2" \
-	"direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+	"1" \
+	"STRIX_OPENAI_FALLBACK_KEY_FILE is unavailable" \
 	"1" \
 	"nvidia_nim/nvidia/primary" \
 	"https://integrate.api.nvidia.com/v1"
+run_nvidia_openai_direct_fallback_case \
+	"nvidia-openai-direct-missing-key-next-fallback-success" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-two' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/primary|nvidia_nim/nvidia/fallback-two" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+	"openai-direct/gpt-5.6-luna nvidia_nim/nvidia/fallback-two"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \

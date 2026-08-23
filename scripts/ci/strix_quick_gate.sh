@@ -2876,7 +2876,7 @@ is_unsupported_model_parameter_error() {
 	# Strix currently has no generation-parameter override. Match the exact
 	# single-line LiteLLM/Azure capability failure so a reasoning model that
 	# rejects Strix's temperature can move to the already-configured fallback.
-	if grep -Ei 'litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" |
+	if LC_ALL=C grep -Ei '^[[:space:]]*(│[[:space:]]*)?Error:[[:space:]]+litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" |
 		grep -Ei '(AzureException|OpenAIException)' |
 		grep -Eiq "Unsupported value:[[:space:]]*['\"]temperature['\"].*Only the default[[:space:]]*\\(1\\)[[:space:]]*value is supported.*No fallback model group found"; then
 		return 0
@@ -3216,7 +3216,7 @@ is_llm_token_limit_error() {
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
 	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' \
-		< <(grep -Eiv '^[[:space:]│]*MODEL QUALITY WARNING[[:space:]│]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$' "$STRIX_LOG"); then
+		< <(LC_ALL=C grep -Eiv '^[[:space:]]*(│[[:space:]]*)?MODEL QUALITY WARNING([[:space:]]*│)?[[:space:]]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$' "$STRIX_LOG"); then
 		return 0
 	fi
 
@@ -4255,6 +4255,12 @@ run_current_target_scan() {
 		fi
 
 		fallback_tried=1
+		if [[ "$candidate" == openai_direct/* ]] &&
+			[[ "$PRIMARY_MODEL" != openai_direct/* ]] &&
+			[ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			echo "Skipping fallback model '$candidate' — STRIX_OPENAI_FALLBACK_KEY_FILE is unavailable." >&2
+			continue
+		fi
 		if is_vertex_model "$PRIMARY_MODEL"; then
 			echo "Primary Vertex model unavailable; retrying with fallback '$candidate'."
 		else

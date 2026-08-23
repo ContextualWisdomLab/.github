@@ -25,9 +25,10 @@ signals:
 
 That exact capability failure is infrastructure evidence and may move directly
 to an already-configured distinct outer fallback. It is not eligible for a
-same-model retry. The shared model normalizer also translates the workflow's
-human-readable `openai-direct/` selector into LiteLLM's `openai_direct/`
-provider prefix before dispatch. A cross-provider direct OpenAI fallback reads
+same-model retry. The shared model normalizer translates the workflow's
+accepted `openai-direct/` alias to the canonical `openai_direct/` selector;
+the LiteLLM child dispatch then uses its provider-compatible `openai/` form. A
+cross-provider direct OpenAI fallback reads
 the established OpenAI secret from a trusted runtime file and clears the
 primary provider's API base; otherwise a NVIDIA or OpenRouter run would send
 the fallback to the wrong endpoint with the wrong credential. If the fallback
@@ -43,8 +44,9 @@ cannot manufacture a provider capability error from separate log lines.
 
 - The reproduced single-line Azure failure reaches the configured GitHub
   Models fallback exactly once and succeeds only when that scan completes.
-- The configured `openai-direct/gpt-5.6-luna` fallback normalizes to the
-  LiteLLM-compatible `openai_direct/gpt-5.6-luna` selector.
+- The configured `openai-direct/gpt-5.6-luna` alias normalizes to the canonical
+  `openai_direct/gpt-5.6-luna` selector, then dispatches through LiteLLM as
+  `openai/gpt-5.6-luna`.
 - A NVIDIA-primary run dispatches that fallback with the OpenAI credential and
   no inherited NVIDIA API base.
 - A split-line imitation is non-recoverable and never dispatches the fallback.
