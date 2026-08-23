@@ -18,6 +18,9 @@ jobs:
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       ORGANIZATION: ContextualWisdomLab
@@ -32,6 +35,7 @@ jobs:
           egress-policy: block
           allowed-endpoints: >-
             api.github.com:443
+            api.opencode.ai:443
             github.com:443
             objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
@@ -53,10 +57,64 @@ jobs:
       - name: Coordinate one bounded fleet pass
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          exchange_unavailable() {
+            echo "::error::OpenCode app token exchange unavailable: $1"
+            exit 1
+          }
+
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PR_REVIEW_MERGE_TOKEN is required; neither the reviewer credential nor repository-scoped GITHUB_TOKEN is accepted."
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+              exchange_unavailable "OIDC request environment is missing."
+            fi
+
+            request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+            separator="&"
+            case "$request_url" in
+              *\?*) ;;
+              *) separator="?" ;;
+            esac
+
+            if ! oidc_response="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+            )"; then
+              exchange_unavailable "OIDC token request did not complete."
+            fi
+
+            if ! oidc_token="$(jq -r '.value // empty' <<<"$oidc_response" 2>/dev/null)"; then
+              exchange_unavailable "OIDC token response was malformed."
+            fi
+            if [ -z "$oidc_token" ]; then
+              exchange_unavailable "OIDC token response was empty."
+            fi
+            echo "::add-mask::$oidc_token"
+
+            if ! token_response="$(
+              curl -fsS \
+                -X POST \
+                -H "Authorization: Bearer ${oidc_token}" \
+                "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+            )"; then
+              exchange_unavailable "app token request did not complete."
+            fi
+
+            if ! app_token="$(jq -r '.token // empty' <<<"$token_response" 2>/dev/null)"; then
+              exchange_unavailable "app token response was malformed."
+            fi
+            if [ -z "$app_token" ]; then
+              exchange_unavailable "app token response was empty."
+            fi
+            echo "::add-mask::$app_token"
+            export GH_TOKEN="$app_token"
+          fi
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PR_REVIEW_MERGE_TOKEN or the job-bound OpenCode App token exchange is required; neither the reviewer credential nor repository-scoped GITHUB_TOKEN is accepted."
             exit 1
           fi
           echo "::add-mask::$GH_TOKEN"

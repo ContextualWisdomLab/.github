@@ -10,7 +10,7 @@ The coordinator may dispatch at most one review-repair workflow and one product-
 
 A single workflow cannot safely write every repository merely because it runs in the organization `.github` repository. GitHub's default `GITHUB_TOKEN` is scoped to the repository containing the workflow; cross-repository Actions dispatch therefore requires an explicitly provisioned user or GitHub App credential with the required repository and Actions permissions. This control does not make every repository directly writable. It only considers repositories the live API reports as organization-owned, non-fork, enabled, non-archived, default-branch-bearing, and writable by the authenticated installation.
 
-The central job therefore refuses both repository-scoped and reviewer-scoped token fallbacks. It requires the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is not accepted for cross-repository coordination. The maintainer token is exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
+The central job therefore refuses both repository-scoped and reviewer-scoped token fallbacks. It prefers the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; when that optional long-lived secret is absent, the protected scheduled job exchanges its GitHub OIDC identity for the existing short-lived OpenCode GitHub App installation token. `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is not accepted for cross-repository coordination. Both accepted credentials are exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. The OIDC exchange receives only `id-token: write`, which permits requesting the job-bound JWT but grants no repository write authority by itself. The exchanged installation token remains bounded by the App installation's selected repositories and permissions; GitHub still requires Contents write for `repository_dispatch` and Actions write for `workflow_dispatch`, so a missing installation permission fails closed. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
 
 ## Dynamic repository-writer lease
 
@@ -44,9 +44,23 @@ The repository-local entrypoint remains responsible for its own bounded editable
 
 ## Failure, evidence, and operations
 
+Runs `32560132644`, `32562851784`, `32565331074`, `32567859925`, and `32570355777` reproduced the same startup failure: the workflow required `PR_REVIEW_MERGE_TOKEN`, but neither the repository nor organization exposed that secret. The coordinator therefore completed no inventory or dispatch work for five consecutive hourly heartbeats. The OIDC installation-token fallback repairs that configuration deadlock without copying a personal token, accepting the repository-scoped `GITHUB_TOKEN`, or reusing `OPENCODE_APPROVE_TOKEN`.
+
 The schedule runs at minute 7 rather than minute 0 to reduce exposure to the documented start-of-hour GitHub Actions load spike. The central workflow has no `workflow_dispatch` entrypoint, so branch-selected coordinator source cannot be executed; scheduled execution occurs only from protected default `main`. Local operators may use the script's `--dry-run` mode from a reviewed checkout without adding a central manual workflow entrypoint.
 
 Organization, workflow, active-run, and pull-request inventories are paginated. One inaccessible repository is recorded as an inspection error while other independently safe repositories continue. A run fails nonzero when every selected repository inspection fails or when every planned dispatch fails; partial, independently contained failures remain visible without discarding successful work.
+
+Exact-head reviews found three exchange-path gaps before activation. A
+malformed HTTP-success OIDC or App-token response made `jq` exit under shell
+`errexit` before the workflow could publish its explicit unavailable result;
+the OIDC JWT was not registered with the runner masker; and the App exchange
+ran even when the preferred maintainer secret was already present. The final
+coordinator shell step now performs the exchange only when its preferred
+`GH_TOKEN` input is empty, guards both JSON parses with a bounded fail-closed
+diagnostic, and masks the OIDC JWT immediately after validation. Keeping
+selection and exchange in that final first-party shell step preserves the rule
+that no checkout, setup, artifact, or other third-party action receives either
+credential, and neither response body is logged.
 
 Each run writes one deterministic JSON receipt and the same bounded evidence to the GitHub Actions job summary. The JSON is uploaded through the immutable, SHA-pinned artifact action with a three-day retention period. Artifact upload receives no maintainer or model credential. The receipt proves only coordinator observations and downstream dispatch acceptance; it is not merge, release, or product-quality evidence.
 
@@ -60,9 +74,13 @@ GitHub. (n.d.). *Automatic token authentication*. GitHub Docs. Retrieved August 
 
 GitHub. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows
 
+GitHub. (n.d.). *OpenID Connect reference*. GitHub Docs. Retrieved August 22, 2026, from https://docs.github.com/en/actions/reference/security/oidc
+
 GitHub. (n.d.). *REST API endpoints for artifacts*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/rest/actions/artifacts
 
 GitHub. (n.d.). *REST API endpoints for workflows*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/rest/actions/workflows
+
+GitHub. (n.d.). *REST API endpoints for repositories*. GitHub Docs. Retrieved August 22, 2026, from https://docs.github.com/en/rest/repos/repos
 
 GitHub. (n.d.). *REST API endpoints for workflow runs*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/rest/actions/workflow-runs
 
