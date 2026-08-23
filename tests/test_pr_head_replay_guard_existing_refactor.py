@@ -24,7 +24,7 @@ def test_existing_test_file_can_supply_replacement_cases(monkeypatch, tmp_path):
         """Return the two diff views used by the replacement counter."""
         if args[:2] == ["diff", "--name-status"]:
             return name_status
-        if args[:2] == ["diff", "--numstat"]:
+        if args[:3] == ["diff", "--diff-filter=M", "--numstat"]:
             return numstat
         raise AssertionError(f"unexpected git command: {args}")
 
@@ -78,7 +78,12 @@ def test_existing_case_counter_ignores_non_growth_and_unevaluable_entries(
             "5\t1\ttests/test_shrunk.py",
         ]
     )
-    monkeypatch.setattr(guard, "git_output", lambda _root, _args: numstat)
+    def fake_git_output(_root, args):
+        """Return numstat only when the helper requests modified files."""
+        assert args[:3] == ["diff", "--diff-filter=M", "--numstat"]
+        return numstat
+
+    monkeypatch.setattr(guard, "git_output", fake_git_output)
     counts = {
         ("a", "tests/test_same.py"): 1,
         ("b", "tests/test_same.py"): 1,

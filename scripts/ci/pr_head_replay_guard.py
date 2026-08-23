@@ -267,7 +267,10 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
             regressed.add(fields[-1])
         elif status == "A":
             added_files += 1
-    for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
+    for line in git_output(
+        repo_root,
+        ["diff", "--diff-filter=M", "--numstat", start, end],
+    ).splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
@@ -284,7 +287,10 @@ def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str,
 def added_existing_test_cases(repo_root: Path, start: str, end: str) -> int:
     """Return declared test cases added to test files that exist at both revisions."""
     added_cases = 0
-    for line in git_output(repo_root, ["diff", "--numstat", start, end]).splitlines():
+    for line in git_output(
+        repo_root,
+        ["diff", "--diff-filter=M", "--numstat", start, end],
+    ).splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
             continue
