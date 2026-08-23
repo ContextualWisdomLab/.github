@@ -2523,15 +2523,15 @@ run_strix_once() {
 	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
 		return 2
 	fi
-	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	local normalized_model
+	normalized_model="$(normalize_model "$model")"
+	child_model="$(child_model_for_api_base "$normalized_model" "$llm_api_base_value")"
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	local normalized_model
-	normalized_model="$(normalize_model "$model")"
 	if ! is_vertex_model "$normalized_model"; then
 		child_llm_api_key="$LLM_API_KEY"
 		if is_github_models_model "$normalized_model" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then

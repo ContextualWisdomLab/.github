@@ -17,6 +17,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
+STRIX_MODEL_UTILS = REPOSITORY_ROOT / "scripts" / "ci" / "strix_model_utils.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 DEFAULT_NVIDIA_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 FREE_NVIDIA_FALLBACK = (
@@ -71,6 +72,64 @@ def _classifies_as_nvidia_not_found(log_text: str) -> bool:
     if completed.returncode not in {0, 1}:
         raise AssertionError(completed.stderr)
     return completed.returncode == 0
+
+
+def _run_strix_once_resolves_child_model(model: str, primary_model: str) -> str:
+    """Execute run_strix_once's own model/API-base resolution lines verbatim.
+
+    Extracts the exact two statements `run_strix_once` uses to compute the
+    model it hands to LiteLLM, rather than reimplementing that composition,
+    so a future call-site edit that stops normalizing the workflow-facing
+    alias before dispatch fails this test instead of only failing in CI
+    against live NVIDIA NIM traffic.
+    """
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    call_site_match = re.search(
+        r'(?m)^\tif ! llm_api_base_value=.*\n'
+        r'(?:.*\n)+?'
+        r'\tchild_model="\$\(child_model_for_api_base [^\n]+\)"\n',
+        gate_source,
+    )
+    if call_site_match is None:
+        raise AssertionError(
+            "missing run_strix_once model/API-base resolution call site"
+        )
+    function_source = "\n".join(
+        _function_block(gate_source, name)
+        for name in (
+            "is_vertex_model",
+            "is_github_models_api_base",
+            "is_github_models_model",
+            "is_github_models_api_compatible_model",
+            "resolved_llm_api_base_for_model",
+            "child_model_for_api_base",
+        )
+    )
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            STRIX_MODEL_UTILS.read_text(encoding="utf-8"),
+            function_source,
+            'PRIMARY_MODEL="$2"',
+            'LLM_API_BASE_FILE=""',
+            "run_strix_once_child_model() {",
+            'local model="$1"',
+            "local llm_api_base_value",
+            "local child_model",
+            call_site_match.group(0),
+            'printf %s "$child_model"',
+            "}",
+            'run_strix_once_child_model "$1"',
+        )
+    )
+    completed = subprocess.run(
+        ["bash", "-c", script, "strix-run-once", model, primary_model],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
 
 
 def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
@@ -212,6 +271,39 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             maxsplit=1,
         )[0]
         self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
+
+    def test_run_strix_once_normalizes_hyphenated_fallback_before_dispatch(
+        self,
+    ) -> None:
+        """Dispatch the NIM-exhaustion fallback as a real LiteLLM provider.
+
+        `normalize_model()` (`scripts/ci/strix_model_utils.sh`) already
+        rewrites the workflow-facing `openai-direct/` alias to LiteLLM's
+        `openai_direct/` provider prefix, and `child_model_for_api_base()`
+        already rewrites `openai_direct/*` to `openai/*`. But
+        `run_strix_once()` calls `child_model_for_api_base` with the raw,
+        un-normalized `$model` -- so a hyphenated `STRIX_FALLBACK_MODELS`
+        entry still reaches LiteLLM unrewritten. Observed live: NVIDIA NIM
+        rate-limited the primary and first fallback model, the run advanced
+        to `openai-direct/gpt-5.6-luna`, and the scan log recorded
+        `model=openai-direct/gpt-5.6-luna` verbatim before
+        `litellm.BadRequestError: LLM Provider NOT provided` ended the run.
+        """
+
+        self.assertEqual(
+            _run_strix_once_resolves_child_model(
+                "openai-direct/gpt-5.6-luna",
+                DEFAULT_NVIDIA_MODEL,
+            ),
+            "openai/gpt-5.6-luna",
+        )
+        self.assertEqual(
+            _run_strix_once_resolves_child_model(
+                "openai_direct/gpt-5.6-luna",
+                DEFAULT_NVIDIA_MODEL,
+            ),
+            "openai/gpt-5.6-luna",
+        )
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
