@@ -221,7 +221,8 @@ has_strix_report_failure_signal() {
 			report_root="$newest_report_root"
 		fi
 		while IFS= read -r -d '' report_log; do
-			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
+			if has_unexpected_strix_failure_signal_file "$report_log" ||
+				grep -Eiq '(^|[^[:alpha:]])Timeout([^[:alpha:]]|$)' "$report_log"; then
 				return 0
 			fi
 		done < <(find "$report_root" -type f -name '*.log' -print0)
@@ -3150,7 +3151,8 @@ is_llm_token_limit_error() {
 # errors (timeout, rate-limit, transport failures) that indicate the scan
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
-has_unexpected_strix_console_failure_signal() {
+has_unexpected_strix_failure_signal_file() {
+	local signal_file="$1"
 	local signal_line
 	while IFS= read -r signal_line; do
 		# Strix emits this exact decorative banner for supported models that are
@@ -3161,9 +3163,13 @@ has_unexpected_strix_console_failure_signal() {
 			continue
 		fi
 		return 0
-	done < <(grep -Ei '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG" || true)
+	done < <(grep -Ei '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$signal_file" || true)
 
 	return 1
+}
+
+has_unexpected_strix_console_failure_signal() {
+	has_unexpected_strix_failure_signal_file "$STRIX_LOG"
 }
 
 has_detected_infrastructure_error() {
