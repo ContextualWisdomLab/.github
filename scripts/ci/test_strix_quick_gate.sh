@@ -360,11 +360,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5'" "strix workflow gives NVIDIA NIM scans a credential-compatible fallback"
+	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna'" "strix workflow must not route a provider credential to direct OpenAI"
+	assert_file_not_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow must not provision unused cross-provider credentials"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
-	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
@@ -3416,6 +3415,23 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-nim-quality-warning-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+			echo "Error: litellm.RateLimitError: Nvidia_nimException - Error code: 429"
+			exit 1
+			;;
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			echo "│  MODEL QUALITY WARNING"
+			echo "scan ok with NVIDIA NIM fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5950,6 +5966,18 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	nvidia-nim-quality-warning-fallback-success)
+		run_gate_case "nvidia-nim-quality-warning-fallback-success" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"<unset>|<unset>" \
+			"openai" \
+			""
 		;;
 	pr-rust-workspace-context)
 		run_gate_case "pr-rust-workspace-context" \
@@ -12367,6 +12395,17 @@ run_gate_case "direct-openai-gpt-does-not-require-github-models-api-base" \
 	"1" \
 	"openai/gpt-5.4" \
 	"<unset>" \
+	"openai" \
+	""
+
+run_gate_case "nvidia-nim-quality-warning-fallback-success" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"<unset>|<unset>" \
 	"openai" \
 	""
 

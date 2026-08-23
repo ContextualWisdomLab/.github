@@ -221,7 +221,8 @@ has_strix_report_failure_signal() {
 			report_root="$newest_report_root"
 		fi
 		while IFS= read -r -d '' report_log; do
-			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
+			if grep -Eiv '^[[:space:]]*[^[:alnum:]]*[[:space:]]*MODEL QUALITY WARNING[[:space:]]*[^[:alnum:]]*[[:space:]]*$' "$report_log" |
+				grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)'; then
 				return 0
 			fi
 		done < <(find "$report_root" -type f -name '*.log' -print0)
@@ -3151,7 +3152,8 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+	if grep -Eiv '^[[:space:]]*[^[:alnum:]]*[[:space:]]*MODEL QUALITY WARNING[[:space:]]*[^[:alnum:]]*[[:space:]]*$' "$STRIX_LOG" |
+		grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)'; then
 		return 0
 	fi
 
