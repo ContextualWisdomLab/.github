@@ -1847,14 +1847,33 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
         sched.require_workflow_starting_mutation_credential("update-branch")
 
 
-def test_withheld_mutation_messages_reject_a_workflow_starting_credential(monkeypatch):
-    """Withheld-mutation helpers reject callers that have no credential problem."""
+def test_withheld_mutation_reason_rejects_a_workflow_starting_credential(monkeypatch):
+    """A safe credential cannot create a contradictory withheld-mutation reason."""
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
 
     with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
         sched.non_triggering_head_mutation_reason("update-branch")
-    with pytest.raises(RuntimeError, match="requires a non-triggering mutation credential"):
-        sched.head_mutation_credential_guidance_text()
+
+
+def test_withheld_mutation_guidance_uses_recorded_reason_after_environment_changes(
+    monkeypatch,
+):
+    """Render a captured wait decision without re-reading mutable token state."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+    reason = sched.non_triggering_head_mutation_reason("branch update")
+
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
+    assert sched.head_mutation_credential_starts_workflows()
+
+    decision = sched.Decision(7, "wait", reason)
+    guidance = sched.decision_guidance(decision)
+    assert guidance is not None
+    assert "workflow GITHUB_TOKEN" in guidance["summary"]
+    assert "workflow GITHUB_TOKEN" in "\n".join(
+        sched.head_mutation_credential_upgrade_summary([decision])
+    )
 
 
 @pytest.mark.parametrize(

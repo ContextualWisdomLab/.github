@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,11 +95,29 @@ def test_pull_pagination_stops_at_cutoff_without_loading_later_pages() -> None:
     assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
 
 
-def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatch) -> None:
-    """Repository fetches are parallel but results remain repository ordered."""
+def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
+    monkeypatch,
+) -> None:
+    """A slow repository cannot hide a completed sibling repository result."""
 
     sweep = module()
-    client = PagingClient(
+    second_completed = threading.Event()
+
+    class CompletionOrderClient(PagingClient):
+        """Hold the first repository until the second one has completed."""
+
+        def request(self, args, *, input_payload=None):
+            """Make repository completion order deterministic for the assertion."""
+
+            endpoint = args[0]
+            if endpoint == "repos/ContextualWisdomLab/first/pulls":
+                assert second_completed.wait(timeout=5)
+            response = super().request(args, input_payload=input_payload)
+            if endpoint == "repos/ContextualWisdomLab/second/pulls":
+                second_completed.set()
+            return response
+
+    client = CompletionOrderClient(
         {
             ("orgs/ContextualWisdomLab/repos", 1): [[
                 repository("first"),
@@ -129,8 +148,8 @@ def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatc
         )
     )
     assert [result["repository"] for result in results] == [
-        "ContextualWisdomLab/first",
         "ContextualWisdomLab/second",
+        "ContextualWisdomLab/first",
     ]
     assert worker_limits == [2]
 

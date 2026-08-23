@@ -65,10 +65,18 @@ Semantic Versioning where the repository publishes a release.
   as its declared source, failing closed when it is missing or resolves to the
   workflow `github.token`; case-fold repository host comparisons so casing
   drift cannot select the wrong Actions credential or skip same-repository
-  stale-run cleanup.
+  stale-run cleanup, and render withheld-mutation guidance from the recorded
+  decision instead of re-reading mutable process credentials.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
+- Translate the workflow-only `openai-direct/...` Strix fallback alias to
+  LiteLLM's documented `openai/...` provider prefix before invocation, so a
+  recoverable NVIDIA capacity failure can reach the configured cross-provider
+  fallback without being misclassified as a successful scan.
+- Invoke actionlint and ShellCheck through fixed argv executable names supplied
+  by the pinned trusted `PATH`, removing unused environment-selected command
+  overrides while preserving the no-shell, file-backed lint boundary.
 
 - Retry configured Strix fallback models when the primary provider records a
   rate-limit or infrastructure failure only in its structured report log, and

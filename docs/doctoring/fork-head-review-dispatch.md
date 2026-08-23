@@ -121,6 +121,12 @@ same-repository stale-run cleanup. This is a zero-trust verification at the
 mutation boundary rather than trust in an upstream environment label (Rose et
 al., 2020).
 
+The scheduler also records the credential refusal in each immutable decision
+reason and renders later JSON and Actions guidance from that captured evidence.
+It does not re-read mutable process credentials while serializing a decision,
+so a surrounding test or caller cannot turn a valid wait into a summary-time
+exception by changing the environment after inspection.
+
 ## Draft merge defense in depth
 
 Exact-head Strix run `32573579932` reported `vuln-0001`, alleging that a draft

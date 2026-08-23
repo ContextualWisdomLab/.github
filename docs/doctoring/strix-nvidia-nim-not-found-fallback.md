@@ -5,8 +5,8 @@
 Strix treats an authenticated NVIDIA NIM model-catalog `404 Not Found` as
 provider availability evidence, not as a target-application vulnerability. The
 gate does not retry the same unavailable model. It proceeds to a distinct
-reviewed NVIDIA hosted model and only then to the existing GitHub Models
-candidates.
+reviewed NVIDIA hosted model and only then to the configured direct OpenAI
+candidate.
 
 Public-repository scans now default to
 `nvidia/nemotron-3-super-120b-a12b`. The first fallback is
@@ -30,6 +30,15 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
+[Required run 32632284647](https://github.com/ContextualWisdomLab/.github/actions/runs/32632284647)
+showed why the model-name boundary must be explicit. After NVIDIA capacity
+failures, the workflow's `openai-direct/gpt-5.6-luna` routing alias reached
+LiteLLM unchanged, so LiteLLM rejected it because `openai-direct` is not a
+provider prefix. The shared gate now translates that workflow-only alias to
+LiteLLM's documented `openai/gpt-5.6-luna` form before Strix starts. This is a
+transport-normalization repair, not a model-selection change or a provider
+failure classified as a successful scan.
+
 Exhausted provider infrastructure remains fail-closed even when the trusted
 gate has classified every observed threshold finding as outside the pull
 request's changed files. That classification scopes authoritative findings; it
@@ -49,7 +58,8 @@ Regression evidence proves that:
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
-7. GitHub Models remain later cross-provider fallbacks;
+7. the direct OpenAI workflow alias is translated to LiteLLM's `openai/`
+   provider prefix before invocation;
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
@@ -65,6 +75,9 @@ change does not treat arbitrary provider errors as success and does not weaken
 Strix severity, changed-file attribution, or independent approval requirements.
 
 ## References
+
+BerriAI. (n.d.). *LiteLLM documentation*. Retrieved August 23, 2026, from
+https://docs.litellm.ai/
 
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC
 9110). Internet Engineering Task Force. https://doi.org/10.17487/RFC9110

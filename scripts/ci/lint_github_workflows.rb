@@ -109,14 +109,13 @@ def shell_scripts(path, workflow)
 end
 
 def run_actionlint(paths)
-  executable = ENV.fetch("ACTIONLINT", "actionlint")
   arguments = [
     "-shellcheck=",
     "-ignore",
     QUEUE_DIAGNOSTIC,
     *paths
   ]
-  stdout, stderr, status = Open3.capture3(executable, *arguments)
+  stdout, stderr, status = Open3.capture3("actionlint", *arguments)
   return 0 if status.success?
 
   warn stdout unless stdout.empty?
@@ -129,7 +128,6 @@ end
 def run_shellcheck(path, job_name, step_name, dialect, script)
   setup = dialect == "bash" ? "set -eo pipefail" : "set -e"
   source = "#{setup}\n#{sanitize_expressions(script)}\n"
-  executable = ENV.fetch("SHELLCHECK", "shellcheck")
   stdout = stderr = nil
   status = nil
 
@@ -138,7 +136,7 @@ def run_shellcheck(path, job_name, step_name, dialect, script)
     file.write(source)
     file.flush
     stdout, stderr, status = Open3.capture3(
-      executable,
+      "shellcheck",
       "--norc",
       "-f",
       "json",

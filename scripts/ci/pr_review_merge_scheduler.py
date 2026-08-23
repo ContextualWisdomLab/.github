@@ -289,13 +289,10 @@ def require_workflow_starting_mutation_credential(action: str) -> None:
         raise RuntimeError(non_triggering_head_mutation_reason(action))
 
 
-def head_mutation_credential_guidance_text() -> tuple[str, str]:
-    """Return operator-facing summary and limit text for a withheld head mutation."""
-    problem = head_mutation_credential_problem()
-    if problem is None:
-        raise RuntimeError("withheld-mutation messaging requires a non-triggering mutation credential")
+def head_mutation_credential_guidance_text(withheld_reason: str) -> tuple[str, str]:
+    """Render operator guidance from the credential decision already recorded."""
     return (
-        f"The scheduler withheld a head mutation because {problem}.",
+        f"The scheduler withheld a head mutation. Recorded decision: {withheld_reason}",
         "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
     )
 
@@ -446,7 +443,7 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
             ],
         }
     if parse_non_triggering_head_mutation_reason(decision.reason):
-        summary, automation_limit = head_mutation_credential_guidance_text()
+        summary, automation_limit = head_mutation_credential_guidance_text(decision.reason)
         return {
             "type": "head_mutation_credential_upgrade",
             "token": mutation_token_label(),
@@ -3121,7 +3118,7 @@ def head_mutation_credential_upgrade_summary(decisions: list[Decision]) -> list[
     waits = [decision for decision in decisions if parse_non_triggering_head_mutation_reason(decision.reason)]
     if not waits:
         return []
-    summary, automation_limit = head_mutation_credential_guidance_text()
+    summary, automation_limit = head_mutation_credential_guidance_text(waits[0].reason)
     lines = ["", "### Head mutation withheld", "", summary, automation_limit]
     lines.extend(
         [

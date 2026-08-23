@@ -31,6 +31,12 @@ regular temporary files. It parses ShellCheck JSON, restores the workflow job
 and step identity in every diagnostic, preserves findings as a failing status,
 and fails closed on malformed output or a missing executable.
 
+The helper invokes the fixed `actionlint` and `shellcheck` executable names as
+argv, never a repository- or environment-selected command and never a shell
+string. The pinned hosted setup supplies those names through its trusted
+`PATH`; behavioral tests use an isolated temporary `PATH` to prove the same
+argv boundary without introducing a second executable-selection channel.
+
 The autofix worker ignores only actionlint's exact released-schema diagnostic
 for the concurrency `queue` key. Before linting, it rejects every changed
 workflow whose `queue` value is not exactly `max`; therefore the compatibility

@@ -80,8 +80,6 @@ def _tool_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     environment = {
         **os.environ,
         "PATH": f"{binary_dir}{os.pathsep}{os.environ['PATH']}",
-        "ACTIONLINT": str(binary_dir / "actionlint"),
-        "SHELLCHECK": str(binary_dir / "shellcheck"),
         "LINT_CAPTURE_DIR": str(capture_dir),
     }
     return environment, capture_dir
@@ -218,6 +216,17 @@ def test_write_capable_autofix_always_uses_the_trusted_linter() -> None:
 
     assert invocation in workflow
     assert "command -v actionlint" not in workflow
+
+
+def test_linter_invokes_fixed_tool_names_without_dynamic_command_selection() -> None:
+    """Repository input cannot select the executable passed to Open3."""
+
+    source = LINTER.read_text(encoding="utf-8")
+
+    assert 'ENV.fetch("ACTIONLINT"' not in source
+    assert 'ENV.fetch("SHELLCHECK"' not in source
+    assert 'Open3.capture3("actionlint", *arguments)' in source
+    assert 'Open3.capture3(\n      "shellcheck",' in source
 
 
 def test_linter_reports_shellcheck_findings_with_workflow_context(tmp_path: Path) -> None:
