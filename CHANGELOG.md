@@ -37,6 +37,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Keep Strix's hash-verified dependency lock on the trusted workflow source;
+  privileged PR scans no longer replace it with a same-repository PR-head lock
+  before provider credentials reach the installed scanner.
 - Route the exact single-line LiteLLM/Azure unsupported-temperature failure to
   an already-configured distinct Strix fallback without accepting split-line
   imitations. The workflow's `openai-direct/` alias now normalizes to the

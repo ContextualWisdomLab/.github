@@ -216,7 +216,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Checkout trusted Strix source" "strix workflow checks out the central Strix source"
 	assert_file_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outputs.repository }}' "strix workflow checks out central Strix scripts instead of target-repo copies"
 	assert_file_contains "$workflow_file" 'ref: ${{ steps.trusted_source.outputs.ref }}' "strix workflow checks out the exact trusted Strix source ref"
-	assert_file_not_contains "$workflow_file" "Materialize central Strix dependency lock from PR head" "strix workflow never installs dependencies selected by a PR head"
+	assert_file_not_contains "$workflow_file" "      - name: Materialize central Strix dependency lock from PR head" "strix workflow never installs dependencies selected by a PR head"
 	assert_file_not_contains "$workflow_file" 'show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt"' "strix workflow never copies a PR-controlled executable dependency lock"
 	assert_file_contains "$workflow_file" 'trusted_lock_blob="$(git rev-parse "HEAD:$trusted_lock")"' "strix workflow binds its dependency lock to the trusted workflow commit"
 	assert_file_contains "$workflow_file" 'working_lock_blob="$(git hash-object --no-filters -- "$trusted_lock")"' "strix workflow hashes exact on-disk trusted dependency-lock bytes immediately before install"

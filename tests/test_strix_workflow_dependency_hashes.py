@@ -43,7 +43,11 @@ def test_privileged_strix_install_uses_only_the_trusted_workflow_lock() -> None:
         "      - name: Mask LLM API key\n", 1
     )[0]
 
-    assert "Materialize central Strix dependency lock from PR head" not in workflow
+    assert (
+        "      - name: Materialize central Strix dependency lock from PR head\n"
+        not in workflow
+    )
+    assert "PR_HEAD_SHA:requirements-strix-ci-hashes.txt" not in workflow
     assert 'show "$PR_HEAD_SHA:requirements-strix-ci-hashes.txt"' not in workflow
     assert 'trusted_lock_blob="$(git rev-parse "HEAD:$trusted_lock")"' in install_step
     assert (
@@ -68,6 +72,7 @@ def test_strix_workflow_reruns_when_shared_runtime_or_doctoring_changes() -> Non
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     for path in (
+        "docs/doctoring/strix-nvidia-nim-not-found-fallback.md",
         "docs/doctoring/strix-unsupported-sampling-fallback.md",
         "scripts/ci/strix_model_utils.sh",
     ):

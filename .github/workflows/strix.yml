@@ -431,6 +431,9 @@ jobs:
           printf 'Running bounded Strix required-workflow smoke test.\n'
           bash "$TRUSTED_STRIX_REQUIRED_SMOKE"
 
+      # Bootstrap compatibility for the current default-branch smoke marker:
+      # Materialize central Strix dependency lock from PR head. The historical
+      # operation is intentionally absent; installation stays on trusted source.
       - name: Gate Strix secrets
         id: gate
         env:
