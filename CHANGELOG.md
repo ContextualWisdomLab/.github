@@ -55,6 +55,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Kept the extracted adversarial-evidence gate and its contract test inside the
+  central OpenCode review-process fallback scope, so changes to that trust
+  boundary retain the same exact-file eligibility and adversarial review path.
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

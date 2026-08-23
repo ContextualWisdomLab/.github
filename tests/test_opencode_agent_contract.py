@@ -1395,6 +1395,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "ContextualWisdomLab/.github:scripts/ci/opencode_review_approve_gate.sh | \\"
         in workflow
     )
+    assert (
+        "ContextualWisdomLab/.github:scripts/ci/adversarial_evidence.py | \\"
+        in workflow
+    )
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
     assert (
         "ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \\"
@@ -1402,6 +1406,10 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \\"
+        in workflow
+    )
+    assert (
+        "ContextualWisdomLab/.github:tests/test_adversarial_evidence.py | \\"
         in workflow
     )
     assert "tests/test_opencode_agent_contract.py | \\" in workflow
