@@ -6,6 +6,13 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Rewrite the workflow-facing `openai-direct/` Strix fallback alias to LiteLLM
+  `openai/` before dispatch, clear a non-OpenAI primary API base, and load the
+  established direct OpenAI secret through a trusted runtime file so NVIDIA NIM
+  catalog 404s can complete a scan instead of failing closed on
+  `LLM Provider NOT provided`. Missing fallback credentials remain fail-closed.
+  Incomplete scans and reported vulnerabilities both still fail closed.
+
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification

@@ -367,6 +367,11 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
+	assert_file_contains "$workflow_file" "Prepare direct OpenAI fallback credentials" "strix workflow provisions a direct OpenAI key for hyphenated openai-direct fallbacks"
+	assert_file_contains "$workflow_file" "STRIX_OPENAI_FALLBACK_KEY_FILE" "strix workflow passes the OpenAI fallback key through a trusted input file"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_OPENAI_FALLBACK_KEY_FILE" "strix gate reads the optional direct OpenAI fallback key file"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_model_utils.sh" 'openai-direct/?*)' "strix gate rewrites the workflow-facing openai-direct alias before LiteLLM dispatch"
+	assert_file_contains "$GATE_SCRIPT" 'normalized_model="$(normalize_model "$model")"' "strix gate normalizes fallback models before LiteLLM child dispatch"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
 	assert_file_contains "$workflow_file" "openai_direct/%s" "strix workflow keeps manual direct OpenAI scans distinct from GitHub Models openai/gpt-* routing"
@@ -12312,6 +12317,11 @@ assert_normalized_model \
 	"projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
 	"vertex_ai" \
 	"vertex_ai/gemini-2.5-pro"
+assert_normalized_model \
+	"openai-direct-hyphen-alias" \
+	"openai-direct/gpt-5.6-luna" \
+	"openai" \
+	"openai_direct/gpt-5.6-luna"
 
 assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
 assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"

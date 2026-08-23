@@ -380,6 +380,23 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	fi
 fi
 
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
 require_non_negative_integer() {
 	local value="$1"
 	local label="$2"
@@ -2380,6 +2397,14 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
+	case "$(normalize_model "$model"):$PRIMARY_MODEL" in
+	openai_direct/*:openai_direct/*) ;;
+	openai_direct/*:*)
+		# Cross-provider fallback: do not inherit NVIDIA/OpenRouter/GitHub
+		# Models API bases. LiteLLM openai/* talks to api.openai.com.
+		return 0
+		;;
+	esac
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
@@ -2490,20 +2515,32 @@ run_strix_once() {
 	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
 		return 2
 	fi
-	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	local normalized_model
+	normalized_model="$(normalize_model "$model")"
+	child_model="$(child_model_for_api_base "$normalized_model" "$llm_api_base_value")"
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	if ! is_vertex_model "$(normalize_model "$model")"; then
+	if ! is_vertex_model "$normalized_model"; then
 		child_llm_api_key="$LLM_API_KEY"
-		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+		if is_github_models_model "$normalized_model" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
+		case "$normalized_model:$PRIMARY_MODEL" in
+		openai_direct/*:openai_direct/*) ;;
+		openai_direct/*:*)
+			if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+				echo "ERROR: direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE." >&2
+				return 2
+			fi
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+			;;
+		esac
 	fi
 	set -o pipefail
 	set +e
