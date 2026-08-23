@@ -44,7 +44,7 @@ FIX_MARKER_RE = re.compile(
     r"<!-- pr-review-fix-scheduler autofix-dispatch "
     r"head_sha=([0-9a-fA-F]{40}) epoch=([0-9]+) -->"
 )
-REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REPO_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
 REPAIR_MODES = frozenset({"review", "rca", "conflict"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
