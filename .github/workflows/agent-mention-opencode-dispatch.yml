@@ -11,6 +11,7 @@ on:
 concurrency:
   group: agent-mention-opencode-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -195,7 +196,6 @@ jobs:
             --arg pr_base_sha "$PR_BASE_SHA" \
             --arg base_branch "$BASE_BRANCH" \
             --arg agent_invocation_key "$INVOCATION_KEY" \
-            --argjson source_comment_id "$SOURCE_COMMENT_ID" \
             '{
               event_type: "merge-scheduler",
               client_payload: {
@@ -207,8 +207,8 @@ jobs:
                 enable_auto_merge: false,
                 update_branches: false,
                 merge_mode: "disabled",
-                agent_invocation_key: $agent_invocation_key,
-                source_comment_id: $source_comment_id
+                trigger_reviews: true,
+                agent_invocation_key: $agent_invocation_key
               }
             }' \
             | gh api "repos/${GITHUB_REPOSITORY}/dispatches" -X POST --input -

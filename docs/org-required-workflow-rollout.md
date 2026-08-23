@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-21 03:30 KST
+Updated: 2026-08-22 KST
 
 ## Decision
 
@@ -9,8 +9,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Ruleset: `CWL Central required workflows`
 - Ruleset ID: `18156473`
 - Enforcement: `active`
-- Target: the default branch of every non-excluded repository (`repository_name.include=["~ALL"]`, `repository_name.exclude=[".github", "IRT-bibliography-set", "noema"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, `ref_name.exclude=[]`)
-- Create transition: required workflows use `do_not_enforce_on_create=true`; proposal branches do not match this strict ruleset, and a new repository can establish its first default-branch commit before subsequent changes are governed
+- Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
 - Active required workflow paths:
@@ -32,21 +31,6 @@ reports another ref, treat that as operations drift and restore ruleset
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
 
-### Stacked pull-request coverage
-
-On 2026-08-20, live PRs #158 and #159 in `ContextualWisdomLab/TEPP` showed that
-stacked PRs need centrally materialized OpenCode and Noema review evidence.
-Expanding the combined required-workflow and pull-request ruleset to `~ALL`
-was later falsified by independent 409/422 canaries: proposal branches could
-not be created or updated because GitHub required a PR and required-workflow
-evidence before the proposal ref could exist. Ruleset `18156473` therefore
-stays exact-default-branch. The central scheduler enumerates non-default-base
-PRs and dispatches exact-head review-only work; merge and branch mutation stay
-disabled for that stacked phase. The final integration PR to the default
-branch remains subject to the full required-workflow, two-approval,
-stale-review, thread-resolution, last-push, deletion, and non-fast-forward
-contract.
-
 ## OpenCode required workflow posture
 
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.
@@ -55,7 +39,7 @@ The central `.github/workflows/opencode-review.yml` is now part of the active or
 - Stable branch-protection job names: `required-workflow-bootstrap`, `coverage-source-tree`, `coverage-evidence`, and `opencode-review`; these jobs are data-only sentinels, while approval remains a separate current-head PR-review requirement
 - Trusted source: `ContextualWisdomLab/.github`
 - PR-head handling: authenticated current-head `repository_dispatch` runs `.github/workflows/opencode-review-dispatch.yml` from the protected default branch; that workflow owns metadata validation, bounded coverage, source-as-data inspection, model review, and publication
-- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted repository, a fork head, or any live metadata mismatch
+- Manual target support: the central scheduler sends exact repository, PR, base, and head metadata through `repository_dispatch`; the dispatch workflow rejects an unauthorized actor, an unallowlisted base repository, a malformed head-repository identity, or any live base/head metadata mismatch. A canonical fork head remains reviewable as untrusted source data.
 - Model token posture: use the organization `STRIX_GITHUB_MODELS_TOKEN` secret for GitHub Models calls, with `github.token` as the fallback; live workflow evidence showed `github.token` alone can return 403 from `models.github.ai/inference`
 - Write posture: OpenCode may create review/comment side effects through the OpenCode app token when available; the workflow token is limited to the same-repository PR context and publication failures remain visible
 - Coverage execution posture: PR-controlled package, test, build, R, Rust, and Docker inputs are never executed from `pull_request_target`; the dispatch workflow runs bounded low-privilege coverage only after exact live metadata and scheduler identity validation
@@ -68,8 +52,11 @@ For a bounded current-head retry in one repository, dispatch `merge-scheduler`
 to the central repository with `target_repository`, `pr_number`, and the live
 `base_branch`. The target must exactly match
 `OPENCODE_REPOSITORY_DISPATCH_TARGETS`; the scheduler then re-reads the open PR
-and rejects a noncanonical repository name, fork head, base mismatch, malformed
-head SHA, or changed/closed PR before using cross-repository credentials:
+and rejects a noncanonical base or head repository name, base mismatch,
+malformed head SHA, or changed/closed PR before using cross-repository
+credentials. A fork head may pass this read/review boundary, but the scheduler
+still excludes it from direct merge, auto-merge, and non-maintainer branch
+mutation:
 
 ```bash
 jq -n '{
@@ -194,8 +181,7 @@ SARIF/dependency evidence, test evidence, and review marker all bind to
 
 The active ruleset no longer maintains a repository-name allowlist. Live
 ruleset inspection on 2026-07-02 18:15 KST reports
-`repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and
-`noema` excluded, so all current and future non-excluded organization
+`repository_name.include=["~ALL"]`, so all current and future organization
 repositories inherit the seven central required workflows on their default
 branch unless a later ruleset exclusion is added. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.

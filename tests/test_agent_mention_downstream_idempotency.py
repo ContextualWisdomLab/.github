@@ -11,8 +11,8 @@ ROUTER_SCRIPT = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
-def test_router_uses_read_only_actions_access_for_durable_artifacts() -> None:
-    """Both local routing and sibling sweeping only read Actions artifacts."""
+def test_router_can_read_durable_central_artifacts() -> None:
+    """Both local routing and sibling sweeping receive actions read access."""
 
     text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
     local, sweep = text.split("\n  sweep-organization-agent-mentions:\n", 1)
@@ -20,19 +20,6 @@ def test_router_uses_read_only_actions_access_for_durable_artifacts() -> None:
     assert "permissions:\n      actions: read" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in local
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
-
-
-def test_local_router_prefers_existing_cross_repository_review_tokens() -> None:
-    """Sibling acknowledgements use the existing reviewer token scheme."""
-
-    text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
-    local = text.split("\n  sweep-organization-agent-mentions:\n", 1)[0]
-    assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in local
-    assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in local
-    assert 'if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then' in local
-    assert 'elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then' in local
-    assert 'export TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"' in local
-    assert 'export TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"' in local
 
 
 def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
@@ -46,7 +33,7 @@ def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
         assert "source_comment_id" in text
         assert "requested_agent" in text
         assert "cancel-in-progress: false" in text
-        assert "queue: max" not in text
+        assert "queue: max" in text
         assert "cancel-in-progress: true" not in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text

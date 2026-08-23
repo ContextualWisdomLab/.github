@@ -30,16 +30,12 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
-The outer workflow may classify exhausted provider infrastructure as neutral only
-when the run log contains no vulnerability signal. Any reported severity or
-non-zero vulnerability count remains blocking. Scanner reports and attempt logs
-remain available as artifacts.
-
-The same bounded infrastructure classification covers the known Caido guest-login
-sandbox startup failure when the runtime traceback contains `RuntimeError:
-loginAsGuest`, `curl exit 7`, and the local `127.0.0.1:48080` service. It does not
-cover arbitrary loopback, curl, or repository-output text, and a vulnerability
-signal still fails the check.
+Exhausted provider infrastructure remains fail-closed even when the trusted
+gate has classified every observed threshold finding as outside the pull
+request's changed files. That classification scopes authoritative findings; it
+cannot prove that an incomplete provider-exhausted scan observed every finding.
+Changed, unmapped, and changed-manifest findings also remain blocking. Scanner
+reports and attempt logs remain available as artifacts.
 
 ## Verification contract
 
@@ -54,8 +50,10 @@ Regression evidence proves that:
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
 7. GitHub Models remain later cross-provider fallbacks;
-8. vulnerability signals prevent neutral infrastructure classification; and
-9. the required-workflow smoke contract pins these properties.
+8. provider exhaustion remains non-passing after unchanged baseline findings;
+9. changed, unmapped, and changed-manifest findings also block after provider
+   exhaustion; and
+10. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 

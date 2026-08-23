@@ -24,6 +24,9 @@ jobs:
         contains(github.event.comment.body, '@cwl-noema-review')
         || contains(github.event.comment.body, '@opencode-agent')
       )
+    concurrency:
+      group: review-agent-mention-router-local-${{ github.repository }}
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -58,18 +61,9 @@ jobs:
             "$SOURCE_EVENT_PATH" >"${RUNNER_TEMP}/agent-mention-event.json"
 
       - name: Route trusted local agent mention
-        env:
-          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
-          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
-            export TARGET_REPOSITORY_TOKEN="$PR_REVIEW_MERGE_TOKEN"
-          elif [ -n "$OPENCODE_APPROVE_TOKEN" ]; then
-            export TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
-          fi
-          python3 scripts/ci/agent_mention_router.py \
-            --event-path "${RUNNER_TEMP}/agent-mention-event.json"
+        run: >-
+          python3 -u scripts/ci/agent_mention_router.py
+          --event-path "${RUNNER_TEMP}/agent-mention-event.json"
 
   sweep-organization-agent-mentions:
     if: >-
@@ -89,6 +83,7 @@ jobs:
       OPENCODE_REPOSITORY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
       LOOKBACK_HOURS: ${{ vars.AGENT_MENTION_LOOKBACK_HOURS || '168' }}
       MAX_DISPATCHES: ${{ vars.AGENT_MENTION_MAX_DISPATCHES || '20' }}
+      TIME_BUDGET_SECONDS: ${{ vars.AGENT_MENTION_TIME_BUDGET_SECONDS || '480' }}
       DRY_RUN: "false"
     steps:
       - name: Exchange OpenCode app token for sibling-repository comments
@@ -186,8 +181,9 @@ jobs:
             --repository-source "$TARGET_REPOSITORY_SOURCE"
             --lookback-hours "$LOOKBACK_HOURS"
             --max-dispatches "$MAX_DISPATCHES"
+            --time-budget-seconds "$TIME_BUDGET_SECONDS"
           )
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
-          python3 scripts/ci/agent_mention_sweep.py "${args[@]}"
+          python3 -u scripts/ci/agent_mention_sweep.py "${args[@]}"

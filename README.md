@@ -48,7 +48,7 @@ that means:
 | Mode | What happens |
 | --- | --- |
 | **따로 (this repo alone)** | Clone, test, and operate `.github` as the org profile and workflow source. Local quality gates, Cloudflare dry-run, and this repository's own PRs do not depend on naruon or any sibling product checkout. |
-| **또 같이 (siblings call it)** | A sibling inherits the org required-workflow ruleset (`repository_name.include=["~ALL"]` with `.github`, `IRT-bibliography-set`, and `noema` excluded; `ref_name.include=["~DEFAULT_BRANCH"]`). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` at the default-branch integration boundary. The scheduler provides review-only evidence for stacked PRs without governing proposal refs into a create/update deadlock. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
+| **또 같이 (siblings call it)** | A sibling enables the org required-workflow ruleset (already `repository_name.include=["~ALL"]` on default branches). GitHub runs the trusted workflows from `ContextualWisdomLab/.github@main` in that sibling's repository context. Optional reusable callers (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`) are `workflow_call` entry points, not files to copy. |
 
 Do not copy Strix, OpenCode, Noema, or scheduler workflow files into a
 sibling to "satisfy CI." Thick downstream sync PRs are an anti-pattern
@@ -61,15 +61,13 @@ Live work and roadmap live on
 The narrative brief is [docs/CWL-MASTER-CONTEXT.md](docs/CWL-MASTER-CONTEXT.md).
 The last checked-in ruleset ledger is
 [docs/org-required-workflow-rollout.md](docs/org-required-workflow-rollout.md)
-(updated 2026-08-21 KST).
+(updated 2026-07-23 KST).
 
 Checked-in operator facts:
 
-- Ruleset `18156473` is **active**. It targets the default branch of every
-  non-excluded repository (`repository_name.include=["~ALL"]`, exclusions
-  `.github`, `IRT-bibliography-set`, and `noema`, and
-  `ref_name.include=["~DEFAULT_BRANCH"]`), permits the create transition, and
-  sources workflows from this repository at `refs/heads/main`.
+- Ruleset `18156473` is **active**. It targets every repository default
+  branch (`~ALL` / `~DEFAULT_BRANCH`) and sources workflows from this
+  repository at `refs/heads/main`.
 - Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
   `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
   `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.
@@ -91,8 +89,7 @@ workflows into siblings.
    public repositories inherit ruleset `18156473` without a name-list update.
 2. Keep product, build, release, and repo-specific security workflows local.
    Do not add local copies of OpenCode, Strix, Noema, or the merge scheduler.
-3. On each pull request, including stacked pull requests targeting a feature
-   branch, GitHub creates the required checks in
+3. On each default-branch pull request, GitHub creates the required checks in
    the sibling context. Review judgment stays with OpenCode (and the
    independent Noema reviewer). Mechanical branch update and merge stay with
    GitHub Actions in that sibling context, using the configured central

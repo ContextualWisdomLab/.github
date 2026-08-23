@@ -269,11 +269,21 @@ jobs:
             echo "::error::Strix target repository must belong to ContextualWisdomLab."
             exit 1
           fi
-          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
+          is_private=""
+          for target_visibility_attempt in 1 2 3 4 5 6; do
+            if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
+              break
+            fi
+            is_private=""
+            if [ "$target_visibility_attempt" -lt 6 ]; then
+              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+              sleep "$(( target_visibility_attempt * 5 ))"
+            fi
+          done
           case "$is_private" in
             true | false) ;;
             *)
-              echo "::error::Target repository visibility did not resolve to true or false."
+              echo "::error::Target repository visibility did not resolve to true or false after retries."
               exit 1
               ;;
           esac
@@ -812,7 +822,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'openai_direct' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'openrouter' && 'github_models/openai/o3 github_models/openai/gpt-5-chat' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 github_models/openai/o3 github_models/openai/gpt-5-chat' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
@@ -843,11 +853,11 @@ jobs:
           # Capture the gate exit code plus its console output. The gate returns
           # exit 1 both for genuine blocking vulnerabilities AND for
           # LLM-backend-unavailable outcomes (GitHub Models "Too many requests"
-          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached
-          # token-cap, connection/warm-up failures, and the local Caido guest-login
-          # sandbox startup failure) that could not complete a scan. A backend outage is CI
-          # infrastructure noise, not a security finding, so it must not fail
-          # the required check and block merges.
+          # rate limits, OpenAI quota starvation, 413 tokens_limit_reached,
+          # connection/warm-up failures, and scanner ModelBehaviorError) that
+          # could not complete a scan. Provider failure is typed infrastructure
+          # evidence, but remains non-passing because no authoritative complete
+          # vulnerability result exists.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e
@@ -867,21 +877,33 @@ jobs:
           fi
 
           # Recognized signals that the LLM backend was unavailable / starved.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|RuntimeError:[[:space:]]*loginAsGuest failed after [0-9]+ attempts:[^[:cntrl:]]*curl exit 7:[^[:cntrl:]]*Failed to connect to 127\.0\.0\.1 port 48080'
+          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
+          model_behavior_error_signal='(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the
           # severity branch anchored away from identifiers so environment lines
           # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.
           reported_vulnerability_signal='Vulnerabilities[[:space:]]+[1-9]|(^|[^A-Za-z0-9_])severity[[:space:]]*:'
 
-          # Neutral skip only when ALL hold: a backend-unavailability signal is
-          # present and no vulnerability was reported anywhere. This preserves
-          # real security gating while keeping uncontrollable provider outages
-          # from blocking current-head merge progress.
-          if grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
-            echo "::warning title=Strix backend unavailable::Strix could not complete because its LLM backend was unavailable (rate limit / token cap / connection or warm-up failure) before producing a vulnerability report. Treating as a neutral skip so an infrastructure outage does not block merges; genuine findings still fail the check. See the strix-reports artifact and the run log."
-            exit 0
+          # An earlier out-of-scope/below-threshold finding may already have
+          # been exempted by the trusted gate. Classify a later provider
+          # outage from the tail after the last continuation marker, but keep
+          # that incomplete later scan non-passing.
+          strix_neutralization_scope_log="$strix_run_log"
+          if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+            strix_neutralization_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
+            awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
+              "$strix_run_log" > "$strix_neutralization_scope_log"
+          fi
+
+          # Classify provider/backend exhaustion only when no vulnerability
+          # finding was emitted. Classification improves diagnosis; it never
+          # converts an incomplete scan into passing security evidence.
+          if ( grep -Eiq "$backend_unavailable_signal" "$strix_neutralization_scope_log" \
+            || grep -Eq "$model_behavior_error_signal" "$strix_neutralization_scope_log" ) \
+            && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
+            echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
+            exit "$strix_rc"
           fi
 
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
