@@ -186,7 +186,13 @@ def test_focused_quality_workflow_tracks_every_owned_contract() -> None:
     assert "tests/test_pr_review_fix_stack_scheduler.py" in quality
     assert "tests/test_pr_review_fix_scheduler.py" in quality
     assert "tests/test_pr_review_merge_scheduler.py" in quality
+    assert "python -m coverage run --branch -m pytest -q tests" in quality
     assert "--fail-under=100" in quality
+    coverage_report = quality.split("python -m coverage report", 1)[1].split(
+        "--fail-under=100", 1
+    )[0]
+    for driver in ("fix_scheduler", "fix_stack_scheduler", "merge_scheduler"):
+        assert f"scripts/ci/pr_review_{driver}.py" in coverage_report
     assert "interrogate -vv --fail-under 100" in quality
     assert "python -m compileall -q \\" in quality
     assert "git diff --check" in quality
