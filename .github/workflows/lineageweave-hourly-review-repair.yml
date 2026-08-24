@@ -2,8 +2,8 @@ name: LineageWeave Hourly Review Repair
 
 on:
   schedule:
-    # Minute 47 avoids established product-specific heartbeat minutes.
-    - cron: "47 * * * *"
+    # Minute 4 is LineageWeave's reserved heartbeat; minute 47 belongs to Inkspan.
+    - cron: "4 * * * *"
 
 concurrency:
   group: lineageweave-hourly-review-repair
