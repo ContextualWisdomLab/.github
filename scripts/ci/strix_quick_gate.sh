@@ -4236,6 +4236,7 @@ run_current_target_scan() {
 	read -r -a FALLBACK_MODELS <<<"$FALLBACK_MODELS_RAW"
 
 	fallback_tried=0
+	local fallback_config_failures=0
 	for candidate_raw in "${FALLBACK_MODELS[@]}"; do
 		candidate="$(normalize_model "$candidate_raw")"
 		if [ -z "$candidate" ] || [ "$candidate" = "$PRIMARY_MODEL" ]; then
@@ -4267,6 +4268,7 @@ run_current_target_scan() {
 			return 0
 		fi
 		if [ "$fallback_scan_rc" -eq 2 ]; then
+			fallback_config_failures=$((fallback_config_failures + 1))
 			echo "Skipping fallback model '$candidate' because its provider configuration is invalid; trying the next configured fallback." >&2
 			continue
 		fi
@@ -4335,6 +4337,10 @@ run_current_target_scan() {
 			echo "ERROR: All configured fallback models are the same as the primary model" >&2
 		fi
 		return 1
+	fi
+	if [ "$fallback_config_failures" -eq "$fallback_tried" ]; then
+		echo "ERROR: All configured fallback models failed provider configuration." >&2
+		return 2
 	fi
 
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&

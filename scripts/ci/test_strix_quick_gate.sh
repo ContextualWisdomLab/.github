@@ -3469,6 +3469,22 @@ REPORT
 			;;
 		esac
 		;;
+	all-fallbacks-invalid)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected primary key for NVIDIA NIM (${LLM_API_KEY:-<unset>})" >&2
+				exit 21
+			fi
+			echo "Error: litellm.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 22
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5701,6 +5717,9 @@ PY
 		# then prove a later valid fallback is still attempted.
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna deepseek/deepseek-v3-0324")
 	fi
+	if [ "$scenario" = "all-fallbacks-invalid" ]; then
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna")
+	fi
 	if [ "$scenario" = "same-provider-direct-openai-fallback-key" ]; then
 		printf '%s' 'same-provider-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.5")
@@ -6455,6 +6474,17 @@ run_filtered_gate_case_if_requested() {
 			"scan ok after invalid direct-OpenAI fallback" \
 			"2" \
 			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
+			"" \
+			"nvidia_nim"
+		;;
+	all-fallbacks-invalid)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
+			"2" \
+			"All configured fallback models failed provider configuration" \
+			"1" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 			"" \
 			"nvidia_nim"
 		;;
