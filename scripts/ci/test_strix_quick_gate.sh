@@ -6423,6 +6423,18 @@ run_filtered_gate_case_if_requested() {
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
 		;;
+	github-models-fallback-requires-api-base)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/missing-primary" \
+			"openai/openai/gpt-5.4" \
+			"2" \
+			"All configured fallback models failed provider configuration." \
+			"1" \
+			"vertex_ai/missing-primary" \
+			"<unset>" \
+			"vertex_ai" \
+			""
+		;;
 	endpoint-in-excluded-dir)
 		run_gate_case "endpoint-in-excluded-dir" \
 			"vertex_ai/excluded-dir-primary" \
@@ -12547,8 +12559,8 @@ run_gate_case "github-models-mistral-prefix-with-api-base-succeeds" \
 run_gate_case "github-models-fallback-requires-api-base" \
 	"vertex_ai/missing-primary" \
 	"openai/openai/gpt-5.4" \
-	"1" \
-	"Configured Vertex model and fallback models were unavailable." \
+	"2" \
+	"All configured fallback models failed provider configuration." \
 	"1" \
 	"vertex_ai/missing-primary" \
 	"<unset>" \
