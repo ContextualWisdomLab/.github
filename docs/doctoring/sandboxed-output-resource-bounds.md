@@ -56,11 +56,21 @@ A truncation marker is included inside, not in addition to, the declared retaine
 
 ## Deferred consumer integration
 
-This first stack layer does not change `sandboxed_verify.py` or
-`sandboxed_web_e2e.py`. The next layers adopt the library for short-lived
-verification commands and long-running service evidence respectively. Keeping
-those integrations separate prevents a shared process primitive, workspace
-symlink policy, and E2E result schema from becoming one monolithic review.
+The second stack layer adopts the library in `sandboxed_verify.py` for
+short-lived verification commands. Long-running `sandboxed_web_e2e.py` service
+evidence remains a separate layer. Keeping those integrations separate prevents
+a shared process primitive, workspace symlink policy, and E2E result schema from
+becoming one monolithic review.
+
+The verification consumer maps an executable lookup failure to exit code `127`,
+publishes its normal machine-readable failed result, and tells the operator to
+install the executable or correct `PATH`. Provider and host path details do not
+escape through an uncaught traceback.
+
+A path that exists but is a directory or lacks execute permission is distinct:
+the consumer returns exit code `126` and tells the operator to select an
+executable file or correct its permissions. The stable failed result remains
+available without exposing the operating-system exception traceback.
 
 ## Security and availability properties
 

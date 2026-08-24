@@ -131,7 +131,11 @@ def test_sandboxed_verify_timeout_with_no_streams_is_bounded(
     repo.mkdir()
 
     def timeout_runner(
-        command: list[str], _cwd: Path, _env: dict[str, str], timeout: int
+        command: list[str],
+        _cwd: Path,
+        _env: dict[str, str],
+        timeout: int,
+        _output_limit_bytes: int,
     ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, timeout, output=None, stderr=None)
 
