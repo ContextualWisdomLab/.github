@@ -3,26 +3,28 @@
 This repository is the organization control plane. It is not naruon and it
 does not own product data. Sibling products remain standalone modules; this
 repo publishes org profile assets, reusable required workflows, and the
-review/merge schedulers those products consume.
+review/merge schedulers those products consume. The live gap snapshot is
+[`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md);
+it is not merge authorization. Figma File ID is N/A (no customer UI here).
 
 ## System context
 
 ```mermaid
 flowchart LR
-  Buyer["Commercial buyer / reviewer"]
+  Operator["Operator / reviewer"]
   Agents["Agents on AGENTS.md"]
   Project["GitHub Project #1"]
   Hub["This repo: org .github"]
   Products["Owned products<br/>naruon · orchestrator · engines"]
   Runner["Required workflows in each repo context"]
 
-  Buyer --> Hub
+  Operator --> Hub
   Agents --> Project
   Agents --> Hub
   Project --> Hub
   Hub --> Runner
   Runner --> Products
-  Products -->|"standalone or as module"| Buyer
+  Products -->|"standalone or as module"| Operator
 ```
 
 ## OriginWeave hourly caller
