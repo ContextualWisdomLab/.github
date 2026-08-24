@@ -701,7 +701,7 @@ jobs:
         # end with openai-direct/gpt-5.6-luna. Without OpenAI credentials those
         # candidates previously ran against the primary provider endpoint with
         # the wrong key and failed closed on every provider outage.
-        if: steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'openrouter'
+        if: steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'github_models'
         env:
           OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
         run: |

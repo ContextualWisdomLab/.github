@@ -233,6 +233,12 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
             workflow,
         )
+        self.assertIn(
+            "steps.gate.outputs.provider_mode == 'nvidia_nim' || "
+            "steps.gate.outputs.provider_mode == 'openrouter' || "
+            "steps.gate.outputs.provider_mode == 'github_models'",
+            workflow,
+        )
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
