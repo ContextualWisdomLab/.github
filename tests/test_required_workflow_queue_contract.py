@@ -361,7 +361,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         if filename == "strix.yml":
             assert "Cancel queued and running scans for the closed pull request" in workflow
             assert "actions: write" in workflow
-            assert "actions/workflows/strix.yml/runs?event=pull_request_target" in workflow
+            assert "actions/runs?event=pull_request_target" in workflow
+            assert 'select(.name == "Strix Security Scan")' in workflow
+            assert "any(.pull_requests[]?; ((.number | tostring) == $pr))" in workflow
+            assert "CLOSED_PR_HEAD_SHA" not in workflow
             assert "actions/runs/${run_id}/cancel" in workflow
             assert "CURRENT_RUN_ID" in workflow
         else:
