@@ -365,6 +365,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
+	assert_file_contains "$workflow_file" "if: steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'github_models'" "strix workflow provisions direct-OpenAI fallback credentials for GitHub Models scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
