@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-24 - SSRF Vulnerability in sandboxed_web_e2e.py
+**Vulnerability:** The `wait_for_url` function in `scripts/ci/sandboxed_web_e2e.py` did not validate the URL hostname before making requests, creating a Server-Side Request Forgery (SSRF) risk.
+**Learning:** Arbitrary URLs passed to internal utilities must be rigorously validated, especially in CI environments, to ensure they do not access unintended network locations or internal services.
+**Prevention:** Always use `urllib.parse.urlparse` to validate that the parsed URL hostname is restricted to safe loopback addresses (e.g., `localhost` or `127.0.0.1`) before opening the URL, particularly for sandbox or internal healthcheck endpoints.
