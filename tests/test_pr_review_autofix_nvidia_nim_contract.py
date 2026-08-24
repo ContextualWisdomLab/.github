@@ -1,14 +1,13 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
 import hashlib
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
 from scripts.ci import pr_review_autofix_context as context
 from scripts.ci import pr_review_conflict_scope as scope
-
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
