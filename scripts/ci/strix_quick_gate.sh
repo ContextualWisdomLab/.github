@@ -2872,7 +2872,7 @@ is_model_behavior_error() {
 	# Classify only a module-qualified Strix/Agents SDK protocol exception.
 	# A bare source-file mention of ModelBehaviorError is not retryable.
 	# Cross-model fallback may continue; same-model retry does not.
-	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG" || grep -Fq "ended without calling finish_scan. The agent emitted a text-only turn instead of a lifecycle tool call" "$STRIX_LOG"; then
+	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
 

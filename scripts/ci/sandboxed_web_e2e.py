@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -44,6 +45,18 @@ class Service:
     command: str
     process: subprocess.Popen[str]
     log_path: Path
+
+
+def is_loopback_hostname(hostname: str | None) -> bool:
+    """Return whether a parsed hostname is an exact local loopback target."""
+    if hostname is None:
+        return False
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -123,8 +136,8 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     parsed = urllib.parse.urlparse(url)
-    if parsed.hostname not in {"localhost", "127.0.0.1"}:
-        raise ValueError(f"URL hostname must be restricted to safe loopback addresses, got: {parsed.hostname}")  # pragma: no cover
+    if not is_loopback_hostname(parsed.hostname):
+        raise ValueError(f"URL hostname must be restricted to safe loopback addresses, got: {parsed.hostname}")
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:

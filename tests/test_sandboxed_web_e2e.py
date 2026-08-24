@@ -112,6 +112,9 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
@@ -599,8 +602,20 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
 
-def test_wait_for_url_rejects_non_loopback_hostnames():
-    from scripts.ci import sandboxed_web_e2e
-    import pytest
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/ready",
+        "http:///ready",
+        "http://0.0.0.0/ready",
+        "http://[::]/ready",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1.evil.test/ready",
+        "http://localhost@evil.test/ready",
+    ],
+)
+def test_wait_for_url_rejects_non_loopback_hostnames(url):
+    """Readiness polling rejects public, unspecified, link-local, and hostname-confusion targets."""
     with pytest.raises(ValueError, match="URL hostname must be restricted to safe loopback addresses"):
-        sandboxed_web_e2e.wait_for_url("http://example.com/ready", 1, None)
+        sandboxed_web_e2e.wait_for_url(url, 1, None)
