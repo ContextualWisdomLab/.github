@@ -2670,6 +2670,18 @@ def inspect_pr(
                 )
             retry_wait_reason = coverage_retry_wait_reason(pr)
             if retry_wait_reason:
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                f"{retry_wait_reason}; disable auto-merge until the same-head "
+                                "coverage retry floor elapses"
+                            ),
+                        )
+                    )
                 return decide("wait", retry_wait_reason)
             if pr.get("autoMergeRequest"):
                 return finish(

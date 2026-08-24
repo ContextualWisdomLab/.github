@@ -1263,12 +1263,18 @@ def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
 
 
 def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
-    """A fresh coverage-only review cannot immediately redispatch itself."""
+    """A fresh coverage-only review disables auto-merge during its retry floor."""
     monkeypatch.setenv(
         "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
         "ContextualWisdomLab/.github",
     )
     monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    disabled = []
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
     dispatched = []
     monkeypatch.setattr(
         sched,
@@ -1276,6 +1282,7 @@ def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
         lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
     )
     coverage_request = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
         reviews={
             "nodes": [
                 {
@@ -1310,8 +1317,10 @@ def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
 
     decision = inspect(coverage_request)
 
-    assert decision.action == "wait"
-    assert decision.reason == "same-head OpenCode coverage retry floor has not elapsed"
+    assert decision.action == "disable_auto_merge"
+    assert "same-head OpenCode coverage retry floor has not elapsed" in decision.reason
+    assert "disable auto-merge until the same-head coverage retry floor elapses" in decision.reason
+    assert disabled == [("owner/repo", 1, True)]
     assert dispatched == []
 
 
