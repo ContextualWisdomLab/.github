@@ -61,6 +61,23 @@ class FakeOpener:
         return FakeResponse(payload, self.final_url or self.request_url)
 
 
+class RawOpener:
+    """Return arbitrary response bytes for malformed and oversized fixtures."""
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def open(self, request: object, timeout: int) -> FakeResponse:
+        """Return the raw payload from the otherwise exact request URL."""
+        del timeout
+        response = FakeResponse({}, request.full_url)  # type: ignore[attr-defined]
+        response.seek(0)
+        response.truncate()
+        response.write(self.payload)
+        response.seek(0)
+        return response
+
+
 @pytest.mark.parametrize(
     "spdx_id",
     [
@@ -119,3 +136,60 @@ def test_redirected_license_metadata_is_rejected() -> None:
 
     with pytest.raises(RuntimeError, match="origin"):
         validator.validate_license("RankWeave", COMMIT, opener=opener)
+
+
+def test_default_opener_disables_proxy_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production requests use the no-proxy opener instead of runner proxy state."""
+    validator = load_validator()
+    opener = FakeOpener("MIT")
+    captured: list[object] = []
+
+    def build_opener(*handlers: object) -> FakeOpener:
+        captured.extend(handlers)
+        return opener
+
+    monkeypatch.setattr(validator.urllib.request, "build_opener", build_opener)
+
+    assert validator.validate_license("RankWeave", COMMIT) == "MIT"
+    assert len(captured) == 1
+    assert isinstance(captured[0], validator.urllib.request.ProxyHandler)
+
+
+def test_oversized_and_malformed_metadata_fail_closed() -> None:
+    """The metadata parser rejects both resource abuse and invalid JSON."""
+    validator = load_validator()
+
+    with pytest.raises(RuntimeError, match="size limit"):
+        validator.validate_license(
+            "RankWeave",
+            COMMIT,
+            opener=RawOpener(b"x" * (validator.MAX_METADATA_BYTES + 1)),
+        )
+    with pytest.raises(ValueError, match="malformed"):
+        validator.validate_license(
+            "RankWeave", COMMIT, opener=RawOpener(b"not-json")
+        )
+
+
+def test_main_reports_success_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI prints a permitted ID and converts validation errors to exit 1."""
+    validator = load_validator()
+    arguments = ["--repository", "RankWeave", "--commit", COMMIT]
+
+    monkeypatch.setattr(validator, "validate_license", lambda *_args: "Apache-2.0")
+    assert validator.main(arguments) == 0
+    assert capsys.readouterr().out == "Apache-2.0\n"
+
+    def reject(*_args: object) -> str:
+        raise ValueError("fixture denial")
+
+    monkeypatch.setattr(validator, "validate_license", reject)
+    assert validator.main(arguments) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "VCS dependency license validation failed: fixture denial" in captured.err
