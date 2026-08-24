@@ -1337,8 +1337,23 @@ jobs:
           }
 
           javascript_test_script_collects_coverage() {
-            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)")' \
+            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)|istanbul([[:space:]]|$)")' \
               package.json >/dev/null 2>&1
+          }
+
+          javascript_test_runner_accepts_coverage_flag() {
+            jq -e '
+              (.scripts.test // "") as $test
+              | ((.devDependencies // {}) + (.dependencies // {})) as $dependencies
+              | ($test | test("(^|[[:space:]])jest([[:space:]]|$)"))
+                or (
+                  ($test | test("(^|[[:space:]])vitest([[:space:]]|$)"))
+                  and (
+                    ($dependencies | has("@vitest/coverage-v8"))
+                    or ($dependencies | has("@vitest/coverage-istanbul"))
+                  )
+                )
+            ' package.json >/dev/null 2>&1
           }
 
           declared_package_manager() {
@@ -1585,6 +1600,36 @@ jobs:
             writable_pnpm_store_dir="$destination"
           }
 
+          pnpm_supports_trust_lockfile() {
+            local pnpm_version
+            local pnpm_major
+            local pnpm_minor
+            pnpm_version="$(corepack pnpm --version 2>/dev/null || printf '0')"
+            pnpm_major="${pnpm_version%%.*}"
+            case "$pnpm_version" in
+              *.*)
+                pnpm_minor="${pnpm_version#*.}"
+                pnpm_minor="${pnpm_minor%%.*}"
+                ;;
+              *)
+                pnpm_minor=0
+                ;;
+            esac
+            case "$pnpm_major" in
+              ''|*[!0-9]*) pnpm_major=0 ;;
+            esac
+            case "$pnpm_minor" in
+              ''|*[!0-9]*) pnpm_minor=0 ;;
+            esac
+            if [ "$pnpm_major" -gt 11 ]; then
+              return 0
+            fi
+            if [ "$pnpm_major" -eq 11 ] && [ "$pnpm_minor" -ge 3 ]; then
+              return 0
+            fi
+            return 1
+          }
+
           install_package_dependencies() {
             local package_runner="$1"
             case "$package_runner" in
@@ -1619,13 +1664,22 @@ jobs:
               pnpm)
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
-                run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
-                  corepack pnpm install \
-                    --offline \
-                    --frozen-lockfile \
-                    --trust-lockfile \
-                    --ignore-scripts \
-                    --store-dir "$writable_pnpm_store_dir"
+                if pnpm_supports_trust_lockfile; then
+                  run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
+                    corepack pnpm install \
+                      --offline \
+                      --frozen-lockfile \
+                      --trust-lockfile \
+                      --ignore-scripts \
+                      --store-dir "$writable_pnpm_store_dir"
+                else
+                  run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
+                    corepack pnpm install \
+                      --offline \
+                      --frozen-lockfile \
+                      --ignore-scripts \
+                      --store-dir "$writable_pnpm_store_dir"
+                fi
                 ;;
               yarn)
                 run_and_capture "JavaScript/TypeScript dependencies (yarn install, lifecycle hooks disabled)" yarn install --immutable --mode=skip-builds
@@ -2133,20 +2187,34 @@ jobs:
                 run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                if javascript_test_script_collects_coverage; then
-                  case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
-                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
-                  esac
+                if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
+                  if javascript_test_script_collects_coverage; then
+                    case "$package_runner" in
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                      pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
+                      yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
+                    esac
+                  else
+                    case "$package_runner" in
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                      pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
+                      yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                    esac
+                  fi
+                  javascript_coverage_ran=1
                 else
                   case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
-                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" npm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack pnpm test ;;
+                    yarn) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" yarn test ;;
                   esac
+                  append "### JavaScript/TypeScript coverage threshold"
+                  append ""
+                  append "- Result: FAIL"
+                  append "- Reason: package.json defines a test script but no compatible coverage provider or coverage-collecting test script. The networkless sandbox ran the tests without inventing an instrumenter, but plain tests cannot satisfy the required frontend coverage gate. Add a lock-pinned provider and a repository-owned coverage command."
+                  append ""
+                  failures=$((failures + 1))
                 fi
-                javascript_coverage_ran=1
               else
                 append "### JavaScript/TypeScript test coverage"
                 append ""
