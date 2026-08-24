@@ -76,7 +76,7 @@ flowchart LR
 |---|---|---|---|
 | G-01 | 열린 PR은 98개다. metadata상 CLEAN은 1개(#1265) / DIRTY 51 / BLOCKED 12 / BEHIND 31 / UNSTABLE 3 / draft 13이다. MERGEABLE/CLEAN은 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
 | G-02 | 리뷰 credential / same-repo status / agent dispatch #1162/#1227/#1215는 새 main `9f8f84074d8a8bc142eafea12c5b9e1c8570ccd6` 기준으로 BEHIND다. 어느 쪽도 current-head OpenCode APPROVE가 없다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, 병합 뒤 router comment/dispatch의 403을 실제 PR에서 검증한다 |
-| G-03 | ContextualWisdomLab/.github#1252는 `main` `9f8f84074d8a8bc142eafea12c5b9e1c8570ccd6`에 병합됐다. G-03 successor는 #1263(`6b569a565784305240d80d165190f71c3ee1cc13`, BLOCKED)이다. Required Strix는 `pull_request_target`로 보호 main 게이트를 쓰므로 MODEL QUALITY / `openai-direct` rewrite를 self-verify하지 못할 수 있다. 닫힌 #1213/#1262를 되살리지 않는다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
+| G-03 | ContextualWisdomLab/.github#1252는 `main` `9f8f84074d8a8bc142eafea12c5b9e1c8570ccd6`에 병합됐다. G-03 successor는 #1263(`50a6ad9129b2da55d049600ecd2516ee0999d7f1`, BLOCKED)이다. Required Strix는 `pull_request_target`로 보호 main 게이트를 쓰므로 MODEL QUALITY / `openai-direct` rewrite를 self-verify하지 못할 수 있다. 닫힌 #1213/#1262를 되살리지 않는다 | 취약점 0건이더라도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | exact runtime signature를 불완전 evidence로 fail-closed 분류하고, vulnerability marker가 있으면 절대 neutralize하지 않는 regression을 유지한다. 중복 Strix PR은 stack/supersede한다 |
 | G-04 | 98개 live PR 중 대부분이 BEHIND/DIRTY/BLOCKED이며, 자동 caller PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고, stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal merge/rebase 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
 | G-06 | ContextualWisdomLab/naruon#974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다. Phase 0 Issue ContextualWisdomLab/naruon#975는 Done(closed completed 2026-07-13)이다. 다음 순서 단계는 ContextualWisdomLab/naruon#976 (P1 Plugin SDK)이며 한 번에 한 phase만 진행한다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
@@ -115,7 +115,7 @@ flowchart LR
 | #1266 | fix(scheduler): retry OpenCode after coverage blockers clear | `855b1837cc0f277043f6e34509b09245a44a28b3` | main | BEHIND | ready |
 | #1265 | test: provision pip in fresh uv environments | `d4d4c2b0589065976e4bdcf5c5ae429bc21ed680` | main | CLEAN | ready |
 | #1264 | perf(redaction): skip invalid key rescans without masking diagnostics | `cbc5852b25634cb333a32da1a89de9825cb24802` | main | BEHIND | ready |
-| #1263 | fix(strix): make Azure and cross-provider fallbacks executable | `7be1e60146575a5943c132f82d38ddf742f010a6` | main | BLOCKED | ready |
+| #1263 | fix(strix): make Azure and cross-provider fallbacks executable | `50a6ad9129b2da55d049600ecd2516ee0999d7f1` | main | BLOCKED | ready |
 | #1259 | feat(automation): add a thin LineageWeave hourly review-repair caller | `6041f2aa9e23af5850cd83fa838a3eb6c45d84b9` | main | DIRTY | ready |
 | #1258 | fix(coverage): run pnpm 9 evidence without --trust-lockfile | `897819c48279b0c0d5e2372eb39dce6120784685` | main | BEHIND | ready |
 | #1257 | fix(osv): keep base scan results across fork checkout | `20d72bc838d7f91b74ce01bb4de16d07144fa270` | main | BEHIND | ready |
@@ -200,7 +200,7 @@ flowchart LR
 
 - ContextualWisdomLab/.github#1252 remains merged on `main` `9f8f84074d8a8bc142eafea12c5b9e1c8570ccd6`.
 - ContextualWisdomLab/.github#1265 stays GitHub CLEAN on `d4d4c2b0589065976e4bdcf5c5ae429bc21ed680` with hosted Checks green and no current-head OpenCode APPROVE after repeated `@opencode-agent` requests. CLEAN is not merge authorization.
-- ContextualWisdomLab/.github#1263 head `7be1e60146575a5943c132f82d38ddf742f010a6` still has required Strix FAILURE on protected-main gate.
+- ContextualWisdomLab/.github#1263 head `50a6ad9129b2da55d049600ecd2516ee0999d7f1` still has required Strix FAILURE on protected-main gate.
 - Open count is 98. No additional `.github` PR merged this pass.
 
 
