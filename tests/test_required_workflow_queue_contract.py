@@ -1219,7 +1219,19 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # The 403 signal is classified as a skipped, non-fatal "unavailable" repo.
     assert "ORG_SWEEP_MAX_UNAVAILABLE" in workflow
     assert 'grep -qF "Resource not accessible by integration"' in workflow
-    assert "grep -qF '\"schema_version\": \"pr-review-merge-scheduler/v2\"'" in workflow
+    assert "grep -Eq '\"schema_version\"[[:space:]]*:[[:space:]]*\"pr-review-merge-scheduler/v2\"'" in workflow
+    schema_pattern = r'"schema_version"[[:space:]]*:[[:space:]]*"pr-review-merge-scheduler/v2"'
+    for payload in (
+        '{"schema_version":"pr-review-merge-scheduler/v2"}\n',
+        '{\n  "schema_version" : "pr-review-merge-scheduler/v2"\n}\n',
+    ):
+        result = subprocess.run(
+            ["grep", "-Eq", schema_pattern],
+            input=payload,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
     assert "unavailable=$((unavailable + 1))" in workflow
     assert 'unavailable_repos+=("$repo_full_name")' in workflow
     assert "the sweep credential lacks access (HTTP 403" in workflow
@@ -1251,7 +1263,7 @@ def test_scheduler_action_errors_propagate_after_structured_summary() -> None:
     assert 'sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}" 2>&1)"' in org_sweep
     assert "sweep_rc=$?" in org_sweep
     assert 'if [ "$sweep_rc" -ne 0 ]; then' in org_sweep
-    assert "grep -qF '\"schema_version\": \"pr-review-merge-scheduler/v2\"'" in org_sweep
+    assert "grep -Eq '\"schema_version\"[[:space:]]*:[[:space:]]*\"pr-review-merge-scheduler/v2\"'" in org_sweep
     assert "failures=$((failures + 1))" in org_sweep
 
 
