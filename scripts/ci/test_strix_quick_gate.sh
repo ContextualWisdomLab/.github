@@ -365,6 +365,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'github_models' || steps.gate.outputs.provider_mode == 'openai_direct'" "strix workflow provisions direct-OpenAI fallback credentials for GitHub Models scans"
 	assert_file_contains "$workflow_file" "STRIX_OPENAI_FALLBACK_API_BASE_FILE" "strix workflow routes direct-OpenAI fallbacks through a trusted API base file"
 	assert_file_contains "$workflow_file" "https://api.openai.com/v1" "strix workflow uses the OpenAI platform endpoint for direct fallbacks"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
@@ -3447,6 +3448,30 @@ REPORT
 			;;
 		esac
 		;;
+	github-models-openai-direct-fallback-success)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5)
+			if [ "${LLM_API_KEY:-}" != "dummy" ] || [ "${LLM_API_BASE:-}" != "https://models.github.ai/inference" ]; then
+				echo "unexpected GitHub Models primary credentials or endpoint" >&2
+				exit 20
+			fi
+			echo "openai.RateLimitError: Error code: 429 - GitHub Models quota exhausted"
+			exit 1
+			;;
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "openai-fallback-key" ] || [ "${LLM_API_BASE:-}" != "https://api.openai.com/v1" ]; then
+				echo "unexpected GitHub-to-OpenAI fallback credentials or endpoint" >&2
+				exit 21
+			fi
+			echo "scan ok after GitHub-to-OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected GitHub-to-OpenAI fallback model ${STRIX_LLM:-}" >&2
+			exit 22
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5680,6 +5705,12 @@ PY
 		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
 		env_cmd+=(STRIX_OPENAI_FALLBACK_API_BASE_FILE="$tmp_dir/openai_fallback_api_base.txt")
 	fi
+	if [ "$scenario" = "github-models-openai-direct-fallback-success" ]; then
+		printf '%s' 'openai-fallback-key' >"$tmp_dir/openai_fallback_key.txt"
+		printf '%s' 'https://api.openai.com/v1' >"$tmp_dir/openai_fallback_api_base.txt"
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+		env_cmd+=(STRIX_OPENAI_FALLBACK_API_BASE_FILE="$tmp_dir/openai_fallback_api_base.txt")
+	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
 		local env_pair
@@ -5965,6 +5996,37 @@ run_nvidia_nim_openai_direct_fallback_case() {
 		"openai-direct/gpt-5.6-luna"
 }
 
+run_github_models_openai_direct_fallback_case() {
+	run_gate_case_allow_provider_signal "github-models-openai-direct-fallback-success" \
+		"openai/gpt-5" \
+		"" \
+		"0" \
+		"REGEX:Strix quick scan succeeded with fallback model 'openai-direct/gpt-5.6-luna' in [0-9]+s\\." \
+		"2" \
+		"openai/gpt-5|openai/gpt-5.6-luna" \
+		"https://models.github.ai/inference|https://api.openai.com/v1" \
+		"openai" \
+		"https://models.github.ai/inference" \
+		"" \
+		"0" \
+		"CRITICAL" \
+		"0" \
+		"" \
+		"" \
+		"1200" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"" \
+		"0" \
+		"" \
+		"" \
+		"" \
+		"__SAME_AS_FALLBACK_MODELS__" \
+		"openai-direct/gpt-5.6-luna"
+}
+
 run_github_models_http410_case() {
 	local scenario="$1"
 	local expected_exit="$2"
@@ -6189,6 +6251,9 @@ run_filtered_gate_case_if_requested() {
 		;;
 	nvidia-nim-openai-direct-fallback-success)
 		run_nvidia_nim_openai_direct_fallback_case
+		;;
+	github-models-openai-direct-fallback-success)
+		run_github_models_openai_direct_fallback_case
 		;;
 	gemini-timeout-fallback-success)
 		run_gate_case_allow_provider_signal "gemini-timeout-fallback-success" \
@@ -12583,6 +12648,9 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 # NVIDIA NIM primary scans must route an explicit direct-OpenAI fallback to
 # the OpenAI endpoint and its own credential, not the primary provider input.
 run_nvidia_nim_openai_direct_fallback_case
+
+# GitHub Models primary scans use the same direct-OpenAI fallback contract.
+run_github_models_openai_direct_fallback_case
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \
