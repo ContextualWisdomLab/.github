@@ -47,3 +47,6 @@
 ## 2026-08-09 - [대용량 로그 스캔 시 정규표현식 실행 전 O(N) 서브스트링 검증 선행]
 **Learning:** `classify_testthat_failure`에서 테스트 실패 내역이 없는 2MB 로그 파일을 대상으로 정규표현식을 실행하면 약 20ms가 소요되지만, 단순 문자열 검색은 약 1ms만 소요됩니다. 문자열 존재 여부가 정규표현식 매칭의 전제 조건일 때, 콜드 패스(Cold Path)에서 순서 최적화는 매우 큰 성능 차이를 만듭니다.
 **Action:** 대용량 텍스트 입력(CI 로그 등)에서 복잡한 정규표현식을 파싱하기 전에 항상 빠른 O(N) 문자열 존재 여부 확인을 먼저 수행하십시오.
+## 2026-08-09 - [Avoid character-by-character append in Python parsing loops]
+**Learning:** `strip_jsonc_comments` in `scripts/ci/assert_opencode_reasoning_effort.py` was appending characters one-by-one inside a `while` loop, which leads to slow execution on large input strings due to python loop overhead and list appending.
+**Action:** In Python parsing logic, avoid appending single characters in tight linear loops. Instead, pre-compile regex at the module level using `re.compile()` and use `re.sub` with a custom replacer to batch unmatched text, or scan ahead and use string slices (e.g., `output.append(text[start:cursor])`).
