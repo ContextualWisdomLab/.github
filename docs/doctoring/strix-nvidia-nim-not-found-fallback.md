@@ -30,6 +30,13 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
+A completed zero-vulnerability fallback may emit Strix's model-quality banner
+and Hugging Face's exact unauthenticated-download advisory while loading public
+scanner assets. The console allowlist removes only those two complete lines and
+the exact optional-web-search-key advisory. Structured report logs additionally
+allow Strix's bounded lifecycle-continuation warning. A suffix, prefix, or any
+other warning text remains fail-closed provider-failure evidence.
+
 Exhausted provider infrastructure remains fail-closed even when the trusted
 gate has classified every observed threshold finding as outside the pull
 request's changed files. That classification scopes authoritative findings; it
@@ -53,7 +60,11 @@ Regression evidence proves that:
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
-10. the required-workflow smoke contract pins these properties.
+10. the exact model-quality and Hugging Face download advisories do not reject
+    an otherwise complete zero-vulnerability fallback when they appear in
+    console or report logs;
+11. appended warning text is not hidden by either exact advisory filter; and
+12. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 

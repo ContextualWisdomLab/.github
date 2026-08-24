@@ -105,6 +105,10 @@ normalize_model() {
 		printf '%s\n' "$model"
 		return 0
 		;;
+	openai-direct/?*)
+		printf 'openai_direct/%s\n' "${model#openai-direct/}"
+		return 0
+		;;
 	*/*)
 		printf '%s\n' "$model"
 		return 0
