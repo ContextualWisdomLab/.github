@@ -2415,6 +2415,15 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 
+	if is_explicit_openai_model "$model"; then
+		# Cross-provider fallback: direct-OpenAI models must always use the
+		# OpenAI platform endpoint. Inheriting the primary provider's API
+		# base (NVIDIA NIM, OpenRouter, GitHub Models) sends an OpenAI
+		# model and key to a foreign host, which answers "404 page not
+		# found" and turns every rate-limit outage into a failed fallback.
+		return 0
+	fi
+
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
 	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
