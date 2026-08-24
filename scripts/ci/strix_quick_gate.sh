@@ -2416,7 +2416,7 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 
-	if is_explicit_openai_model "$model"; then
+	if is_explicit_openai_model "$model" && ! is_explicit_openai_model "$PRIMARY_MODEL"; then
 		# Cross-provider fallback: direct-OpenAI models must always use the
 		# OpenAI platform endpoint. Inheriting the primary provider's API
 		# base (NVIDIA NIM, OpenRouter, GitHub Models) sends an OpenAI
@@ -2556,15 +2556,16 @@ run_strix_once() {
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
 		if is_explicit_openai_model "$model"; then
-			if is_explicit_openai_model "$PRIMARY_MODEL"; then
-				# Same-provider fallback: the primary direct-OpenAI key is
-				# valid for every direct-OpenAI model in this chain.
-				:
-			elif [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			if [ "$model" != "$PRIMARY_MODEL" ] && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
 				# Cross-provider fallback: explicit direct-OpenAI models
 				# authenticate with the OpenAI key, not the primary provider's
-				# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+				# key (NVIDIA NIM, OpenRouter, or GitHub Models). The same
+				# dedicated key also takes precedence for same-provider fallback.
 				child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+			elif is_explicit_openai_model "$PRIMARY_MODEL"; then
+				# Same-provider fallback: reuse the primary direct-OpenAI key
+				# only when no dedicated fallback key was configured.
+				:
 			else
 				echo "ERROR: direct-OpenAI fallback '$model' requires STRIX_OPENAI_FALLBACK_KEY_FILE when the primary model uses another provider." >&2
 				return 2
@@ -4266,7 +4267,8 @@ run_current_target_scan() {
 			return 0
 		fi
 		if [ "$fallback_scan_rc" -eq 2 ]; then
-			return 2
+			echo "Skipping fallback model '$candidate' because its provider configuration is invalid; trying the next configured fallback." >&2
+			continue
 		fi
 
 		local strict_fallback_provider_signal=0

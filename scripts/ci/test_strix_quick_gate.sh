@@ -3421,6 +3421,30 @@ REPORT
 			;;
 		esac
 		;;
+	same-provider-direct-openai-fallback-key)
+		case "${STRIX_LLM:-}" in
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected primary direct-OpenAI key (${LLM_API_KEY:-<unset>})" >&2
+				exit 19
+			fi
+			echo "Error: litellm.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		openai/gpt-5.5)
+			if [ "${LLM_API_KEY:-}" != "same-provider-fallback-token" ]; then
+				echo "unexpected same-provider fallback key (${LLM_API_KEY:-<unset>})" >&2
+				exit 20
+			fi
+			echo "scan ok with same-provider fallback key"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	nvidia-nim-quota-openai-direct-fallback-missing-key)
 		case "${STRIX_LLM:-}" in
 		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
@@ -3434,6 +3458,10 @@ REPORT
 		openai/gpt-5.6-luna)
 			echo "unexpected direct-OpenAI fallback invocation without a fallback key" >&2
 			exit 18
+			;;
+		deepseek/deepseek-v3-0324)
+			echo "scan ok after invalid direct-OpenAI fallback"
+			exit 0
 			;;
 		*)
 			echo "unexpected model ${STRIX_LLM:-}" >&2
@@ -4367,7 +4395,7 @@ EOS
 		echo "Error: deepseek model was rewritten (${STRIX_LLM:-})" >&2
 		exit 33
 		;;
-	preserve-existing-api-base)
+	preserve-existing-api-base|preserve-existing-direct-openai-api-base)
 		if [ "${LLM_API_BASE:-}" = "https://preexisting.invalid" ]; then
 			echo "scan ok with preserved api base"
 			exit 0
@@ -5669,8 +5697,14 @@ PY
 		env_cmd+=(STRIX_GITHUB_MODELS_KEY_FILE="$tmp_dir/github_models_key.txt")
 	fi
 	if [ "$scenario" = "nvidia-nim-quota-openai-direct-fallback-missing-key" ]; then
-		# Exercise the cross-provider path with no OpenAI fallback credential.
-		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna")
+		# Exercise the cross-provider path with no OpenAI fallback credential,
+		# then prove a later valid fallback is still attempted.
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna deepseek/deepseek-v3-0324")
+	fi
+	if [ "$scenario" = "same-provider-direct-openai-fallback-key" ]; then
+		printf '%s' 'same-provider-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.5")
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
 	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
@@ -6417,12 +6451,36 @@ run_filtered_gate_case_if_requested() {
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 			"" \
+			"0" \
+			"scan ok after invalid direct-OpenAI fallback" \
 			"2" \
-			"ERROR: direct-OpenAI fallback 'openai-direct/gpt-5.6-luna' requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
-			"1" \
-			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
 			"" \
 			"nvidia_nim"
+		;;
+	same-provider-direct-openai-fallback-key)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"openai_direct/gpt-5.6-luna" \
+			"" \
+			"0" \
+			"scan ok with same-provider fallback key" \
+			"2" \
+			"openai/gpt-5.6-luna|openai/gpt-5.5" \
+			"<unset>|<unset>" \
+			"openai"
+		;;
+	preserve-existing-direct-openai-api-base)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"openai_direct/gpt-5.6-luna" \
+			"" \
+			"0" \
+			"scan ok with preserved api base" \
+			"1" \
+			"openai/gpt-5.6-luna" \
+			"https://preexisting.invalid" \
+			"openai" \
+			"" \
+			"https://preexisting.invalid"
 		;;
 	total-timeout)
 		run_total_timeout_case
@@ -10952,6 +11010,18 @@ run_gate_case "preserve-existing-api-base" \
 	"openai/gpt-4o-mini" \
 	"https://preexisting.invalid" \
 	"vertex_ai" \
+	"" \
+	"https://preexisting.invalid"
+
+run_gate_case "preserve-existing-direct-openai-api-base" \
+	"openai_direct/gpt-5.6-luna" \
+	"" \
+	"0" \
+	"scan ok with preserved api base" \
+	"1" \
+	"openai/gpt-5.6-luna" \
+	"https://preexisting.invalid" \
+	"openai" \
 	"" \
 	"https://preexisting.invalid"
 
