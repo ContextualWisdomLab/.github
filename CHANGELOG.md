@@ -15,9 +15,11 @@ Semantic Versioning where the repository publishes a release.
 - Serialize Strix scans per repository and event class to stop shared-provider
   key rate-limit storms. Concurrent per-PR scans each retried the shared NVIDIA
   NIM key, producing guaranteed `litellm.RateLimitError` failures across open
-  PRs. Queue `max` preserves every queued evidence run; `cancel-in-progress:
-  false` avoids dropping in-flight evidence. Update the bash contract test to
-  match the repository-scoped concurrency group.
+  PRs. GitHub retains one active and one pending run per repository/event group;
+  `cancel-in-progress: false` keeps the active scan running, while the merge
+  scheduler re-dispatches exact-head evidence after pending-run supersession.
+  Update the bash contract test to match the repository-scoped concurrency
+  group.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
