@@ -2209,6 +2209,9 @@ jobs:
             append "- Docstring evidence: not proven passing when configured"
             append "- Failure count: ${failures}"
           fi
+          if [ "$python_native_peer_check_required" -eq 1 ]; then
+            append "- Python native-extension peer evidence: deferred source-only collection requires successful exact-head peer checks"
+          fi
 
           coverage_output_file="$(mktemp)"
           awk '

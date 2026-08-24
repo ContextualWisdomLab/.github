@@ -232,6 +232,25 @@ def test_source_only_native_failure_is_distinct_deferred_evidence() -> None:
     )
 
 
+def test_compact_coverage_decision_preserves_native_peer_requirement() -> None:
+    """The published compact summary must carry the fail-closed peer marker."""
+
+    workflow = _review_workflow()
+    decision_start = workflow.index('          append "## Coverage Decision"')
+    decision_end = workflow.index(
+        '          coverage_output_file="$(mktemp)"', decision_start
+    )
+    compact_decision_source = workflow[decision_start:decision_end]
+
+    assert 'if [ "$python_native_peer_check_required" -eq 1 ]; then' in (
+        compact_decision_source
+    )
+    assert (
+        "Python native-extension peer evidence: deferred source-only collection "
+        "requires successful exact-head peer checks" in compact_decision_source
+    )
+
+
 def test_approval_requires_live_exact_head_python_rust_and_package_checkruns() -> None:
     """The trusted approval phase must validate all three exact-head peer checks."""
 
