@@ -5946,6 +5946,16 @@ run_filtered_gate_case_if_requested() {
 	"")
 		return 0
 		;;
+	provider-not-provided)
+		run_gate_case "provider-not-provided" \
+			"vertex_ai/provider-not-provided" \
+			"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
+			"1" \
+			"Configured Vertex model and fallback models were unavailable." \
+			"3" \
+			"vertex_ai/provider-not-provided|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+			"<unset>|<unset>|<unset>"
+		;;
 	success)
 		run_gate_case "success" \
 			"vertex_ai/ready-primary" \
@@ -10815,12 +10825,12 @@ run_gate_case "below-threshold-with-requests-connection-error" \
 # must fail closed rather than being mistaken for an application failure.
 run_gate_case "provider-not-provided" \
 	"vertex_ai/provider-not-provided" \
-	"" \
+	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 	"1" \
-	"Strix quick scan failed with a non-recoverable error." \
-	"1" \
-	"vertex_ai/provider-not-provided" \
-	"<unset>"
+	"Configured Vertex model and fallback models were unavailable." \
+	"3" \
+	"vertex_ai/provider-not-provided|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>"
 
 # Guard test 4: MEDIUM finding + MidStreamFallbackError → should fail (exit 1).
 # Midstream is vertex-retryable, so the gate also tries fallback models
