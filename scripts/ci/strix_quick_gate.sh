@@ -380,6 +380,40 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	fi
 fi
 
+# Optional cross-provider fallback credentials for direct-OpenAI fallback
+# models (openai-direct/... or openai_direct/...). When the primary model runs
+# against NVIDIA NIM, OpenRouter, or GitHub Models, its LLM_API_KEY cannot
+# authenticate a direct-OpenAI fallback; this file carries the OpenAI key.
+# Optional: without it, explicit direct-OpenAI models keep using LLM_API_KEY,
+# which is correct whenever the primary already runs against direct OpenAI.
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+is_explicit_openai_model() {
+	case "$1" in
+	openai_direct/* | openai-direct/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 require_non_negative_integer() {
 	local value="$1"
 	local label="$2"
@@ -2452,6 +2486,13 @@ child_model_for_api_base() {
 		printf 'openai/%s\n' "${model#openai_direct/}"
 		return 0
 		;;
+	# The workflow contract spells the direct-OpenAI fallback with a hyphen
+	# (openai-direct/...). litellm cannot infer a provider from that prefix,
+	# so both spellings must resolve to the litellm openai/<model> form.
+	openai-direct/*)
+		printf 'openai/%s\n' "${model#openai-direct/}"
+		return 0
+		;;
 	esac
 
 	printf '%s\n' "$model"
@@ -2503,6 +2544,12 @@ run_strix_once() {
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
+		fi
+		if is_explicit_openai_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			# Cross-provider fallback: explicit direct-OpenAI models
+			# authenticate with the OpenAI key, not the primary provider's
+			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
 		fi
 	fi
 	set -o pipefail
