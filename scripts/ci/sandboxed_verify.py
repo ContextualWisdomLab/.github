@@ -14,6 +14,11 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci import bounded_subprocess
+
 
 DEFAULT_IGNORE = (
     ".git",
@@ -56,7 +61,18 @@ SAFE_ENV_ALLOWLIST = (
     "PYTHONPATH",
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
+PATH_BOUNDARY_EXIT_CODE = 122
+COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
+COMMAND_NOT_FOUND_EXIT_CODE = 127
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class RepositoryPathBoundaryError(ValueError):
+    """Report a copied repository link that escapes its sandbox boundary."""
+
+
+class RepositoryRootError(ValueError):
+    """Report that the requested repository root cannot be copied."""
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -69,6 +85,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
     parser.add_argument("--timeout", type=int, default=300, help="Command timeout in seconds.")
+    parser.add_argument(
+        "--output-limit-bytes",
+        type=int,
+        default=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+        help="Maximum retained stdout and stderr bytes per stream.",
+    )
     parser.add_argument(
         "--keep-sandbox",
         action="store_true",
@@ -106,6 +128,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("provide a verification command after --")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    try:
+        args.output_limit_bytes = bounded_subprocess.validate_output_limit(
+            args.output_limit_bytes,
+            "--output-limit-bytes",
+        )
+    except ValueError as error:
+        parser.error(str(error))
     for name in args.allow_env:
         if not ENV_NAME_RE.match(name):
             parser.error(f"--allow-env must be an environment variable name: {name}")
@@ -138,29 +167,62 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
+def validate_repository_symlinks(source: Path) -> None:
+    """Reject symlinks that could escape the copied repository sandbox.
+
+    Relative links are retained only when their resolved target stays beneath
+    ``source``. Absolute links are rejected even when they currently name a
+    path beneath ``source`` because preserving them would point the sandboxed
+    command back at the original checkout instead of the isolated copy.
+    """
+    source_root = source.resolve(strict=True)
+    for current_root, directory_names, file_names in os.walk(source_root, followlinks=False):
+        current = Path(current_root)
+        for name in (*directory_names, *file_names):
+            candidate = current / name
+            if not candidate.is_symlink():
+                continue
+            target = Path(os.readlink(candidate))
+            if target.is_absolute():
+                raise RepositoryPathBoundaryError(
+                    f"symlink escapes repository verification sandbox via absolute target: "
+                    f"{candidate} -> {target}"
+                )
+            resolved_target = (candidate.parent / target).resolve(strict=False)
+            try:
+                resolved_target.relative_to(source_root)
+            except ValueError as exc:
+                raise RepositoryPathBoundaryError(
+                    f"symlink escapes repository verification sandbox: {candidate} -> {target}"
+                ) from exc
+
+
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
-        raise ValueError(f"repo root is not a directory: {source}")
+        raise RepositoryRootError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
     ignore = shutil.ignore_patterns(*(DEFAULT_IGNORE + tuple(extra_ignores)))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
+    validate_repository_symlinks(destination)
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run the verification command and capture output for review evidence."""
-    return subprocess.run(
-        list(command),
+def run_command(
+    command: Sequence[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+) -> bounded_subprocess.BoundedCompletedProcess:
+    """Run one verification command with continuously drained bounded output."""
+    return bounded_subprocess.run_bounded_command(
+        command,
         cwd=cwd,
         env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         timeout=timeout,
-        check=False,
-        shell=False,
+        evidence_limit_bytes=output_limit_bytes,
     )
 
 
@@ -184,6 +246,10 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    output_limited: bool = False,
+    output_limit_unsupported: bool = False,
+    path_boundary_rejected: bool = False,
 ) -> None:
     """Print a machine-readable execution evidence summary."""
     payload = {
@@ -194,9 +260,14 @@ def emit_result(
         "evidence_note": evidence_note,
         "exit_code": exit_code,
         "network": network,
+        "output_limit_bytes": output_limit_bytes,
+        "output_limited": output_limited,
+        "output_limit_unsupported": output_limit_unsupported,
+        "path_boundary_rejected": path_boundary_rejected,
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
+    print()
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
 
 
@@ -206,9 +277,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     sandbox = Path(tempfile.mkdtemp(prefix="sandboxed-verify-"))
     start = time.monotonic()
     exit_code = 1
+    output_limited = False
+    output_limit_unsupported = False
+    path_boundary_rejected = False
     copied_repo = sandbox / "repo"
     try:
-        copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        try:
+            copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        except RepositoryPathBoundaryError:
+            path_boundary_rejected = True
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-verify: repository path boundary rejected",
+                file=sys.stderr,
+            )
+            exit_code = PATH_BOUNDARY_EXIT_CODE
+            return exit_code
+        except RepositoryRootError:
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-verify: repository root is not a directory",
+                file=sys.stderr,
+            )
+            exit_code = 1
+            return exit_code
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
         print(f"sandboxed-verify: command={' '.join(args.command)}")
@@ -217,12 +309,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
-            completed = run_command(args.command, copied_repo, env, args.timeout)
+            completed = run_command(
+                args.command,
+                copied_repo,
+                env,
+                args.timeout,
+                args.output_limit_bytes,
+            )
             if completed.stdout:
                 print(completed.stdout, end="")
             if completed.stderr:
                 print(completed.stderr, end="", file=sys.stderr)
-            exit_code = completed.returncode
+            output_limited = completed.output_limited
+            if output_limited:
+                print(
+                    "sandboxed-verify: command output exceeded "
+                    f"{args.output_limit_bytes} bytes",
+                    file=sys.stderr,
+                )
+                exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+            else:
+                exit_code = completed.returncode
+        except FileNotFoundError:
+            print(
+                "sandboxed-verify: install the executable or correct command PATH",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_FOUND_EXIT_CODE
+        except (PermissionError, IsADirectoryError):
+            print(
+                "sandboxed-verify: select an executable file or correct its permissions",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_EXECUTABLE_EXIT_CODE
+        except bounded_subprocess.OutputLimitUnsupportedError:
+            output_limit_unsupported = True
+            print(
+                "sandboxed-verify: bounded child output is unavailable on this platform",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+        except RuntimeError:
+            print(
+                "sandboxed-verify: bounded output capture failed",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
@@ -230,6 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+            output_limited = bool(getattr(exc, "output_limited", False))
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
@@ -245,6 +378,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             allowed_env=args.allow_env,
             network=args.network,
             evidence_note=args.evidence_note,
+            output_limit_bytes=args.output_limit_bytes,
+            output_limited=output_limited,
+            output_limit_unsupported=output_limit_unsupported,
+            path_boundary_rejected=path_boundary_rejected,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
