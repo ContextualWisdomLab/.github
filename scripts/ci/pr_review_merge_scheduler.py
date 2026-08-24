@@ -1337,30 +1337,36 @@ def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
     return False
 
 
-def latest_coverage_evidence_node(pr: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the newest coverage-evidence check across workflow names."""
-    coverage_runs = [
-        node
-        for node in latest_check_runs(pr)
+def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]:
+    """Return indexes of coverage-evidence checks in one check-run snapshot."""
+    return [
+        index
+        for index, node in enumerate(check_runs)
         if (node.get("name") or "").lower() == "coverage-evidence"
     ]
-    if not coverage_runs:
+
+
+def latest_coverage_evidence_index(check_runs: Sequence[dict[str, Any]]) -> int | None:
+    """Return the newest coverage-evidence index across workflow names."""
+    coverage_indices = coverage_evidence_indices(check_runs)
+    if not coverage_indices:
         return None
-    _, node = max(
-        enumerate(coverage_runs),
+    return max(
+        coverage_indices,
         key=lambda item: (
-            parse_github_datetime(item[1].get("startedAt"))
+            parse_github_datetime(check_runs[item].get("startedAt"))
             or datetime.min.replace(tzinfo=timezone.utc),
-            item[0],
+            item,
         ),
     )
-    return node
 
 
 def coverage_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, complete, or failed for the latest coverage gate."""
-    node = latest_coverage_evidence_node(pr)
-    if node is not None:
+    check_runs = latest_check_runs(pr)
+    latest_index = latest_coverage_evidence_index(check_runs)
+    if latest_index is not None:
+        node = check_runs[latest_index]
         status = (node.get("status") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
@@ -1378,21 +1384,15 @@ def coverage_evidence_state(pr: dict[str, Any]) -> str:
     return "missing"
 
 
-def superseded_coverage_evidence_ids(pr: dict[str, Any]) -> set[int]:
+def superseded_coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> set[int]:
     """Return older coverage checks superseded by a newer successful run."""
-    authoritative = latest_coverage_evidence_node(pr)
-    if authoritative is None:
+    authoritative_index = latest_coverage_evidence_index(check_runs)
+    if authoritative_index is None:
         return set()
+    authoritative = check_runs[authoritative_index]
     if (authoritative.get("conclusion") or "").upper() != "SUCCESS":
         return set()
-    coverage_runs = [
-        node
-        for node in latest_check_runs(pr)
-        if (node.get("name") or "").lower() == "coverage-evidence"
-    ]
-    superseded = {id(node) for node in coverage_runs}
-    superseded.discard(id(authoritative))
-    return superseded
+    return set(coverage_evidence_indices(check_runs)) - {authoritative_index}
 
 
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
@@ -1590,8 +1590,9 @@ def failed_status_checks(
     being retried. Sibling jobs in the same workflow remain authoritative.
     """
     failed: list[str] = []
-    superseded_coverage_ids = (
-        superseded_coverage_evidence_ids(pr) if ignore_opencode else set()
+    check_runs = latest_check_runs(pr)
+    superseded_coverage_indices = (
+        superseded_coverage_evidence_indices(check_runs) if ignore_opencode else set()
     )
     status_contexts = [
         node
@@ -1604,10 +1605,10 @@ def failed_status_checks(
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for node in latest_check_runs(pr):
+    for index, node in enumerate(check_runs):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
-            if id(node) in superseded_coverage_ids:
+            if index in superseded_coverage_indices:
                 continue
             if ignore_opencode and node.get("name") == "opencode-review":
                 continue
@@ -2614,6 +2615,18 @@ def inspect_pr(
             and not failed_status_checks(pr, ignore_opencode=True)
         )
         if coverage_ready:
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=(
+                            "current-head OpenCode coverage blocker is cleared; disable auto-merge "
+                            "before same-head re-review"
+                        ),
+                    )
+                )
             wait_reason = repository_dispatch_wait_reason(repo, workflow)
             if wait_reason:
                 return decide("wait", wait_reason)
