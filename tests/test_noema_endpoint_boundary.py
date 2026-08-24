@@ -119,6 +119,85 @@ def test_pinned_http_connection_uses_only_validated_numeric_destination(
     assert observed == [(('8.8.8.8', 443), 17, None)]
 
 
+def test_pinned_connection_rejects_empty_validation_evidence() -> None:
+    """Fail closed when endpoint validation produced no usable address."""
+    with pytest.raises(ValueError, match="no validated DNS addresses"):
+        noema.PinnedHTTPConnection(
+            "model.example.test",
+            validated_addresses=frozenset(),
+        )
+
+
+def test_pinned_connection_reports_exhausted_validated_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report a connection error after every validated address is exhausted."""
+    monkeypatch.setattr(
+        noema.socket,
+        "create_connection",
+        lambda *_args: (_ for _ in ()).throw(OSError("unavailable")),
+    )
+    connection = noema.PinnedHTTPConnection(
+        "model.example.test",
+        validated_addresses=frozenset({noema.ipaddress.ip_address("8.8.8.8")}),
+    )
+
+    with pytest.raises(OSError, match="could not connect to validated DNS addresses"):
+        connection.connect()
+
+
+def test_pinned_http_connection_preserves_proxy_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connect to the validated address before establishing an HTTP proxy tunnel."""
+    monkeypatch.setattr(noema.socket, "create_connection", lambda *_args: object())
+    connection = noema.PinnedHTTPConnection(
+        "model.example.test",
+        validated_addresses=frozenset({noema.ipaddress.ip_address("8.8.8.8")}),
+    )
+    connection.set_tunnel("proxy.example.test")
+    tunneled = False
+
+    def fake_tunnel() -> None:
+        nonlocal tunneled
+        tunneled = True
+
+    monkeypatch.setattr(connection, "_tunnel", fake_tunnel)
+    connection.connect()
+
+    assert tunneled
+
+
+def test_pinned_https_connection_preserves_proxy_tunnel_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the proxy hostname for TLS after an HTTPS proxy tunnel is opened."""
+    fake_socket = object()
+    wrapped_socket = object()
+
+    class Context:
+        """Record the hostname supplied for the tunneled TLS handshake."""
+
+        def wrap_socket(self, value: object, *, server_hostname: str) -> object:
+            """Return the wrapped socket after checking the proxy hostname."""
+            assert value is fake_socket
+            assert server_hostname == "proxy.example.test"
+            return wrapped_socket
+
+    monkeypatch.setattr(noema.socket, "create_connection", lambda *_args: fake_socket)
+    connection = noema.PinnedHTTPSConnection(
+        "model.example.test",
+        context=Context(),
+        validated_addresses=frozenset({noema.ipaddress.ip_address("8.8.8.8")}),
+    )
+    connection.set_tunnel("proxy.example.test")
+    monkeypatch.setattr(connection, "_tunnel", lambda: None)
+
+    connection.connect()
+
+    assert connection.sock is wrapped_socket
+
+
 def test_pinned_connection_supports_ipv6_destination_shape() -> None:
     """Preserve the four-field socket address shape required by IPv6 connect."""
     assert noema._socket_target(noema.ipaddress.ip_address("::1"), 443) == (
