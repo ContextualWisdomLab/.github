@@ -1336,7 +1336,8 @@ def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
             not reviewer
             or reviewer == author
             or is_automated_opencode_review(review)
-            or reviewer in {"github-actions", "github-actions[bot]"}
+            or reviewer == "github-actions"
+            or reviewer.endswith("[bot]")
             or not review_matches_current_head(review, pr)
             or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
             or reviewer in seen_reviewers

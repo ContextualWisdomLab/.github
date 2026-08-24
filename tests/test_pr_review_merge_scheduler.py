@@ -2064,6 +2064,7 @@ def test_scheduler_query_requests_pull_request_author():
         ("pull-request-author", "pull-request-author", "APPROVED", "head"),
         ("pull-request-author", "opencode-agent", "APPROVED", "head"),
         ("pull-request-author", "github-actions[bot]", "APPROVED", "head"),
+        ("pull-request-author", "noema-review[bot]", "APPROVED", "head"),
         ("pull-request-author", "independent-reviewer", "COMMENTED", "head"),
         ("pull-request-author", "independent-reviewer", "APPROVED", "old"),
     ),
