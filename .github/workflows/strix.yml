@@ -71,7 +71,8 @@ on:
 concurrency:
   # Include the event name so default-branch repository_dispatch evidence cannot cancel
   # or interleave with the required pull_request_target Strix context that branch
-  # protection reads.
+  # protection reads. Closed PR events use a separate group so their cancellation
+  # job can run immediately instead of waiting behind the scan it must cancel.
   #
   # Rate-limit root-cause fix (2026-08-24): the group is scoped per REPOSITORY
   # (not per PR) so sibling pull requests in the same repository scan
@@ -83,7 +84,12 @@ concurrency:
   # every queued evidence run (nothing is dropped), and accuracy is prioritized
   # over scan latency.
   group: >-
-    strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+    strix-${{
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number) ||
+      format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository)
+    }}
   cancel-in-progress: false
   queue: max
 
@@ -98,8 +104,43 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+      - name: Cancel queued and running scans for the closed pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cancel_runs() {
+            local status="$1"
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/workflows/strix.yml/runs?event=pull_request_target&status=${status}&per_page=100"
+            gh api --paginate "$runs_url" |
+              jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head "$CLOSED_PR_HEAD_SHA" --arg current "$CURRENT_RUN_ID" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(
+                    ($head != "" and .head_sha == $head) or
+                    any(.pull_requests[]?; ((.number | tostring) == $pr))
+                  )
+                | .id
+              ' |
+              while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null
+                echo "Cancelled Strix run ${run_id} for closed PR #${CLOSED_PR_NUMBER}."
+              done
+          }
+
+          cancel_runs queued
+          cancel_runs in_progress
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'

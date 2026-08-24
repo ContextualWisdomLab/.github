@@ -298,8 +298,12 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository }}"
+        "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, "
+        "github.event.pull_request.number)"
+    ) in concurrency_contract
+    assert (
+        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository)"
     ) in concurrency_contract
     # Repository-level (not PR-level) grouping: no pr-{N} component remains.
     assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
@@ -352,10 +356,17 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
-        assert (
-            "PR closed; this run only cancels older runs through workflow concurrency."
-            in workflow
-        )
+        if filename == "strix.yml":
+            assert "Cancel queued and running scans for the closed pull request" in workflow
+            assert "actions: write" in workflow
+            assert "actions/workflows/strix.yml/runs?event=pull_request_target" in workflow
+            assert "actions/runs/${run_id}/cancel" in workflow
+            assert "CURRENT_RUN_ID" in workflow
+        else:
+            assert (
+                "PR closed; this run only cancels older runs through workflow concurrency."
+                in workflow
+            )
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
