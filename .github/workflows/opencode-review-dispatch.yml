@@ -6269,18 +6269,41 @@ jobs:
             local evidence_file="$1"
             local source_root="${OPENCODE_SOURCE_WORKDIR:-${GITHUB_WORKSPACE:-$PWD}}"
             local diff_status
+            local base_prefix
 
             if self_healed_strix_dependency_base_failure "$evidence_file"; then
               return 0
             fi
-            grep -Fq "Self-test Strix gate script" "$evidence_file" || return 1
-            grep -Fq "opencode.jsonc: No such file or directory" "$evidence_file" || return 1
             if [ -z "${PR_BASE_SHA:-}" ] || [ -z "${PR_HEAD_SHA:-}" ]; then
               return 1
             fi
             if ! git -C "$source_root" rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1 ||
               ! git -C "$source_root" rev-parse --verify "${PR_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
               return 1
+            fi
+            base_prefix="${PR_BASE_SHA:0:7}"
+
+            # A pull_request_target Strix run executes the gate from the
+            # protected base. Authenticate that predecessor identity from the
+            # runner-owned checkout lines before treating its infrastructure
+            # failure as evidence about the old gate instead of PR source.
+            grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+Z \[command\]/usr/bin/git checkout --progress --force ${PR_BASE_SHA}$" \
+              "$evidence_file" || return 1
+            grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+Z HEAD is now at ${base_prefix}([[:space:]]|$)" \
+              "$evidence_file" || return 1
+
+            # A real vulnerability report remains authoritative even when a
+            # PR also edits the trusted Strix gate. Never reclassify source
+            # findings as predecessor infrastructure evidence.
+            if grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+Z .*Vulnerabilities[[:space:]]+[1-9][0-9]*([[:space:]]|$)|^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+Z .*Severity:[[:space:]]*(CRITICAL|HIGH|MEDIUM|LOW)([[:space:]]|$)" \
+              "$evidence_file"; then
+              return 1
+            fi
+
+            if ! grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[^[:space:]]+Z (.*Strix run failed for model|.*emitted provider infrastructure or failure-signal output|.*LLM CONNECTION FAILED|.*Configured (model and fallback models|Vertex model and fallback models) were unavailable)" \
+              "$evidence_file"; then
+              grep -Fq "Self-test Strix gate script" "$evidence_file" || return 1
+              grep -Fq "opencode.jsonc: No such file or directory" "$evidence_file" || return 1
             fi
 
             set +e
