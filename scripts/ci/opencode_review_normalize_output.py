@@ -137,6 +137,8 @@ APPROVAL_VERIFICATION_PATTERNS = {
     label: re.compile(re.escape(label)) for label in APPROVAL_VERIFICATION_LABELS
 }
 
+ANY_LABEL_PATTERN = re.compile("|".join(re.escape(label) for label in APPROVAL_VERIFICATION_LABELS))
+
 SOURCE_LIKE_CHANGED_FILE_EXTENSIONS = frozenset(
     {
         ".bash",
@@ -979,15 +981,16 @@ def label_section(text: str, label: str) -> str:
     if not starts:
         return ""
     start = starts[-1] + len(label)
-    next_starts = [
-        candidate_start
-        for candidate in APPROVAL_VERIFICATION_LABELS
-        if candidate != label
-        for candidate_start in label_starts(candidate)
-        if candidate_start >= start
-    ]
-    end = min(next_starts) if next_starts else len(text)
-    return text[start:end]
+
+    match = ANY_LABEL_PATTERN.search(text, start)
+    while match:
+        idx = match.start()
+        matched_label = match.group(0)
+        if matched_label != label and idx in label_starts(matched_label):
+            return text[start:idx]
+        match = ANY_LABEL_PATTERN.search(text, match.end())
+
+    return text[start:]
 
 
 def coverage_section_is_valid(section: str) -> bool:
