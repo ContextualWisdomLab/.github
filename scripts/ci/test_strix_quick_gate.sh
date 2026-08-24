@@ -5718,7 +5718,7 @@ PY
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna deepseek/deepseek-v3-0324")
 	fi
 	if [ "$scenario" = "all-fallbacks-invalid" ]; then
-		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna")
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna openai_direct/gpt-5.5")
 	fi
 	if [ "$scenario" = "same-provider-direct-openai-fallback-key" ]; then
 		printf '%s' 'same-provider-fallback-token' >"$tmp_dir/openai_fallback_key.txt"

@@ -4236,6 +4236,7 @@ run_current_target_scan() {
 	read -r -a FALLBACK_MODELS <<<"$FALLBACK_MODELS_RAW"
 
 	fallback_tried=0
+	local fallback_attempts=0
 	local fallback_config_failures=0
 	for candidate_raw in "${FALLBACK_MODELS[@]}"; do
 		candidate="$(normalize_model "$candidate_raw")"
@@ -4250,6 +4251,7 @@ run_current_target_scan() {
 		fi
 
 		fallback_tried=1
+		fallback_attempts=$((fallback_attempts + 1))
 		if is_vertex_model "$PRIMARY_MODEL"; then
 			echo "Primary Vertex model unavailable; retrying with fallback '$candidate'."
 		else
@@ -4338,7 +4340,7 @@ run_current_target_scan() {
 		fi
 		return 1
 	fi
-	if [ "$fallback_config_failures" -eq "$fallback_tried" ]; then
+	if [ "$fallback_config_failures" -eq "$fallback_attempts" ]; then
 		echo "ERROR: All configured fallback models failed provider configuration." >&2
 		return 2
 	fi
