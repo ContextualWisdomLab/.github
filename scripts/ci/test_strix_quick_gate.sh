@@ -929,7 +929,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "required OpenCode reviews measure coverage instead of approving skipped coverage evidence"
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository coverage reads" "coverage source materialization can read private target repositories during central manual dispatch"
 	assert_file_contains "$workflow_file" "Upload materialized pull request merge tree" "coverage source materialization passes only a prepared merge tree artifact to the PR-head coverage job"
-	assert_file_contains "$workflow_file" "Download materialized pull request merge tree" "coverage evidence consumes the prepared merge tree artifact without target-repository credentials"
+	assert_file_contains "$workflow_file" "Download current-attempt materialized pull request merge tree" "coverage evidence consumes the prepared current-attempt merge tree artifact without target-repository credentials"
 	assert_file_contains "$workflow_file" "Report coverage source materialization failure" "coverage evidence logs source materialization failures as the coverage blocker"
 	local coverage_merge_tree_step
 	coverage_merge_tree_step="$(
