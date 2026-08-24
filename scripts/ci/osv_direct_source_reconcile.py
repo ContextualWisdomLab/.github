@@ -348,20 +348,18 @@ def reconcile_payload(
         if not candidates and package_name != "xlsx":
             continue
         if len(candidates) != 1:
+            reason = (
+                "no unique direct-source provenance matches package and version"
+                if not candidates
+                else "multiple direct-source records match package and version"
+            )
             source = candidates[0] if candidates else DirectSource(
                 package_name=package_name,
                 version=package_version,
                 source_url="",
                 integrity="",
                 valid=False,
-                reason="no unique direct-source provenance matches package and version"
-                if not candidates
-                else "multiple direct-source records match package and version",
-            )
-            reason = (
-                "no unique direct-source provenance matches package and version"
-                if not candidates
-                else "multiple direct-source records match package and version"
+                reason=reason,
             )
             retained = []
             for vulnerability in vulnerabilities:
@@ -592,7 +590,7 @@ def main() -> int:
                 f"{entry['vulnerability_id']} ({entry['reason']})"
             )
         return 0
-    except (TypeError, ValueError) as error:
+    except (OSError, TypeError, ValueError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
 

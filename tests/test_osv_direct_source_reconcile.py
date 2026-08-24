@@ -560,6 +560,18 @@ class DirectSourceReconcileTests(unittest.TestCase):
                 str(SCRIPT), "--results", str(results_path), "--lockfile", str(lock_path),
                 "--audit", str(audit_path), "--label", "head",
             ]
+            with (
+                mock.patch.object(
+                    OSV, "atomic_json_write", side_effect=OSError("write failed")
+                ),
+                mock.patch.object(OSV.sys, "argv", argv),
+                mock.patch.object(
+                    OSV.sys, "stderr", new_callable=io.StringIO
+                ) as stderr,
+            ):
+                self.assertEqual(OSV.main(), 1)
+            self.assertIn("::error::write failed", stderr.getvalue())
+
             with mock.patch.object(sys, "argv", argv):
                 self.assertEqual(OSV.main(), 0)
             self.assertEqual(json.loads(audit_path.read_text(encoding="utf-8")), [{"status": "prior"}])
