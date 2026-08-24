@@ -399,9 +399,14 @@ def test_quality_workflow_covers_supported_pythons_and_all_contract_files() -> N
         ".github/workflows/python-native-extension-peer-gate-quality-ci.yml",
         "docs/doctoring/python-native-extension-peer-evidence.md",
         "docs/doctoring/python-native-extension-peer-file-safety.md",
+        "AGENTS.md",
+        "ARCHITECTURE.md",
         "CHANGELOG.md",
     ):
         assert path in workflow
+    trigger_contract = workflow.split("\nconcurrency:", 1)[0]
+    for policy_path in ("AGENTS.md", "ARCHITECTURE.md"):
+        assert trigger_contract.count(f'- "{policy_path}"') == 2
     assert 'python-version: "3.10"' in workflow
     assert 'python-version: "3.14"' in workflow
     assert "--cov-branch" in workflow or "branch = True" in workflow
@@ -410,3 +415,20 @@ def test_quality_workflow_covers_supported_pythons_and_all_contract_files() -> N
     assert "compileall -q" in workflow
     assert "actionlint" in workflow
     assert '"${RUNNER_TEMP}/actionlint" -shellcheck=' in workflow
+
+
+def test_unreleased_changelog_has_unique_sibling_headings() -> None:
+    """Keep a Changelog sections must not duplicate sibling headings."""
+
+    unreleased = (
+        (_ROOT / "CHANGELOG.md")
+        .read_text(encoding="utf-8")
+        .split("## [Unreleased]", 1)[1]
+        .split("\n## ", 1)[0]
+    )
+    headings = [
+        line
+        for line in unreleased.splitlines()
+        if line.startswith("### ")
+    ]
+    assert len(headings) == len(set(headings))

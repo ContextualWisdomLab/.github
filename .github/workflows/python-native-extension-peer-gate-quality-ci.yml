@@ -14,6 +14,8 @@ on:
       - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
       - "docs/doctoring/python-native-extension-peer-evidence.md"
       - "docs/doctoring/python-native-extension-peer-file-safety.md"
+      - "AGENTS.md"
+      - "ARCHITECTURE.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
   push:
@@ -29,6 +31,8 @@ on:
       - "tests/test_python_native_extension_peer_gate_workflow_contract.py"
       - "docs/doctoring/python-native-extension-peer-evidence.md"
       - "docs/doctoring/python-native-extension-peer-file-safety.md"
+      - "AGENTS.md"
+      - "ARCHITECTURE.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
 
