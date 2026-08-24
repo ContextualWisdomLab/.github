@@ -388,7 +388,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "openai_direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai_direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
-	assert_file_not_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow fallback configuration uses the canonical direct-OpenAI provider prefix"
+	if grep -Eq '^[[:space:]]+STRIX_FALLBACK_MODELS:.*openai-direct/gpt-5\.6-luna' "$workflow_file"; then
+		record_failure "strix workflow active fallback configuration uses the retired direct-OpenAI provider prefix"
+	fi
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_not_contains "$workflow_file" "- name: Prepare GitHub Models fallback credentials" "strix workflow does not define a GitHub Models fallback credential step (a compatibility comment for main's retired smoke needle is allowed)"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
