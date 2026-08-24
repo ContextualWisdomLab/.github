@@ -196,6 +196,7 @@ flowchart LR
 | #821 | fix(opencode): reap fatal provider process groups | `e1eb67926d9143730054c1fc9f1ef82dc5ef4a0c` | main | BEHIND | ready |
 | #790 | fix(coverage): retry transient trusted uv downloads | `463ddbad84ee40f56f2196af2aa41f1dd4100907` | main | BEHIND | ready |
 | #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `31c8d207a5d5cbdde3e0ea98dcd7f50c383b6e4b` | main | BLOCKED | ready |
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
@@ -216,7 +217,7 @@ flowchart LR
 
 1. ContextualWisdomLab/.github#1265 — `0c6b9a6459c9dbdf5e23fb01df7a32a8a14964b3` main에 병합됐다.
 2. 이 베이스라인 PR — current-head OpenCode APPROVE 후 병합. 기존 #1277은 이미 `main`에 병합된 선행 기준선이며, 이 PR은 현재 live snapshot을 갱신한다.
-3. ContextualWisdomLab/.github#1263 — G-03. Strix CRs on #1278/#1273/#1271/#1267/#1258 are the same provider fail-closed, not those PRs' code.
+3. ContextualWisdomLab/.github#1263 — G-03. Historical Strix CRs observed on merged #1278 and open #1273/#1271/#1267/#1258 are the same provider fail-closed, not those PRs' code.
 4. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#976부터 한 phase씩 구현한다.
 
 
