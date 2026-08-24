@@ -380,6 +380,35 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	fi
 fi
 
+# Optional cross-provider direct-OpenAI fallback credentials. A fallback must
+# never reuse the primary provider's key or endpoint (for example NVIDIA NIM)
+# merely because the model name is OpenAI-compatible.
+STRIX_OPENAI_API_KEY_FILE="${STRIX_OPENAI_API_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_API_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_API_KEY_FILE" ] || [ -L "$STRIX_OPENAI_API_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_API_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_API_KEY_FILE" ] && ! STRIX_OPENAI_API_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_API_KEY_FILE" "$STRIX_OPENAI_API_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_API_KEY=""
+if [ -n "$STRIX_OPENAI_API_KEY_FILE" ]; then
+	STRIX_OPENAI_API_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_API_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_API_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_API_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+STRIX_OPENAI_API_BASE_FILE="${STRIX_OPENAI_API_BASE_FILE:-}"
+if [ -n "$STRIX_OPENAI_API_BASE_FILE" ] && { [ ! -f "$STRIX_OPENAI_API_BASE_FILE" ] || [ -L "$STRIX_OPENAI_API_BASE_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_API_BASE_FILE must reference a regular file containing the API base." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_API_BASE_FILE" ] && ! STRIX_OPENAI_API_BASE_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_API_BASE_FILE" "$STRIX_OPENAI_API_BASE_FILE")"; then
+	exit 2
+fi
+
 require_non_negative_integer() {
 	local value="$1"
 	local label="$2"
@@ -2383,6 +2412,12 @@ resolved_llm_api_base_for_model() {
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
+	if [[ "$model" == openai_direct/* ]] && [ -n "$STRIX_OPENAI_API_BASE_FILE" ]; then
+		# Cross-provider fallback: direct OpenAI attempts must use the direct
+		# OpenAI endpoint instead of the primary provider's endpoint.
+		api_base_file="$STRIX_OPENAI_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENAI_API_BASE_FILE"
+	fi
 	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback
@@ -2394,6 +2429,10 @@ resolved_llm_api_base_for_model() {
 	if [ -z "$api_base_file" ]; then
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
+			return 2
+		fi
+		if [[ "$model" == openai_direct/* ]] && [ "$PRIMARY_MODEL" != "$model" ] && [ -n "$LLM_API_BASE_FILE" ]; then
+			echo "ERROR: Cross-provider direct-OpenAI Strix fallbacks require STRIX_OPENAI_API_BASE_FILE." >&2
 			return 2
 		fi
 		return 0
@@ -2497,12 +2536,19 @@ run_strix_once() {
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	if ! is_vertex_model "$(normalize_model "$model")"; then
+	local normalized_model
+	normalized_model="$(normalize_model "$model")"
+	if ! is_vertex_model "$normalized_model"; then
 		child_llm_api_key="$LLM_API_KEY"
-		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+		if is_github_models_model "$normalized_model" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
+		fi
+		if [[ "$normalized_model" == openai_direct/* ]] && [ -n "$STRIX_OPENAI_API_KEY" ]; then
+			# Cross-provider fallback: direct OpenAI models authenticate with the
+			# dedicated OpenAI key, not the primary provider's credential.
+			child_llm_api_key="$STRIX_OPENAI_API_KEY"
 		fi
 	fi
 	set -o pipefail
@@ -4179,6 +4225,11 @@ run_current_target_scan() {
 		fi
 		if [ "$TOTAL_TIMEOUT_EXCEEDED" -eq 1 ]; then
 			return 1
+		fi
+		if [[ "$candidate" == openai_direct/* ]] && [[ "$PRIMARY_MODEL" != openai_direct/* ]] &&
+			{ [ -z "$STRIX_OPENAI_API_KEY" ] || [ -z "$STRIX_OPENAI_API_BASE_FILE" ]; }; then
+			echo "Skipping direct-OpenAI fallback '$candidate' because its dedicated key and endpoint are unavailable; primary provider credentials will not be reused." >&2
+			continue
 		fi
 
 		fallback_tried=1

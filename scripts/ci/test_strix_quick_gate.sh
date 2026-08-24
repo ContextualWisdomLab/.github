@@ -366,7 +366,10 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow's STRIX_FALLBACK_MODELS must use the underscore openai_direct/ form litellm actually routes on -- the hyphenated openai-direct/ alias reaches litellm unmodified and fails 'LLM Provider NOT provided' (see child_model_for_api_base in strix_quick_gate.sh, which only matches openai_direct/*)"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
+	assert_file_contains "$workflow_file" "Prepare direct OpenAI fallback credentials" "strix workflow provisions dedicated direct-OpenAI fallback credentials"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_OPENAI_API_KEY_FILE" "strix gate reads the optional direct-OpenAI fallback key file"
+	assert_file_contains "$GATE_SCRIPT" "STRIX_OPENAI_API_BASE_FILE" "strix gate routes direct-OpenAI fallbacks through the direct endpoint"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_API_BASE_FILE" "strix gate routes github_models fallback models through the GitHub Models endpoint"
 	assert_file_not_contains "$workflow_file" 'github_models/deepseek/deepseek-r1-0528 | github_models/deepseek/deepseek-v3-0324)' "strix workflow keeps DeepSeek GitHub Models restricted to fallback-only routing"
 	assert_file_contains "$workflow_file" '${strix_model#github_models/}' "strix workflow strips manual github_models routing prefix for OpenAI GPT model names before passing model names to LiteLLM"
@@ -3223,7 +3226,8 @@ run_gate_case() {
 	local gemini_fallback_models="${27-__SAME_AS_FALLBACK_MODELS__}"
 	local generic_fallback_models="${28-}"
 	local fail_on_provider_signal="${29-1}"
-	if [ "$default_provider" = "openai" ] && [ -z "$generic_fallback_models" ] && [ -n "$fallback_models" ]; then
+	if { [ "$default_provider" = "openai" ] || [ "$default_provider" = "nvidia_nim" ]; } &&
+		[ -z "$generic_fallback_models" ] && [ -n "$fallback_models" ]; then
 		generic_fallback_models="$fallback_models"
 		fallback_models=""
 	fi
@@ -3414,6 +3418,38 @@ REPORT
 		*)
 			echo "unexpected model ${STRIX_LLM:-}" >&2
 			exit 9
+		;;
+		esac
+		;;
+	nvidia-nim-direct-openai-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected NVIDIA NIM key (${LLM_API_KEY:-<unset>})" >&2
+				exit 17
+			fi
+			if [ "${LLM_API_BASE:-}" != "https://integrate.api.nvidia.com/v1" ]; then
+				echo "unexpected NVIDIA NIM API base (${LLM_API_BASE:-<unset>})" >&2
+				exit 18
+			fi
+			echo "Error: litellm.NotFoundError: Nvidia_nimException - model not found, Error code: 404"
+			exit 1
+			;;
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
+				echo "direct-OpenAI fallback reused the primary provider key (${LLM_API_KEY:-<unset>})" >&2
+				exit 19
+			fi
+			if [ "${LLM_API_BASE:-}" != "https://api.openai.com/v1" ]; then
+				echo "direct-OpenAI fallback reused the primary provider API base (${LLM_API_BASE:-<unset>})" >&2
+				exit 20
+			fi
+			echo "scan ok with direct-OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 21
 			;;
 		esac
 		;;
@@ -5644,6 +5680,12 @@ PY
 		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
 		env_cmd+=(STRIX_GITHUB_MODELS_KEY_FILE="$tmp_dir/github_models_key.txt")
 	fi
+	if [ "$scenario" = "nvidia-nim-direct-openai-fallback-success" ]; then
+		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_OPENAI_API_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+		printf '%s' 'https://api.openai.com/v1' >"$tmp_dir/openai_fallback_api_base.txt"
+		env_cmd+=(STRIX_OPENAI_API_BASE_FILE="$tmp_dir/openai_fallback_api_base.txt")
+	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
 		local env_pair
@@ -6239,6 +6281,18 @@ run_filtered_gate_case_if_requested() {
 			"openai/quota-primary|openai/fallback-one" \
 			"<unset>|<unset>" \
 			"openai"
+		;;
+	nvidia-nim-direct-openai-fallback-success)
+		run_gate_case "nvidia-nim-direct-openai-fallback-success" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.6-luna" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'openai_direct/gpt-5.6-luna' in [0-9]+s\\." \
+			"3" \
+			"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|openai/gpt-5.6-luna" \
+			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://api.openai.com/v1" \
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1"
 		;;
 	pr-critical-changed-json-target)
 		run_gate_case "pr-critical-changed-json-target" \
@@ -9721,6 +9775,17 @@ run_gate_case_allow_provider_signal "openai-primary-quota-fallback-success" \
 	"openai/quota-primary|openai/fallback-one" \
 	"<unset>|<unset>" \
 	"openai"
+
+run_gate_case "nvidia-nim-direct-openai-fallback-success" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.6-luna" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'openai_direct/gpt-5.6-luna' in [0-9]+s\\." \
+	"3" \
+	"nvidia_nim/nvidia/nemotron-3-super-120b-a12b|nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|openai/gpt-5.6-luna" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://api.openai.com/v1" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1"
 
 run_gate_case_allow_provider_signal "vertex-primary-429-fallback-success" \
 	"vertex_ai/http429-primary" \

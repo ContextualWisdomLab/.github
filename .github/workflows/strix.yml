@@ -649,6 +649,28 @@ jobs:
           printf '%s' "$trimmed" > "$llm_api_key_file"
           echo "LLM_API_KEY_FILE=$llm_api_key_file" >> "$GITHUB_ENV"
 
+      - name: Prepare direct OpenAI fallback credentials
+        if: steps.gate.outputs.provider_mode == 'github_models' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
+        env:
+          OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          # Cross-provider fallbacks must receive both direct-OpenAI inputs;
+          # an unavailable pair is left unset so the gate skips the candidate
+          # instead of sending a primary-provider credential to another API.
+          umask 077
+          sanitized="$(printf '%s' "$OPENAI_FALLBACK_KEY" | tr -d '\r\n')"
+          trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ]; then
+            echo '::notice::No direct OpenAI fallback key available; cross-provider direct-OpenAI fallbacks remain disabled.'
+            exit 0
+          fi
+          openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
+          printf '%s' "$trimmed" > "$openai_fallback_key_file"
+          echo "STRIX_OPENAI_API_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
+          openai_fallback_api_base_file="$RUNNER_TEMP/openai_fallback_api_base.txt"
+          printf '%s' 'https://api.openai.com/v1' > "$openai_fallback_api_base_file"
+          echo "STRIX_OPENAI_API_BASE_FILE=$openai_fallback_api_base_file" >> "$GITHUB_ENV"
+
       - name: Prepare OpenRouter API base
         if: steps.gate.outputs.provider_mode == 'openrouter'
         run: |
@@ -806,6 +828,8 @@ jobs:
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == 'vertex_ai' && 'vertex_ai' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim' || 'openai' }}
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
+          STRIX_OPENAI_API_KEY_FILE: ${{ env.STRIX_OPENAI_API_KEY_FILE }}
+          STRIX_OPENAI_API_BASE_FILE: ${{ env.STRIX_OPENAI_API_BASE_FILE }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
           CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ${{ env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE }}
           VERTEXAI_PROJECT: ${{ env.VERTEXAI_PROJECT }}

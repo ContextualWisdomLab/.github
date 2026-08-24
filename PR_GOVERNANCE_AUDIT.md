@@ -211,6 +211,24 @@ documented in `.github#624` -- that remains a capacity problem requiring an
 org-billing action, not a wiring bug; this fix only ensures the
 `openai_direct` fallback slot is reachable at all once capacity exists.
 
+2026-08-24 KST cross-provider credential and endpoint isolation: the corrected
+`openai_direct/*` fallback still needed its own credential boundary when the
+primary provider was NVIDIA NIM, OpenRouter, or GitHub Models. Without that
+boundary, `run_strix_once()` would pass the primary `LLM_API_KEY` and
+`LLM_API_BASE_FILE` into a direct-OpenAI attempt; this could turn a fallback
+into a request authenticated against the wrong provider and would make a
+successful security scan impossible to interpret. The workflow now materializes
+`STRIX_OPENAI_API_KEY_FILE` and `STRIX_OPENAI_API_BASE_FILE` only for the
+cross-provider branches, using the scoped `STRIX_OPENAI_API_KEY`/
+`OPENAI_API_KEY` secret and `https://api.openai.com/v1`. The gate selects these
+inputs only for `openai_direct/*` candidates and skips that candidate when the
+pair is unavailable, never reusing a primary-provider secret. Added a fake
+Strix regression covering NVIDIA NIM → NVIDIA NIM → direct OpenAI routing and
+asserting both credential and endpoint separation, plus static workflow and
+trusted-input smoke assertions. This is a provider-boundary remediation; it
+does not relax provider-signal fail-closed behavior or the required security
+review gate.
+
 ## Live Repository Inventory
 
 Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, #71, #79, and #80 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The 2026-07-02 18:15 KST refresh found 17 public non-fork repositories, adding `kaefa` and `waf-ids-ai-soc` to the prior public non-fork inventory. The public fork inventory still contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.
