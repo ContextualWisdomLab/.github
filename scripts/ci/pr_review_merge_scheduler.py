@@ -1428,6 +1428,8 @@ def is_non_authoritative_coverage_check_run(node: dict[str, Any]) -> bool:
     """Return whether central metadata-only coverage evidence is non-authoritative."""
     if not (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip():
         return False
+    if (node.get("name") or "").lower() != "coverage-evidence":
+        return False
     workflow = (
         ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
         or {}
@@ -1703,6 +1705,8 @@ def failed_status_checks(
         if (node.get("state") or "").upper() == "SUCCESS"
     }
     for index, node in enumerate(check_runs):
+        if is_non_authoritative_coverage_check_run(node):
+            continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if index in superseded_coverage_indices:
