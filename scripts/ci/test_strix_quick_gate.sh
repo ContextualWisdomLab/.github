@@ -3469,6 +3469,34 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-nim-quota-openai-direct-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected primary key for NVIDIA NIM (${LLM_API_KEY:-<unset>})" >&2
+				exit 25
+			fi
+			echo "Error: litellm.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		openai/gpt-5.6-luna)
+			if [ "${LLM_API_KEY:-}" != "dedicated-openai-fallback-token" ]; then
+				echo "unexpected direct-OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
+				exit 26
+			fi
+			if [ "${LLM_API_BASE:-<unset>}" != "<unset>" ]; then
+				echo "unexpected direct-OpenAI fallback API base (${LLM_API_BASE:-<unset>})" >&2
+				exit 27
+			fi
+			echo "scan ok with dedicated direct-OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 28
+			;;
+		esac
+		;;
 	all-fallbacks-invalid)
 		case "${STRIX_LLM:-}" in
 		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
@@ -5733,6 +5761,11 @@ PY
 		# then prove a later valid fallback is still attempted.
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna deepseek/deepseek-v3-0324")
 	fi
+	if [ "$scenario" = "nvidia-nim-quota-openai-direct-fallback-success" ]; then
+		printf '%s' 'dedicated-openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna")
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+	fi
 	if [ "$scenario" = "all-fallbacks-invalid" ]; then
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna openai_direct/gpt-5.5")
 	fi
@@ -6506,6 +6539,17 @@ run_filtered_gate_case_if_requested() {
 			"2" \
 			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
 			"" \
+			"nvidia_nim"
+		;;
+	nvidia-nim-quota-openai-direct-fallback-success)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
+			"0" \
+			"scan ok with dedicated direct-OpenAI fallback" \
+			"2" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|openai/gpt-5.6-luna" \
+			"https://example.invalid|<unset>" \
 			"nvidia_nim"
 		;;
 	all-fallbacks-invalid)
@@ -12702,6 +12746,16 @@ run_gate_case "nvidia-nim-quota-openai-direct-fallback-missing-key" \
 	"2" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
 	"" \
+	"nvidia_nim"
+
+run_gate_case "nvidia-nim-quota-openai-direct-fallback-success" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"" \
+	"0" \
+	"scan ok with dedicated direct-OpenAI fallback" \
+	"2" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|openai/gpt-5.6-luna" \
+	"https://example.invalid|<unset>" \
 	"nvidia_nim"
 
 run_gate_case "mixed-fallback-config-and-retryable" \
