@@ -12,7 +12,8 @@ control (usestrix, n.d.).
 ## Root cause and repair
 
 The preferred request-boundary repair is to omit a sampling parameter that a
-caller did not explicitly provide. `contextual-orchestrator` owns that provider
+caller did not explicitly provide. [ContextualWisdomLab/contextual-orchestrator](https://github.com/ContextualWisdomLab/contextual-orchestrator)
+owns that provider
 boundary for organization software. The pinned Strix integration cannot yet
 express the omission through its documented configuration, so the trusted
 quick gate recognizes only one physical error line containing all of these
