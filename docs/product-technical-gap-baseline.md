@@ -202,6 +202,7 @@ flowchart LR
 - ContextualWisdomLab/.github#1265 stays GitHub CLEAN on `d4d4c2b0589065976e4bdcf5c5ae429bc21ed680` with hosted Checks green and no current-head OpenCode APPROVE after repeated `@opencode-agent` requests. CLEAN is not merge authorization.
 - ContextualWisdomLab/.github#1263 head `50a6ad9129b2da55d049600ecd2516ee0999d7f1` still has required Strix FAILURE on protected-main gate.
 - Open count is 98. No additional `.github` PR merged this pass.
+- ContextualWisdomLab/.github#1295 exact head `d376c33a3fdf013c588ab7fd30971f54f9dcee1b` now binds `openai-direct/<model>` fallbacks to the OpenAI platform endpoint and preserves fail-closed behavior for provider 404/no-report outcomes. The focused provider-routing tests pass locally; hosted Checks remain the authority.
 
 
 ## 5. 실행 루프와 고객의 다음 행동
