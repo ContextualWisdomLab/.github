@@ -47,6 +47,8 @@ alphanumeric/hyphen characters with an alphanumeric first and last character.
 option-like, traversal, whitespace, control, or backslash syntax, must resolve
 to an existing directory, and must remain inside the exact checked-out
 `GITHUB_WORKSPACE` after symlink resolution.
+Every path component must be non-empty; callers should pass `./public`, not
+`./public/`.
 `custom_domain` is optional; when present it is bounded to DNS-style labels,
 rejects path/query/fragment/port-like syntax, and is canonicalized to lowercase.
 Invalid input fails with one generic value-free error rather than reflecting the
