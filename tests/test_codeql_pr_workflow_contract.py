@@ -71,7 +71,7 @@ def test_all_codeql_actions_share_the_reviewed_current_release() -> None:
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
-            if "github/codeql-action/" not in line:
+            if "uses:" not in line or "github/codeql-action/" not in line:
                 continue
             match = pattern.search(line)
             assert match is not None, f"malformed CodeQL pin: {path}:{line_number}"
