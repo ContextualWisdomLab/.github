@@ -222,6 +222,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      coverage_source_artifact_id: ${{ steps.coverage_source_upload.outputs.artifact-id }}
+      coverage_source_run_attempt: ${{ steps.coverage_source_attempt.outputs.run_attempt }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -349,10 +352,23 @@ jobs:
           git -C "$COVERAGE_SOURCE_WORKDIR" status --short
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
 
+      - name: Record coverage source workflow attempt
+        id: coverage_source_attempt
+        env:
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Coverage producer workflow attempt is not a positive integer."
+            exit 1
+          fi
+          printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
+
       - name: Upload materialized pull request merge tree
+        id: coverage_source_upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: opencode-coverage-source
+          name: opencode-coverage-source-${{ github.run_attempt }}
           path: ${{ runner.temp }}/opencode-coverage-source.tar
           if-no-files-found: error
           retention-days: 1
@@ -431,13 +447,54 @@ jobs:
         if: needs.coverage-source-tree.result != 'success'
         run: |
           echo "::error::Coverage source tree could not be materialized; see the coverage-source-tree job log for the exact target repository, base SHA, head SHA, and fetch or merge failure."
-          exit 1
+          # Continue to the unified current-attempt recovery gate for bounded
+          # fail-closed guidance.
 
-      - name: Download materialized pull request merge tree
+      - name: Verify coverage source identity for current workflow attempt
+        if: always()
+        id: coverage_source_identity
+        continue-on-error: true
+        env:
+          COVERAGE_SOURCE_ARTIFACT_ID: ${{ needs.coverage-source-tree.outputs.coverage_source_artifact_id }}
+          COVERAGE_SOURCE_RUN_ATTEMPT: ${{ needs.coverage-source-tree.outputs.coverage_source_run_attempt }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if ! [[ "$CURRENT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
+            [ "$COVERAGE_SOURCE_RUN_ATTEMPT" != "$CURRENT_RUN_ATTEMPT" ]; then
+            echo "::error::Coverage source was not produced in current workflow attempt ${CURRENT_RUN_ATTEMPT:-missing}; producer attempt=${COVERAGE_SOURCE_RUN_ATTEMPT:-missing}."
+            echo "::error::Use a full rerun or a fresh repository dispatch; failed-jobs-only reruns cannot reuse prior-attempt source evidence."
+            exit 1
+          fi
+          if ! [[ "$COVERAGE_SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Coverage source artifact ID is missing or malformed for current workflow attempt."
+            echo "::error::Use a full rerun or a fresh repository dispatch so the producer publishes current-attempt evidence."
+            exit 1
+          fi
+          artifact_id=$COVERAGE_SOURCE_ARTIFACT_ID
+          printf 'artifact_id=%s\n' "$artifact_id" >>"$GITHUB_OUTPUT"
+
+      - name: Download current-attempt materialized pull request merge tree
+        if: >-
+          always()
+          && needs.coverage-source-tree.result == 'success'
+          && steps.coverage_source_identity.outcome == 'success'
+        id: coverage_source_download
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: opencode-coverage-source
+          artifact-ids: ${{ steps.coverage_source_identity.outputs.artifact_id }}
           path: ${{ runner.temp }}/opencode-coverage-artifact
+
+      - name: Report missing current-attempt coverage source
+        if: always() && (needs.coverage-source-tree.result != 'success' || steps.coverage_source_identity.outcome != 'success' || steps.coverage_source_download.outcome != 'success')
+        env:
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          echo "::error::Coverage source evidence is unavailable for workflow run attempt ${GITHUB_RUN_ATTEMPT}; a failed-jobs-only rerun cannot safely reconstruct or reuse source evidence from another attempt."
+          echo "::error::Use a full rerun or a fresh repository dispatch so coverage-source-tree uploads exact current-attempt evidence."
+          exit 1
 
       - name: Prepare pull request merge tree for coverage measurement
         env:
@@ -2447,6 +2504,7 @@ jobs:
               ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \
               ContextualWisdomLab/.github:tests/test_materialize_base_javascript_packages.py | \
               ContextualWisdomLab/.github:tests/test_adversarial_evidence.py | \
+              ContextualWisdomLab/.github:tests/test_opencode_coverage_artifact_rerun_contract.py | \
               ContextualWisdomLab/.github:tests/test_opencode_agent_contract.py | \
               ContextualWisdomLab/.github:tests/test_opencode_model_pool_runner.py | \
               ContextualWisdomLab/.github:tests/test_pr_head_replay_guard.py | \

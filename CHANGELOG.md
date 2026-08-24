@@ -60,6 +60,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Bound OpenCode coverage source evidence to the current workflow attempt and
+  immutable upload artifact ID, failing closed with full-rerun guidance when a
+  failed-jobs-only rerun cannot obtain exact current-attempt evidence.
 - Kept the extracted adversarial-evidence gate and its contract test inside the
   central OpenCode review-process fallback scope, so changes to that trust
   boundary retain the same exact-file eligibility and adversarial review path.
