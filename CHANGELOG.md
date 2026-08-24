@@ -12,6 +12,12 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Serialize Strix scans per repository and event class to stop shared-provider
+  key rate-limit storms. Concurrent per-PR scans each retried the shared NVIDIA
+  NIM key, producing guaranteed `litellm.RateLimitError` failures across open
+  PRs. Queue `max` preserves every queued evidence run; `cancel-in-progress:
+  false` avoids dropping in-flight evidence. Update the bash contract test to
+  match the repository-scoped concurrency group.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
