@@ -2637,6 +2637,9 @@ def inspect_pr(
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
+        coverage_retry_progress = opencode_progress_state(
+            pr, stale_after_minutes=stale_opencode_minutes
+        )
         coverage_ready = (
             merge_state not in {"DIRTY", "CONFLICTING"}
             and trigger_reviews
@@ -2644,11 +2647,27 @@ def inspect_pr(
             and current_head_coverage_change_request(pr)
             and coverage_evidence_state(pr) == "complete"
             and strix_evidence_state(pr) == "complete"
-            and opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
-            != "running"
             and not failed_status_checks(pr, ignore_opencode=True)
         )
         if coverage_ready:
+            if coverage_retry_progress == "running":
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                "current-head OpenCode coverage evidence is complete; disable "
+                                "auto-merge while same-head re-review is already running"
+                            ),
+                        )
+                    )
+                return decide(
+                    "wait",
+                    "current-head OpenCode coverage evidence is complete; "
+                    "same-head OpenCode re-review is already running",
+                )
             retry_wait_reason = coverage_retry_wait_reason(pr)
             if retry_wait_reason:
                 return decide("wait", retry_wait_reason)

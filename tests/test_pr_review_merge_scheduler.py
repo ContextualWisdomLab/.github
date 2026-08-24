@@ -1254,8 +1254,11 @@ def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
 
     decision = inspect(coverage_request)
 
-    assert decision.action == "block"
-    assert decision.reason == "current-head OpenCode review requested changes"
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "current-head OpenCode coverage evidence is complete; "
+        "same-head OpenCode re-review is already running"
+    )
     assert dispatched == []
 
 
