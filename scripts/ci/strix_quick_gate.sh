@@ -2482,15 +2482,10 @@ child_model_for_api_base() {
 	fi
 
 	case "$model" in
+	# The workflow accepts both direct-OpenAI spellings. LiteLLM cannot infer a
+	# provider from either prefix, so normalize both in this single case arm.
 	openai_direct/* | openai-direct/*)
 		printf 'openai/%s\n' "${model#*/}"
-		return 0
-		;;
-	# The workflow contract spells the direct-OpenAI fallback with a hyphen
-	# (openai-direct/...). litellm cannot infer a provider from that prefix,
-	# so both spellings must resolve to the litellm openai/<model> form.
-	openai-direct/*)
-		printf 'openai/%s\n' "${model#openai-direct/}"
 		return 0
 		;;
 	esac

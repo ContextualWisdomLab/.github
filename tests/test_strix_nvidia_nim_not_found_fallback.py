@@ -264,6 +264,18 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             "openai/gpt-5.6-luna",
         )
 
+    def test_direct_openai_aliases_share_one_reachable_case_arm(self) -> None:
+        """Keep both supported spellings without a shadowed duplicate arm."""
+
+        gate = STRIX_GATE.read_text(encoding="utf-8")
+        normalizer = _function_block(gate, "child_model_for_api_base")
+
+        self.assertEqual(
+            normalizer.count("openai_direct/* | openai-direct/*)"),
+            1,
+        )
+        self.assertNotIn("\n\topenai-direct/*)", normalizer)
+
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
 
