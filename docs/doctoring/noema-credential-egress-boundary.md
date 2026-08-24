@@ -27,17 +27,19 @@ Before request construction it:
    malformed resolution evidence; and
 4. requires every non-loopback address to be globally routable unicast.
 
-Redirects remain disabled. The response reader requests at most one byte beyond
-the 1 MiB contract, rejects an over-limit result before decoding JSON, and then
-re-resolves the same host and port. A changed address set invalidates the result.
-Tests cover IPv4 and IPv6 loopback, dual-stack public endpoints, DNS rebinding
-evidence, resolver failures, malformed results, URL credentials, special-use
-address classes, and the byte limit.
+Redirects remain disabled, and the opener disables ambient proxies. Custom HTTP
+and HTTPS connections connect only to the validated numeric addresses while
+retaining the original hostname for HTTPS certificate validation. The response
+reader requests at most one byte beyond the 1 MiB contract, rejects an
+over-limit result before decoding JSON, and then re-resolves the same host and
+port. A changed address set invalidates the result. Tests cover IPv4 and IPv6
+loopback, dual-stack public endpoints, pinned numeric TCP destinations, TLS SNI,
+DNS rebinding evidence, resolver failures, malformed results, URL credentials,
+special-use address classes, and the byte limit.
 
-DNS comparison detects observed rebinding but cannot bind `urllib`'s underlying
-socket to the prevalidated address. Production deployments must therefore also
-use trusted DNS and network egress controls. This residual is explicit rather
-than claiming that application validation replaces infrastructure isolation.
+Trusted DNS and network egress controls remain defense-in-depth for production;
+the application boundary now also prevents the request socket from performing
+an unvalidated hostname resolution.
 
 ## References
 

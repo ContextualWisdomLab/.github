@@ -70,6 +70,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Pin Noema's HTTP and HTTPS credential egress to the prevalidated numeric DNS
+  addresses while preserving the original HTTPS hostname for certificate
+  validation, preventing DNS rebinding between endpoint validation and socket
+  creation.
 - Fail closed before sending Noema's bearer credential to a configured model
   endpoint unless a non-loopback target uses HTTPS with stable, globally
   routable unicast DNS evidence; preserve only the literal same-job loopback

@@ -90,6 +90,147 @@ def _addrinfo(address: str, port: int) -> list[tuple[Any, ...]]:
     return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
 
 
+def test_pinned_http_connection_uses_only_validated_numeric_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prevent a second hostname resolution from selecting an unvalidated peer."""
+    fake_socket = object()
+    observed: list[tuple[tuple[object, ...], float | object, object]] = []
+
+    def fake_create_connection(
+        target: tuple[object, ...],
+        timeout: float | object,
+        source_address: object,
+    ) -> object:
+        observed.append((target, timeout, source_address))
+        return fake_socket
+
+    monkeypatch.setattr(noema.socket, "create_connection", fake_create_connection)
+    connection = noema.PinnedHTTPConnection(
+        "model.example.test",
+        port=443,
+        timeout=17,
+        validated_addresses=frozenset({noema.ipaddress.ip_address("8.8.8.8")}),
+    )
+
+    connection.connect()
+
+    assert connection.sock is fake_socket
+    assert observed == [(('8.8.8.8', 443), 17, None)]
+
+
+def test_pinned_connection_supports_ipv6_destination_shape() -> None:
+    """Preserve the four-field socket address shape required by IPv6 connect."""
+    assert noema._socket_target(noema.ipaddress.ip_address("::1"), 443) == (
+        "::1",
+        443,
+        0,
+        0,
+    )
+
+
+def test_pinned_connection_retries_only_other_validated_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry a failed connection only within the already validated address set."""
+    attempts: list[tuple[object, ...]] = []
+    fake_socket = object()
+
+    def fake_create_connection(
+        target: tuple[object, ...],
+        _timeout: float | object,
+        _source_address: object,
+    ) -> object:
+        attempts.append(target)
+        if len(attempts) == 1:
+            raise OSError("first validated address unavailable")
+        return fake_socket
+
+    monkeypatch.setattr(noema.socket, "create_connection", fake_create_connection)
+    connection = noema.PinnedHTTPConnection(
+        "model.example.test",
+        port=443,
+        validated_addresses=frozenset(
+            {
+                noema.ipaddress.ip_address("8.8.8.8"),
+                noema.ipaddress.ip_address("1.1.1.1"),
+            }
+        ),
+    )
+
+    connection.connect()
+
+    assert connection.sock is fake_socket
+    assert attempts == [("1.1.1.1", 443), ("8.8.8.8", 443)]
+
+
+def test_pinned_https_connection_keeps_hostname_for_tls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin TCP to the validated IP while retaining the URL hostname for TLS SNI."""
+    fake_socket = object()
+    wrapped_socket = object()
+
+    class Context:
+        """Provide the small SSL context surface used by HTTPSConnection."""
+
+        check_hostname = True
+
+        def wrap_socket(self, value: object, *, server_hostname: str) -> object:
+            """Record the original hostname and return the wrapped socket."""
+            assert value is fake_socket
+            assert server_hostname == "model.example.test"
+            return wrapped_socket
+
+    monkeypatch.setattr(
+        noema.socket,
+        "create_connection",
+        lambda *_args: fake_socket,
+    )
+    connection = noema.PinnedHTTPSConnection(
+        "model.example.test",
+        port=443,
+        context=Context(),
+        validated_addresses=frozenset({noema.ipaddress.ip_address("8.8.8.8")}),
+    )
+
+    connection.connect()
+
+    assert connection.sock is wrapped_socket
+
+
+@pytest.mark.parametrize(
+    ("handler_type", "connection_type"),
+    [
+        (noema.PinnedHTTPHandler, noema.PinnedHTTPConnection),
+        (noema.PinnedHTTPSHandler, noema.PinnedHTTPSConnection),
+    ],
+)
+def test_pinned_handlers_construct_pinned_connections(
+    monkeypatch: pytest.MonkeyPatch,
+    handler_type: type[Any],
+    connection_type: type[Any],
+) -> None:
+    """Keep urllib's HTTP and HTTPS paths on the validated connection classes."""
+    addresses = frozenset({noema.ipaddress.ip_address("8.8.8.8")})
+    handler = handler_type(addresses)
+    observed: dict[str, Any] = {}
+
+    def fake_do_open(factory: Any, request: object, **kwargs: Any) -> str:
+        observed["request"] = request
+        observed["connection"] = factory("model.example.test", timeout=3, **kwargs)
+        return "opened"
+
+    monkeypatch.setattr(handler, "do_open", fake_do_open)
+    request = object()
+    opened = handler.http_open(request) if isinstance(handler, noema.PinnedHTTPHandler) else handler.https_open(request)
+
+    assert opened == "opened"
+    assert observed["request"] is request
+    assert isinstance(observed["connection"], connection_type)
+    assert observed["connection"]._validated_addresses == tuple(addresses)
+
+
 def test_public_endpoint_requires_https_and_stable_global_dns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

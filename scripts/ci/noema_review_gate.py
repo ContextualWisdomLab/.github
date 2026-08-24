@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import ipaddress
 import json
 import os
@@ -428,6 +429,105 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _socket_target(address: IpAddress, port: int) -> tuple[object, ...]:
+    """Return a socket destination that contains only a validated IP literal."""
+    if address.version == 6:
+        return (str(address), port, 0, 0)
+    return (str(address), port)
+
+
+class _PinnedConnectionMixin:
+    """Connect only to the DNS addresses validated before the request."""
+
+    def __init__(
+        self,
+        *args: Any,
+        validated_addresses: frozenset[IpAddress],
+        **kwargs: Any,
+    ) -> None:
+        """Store immutable DNS evidence before initializing the HTTP connection."""
+        if not validated_addresses:
+            raise ValueError("Noema endpoint has no validated DNS addresses")
+        self._validated_addresses = tuple(
+            sorted(validated_addresses, key=lambda address: (address.version, address.packed))
+        )
+        super().__init__(*args, **kwargs)
+
+    def _connect_to_validated_address(self) -> None:
+        """Open a socket using a validated numeric destination, never the hostname."""
+        last_error: OSError | None = None
+        for address in self._validated_addresses:
+            try:
+                self.sock = socket.create_connection(
+                    _socket_target(address, self.port),
+                    self.timeout,
+                    self.source_address,
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+        raise OSError("Noema endpoint could not connect to validated DNS addresses") from last_error
+
+
+class PinnedHTTPConnection(_PinnedConnectionMixin, http.client.HTTPConnection):
+    """HTTP connection that cannot resolve the configured hostname a second time."""
+
+    def connect(self) -> None:
+        """Connect to a validated address and preserve proxy tunnel behavior."""
+        self._connect_to_validated_address()
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class PinnedHTTPSConnection(_PinnedConnectionMixin, http.client.HTTPSConnection):
+    """HTTPS connection pinned to validated addresses while retaining hostname TLS."""
+
+    def connect(self) -> None:
+        """Connect to a validated address, then verify the original hostname in TLS."""
+        self._connect_to_validated_address()
+        if self._tunnel_host:
+            self._tunnel()
+        server_hostname = self._tunnel_host or self.host
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=server_hostname)
+
+
+class PinnedHTTPHandler(urllib.request.HTTPHandler):
+    """urllib handler that uses validated numeric destinations for HTTP requests."""
+
+    def __init__(self, addresses: frozenset[IpAddress]) -> None:
+        """Bind this handler to one prevalidated DNS result set."""
+        super().__init__()
+        self._addresses = addresses
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        """Open an HTTP request without resolving its hostname again."""
+        return self.do_open(
+            lambda host, **kwargs: PinnedHTTPConnection(
+                host, validated_addresses=self._addresses, **kwargs
+            ),
+            req,
+        )
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """urllib handler that pins TCP while preserving HTTPS hostname verification."""
+
+    def __init__(self, addresses: frozenset[IpAddress]) -> None:
+        """Bind this handler to one prevalidated DNS result set."""
+        super().__init__()
+        self._addresses = addresses
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open HTTPS using the validated address set and original URL hostname."""
+        return self.do_open(
+            lambda host, **kwargs: PinnedHTTPSConnection(
+                host, validated_addresses=self._addresses, **kwargs
+            ),
+            req,
+            context=self._context,
+        )
+
+
 def resolve_endpoint_addresses(
     hostname: str,
     port: int,
@@ -563,7 +663,14 @@ def call_llm(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(
+        # Force the pinned direct path; proxy destinations have not passed this
+        # endpoint's DNS policy and must not receive the bearer credential.
+        urllib.request.ProxyHandler({}),
+        PinnedHTTPHandler(addresses),
+        PinnedHTTPSHandler(addresses),
+        NoRedirectHandler(),
+    )
     with opener.open(request, timeout=120) as response:  # nosec B310
         raw_bytes = response.read(MAX_LLM_RESPONSE_BYTES + 1)
     if len(raw_bytes) > MAX_LLM_RESPONSE_BYTES:
