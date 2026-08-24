@@ -67,7 +67,7 @@ def test_all_codeql_actions_share_the_reviewed_current_release() -> None:
     actions: set[str] = set()
     observed: set[tuple[str, str]] = set()
 
-    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.y*ml")):
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
