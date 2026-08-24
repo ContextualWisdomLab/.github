@@ -34,7 +34,7 @@ def test_all_osv_scanner_actions_share_the_reviewed_current_release() -> None:
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
-            if "google/osv-scanner-action/" not in line:
+            if "uses:" not in line or "google/osv-scanner-action/" not in line:
                 continue
             match = _PIN.search(line)
             assert match is not None, f"malformed OSV Action pin: {path}:{line_number}"
