@@ -3421,6 +3421,26 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-nim-quota-openai-direct-fallback-missing-key)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected primary key for NVIDIA NIM (${LLM_API_KEY:-<unset>})" >&2
+				exit 17
+			fi
+			echo "Error: litellm.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		openai/gpt-5.6-luna)
+			echo "unexpected direct-OpenAI fallback invocation without a fallback key" >&2
+			exit 18
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5648,6 +5668,10 @@ PY
 		env_cmd+=(STRIX_GITHUB_MODELS_API_BASE_FILE="$tmp_dir/github_models_api_base.txt")
 		env_cmd+=(STRIX_GITHUB_MODELS_KEY_FILE="$tmp_dir/github_models_key.txt")
 	fi
+	if [ "$scenario" = "nvidia-nim-quota-openai-direct-fallback-missing-key" ]; then
+		# Exercise the cross-provider path with no OpenAI fallback credential.
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna")
+	fi
 	if [ "$min_fail_severity" = "__UNSET__" ]; then
 		local next_env_cmd=()
 		local env_pair
@@ -5742,6 +5766,7 @@ PY
 			-u STRIX_VERTEX_FALLBACK_MODELS \
 			-u STRIX_GEMINI_FALLBACK_MODELS \
 			-u STRIX_FALLBACK_MODELS \
+			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
 			"${env_cmd[@]}" \
 			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
@@ -6387,6 +6412,17 @@ run_filtered_gate_case_if_requested() {
 			"2" \
 			"vertex_ai/report-rate-limit-primary|vertex_ai/fallback-one" \
 			"<unset>|<unset>"
+		;;
+	nvidia-nim-quota-openai-direct-fallback-missing-key)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
+			"2" \
+			"ERROR: direct-OpenAI fallback 'openai-direct/gpt-5.6-luna' requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+			"1" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
+			"nvidia_nim"
 		;;
 	total-timeout)
 		run_total_timeout_case
@@ -12513,6 +12549,18 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 	"" \
 	"" \
 	"github_models/openai/o3"
+
+# A cross-provider direct-OpenAI fallback must fail closed when its dedicated
+# credential is absent; it must never receive the primary NVIDIA key.
+run_gate_case "nvidia-nim-quota-openai-direct-fallback-missing-key" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"" \
+	"2" \
+	"ERROR: direct-OpenAI fallback 'openai-direct/gpt-5.6-luna' requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
+	"1" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"" \
+	"nvidia_nim"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
 	"vertex_ai/missing-primary" \

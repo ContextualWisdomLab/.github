@@ -384,8 +384,9 @@ fi
 # models (openai-direct/... or openai_direct/...). When the primary model runs
 # against NVIDIA NIM, OpenRouter, or GitHub Models, its LLM_API_KEY cannot
 # authenticate a direct-OpenAI fallback; this file carries the OpenAI key.
-# Optional: without it, explicit direct-OpenAI models keep using LLM_API_KEY,
-# which is correct whenever the primary already runs against direct OpenAI.
+# When the primary already runs against direct OpenAI, its LLM_API_KEY is safe
+# to reuse for direct-OpenAI fallback models. A cross-provider fallback without
+# this key fails closed instead of receiving the primary provider's credential.
 STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
 if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
 	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
@@ -2554,11 +2555,20 @@ run_strix_once() {
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
-		if is_explicit_openai_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
-			# Cross-provider fallback: explicit direct-OpenAI models
-			# authenticate with the OpenAI key, not the primary provider's
-			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
-			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		if is_explicit_openai_model "$model"; then
+			if is_explicit_openai_model "$PRIMARY_MODEL"; then
+				# Same-provider fallback: the primary direct-OpenAI key is
+				# valid for every direct-OpenAI model in this chain.
+				:
+			elif [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+				# Cross-provider fallback: explicit direct-OpenAI models
+				# authenticate with the OpenAI key, not the primary provider's
+				# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+				child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+			else
+				echo "ERROR: direct-OpenAI fallback '$model' requires STRIX_OPENAI_FALLBACK_KEY_FILE when the primary model uses another provider." >&2
+				return 2
+			fi
 		fi
 	fi
 	set -o pipefail
