@@ -3216,8 +3216,9 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' \
-		< <(LC_ALL=C grep -Eiv '^[[:space:]]*(│[[:space:]]*)?MODEL QUALITY WARNING([[:space:]]*│)?[[:space:]]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ WARNING [^ ]+ - strix\.tools\.web_search\.tool: web_search invoked without PERPLEXITY_API_KEY configured$' "$STRIX_LOG"); then
+	local provider_failure_word_regex='(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)'
+	if LC_ALL=C grep -Eiv '^[[:space:]]*(│[[:space:]]*)?MODEL QUALITY WARNING([[:space:]]*│)?[[:space:]]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ WARNING [^ ]+ - strix\.tools\.web_search\.tool: web_search invoked without PERPLEXITY_API_KEY configured$' "$STRIX_LOG" |
+		grep -Eiq "($LLM_PROVIDER_ONLY_REGEX.*$provider_failure_word_regex|$provider_failure_word_regex.*$LLM_PROVIDER_ONLY_REGEX)"; then
 		return 0
 	fi
 

@@ -4610,18 +4610,24 @@ EOS
 		esac
 		;;
 	provider-fatal-success-signal)
-		echo "Fatal: provider stream aborted"
+		echo "litellm Fatal: provider stream aborted"
 		exit 0
 		;;
 	provider-warning-success-signal)
 		for _ in {1..10000}; do
 			echo "benign scanner output"
 		done
-		echo "Warning: provider response included incomplete scan state"
+		echo "openai Warning: provider response included incomplete scan state"
 		exit 0
 		;;
 	provider-denied-success-signal)
-		echo "Denied: provider credentials were rejected"
+		echo "anthropic Denied: provider credentials were rejected"
+		exit 0
+		;;
+	clean-target-narrative-failure-words)
+		echo "Target documentation mentions OpenAI integration as product context."
+		echo "Target log taxonomy documents Fatal, Denied, Warn, and Warning labels."
+		echo "│  Vulnerabilities  0 (No exploitable vulnerabilities detected)                │"
 		exit 0
 		;;
 	provider-report-rate-limit-fallback-success)
@@ -6725,7 +6731,7 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/hf-advisory-suffix-fails-closed" \
 			"<unset>"
 		;;
-	provider-fatal-success-signal | provider-warning-success-signal)
+	provider-fatal-success-signal | provider-warning-success-signal | provider-denied-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
 		"" \
@@ -6733,7 +6739,17 @@ run_filtered_gate_case_if_requested() {
 		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
 		"1" \
 		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
-		"<unset>"
+			"<unset>"
+		;;
+	clean-target-narrative-failure-words)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/$STRIX_TEST_CASE_FILTER" \
+			"" \
+			"0" \
+			"Vulnerabilities  0" \
+			"1" \
+			"vertex_ai/$STRIX_TEST_CASE_FILTER" \
+			"<unset>"
 		;;
 	provider-report-rate-limit-fallback-success)
 		run_gate_case "provider-report-rate-limit-fallback-success" \
@@ -10897,6 +10913,15 @@ run_gate_case "provider-denied-success-signal" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "clean-target-narrative-failure-words" \
+	"vertex_ai/clean-target-narrative-failure-words" \
+	"" \
+	"0" \
+	"Vulnerabilities  0" \
+	"1" \
+	"vertex_ai/clean-target-narrative-failure-words" \
+	"<unset>"
 
 run_gate_case_allow_provider_signal "vertex-all-ratelimited" \
 	"vertex_ai/ratelimit-primary" \
