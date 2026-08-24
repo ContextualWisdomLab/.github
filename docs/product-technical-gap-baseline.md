@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-24 17:45 KST
+작성 기준일: **2026-08-24 17:45 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `0c6b9a6459c9dbdf5e23fb01df7a32a8a14964b3`
 현재 열린 PR 수: **95** (아래 표에 이 스냅샷의 전체 목록 포함)
@@ -95,7 +95,7 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 GitHub PR list가 2026-08-24 17:45 KST에 반환한 95개 열린 PR의 number/title/head/base/metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿌 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
+아래는 GitHub PR list가 2026-08-24 17:45 KST에 반환한 95개 열린 PR의 number/title/head/base/metadata다. CLEAN/BLOCKED/DIRTY/BEHIND/UNSTABLE은 GitHub metadata일 뿐 protected merge 승인이나 required Checks PASS를 뜻하지 않는다. 다음 루프에서 모든 행의 live review, thread, Checks를 다시 확인한다.
 
 스냅샷 요약: total 95; BLOCKED [1289, 1288, 1286, 1283, 1280, 1279, 1276, 1275, 1274, 1273…]; BEHIND [1271, 1267, 1258, 1257, 1246, 1245, 1244, 1242, 1238, 1233…]; DIRTY [1269, 1188, 1187, 1172, 1170, 1161, 1150, 1147, 1146, 1143…]; draft 13
 
@@ -215,7 +215,7 @@ flowchart LR
 ### 5.1 이번 루프의 다음 개발 increment
 
 1. ContextualWisdomLab/.github#1265 — `0c6b9a6459c9dbdf5e23fb01df7a32a8a14964b3` main에 병합됐다.
-2. 이 베이스라인 PR — current-head OpenCode APPROVE 후 병합. 기존 #1277은 동일 목적의 behind/BLOCKED 상태이므로 supersede한다.
+2. 이 베이스라인 PR — current-head OpenCode APPROVE 후 병합. 기존 #1277은 이미 `main`에 병합된 선행 기준선이며, 이 PR은 현재 live snapshot을 갱신한다.
 3. ContextualWisdomLab/.github#1263 — G-03. Strix CRs on #1278/#1273/#1271/#1267/#1258 are the same provider fail-closed, not those PRs' code.
 4. G-06는 naruon 소유. 큐가 비면 ContextualWisdomLab/naruon#976부터 한 phase씩 구현한다.
 
