@@ -76,7 +76,9 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Keep Strix target commands inside the pinned Docker sandbox environment,
-  isolate commit-status authority from the credential-bearing scan job, reject
+  omit `GITHUB_TOKEN` and `GITHUB_STATUS_TOKEN` from the scanner child even
+  while the scan job retains protected-main-compatible `statuses: write`, use
+  only an exchanged app token in the status-incapable follow-up job, reject
   nonzero low-severity and symlinked report evidence, classify JSON reports,
   and fail closed when reported paths escape the active PR scan target.
 

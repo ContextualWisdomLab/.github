@@ -55,12 +55,15 @@ sandbox manifest adds any host environment key outside the reviewed allowlist.
 This proves only the target-command environment boundary. It does not claim
 network isolation or read-only source mounts.
 
-GitHub creates a distinct `GITHUB_TOKEN` for each job and recommends increasing
-permissions only on the job that needs them. The credential-bearing `strix` job
-therefore has no `statuses: write` permission or status token. A separate
-follow-up job receives that permission and can publish only when the scan job
-exports evidence that repository-dispatch inputs matched live pull-request
-number, base SHA, and head SHA.
+GitHub creates a distinct `GITHUB_TOKEN` for each job. The `strix` job currently
+retains `statuses: write` only because protected main's trusted required-workflow
+smoke pins that live permission layout. The gate constructs the scanner child
+environment from an allowlist that omits both `GITHUB_TOKEN` and
+`GITHUB_STATUS_TOKEN`, so the scanner process cannot exercise the job token's
+status authority. The separate follow-up job has no `statuses: write`
+permission; after the scan exports evidence that repository-dispatch inputs
+matched live pull-request number, base SHA, and head SHA, it publishes with an
+exchanged app token.
 
 ## Report evidence boundary
 

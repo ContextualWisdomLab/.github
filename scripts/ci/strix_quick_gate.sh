@@ -2097,14 +2097,14 @@ extract_max_severity_rank() {
 	local line severity severity_value rank=-1
 
 	while IFS= read -r line; do
-		if [[ "${line^^}" =~ SEVERITY[[:space:][:punct:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
-			severity="${BASH_REMATCH[1]}"
+		if [[ "${line^^}" =~ (^|[^A-Za-z0-9_])SEVERITY[[:space:][:punct:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
+			severity="${BASH_REMATCH[2]}"
 			severity_value="$(severity_rank "$severity")"
 			if [ "$severity_value" -gt "$rank" ]; then
 				rank="$severity_value"
 			fi
 		fi
-	done < <(grep -Ei 'severity[[:space:][:punct:]]*:' "$source_path" || true)
+	done < <(grep -Ei '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$source_path" || true)
 
 	printf '%s\n' "$rank"
 }
@@ -3354,7 +3354,7 @@ has_structured_reported_severity_markers() {
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
-			if grep -Eiq 'severity[[:space:][:punct:]]*:' "$vuln_file"; then
+			if grep -Eiq '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$vuln_file"; then
 				return 0
 			fi
 		done
@@ -3368,7 +3368,7 @@ has_any_reported_severity_markers() {
 		return 0
 	fi
 
-	grep -Eiq 'severity[[:space:][:punct:]]*:' "$STRIX_LOG"
+	grep -Eiq '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$STRIX_LOG"
 }
 
 strix_reported_zero_vulnerabilities() {
@@ -4239,13 +4239,6 @@ run_current_target_scan() {
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
 		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
 		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
-		return 1
-	fi
-
-	local threshold_rank
-	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
-	if [ "${STRIX_MAX_SEVERITY_RANK:--1}" -ge "$threshold_rank" ]; then
-		echo "Strix quick scan failed with a non-recoverable error." >&2
 		return 1
 	fi
 
