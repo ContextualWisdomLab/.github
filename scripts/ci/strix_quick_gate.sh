@@ -2481,6 +2481,7 @@ child_model_for_api_base() {
 run_strix_once() {
 	local model="$1"
 	local rc
+	local normalized_model
 	local llm_api_base_value
 	local child_model
 	local resolved_target_path
@@ -2502,11 +2503,12 @@ run_strix_once() {
 			total_budget_limited_timeout=1
 		fi
 	fi
-	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
+	if ! normalized_model="$(normalize_model "$model")"; then
 		return 2
 	fi
-	local normalized_model
-	normalized_model="$(normalize_model "$model")"
+	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$normalized_model")"; then
+		return 2
+	fi
 	child_model="$(child_model_for_api_base "$normalized_model" "$llm_api_base_value")"
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1

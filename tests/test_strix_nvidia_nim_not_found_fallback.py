@@ -86,7 +86,9 @@ def _run_strix_once_resolves_child_model(model: str, primary_model: str) -> str:
 
     gate_source = STRIX_GATE.read_text(encoding="utf-8")
     call_site_match = re.search(
-        r'(?m)^\tif ! llm_api_base_value=.*\n'
+        r'(?m)^\tif ! normalized_model="\$\(normalize_model "\$model"\)"; then\n'
+        r'(?:.*\n)+?'
+        r'\tif ! llm_api_base_value=.*\n'
         r'(?:.*\n)+?'
         r'\tchild_model="\$\(child_model_for_api_base [^\n]+\)"\n',
         gate_source,
@@ -115,6 +117,7 @@ def _run_strix_once_resolves_child_model(model: str, primary_model: str) -> str:
             'LLM_API_BASE_FILE=""',
             "run_strix_once_child_model() {",
             'local model="$1"',
+            "local normalized_model",
             "local llm_api_base_value",
             "local child_model",
             call_site_match.group(0),
