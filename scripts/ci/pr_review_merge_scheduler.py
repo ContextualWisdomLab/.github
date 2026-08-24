@@ -1348,14 +1348,16 @@ def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
 def coverage_retry_wait_reason(
     pr: dict[str, Any],
     *,
+    repo: str | None = None,
+    workflow: str | None = None,
     now: datetime | None = None,
     floor_minutes: int = DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES,
 ) -> str | None:
     """Return a wait reason until one same-head coverage retry interval elapses.
 
-    The review submission timestamp is the durable same-head retry marker. Missing
-    or malformed timestamps fail closed so a repeated coverage-only review cannot
-    create an unbounded dispatch loop.
+    The latest exact-head review submission or completed dispatch timestamp is the
+    durable same-head retry marker. Missing or malformed timestamps fail closed so
+    a repeated coverage-only review cannot create an unbounded dispatch loop.
     """
     review = latest_current_head_coverage_change_request(pr)
     if review is None:
@@ -1363,8 +1365,16 @@ def coverage_retry_wait_reason(
     submitted_at = parse_github_datetime(review.get("submittedAt"))
     if submitted_at is None:
         return "current-head OpenCode coverage review has no valid submission timestamp; defer same-head re-review"
+    retry_anchor = submitted_at
+    if repo and workflow:
+        try:
+            dispatch_started_at = latest_opencode_dispatch_started_at(repo, workflow, pr)
+        except RuntimeError:
+            return "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
+        if dispatch_started_at and dispatch_started_at > retry_anchor:
+            retry_anchor = dispatch_started_at
     current_time = now or datetime.now(timezone.utc)
-    if current_time < submitted_at + timedelta(minutes=max(0, floor_minutes)):
+    if current_time < retry_anchor + timedelta(minutes=max(0, floor_minutes)):
         return "same-head OpenCode coverage retry floor has not elapsed"
     return None
 
@@ -2214,6 +2224,46 @@ def active_opencode_run_refs(
     )
 
 
+def latest_opencode_dispatch_started_at(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+) -> datetime | None:
+    """Return the latest completed same-head OpenCode dispatch start time."""
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
+    head = str(pr.get("headRefOid") or "").lower()
+    number = int(pr["number"])
+    title_prefixes = tuple(
+        f"{title} {target_repo}#{number}@"
+        for title in sorted(
+            {"Required OpenCode Review", *OPENCODE_WORKFLOW_NAMES},
+            key=len,
+            reverse=True,
+        )
+    )
+    latest: datetime | None = None
+    for run_data in active_workflow_runs(dispatch_repo, ("completed",)):
+        if run_data.get("event") != "repository_dispatch":
+            continue
+        display_title = str(run_data.get("display_title") or "")
+        prefix = next(
+            (candidate for candidate in title_prefixes if display_title.startswith(candidate)),
+            None,
+        )
+        if prefix is None:
+            continue
+        dispatched_head = display_title.removeprefix(prefix).lower()
+        if not GIT_SHA_RE.fullmatch(dispatched_head) or dispatched_head != head:
+            continue
+        started_at = parse_github_datetime(
+            run_data.get("run_started_at") or run_data.get("created_at")
+        )
+        if started_at and (latest is None or started_at > latest):
+            latest = started_at
+    return latest
+
+
 def active_opencode_run_ids(
     repo: str,
     workflow: str,
@@ -2668,7 +2718,11 @@ def inspect_pr(
                     "current-head OpenCode coverage evidence is complete; "
                     "same-head OpenCode re-review is already running",
                 )
-            retry_wait_reason = coverage_retry_wait_reason(pr)
+            retry_wait_reason = coverage_retry_wait_reason(
+                pr,
+                repo=repo if not dry_run else None,
+                workflow=workflow if not dry_run else None,
+            )
             if retry_wait_reason:
                 if pr.get("autoMergeRequest"):
                     return finish(

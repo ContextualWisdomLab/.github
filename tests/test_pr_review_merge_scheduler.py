@@ -1262,6 +1262,52 @@ def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
     assert dispatched == []
 
 
+def test_coverage_retry_disables_auto_merge_for_visible_opencode_run(monkeypatch):
+    """An active same-head re-review disables any pre-existing auto-merge request."""
+    disabled = []
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+    coverage_request = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    opencode_check(
+                        status="IN_PROGRESS",
+                        started_at=datetime.now(timezone.utc).isoformat(),
+                    ),
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "disable_auto_merge"
+    assert disabled == [("owner/repo", 1, True)]
+
+
 def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
     """A fresh coverage-only review disables auto-merge during its retry floor."""
     monkeypatch.setenv(
@@ -1322,6 +1368,112 @@ def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
     assert "disable auto-merge until the same-head coverage retry floor elapses" in decision.reason
     assert disabled == [("owner/repo", 1, True)]
     assert dispatched == []
+
+
+def test_coverage_retry_floor_uses_latest_dispatch_timestamp(monkeypatch):
+    """A completed dispatch without a review still receives a bounded retry floor."""
+    coverage_review = {
+        **opencode_review(
+            "CHANGES_REQUESTED",
+            "head",
+            submitted_at="2026-08-24T00:00:00Z",
+        ),
+        "body": (
+            "OpenCode cannot approve yet because required coverage evidence did not pass. "
+            "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+        ),
+    }
+    coverage_request = make_pr(reviews={"nodes": [coverage_review]})
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 1, 59, tzinfo=timezone.utc),
+    ) == "same-head OpenCode coverage retry floor has not elapsed"
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc),
+    ) is None
+
+
+def test_coverage_retry_wait_reason_fails_closed_without_coverage_review():
+    """A non-coverage change request cannot authorize a retry."""
+    assert sched.coverage_retry_wait_reason(make_pr()) is None
+
+
+def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavailable(
+    monkeypatch,
+):
+    """Unavailable dispatch history prevents an unbounded same-head retry."""
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2026-08-24T00:00:00Z",
+                    ),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: (_ for _ in ()).throw(RuntimeError("temporary API failure")),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+    ) == "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
+
+
+def test_coverage_retry_floor_keeps_newer_review_timestamp(monkeypatch):
+    """An older dispatch cannot extend or replace the newer review timestamp."""
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2026-08-24T02:00:00Z",
+                    ),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 2, 30, tzinfo=timezone.utc),
+    ) == "same-head OpenCode coverage retry floor has not elapsed"
 
 
 def test_coverage_retry_without_timestamp_fails_closed(monkeypatch):
@@ -2929,6 +3081,74 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
         in capsys.readouterr().out
     )
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_latest_opencode_dispatch_started_at_matches_exact_completed_run(monkeypatch):
+    """Completed same-head repository dispatch runs provide a retry timestamp."""
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses: [
+            {"event": "push", "display_title": "irrelevant"},
+            {
+                "event": "repository_dispatch",
+                "display_title": "Different workflow owner/repo#1@" + head_sha,
+                "created_at": "2026-08-24T00:30:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "run_started_at": "2026-08-24T01:00:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "created_at": "2026-08-24T02:00:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "created_at": "2026-08-24T01:30:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
+                "created_at": "2026-08-24T03:00:00Z",
+            },
+        ],
+    )
+
+    assert sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
+
+
+def test_latest_opencode_dispatch_started_at_returns_none_without_exact_run(monkeypatch):
+    """Unrelated completed runs cannot become a same-head retry marker."""
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses: [
+            {
+                "event": "repository_dispatch",
+                "display_title": "Required OpenCode Review owner/repo#1@" + "b" * 40,
+                "created_at": "2026-08-24T02:00:00Z",
+            }
+        ],
+    )
+
+    assert sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid="a" * 40),
+    ) is None
 
 
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
