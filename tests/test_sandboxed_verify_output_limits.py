@@ -126,19 +126,22 @@ def test_timeout_retains_precedence_and_bounded_partial_output(
     assert payload["output_limited"] is False
 
 
+@pytest.mark.parametrize(
+    "capture_error",
+    [RuntimeError("host descriptor detail"), OSError("reader failed")],
+)
 def test_stuck_capture_returns_bounded_failure_without_traceback(
     monkeypatch,
     tmp_path: Path,
     capsys,
+    capture_error: BaseException,
 ) -> None:
     """A stuck reader becomes stable resource evidence instead of a traceback."""
     repository = _repository(tmp_path)
     monkeypatch.setattr(
         sandboxed_verify,
         "run_command",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("host descriptor detail")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(capture_error),
     )
 
     exit_code = sandboxed_verify.main(

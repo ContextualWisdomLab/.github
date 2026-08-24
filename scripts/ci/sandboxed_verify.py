@@ -349,7 +349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
-        except RuntimeError:
+        except (OSError, RuntimeError):
             print(
                 "sandboxed-verify: bounded output capture failed",
                 file=sys.stderr,

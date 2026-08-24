@@ -517,10 +517,15 @@ def test_main_reports_web_invalid_root_without_boundary_evidence(
     assert str(missing) not in captured.err
 
 
+@pytest.mark.parametrize(
+    "capture_error",
+    [RuntimeError("host descriptor detail"), OSError("reader failed")],
+)
 def test_main_maps_command_capture_failure_to_bounded_resource_evidence(
     monkeypatch,
     tmp_path: Path,
     capsys,
+    capture_error: BaseException,
 ) -> None:
     """A command-side stuck reader is reported without leaking its exception."""
     repository = tmp_path / "repository"
@@ -543,9 +548,7 @@ def test_main_maps_command_capture_failure_to_bounded_resource_evidence(
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "run_shell",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("host descriptor detail")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(capture_error),
     )
 
     exit_code = sandboxed_web_e2e.main(

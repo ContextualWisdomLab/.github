@@ -464,7 +464,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             exit_code = 1
-        except RuntimeError:
+        except (OSError, RuntimeError):
             print(
                 "sandboxed-web-e2e: bounded output capture failed",
                 file=sys.stderr,
