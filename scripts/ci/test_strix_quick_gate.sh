@@ -192,8 +192,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" 'strix-${{ github.event_name }}-' "strix workflow isolates manual evidence runs from required PR contexts"
-	assert_file_contains "$workflow_file" 'strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}' "strix workflow scopes concurrency per repository and event class"
+	assert_file_contains "$workflow_file" "group: >-" "strix workflow defines an explicit concurrency group"
+	assert_file_contains "$workflow_file" "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number)" "strix workflow gives closed PR cleanup an independent concurrency group"
+	assert_file_contains "$workflow_file" "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository ||" "strix workflow scopes active evidence per repository and event class"
 	assert_file_contains "$workflow_file" "github.event.client_payload.target_repository ||" "strix manual dispatch concurrency scopes to the target repository when provided"
 	assert_file_contains "$workflow_file" "github.repository }}" "strix workflow falls back to the workflow repository when no target repository is provided"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow serializes sibling PR scans at repository scope"
