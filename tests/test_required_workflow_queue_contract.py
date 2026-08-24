@@ -280,7 +280,14 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
 
 
 def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
-    """Scope Strix concurrency to the target PR while preserving current-head evidence."""
+    """Serialize Strix per repository so shared provider keys are not rate-limited.
+
+    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
+    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
+    storms and fail-closed gate failures on every open PR. The queue now scopes
+    one scan at a time per repository and event class while preserving every
+    evidence run (queue: max, nothing cancelled).
+    """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -294,14 +301,16 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
         "strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository }}"
     ) in concurrency_contract
-    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
-    assert "github.event.client_payload.pr_number != '' && format('pr-{0}'," in workflow
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
+    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "cancel-in-progress: true" in workflow
+    # Nothing is dropped: scans queue sequentially instead of cancelling.
+    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "queue: max" in workflow
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in workflow
+    assert "RateLimitError" in concurrency_contract
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -357,8 +366,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    assert "cancel-in-progress: true" in strix_workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
+    # Strix serializes per repository (rate-limit root-cause fix): close-event
+    # runs still cancel superseded same-PR evidence through their own
+    # cancel-closed-pr-runs job, while scan jobs queue instead of cancelling.
+    assert "cancel-in-progress: false" in strix_workflow
+    assert "Serialize Strix scans per repository" in strix_workflow or "per REPOSITORY" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
