@@ -561,6 +561,32 @@ def test_run_gh_visibility_separates_included_headers_from_body(
     assert visibility.run_gh_visibility("ContextualWisdomLab/aFIPC") == "false\n"
 
 
+def test_run_gh_visibility_executes_cli_boundary_with_include_and_jq(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the real subprocess boundary with a CLI-shaped ``gh`` binary."""
+    argument_log = tmp_path / "gh-arguments.log"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"$FAKE_GH_ARGUMENT_LOG\"\n"
+        "printf '%s\\n' 'HTTP/2 200 OK' 'Content-Type: application/json' '' 'true'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("FAKE_GH_ARGUMENT_LOG", str(argument_log))
+
+    assert visibility.run_gh_visibility("ContextualWisdomLab/aFIPC") == "true\n"
+    assert argument_log.read_text(encoding="utf-8").splitlines() == [
+        "api",
+        "repos/ContextualWisdomLab/aFIPC",
+        "--include",
+        "--jq",
+        ".private",
+    ]
+
+
 def test_split_gh_response_handles_header_only_and_plain_output() -> None:
     """The bounded splitter handles plain, complete, and incomplete responses."""
 
