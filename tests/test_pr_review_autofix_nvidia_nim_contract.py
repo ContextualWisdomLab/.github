@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "c3a0e144c53169a96783a6e8d8022eee3b83eea8"
+REVIEW_DISPATCH_BLOB_SHA = "4fe549fb193f04ce1afb4b9a74ca8d95432cf99d"
 
 
 def _workflow_text(path: Path) -> str:
@@ -61,6 +62,7 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         '"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"',
         '"baseURL": "https://models.github.ai/inference"',
         'COPILOT_GITHUB_TOKEN',
+        'CLOUDFLARE_API_TOKEN',
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
@@ -184,6 +186,17 @@ def test_independent_review_agent_key_system_is_unchanged() -> None:
     assert "OPENCODE_APPROVE_TOKEN" not in model_step
 
 
+def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:
+    """Pin the complete reviewed reviewer workflow in addition to semantic guards."""
+    result = subprocess.run(
+        ["git", "hash-object", str(REVIEW_DISPATCH_WORKFLOW)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == REVIEW_DISPATCH_BLOB_SHA
+
+
 def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -> None:
     """Snapshot ordinary repairs so ignored and symlink-mediated writes fail closed."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
@@ -250,6 +263,12 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "OpenCode. (2026a). *Permissions*" in doctoring
     assert "ignored-path inventory" in changelog
     assert "model-mutable Git metadata" in changelog
+    assert "Allowed an allowlisted base repository's open fork-head PR" in changelog
+    assert (
+        "external fork heads now fail closed before OIDC, review-token, CodeGraph, "
+        "model, or merge-control paths"
+        not in changelog
+    )
 
 
 def test_allowed_path_seal_accepts_the_structured_inventory(tmp_path: Path) -> None:

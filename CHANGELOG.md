@@ -12,6 +12,16 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Keep `--trust-lockfile` only for pnpm 11.3 and newer
+  (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
+  that flag and previously failed LineageWeave JavaScript coverage before
+  tests could run. Jest test scripts still receive `--coverage` because Jest
+  documents a native coverage flag.
+- Run declared JavaScript test scripts without synthesizing `--coverage` when
+  the package does not declare a compatible coverage command, but keep the
+  coverage result failed until the repository adds a lock-pinned provider and
+  owned coverage command. A generic `c8`, `nyc`, or Istanbul dependency no
+  longer makes an unrelated test runner receive an unsupported flag.
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
   dependencies without weakening registry hashes or the networkless PR sandbox,
   reject namespace, ambiguous, linked, native-extension, and installed-metadata
@@ -140,7 +150,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
-- Restored same-repository checks before central OpenCode privileged review and targeted scheduler execution; external fork heads now fail closed before OIDC, review-token, CodeGraph, model, or merge-control paths.
+- Preserve fork heads as untrusted review-only inputs for allowlisted base repositories: privileged review revalidates exact base/head identity, while branch mutation and automatic or final external-head merge remain maintainer-controlled.
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.

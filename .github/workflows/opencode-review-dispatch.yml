@@ -923,6 +923,11 @@ jobs:
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN
+          # Corepack may resolve a package-manager release from package.json.
+          # The validated base/head identity check below makes that selection
+          # immutable, and this keeps execution offline even if Corepack would
+          # otherwise attempt a download.
+          export COREPACK_ENABLE_NETWORK=0
           umask 077
           cd "$COVERAGE_SOURCE_WORKDIR"
 
@@ -1268,8 +1273,23 @@ jobs:
           }
 
           javascript_test_script_collects_coverage() {
-            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)")' \
+            jq -e '(.scripts.test // "") | test("(^|[[:space:]])--coverage([.=[:space:]]|$)|c8([[:space:]]|$)|nyc([[:space:]]|$)|istanbul([[:space:]]|$)")' \
               package.json >/dev/null 2>&1
+          }
+
+          javascript_test_runner_accepts_coverage_flag() {
+            jq -e '
+              (.scripts.test // "") as $test
+              | ((.devDependencies // {}) + (.dependencies // {})) as $dependencies
+              | ($test | test("(^|[[:space:]])jest([[:space:]]|$)"))
+                or (
+                  ($test | test("(^|[[:space:]])vitest([[:space:]]|$)"))
+                  and (
+                    ($dependencies | has("@vitest/coverage-v8"))
+                    or ($dependencies | has("@vitest/coverage-istanbul"))
+                  )
+                )
+            ' package.json >/dev/null 2>&1
           }
 
           declared_package_manager() {
@@ -1451,6 +1471,49 @@ jobs:
             writable_npm_cache_dir="$destination"
           }
 
+          trusted_pnpm_package_manager_matches_base() {
+            local relative_dir
+            local relative_manifest
+            local base_spec
+            local head_spec
+            local worktree_spec
+
+            case "$PWD" in
+              "$COVERAGE_SOURCE_WORKDIR")
+                relative_dir=""
+                ;;
+              "$COVERAGE_SOURCE_WORKDIR"/*)
+                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
+                ;;
+              *)
+                echo "::error::pnpm project directory escaped the validated coverage worktree." >&2
+                return 1
+                ;;
+            esac
+            relative_manifest="${relative_dir:+${relative_dir}/}package.json"
+            if [ ! -f package.json ] || [ -L package.json ]; then
+              echo "::error::Current pnpm package manifest must be a regular non-symlink file." >&2
+              return 1
+            fi
+
+            base_spec="$(trusted_git show "${PR_BASE_SHA}:${relative_manifest}" | jq -er '.packageManager // empty')" || {
+              echo "::error::Validated base does not declare an exact pnpm packageManager in ${relative_manifest}." >&2
+              return 1
+            }
+            head_spec="$(trusted_git show "${PR_HEAD_SHA}:${relative_manifest}" | jq -er '.packageManager // empty')" || {
+              echo "::error::Validated head does not declare an exact pnpm packageManager in ${relative_manifest}." >&2
+              return 1
+            }
+            worktree_spec="$(jq -er '.packageManager // empty' package.json)" || {
+              echo "::error::Current pnpm package manifest does not declare packageManager." >&2
+              return 1
+            }
+            if [ "$base_spec" != "$head_spec" ] || [ "$head_spec" != "$worktree_spec" ]; then
+              echo "::error::Current pnpm packageManager specification differs from the validated base; refusing Corepack version resolution." >&2
+              return 1
+            fi
+          }
+
           trusted_pnpm_lock_matches_base() {
             local relative_dir
             local relative_lock
@@ -1516,6 +1579,36 @@ jobs:
             writable_pnpm_store_dir="$destination"
           }
 
+          pnpm_supports_trust_lockfile() {
+            local pnpm_version
+            local pnpm_major
+            local pnpm_minor
+            pnpm_version="$(corepack pnpm --version 2>/dev/null || printf '0')"
+            pnpm_major="${pnpm_version%%.*}"
+            case "$pnpm_version" in
+              *.*)
+                pnpm_minor="${pnpm_version#*.}"
+                pnpm_minor="${pnpm_minor%%.*}"
+                ;;
+              *)
+                pnpm_minor=0
+                ;;
+            esac
+            case "$pnpm_major" in
+              ''|*[!0-9]*) pnpm_major=0 ;;
+            esac
+            case "$pnpm_minor" in
+              ''|*[!0-9]*) pnpm_minor=0 ;;
+            esac
+            if [ "$pnpm_major" -gt 11 ]; then
+              return 0
+            fi
+            if [ "$pnpm_major" -eq 11 ] && [ "$pnpm_minor" -ge 3 ]; then
+              return 0
+            fi
+            return 1
+          }
+
           install_package_dependencies() {
             local package_runner="$1"
             case "$package_runner" in
@@ -1548,15 +1641,25 @@ jobs:
                 fi
                 ;;
               pnpm)
+                trusted_pnpm_package_manager_matches_base
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
-                run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
-                  corepack pnpm install \
-                    --offline \
-                    --frozen-lockfile \
-                    --trust-lockfile \
-                    --ignore-scripts \
-                    --store-dir "$writable_pnpm_store_dir"
+                if pnpm_supports_trust_lockfile; then
+                  run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
+                    corepack pnpm install \
+                      --offline \
+                      --frozen-lockfile \
+                      --trust-lockfile \
+                      --ignore-scripts \
+                      --store-dir "$writable_pnpm_store_dir"
+                else
+                  run_and_capture "JavaScript/TypeScript dependencies (pnpm offline install, lifecycle hooks disabled)" \
+                    corepack pnpm install \
+                      --offline \
+                      --frozen-lockfile \
+                      --ignore-scripts \
+                      --store-dir "$writable_pnpm_store_dir"
+                fi
                 ;;
               yarn)
                 run_and_capture "JavaScript/TypeScript dependencies (yarn install, lifecycle hooks disabled)" yarn install --immutable --mode=skip-builds
@@ -2059,20 +2162,34 @@ jobs:
                 run_package_script_and_capture "JavaScript/TypeScript coverage script" "$package_runner" coverage
                 javascript_coverage_ran=1
               elif jq -e '.scripts.test // empty' package.json >/dev/null; then
-                if javascript_test_script_collects_coverage; then
-                  case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
-                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
-                  esac
+                if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
+                  if javascript_test_script_collects_coverage; then
+                    case "$package_runner" in
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                      pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
+                      yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
+                    esac
+                  else
+                    case "$package_runner" in
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                      pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
+                      yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                    esac
+                  fi
+                  javascript_coverage_ran=1
                 else
                   case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
-                    pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
-                    yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
+                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" npm test ;;
+                    pnpm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack pnpm test ;;
+                    yarn) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" yarn test ;;
                   esac
+                  append "### JavaScript/TypeScript coverage threshold"
+                  append ""
+                  append "- Result: FAIL"
+                  append "- Reason: package.json defines a test script but no compatible coverage provider or coverage-collecting test script. The networkless sandbox ran the tests without inventing an instrumenter, but plain tests cannot satisfy the required frontend coverage gate. Add a lock-pinned provider and a repository-owned coverage command."
+                  append ""
+                  failures=$((failures + 1))
                 fi
-                javascript_coverage_ran=1
               else
                 append "### JavaScript/TypeScript test coverage"
                 append ""
