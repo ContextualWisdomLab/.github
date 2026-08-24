@@ -42,21 +42,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
-- Keep Strix's hash-verified dependency lock on the trusted workflow source;
-  privileged PR scans no longer replace it with a same-repository PR-head lock
-  before provider credentials reach the installed scanner.
-- Route the exact single-line LiteLLM/Azure unsupported-temperature failure to
-  an already-configured distinct Strix fallback without accepting split-line
-  imitations. The workflow's `openai-direct/` alias now normalizes to the
-  canonical `openai_direct/` selector, while LiteLLM dispatch uses its `openai/`
-  provider form. Cross-provider
-  attempts now switch to the trusted OpenAI credential and clear the primary
-  provider API base, without turning an incomplete provider scan into passing
-  evidence. Exact clean model-quality and Hugging Face advisories are filtered
-  consistently from console and report logs, while any appended warning text
-  remains fail closed. The incident and fail-closed boundary are recorded in
-  `docs/doctoring/strix-unsupported-sampling-fallback.md`; changes to that
-  record or the shared model normalizer now rerun the exact-head path gate.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
@@ -74,13 +59,6 @@ Semantic Versioning where the repository publishes a release.
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
 
 ### Fixed
-
-- Keep Strix target commands inside the pinned Docker sandbox environment,
-  omit `GITHUB_TOKEN` and `GITHUB_STATUS_TOKEN` from the scanner child even
-  while the scan job retains protected-main-compatible `statuses: write`, use
-  only an exchanged app token in the status-incapable follow-up job, reject
-  nonzero low-severity and symlinked report evidence, classify JSON reports,
-  and fail closed when reported paths escape the active PR scan target.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
@@ -153,7 +131,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
-- Prevented privileged Strix pull-request scans from installing a PR-selected dependency lock; the workflow now verifies the trusted checkout's Git blob immediately before a hash-enforced, binary-only install and pins the first compatible LiteLLM release that supplies the required Python 3.13 manylinux wheel.
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.
