@@ -1337,22 +1337,30 @@ def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
     return False
 
 
-def coverage_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, complete, or failed for the latest coverage gate."""
+def latest_coverage_evidence_node(pr: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the newest coverage-evidence check across workflow names."""
     coverage_runs = [
         node
         for node in latest_check_runs(pr)
         if (node.get("name") or "").lower() == "coverage-evidence"
     ]
-    if coverage_runs:
-        _, node = max(
-            enumerate(coverage_runs),
-            key=lambda item: (
-                parse_github_datetime(item[1].get("startedAt"))
-                or datetime.min.replace(tzinfo=timezone.utc),
-                item[0],
-            ),
-        )
+    if not coverage_runs:
+        return None
+    _, node = max(
+        enumerate(coverage_runs),
+        key=lambda item: (
+            parse_github_datetime(item[1].get("startedAt"))
+            or datetime.min.replace(tzinfo=timezone.utc),
+            item[0],
+        ),
+    )
+    return node
+
+
+def coverage_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, complete, or failed for the latest coverage gate."""
+    node = latest_coverage_evidence_node(pr)
+    if node is not None:
         status = (node.get("status") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
@@ -1368,6 +1376,23 @@ def coverage_evidence_state(pr: dict[str, Any]) -> str:
             return "running"
         return "complete" if status == "SUCCESS" else "failed"
     return "missing"
+
+
+def superseded_coverage_evidence_ids(pr: dict[str, Any]) -> set[int]:
+    """Return older coverage checks superseded by a newer successful run."""
+    authoritative = latest_coverage_evidence_node(pr)
+    if authoritative is None:
+        return set()
+    if (authoritative.get("conclusion") or "").upper() != "SUCCESS":
+        return set()
+    coverage_runs = [
+        node
+        for node in latest_check_runs(pr)
+        if (node.get("name") or "").lower() == "coverage-evidence"
+    ]
+    superseded = {id(node) for node in coverage_runs}
+    superseded.discard(id(authoritative))
+    return superseded
 
 
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
@@ -1565,6 +1590,9 @@ def failed_status_checks(
     being retried. Sibling jobs in the same workflow remain authoritative.
     """
     failed: list[str] = []
+    superseded_coverage_ids = (
+        superseded_coverage_evidence_ids(pr) if ignore_opencode else set()
+    )
     status_contexts = [
         node
         for node in context_nodes(pr)
@@ -1579,6 +1607,8 @@ def failed_status_checks(
     for node in latest_check_runs(pr):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if id(node) in superseded_coverage_ids:
+                continue
             if ignore_opencode and node.get("name") == "opencode-review":
                 continue
             if is_strix_context(node) and "strix" in successful_status_contexts:

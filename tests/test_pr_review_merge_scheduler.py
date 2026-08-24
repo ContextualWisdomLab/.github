@@ -1966,6 +1966,77 @@ def test_coverage_evidence_state_prefers_newest_run_across_workflows():
     assert sched.coverage_evidence_state(pr) == "complete"
 
 
+def test_coverage_retry_ignores_superseded_failure_across_workflows():
+    """A newer successful workflow supersedes an older coverage failure."""
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T01:00:00Z",
+                        "FAILURE",
+                    ),
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "SUCCESS",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr) == ["coverage-evidence"]
+    assert sched.failed_status_checks(pr, ignore_opencode=True) == []
+
+
+def test_coverage_retry_keeps_newest_failed_run_authoritative_across_workflows():
+    """An unsuccessful newest run remains a blocking coverage failure."""
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T01:00:00Z",
+                        "SUCCESS",
+                    ),
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "FAILURE",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr, ignore_opencode=True) == ["coverage-evidence"]
+
+
 def test_run_command_failure_scrubs_secrets(monkeypatch):
     import subprocess
 
