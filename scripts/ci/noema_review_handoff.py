@@ -26,7 +26,9 @@ else:  # pragma: no cover - exercised by the standalone CLI regression test
     from redact_sensitive_log import redact_text
 
 
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(
+    r"^ContextualWisdomLab/(?:\.github|(?!\.)(?!.*\.\.)[A-Za-z0-9_.-]+(?<!\.))$"
+)
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GH_COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_TRANSIENT_BACKOFF_MULTIPLIER = 4
