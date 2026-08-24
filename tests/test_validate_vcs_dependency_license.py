@@ -119,4 +119,3 @@ def test_redirected_license_metadata_is_rejected() -> None:
 
     with pytest.raises(RuntimeError, match="origin"):
         validator.validate_license("RankWeave", COMMIT, opener=opener)
-
