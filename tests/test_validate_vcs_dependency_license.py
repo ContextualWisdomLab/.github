@@ -153,8 +153,25 @@ def test_default_opener_disables_proxy_resolution(
     monkeypatch.setattr(validator.urllib.request, "build_opener", build_opener)
 
     assert validator.validate_license("RankWeave", COMMIT) == "MIT"
-    assert len(captured) == 1
+    assert len(captured) == 2
     assert isinstance(captured[0], validator.urllib.request.ProxyHandler)
+    assert isinstance(captured[1], validator.RejectRedirectHandler)
+
+
+def test_default_opener_rejects_redirect_before_following_target() -> None:
+    """Production metadata requests never contact a redirect destination."""
+    validator = load_validator()
+    handler = validator.RejectRedirectHandler()
+
+    with pytest.raises(RuntimeError, match="redirect"):
+        handler.redirect_request(
+            object(),
+            object(),
+            302,
+            "Found",
+            {},
+            "https://attacker.invalid/license.json",
+        )
 
 
 def test_oversized_and_malformed_metadata_fail_closed() -> None:

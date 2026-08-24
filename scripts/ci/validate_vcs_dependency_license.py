@@ -29,6 +29,22 @@ PERMITTED_SPDX_IDS = frozenset(
 )
 
 
+class RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before urllib can contact their destination."""
+
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
+        raise RuntimeError("VCS dependency license metadata redirect is forbidden")
+
+
 def _license_url(repository: str, commit: str) -> str:
     """Return the fixed-origin GitHub license URL for one exact revision."""
     if REPOSITORY_RE.fullmatch(repository) is None:
@@ -43,7 +59,10 @@ def _license_url(repository: str, commit: str) -> str:
 
 def _default_opener() -> urllib.request.OpenerDirector:
     """Build a no-proxy opener for the fixed public GitHub API request."""
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        RejectRedirectHandler(),
+    )
 
 
 def validate_license(
