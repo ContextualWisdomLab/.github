@@ -64,7 +64,13 @@ def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     """Changing this regression contract must trigger the exact-head workflow."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
+    for path in (
+        "requirements-strix-ci.txt",
+        "requirements-strix-ci-hashes.txt",
+        "tests/test_strix_severity_identifier_boundary.py",
+        "tests/test_strix_workflow_dependency_hashes.py",
+    ):
+        assert f'      - "{path}"' in workflow
 
 
 def test_strix_workflow_reruns_when_shared_runtime_or_doctoring_changes() -> None:

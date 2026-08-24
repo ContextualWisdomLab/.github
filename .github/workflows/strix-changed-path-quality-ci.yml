@@ -16,9 +16,12 @@ on:
       - "scripts/ci/strix_model_utils.sh"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_model_behavior_error.py"
       - "tests/test_strix_nvidia_nim_not_found_fallback.py"
+      - "tests/test_strix_severity_identifier_boundary.py"
       - "tests/test_strix_workflow_dependency_hashes.py"
       - "tests/test_strix_quality_timeout_fixture_budget.py"
 
