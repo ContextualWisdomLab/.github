@@ -47,10 +47,20 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Bound backend and frontend combined service logs plus E2E command output,
+  stop a service before running E2E when readiness evidence overflows, preserve
+  timeout and prior-failure precedence, and publish separate resource and
+  capture-finalization fields with bounded log tails.
+
 - Route sandboxed verification commands through the bounded subprocess layer,
   reject copied-tree symlinks that leave the sandbox, and publish distinct
   output-limit, unsupported-platform, missing/non-executable command, and
   path-boundary evidence without exposing host paths or uncaught tracebacks.
+- Classify missing or non-executable backend, frontend, and E2E commands with
+  stable exit codes and operator recovery actions while still cleaning up
+  services that started before the failure.
+- Reject non-HTTP readiness URLs during argument parsing with the exact option
+  to correct, instead of starting services and exposing a runtime traceback.
 
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
