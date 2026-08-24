@@ -280,6 +280,7 @@ def test_remaining_classifiers_cover_common_layouts() -> None:
     assert surfaces.classify_changed_path("module.py")["kind"] == "python"
     assert surfaces.classify_changed_path("app.ts")["kind"] == "typescript"
     assert surfaces.classify_changed_path("tests/test_resolution.py")["kind"] == "tests"
+    assert surfaces.classify_changed_path("tests/fixture.rs")["kind"] == "tests"
     assert surfaces.classify_changed_path("LICENSE")["kind"] == "other"
 
 

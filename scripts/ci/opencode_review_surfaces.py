@@ -86,14 +86,6 @@ def classify_changed_path(raw_path: str) -> dict[str, str]:
             "verify": "cargo test plus llvm-cov",
             "kind": "rust",
         }
-    if suffix in RUST_SUFFIXES:
-        return {
-            "key": "rust-source",
-            "surface": f"Rust source: {name}",
-            "impact": "Rust package behavior",
-            "verify": "cargo test plus llvm-cov",
-            "kind": "rust",
-        }
     if TEST_NAME_RE.search(path):
         return {
             "key": f"tests:{Path(path).parent.as_posix()}",
@@ -101,6 +93,14 @@ def classify_changed_path(raw_path: str) -> dict[str, str]:
             "impact": "regression suite",
             "verify": "targeted test run",
             "kind": "tests",
+        }
+    if suffix in RUST_SUFFIXES:
+        return {
+            "key": "rust-source",
+            "surface": f"Rust source: {name}",
+            "impact": "Rust package behavior",
+            "verify": "cargo test plus llvm-cov",
+            "kind": "rust",
         }
     if path.startswith(DOC_PREFIXES):
         return {
