@@ -22,7 +22,7 @@ def test_all_scorecard_actions_share_the_reviewed_current_release() -> None:
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
-            if "ossf/scorecard-action@" not in line:
+            if "uses:" not in line or "ossf/scorecard-action@" not in line:
                 continue
             match = _PIN.search(line)
             assert match is not None, f"malformed Scorecard pin: {path}:{line_number}"
