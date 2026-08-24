@@ -3485,6 +3485,22 @@ REPORT
 			;;
 		esac
 		;;
+	mixed-fallback-config-and-retryable)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324)
+			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
+				echo "unexpected NVIDIA NIM key for fallback probe (${LLM_API_KEY:-<unset>})" >&2
+				exit 23
+			fi
+			echo "Error: litellm.RateLimitError: Error code: 429"
+			exit 1
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 24
+			;;
+		esac
+		;;
 	vertex-all-notfound)
 		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
 		echo '"status": "NOT_FOUND"'
@@ -5720,6 +5736,9 @@ PY
 	if [ "$scenario" = "all-fallbacks-invalid" ]; then
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna openai_direct/gpt-5.5")
 	fi
+	if [ "$scenario" = "mixed-fallback-config-and-retryable" ]; then
+		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.6-luna deepseek/deepseek-v3-0324")
+	fi
 	if [ "$scenario" = "same-provider-direct-openai-fallback-key" ]; then
 		printf '%s' 'same-provider-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
 		env_cmd+=(STRIX_FALLBACK_MODELS="openai-direct/gpt-5.5")
@@ -6498,6 +6517,17 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 			"" \
+			"nvidia_nim"
+		;;
+	mixed-fallback-config-and-retryable)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+			"" \
+			"1" \
+			"Configured model and fallback models were unavailable." \
+			"2" \
+			"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
+			"https://example.invalid|https://example.invalid" \
 			"nvidia_nim"
 		;;
 	same-provider-direct-openai-fallback-key)
@@ -12672,6 +12702,16 @@ run_gate_case "nvidia-nim-quota-openai-direct-fallback-missing-key" \
 	"2" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
 	"" \
+	"nvidia_nim"
+
+run_gate_case "mixed-fallback-config-and-retryable" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"" \
+	"1" \
+	"Configured model and fallback models were unavailable." \
+	"2" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
+	"https://example.invalid|https://example.invalid" \
 	"nvidia_nim"
 
 run_gate_case "github-models-fallback-success-deepseek-v3" \
