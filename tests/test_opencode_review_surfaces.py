@@ -10,6 +10,7 @@ import pytest
 
 from scripts.ci import opencode_review_surfaces as surfaces
 
+ROOT = Path(__file__).resolve().parents[1]
 ORIGINWEAVE_47_FILES = [
     "crates/originweave-destination/src/lib.rs",
     "crates/originweave-destination/src/resolution.rs",
@@ -661,9 +662,13 @@ def test_format_structured_findings_skips_non_mappings() -> None:
     assert surfaces.format_structured_findings(["skip", 1]) == ""
 
 
-def test_publisher_workflow_cannot_replace_review_with_coverage_finding() -> None:
+def test_publisher_workflow_cannot_replace_review_with_coverage_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The #47 publisher shape — coverage REQUEST_CHANGES as the whole review — is gone."""
-    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+    monkeypatch.chdir(tmp_path)
+    workflow = (ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
         encoding="utf-8"
     )
     assert "publish_fallback_diff_review" in workflow
