@@ -696,6 +696,29 @@ jobs:
           printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
           echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
 
+      - name: Prepare direct-OpenAI fallback credentials
+        # The nvidia_nim, github_models, and openrouter fallback matrices all
+        # end with openai-direct/gpt-5.6-luna. Without OpenAI credentials those
+        # candidates previously ran against the primary provider endpoint with
+        # the wrong key and failed closed on every provider outage.
+        if: steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'openrouter'
+        env:
+          OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          umask 077
+          sanitized="$(printf '%s' "$OPENAI_FALLBACK_KEY" | tr -d '\r\n')"
+          trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ]; then
+            echo '::notice::No direct-OpenAI key available; Strix scans run without the openai-direct terminal fallback.'
+            exit 0
+          fi
+          openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
+          printf '%s' "$trimmed" > "$openai_fallback_key_file"
+          echo "STRIX_OPENAI_FALLBACK_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
+          openai_fallback_api_base_file="$RUNNER_TEMP/openai_fallback_api_base.txt"
+          printf '%s' 'https://api.openai.com/v1' > "$openai_fallback_api_base_file"
+          echo "STRIX_OPENAI_FALLBACK_API_BASE_FILE=$openai_fallback_api_base_file" >> "$GITHUB_ENV"
+
       - name: Prepare Vertex AI credentials
         if: steps.gate.outputs.provider_mode == 'vertex_ai'
         env:
@@ -825,6 +848,8 @@ jobs:
           STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
+          STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}
+          STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"

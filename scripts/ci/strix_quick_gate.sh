@@ -380,6 +380,38 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	fi
 fi
 
+# Optional cross-provider fallback credentials for openai-direct/ (and the
+# underscore alias openai_direct/) fallback models. When the primary provider
+# is NVIDIA NIM, GitHub Models, or OpenRouter, those fallbacks must
+# authenticate against the direct OpenAI API with an OpenAI key instead of
+# reusing LLM_API_KEY_FILE / LLM_API_BASE_FILE. Both files are optional;
+# without them openai-direct fallbacks keep requiring LLM_API_BASE_FILE.
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+STRIX_OPENAI_FALLBACK_API_BASE_FILE="${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_API_BASE_FILE must reference a regular file containing the API base URL." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] && ! STRIX_OPENAI_FALLBACK_API_BASE_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_API_BASE_FILE" "$STRIX_OPENAI_FALLBACK_API_BASE_FILE")"; then
+	exit 2
+fi
+
 require_non_negative_integer() {
 	local value="$1"
 	local label="$2"
@@ -747,6 +779,20 @@ is_github_models_model() {
 	openai/o3 | openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
 	openai/deepseek/* | openai/meta/* | openai/mistral-ai/* | \
 	deepseek/* | meta/* | mistral-ai/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+## True when the model routes to the direct OpenAI API through one of the two
+## accepted spellings. The workflow's fallback matrices use the hyphen alias
+## while some self-tests and callers pass the underscore form.
+is_openai_direct_model() {
+	case "$1" in
+	openai-direct/* | openai_direct/*)
 		return 0
 		;;
 	*)
@@ -2383,7 +2429,13 @@ resolved_llm_api_base_for_model() {
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+	if is_openai_direct_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: openai-direct/* (and openai_direct/*)
+		# candidates must reach the direct OpenAI API even when the primary
+		# provider selected a different LLM_API_BASE_FILE endpoint.
+		api_base_file="$STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+	elif is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback
 		# attempts must still route through the GitHub Models inference endpoint.
@@ -2499,7 +2551,12 @@ run_strix_once() {
 	local child_llm_api_key=""
 	if ! is_vertex_model "$(normalize_model "$model")"; then
 		child_llm_api_key="$LLM_API_KEY"
-		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+		if is_openai_direct_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			# Cross-provider fallback: openai-direct/* (and openai_direct/*)
+			# models authenticate with the direct-OpenAI key, not the primary
+			# provider key in LLM_API_KEY_FILE.
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		elif is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
