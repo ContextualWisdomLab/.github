@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -118,6 +118,7 @@ OPEN_PRS_PAGE_SIZE = 25
 # remains deliberately larger than the job cap while recovering genuine zombie
 # checks in the same operating window instead of leaving them for seven hours.
 DEFAULT_STALE_OPENCODE_MINUTES = 90
+DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {
@@ -159,6 +160,11 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "deterministic current-head evidence",
     "deterministic fallback approval",
     "did not emit a usable current-head control block",
+)
+COVERAGE_REVIEW_MARKERS = (
+    "coverage evidence did not pass",
+    "coverage-evidence",
+    "required test/docstring evidence",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 
@@ -1023,6 +1029,20 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
     return contexts.get("nodes") or []
 
 
+def is_opencode_check_run(node: dict[str, Any]) -> bool:
+    """Return whether a CheckRun carries the OpenCode workflow identity."""
+    if node.get("__typename") != "CheckRun":
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return (
+        node.get("name") == "opencode-review"
+        or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+    )
+
+
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
@@ -1031,11 +1051,7 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
             # status. Organization required-workflow CheckRuns are deliberately
             # non-authoritative placeholders and must not suppress that dispatch.
             return False
-        workflow = (
-            ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
-            or {}
-        )
-        return node.get("name") == "opencode-review" or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+        return is_opencode_check_run(node)
     return node.get("context") == "opencode-review"
 
 
@@ -1083,6 +1099,39 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the newest check run for each workflow and check-name pair."""
+    latest: dict[
+        tuple[str, str],
+        tuple[datetime | None, int, dict[str, Any]],
+    ] = {}
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun":
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest.get(key)
+        if previous is None:
+            latest[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest[key] = (started_at, index, node)
+    return [node for _, _, node in sorted(latest.values(), key=lambda item: item[1])]
 
 
 def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
@@ -1320,6 +1369,117 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def latest_current_head_coverage_change_request(
+    pr: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the latest exact-head OpenCode request that only cites coverage."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
+            return None
+        body = (review.get("body") or "").lower()
+        return review if all(marker in body for marker in COVERAGE_REVIEW_MARKERS) else None
+    return None
+
+
+def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
+    """Return whether the latest current-head request is only a coverage gate."""
+    return latest_current_head_coverage_change_request(pr) is not None
+
+
+def coverage_retry_wait_reason(
+    pr: dict[str, Any],
+    *,
+    repo: str | None = None,
+    workflow: str | None = None,
+    now: datetime | None = None,
+    floor_minutes: int = DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES,
+) -> str | None:
+    """Return a wait reason until one same-head coverage retry interval elapses.
+
+    The latest exact-head review submission or completed dispatch timestamp is the
+    durable same-head retry marker. Missing or malformed timestamps fail closed so
+    a repeated coverage-only review cannot create an unbounded dispatch loop.
+    """
+    review = latest_current_head_coverage_change_request(pr)
+    if review is None:
+        return None
+    submitted_at = parse_github_datetime(review.get("submittedAt"))
+    if submitted_at is None:
+        return "current-head OpenCode coverage review has no valid submission timestamp; defer same-head re-review"
+    retry_anchor = submitted_at
+    if repo and workflow:
+        try:
+            dispatch_started_at = latest_opencode_dispatch_started_at(repo, workflow, pr)
+        except RuntimeError:
+            return "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
+        if dispatch_started_at and dispatch_started_at > retry_anchor:
+            retry_anchor = dispatch_started_at
+    current_time = now or datetime.now(timezone.utc)
+    if current_time < retry_anchor + timedelta(minutes=max(0, floor_minutes)):
+        return "same-head OpenCode coverage retry floor has not elapsed"
+    return None
+
+
+def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]:
+    """Return indexes of coverage-evidence checks in one check-run snapshot."""
+    return [
+        index
+        for index, node in enumerate(check_runs)
+        if (node.get("name") or "").lower() == "coverage-evidence"
+    ]
+
+
+def latest_coverage_evidence_index(check_runs: Sequence[dict[str, Any]]) -> int | None:
+    """Return the newest coverage-evidence index across workflow names."""
+    coverage_indices = coverage_evidence_indices(check_runs)
+    if not coverage_indices:
+        return None
+    return max(
+        coverage_indices,
+        key=lambda item: (
+            parse_github_datetime(check_runs[item].get("startedAt"))
+            or datetime.min.replace(tzinfo=timezone.utc),
+            item,
+        ),
+    )
+
+
+def coverage_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, complete, or failed for the latest coverage gate."""
+    check_runs = latest_check_runs(pr)
+    latest_index = latest_coverage_evidence_index(check_runs)
+    if latest_index is not None:
+        node = check_runs[latest_index]
+        status = (node.get("status") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        return "complete" if (node.get("conclusion") or "").upper() == "SUCCESS" else "failed"
+    for node in reversed(context_nodes(pr)):
+        if node.get("__typename") == "CheckRun":
+            continue
+        name = (node.get("name") or node.get("context") or "").lower()
+        if name != "coverage-evidence":
+            continue
+        status = (node.get("status") or node.get("state") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        return "complete" if status == "SUCCESS" else "failed"
+    return "missing"
+
+
+def superseded_coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> set[int]:
+    """Return older coverage checks superseded by a newer successful run."""
+    authoritative_index = latest_coverage_evidence_index(check_runs)
+    if authoritative_index is None:
+        return set()
+    authoritative = check_runs[authoritative_index]
+    if (authoritative.get("conclusion") or "").upper() != "SUCCESS":
+        return set()
+    return set(coverage_evidence_indices(check_runs)) - {authoritative_index}
+
+
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
     """Return dismissible automated change requests tied to previous heads."""
     review_ids: list[int] = []
@@ -1502,48 +1662,41 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
     return len(review_ids)
 
 
-def failed_status_checks(pr: dict[str, Any]) -> list[str]:
-    """Return failing check or status context names from the PR rollup."""
+def failed_status_checks(
+    pr: dict[str, Any],
+    *,
+    ignore_opencode: bool = False,
+) -> list[str]:
+    """Return failing check or status context names from the PR rollup.
+
+    ``ignore_opencode`` is reserved for the authenticated coverage-only retry
+    path: the previous ``opencode-review`` job or status is expected to be
+    failing there because it published the current-head coverage change request
+    being retried. Sibling jobs in the same workflow remain authoritative.
+    """
     failed: list[str] = []
-    latest_check_runs: dict[
-        tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
-    ] = {}
-    status_contexts: list[dict[str, Any]] = []
-    for index, node in enumerate(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun":
-            status_contexts.append(node)
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest_check_runs.get(key)
-        if previous is None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest_check_runs[key] = (started_at, index, node)
+    check_runs = latest_check_runs(pr)
+    superseded_coverage_indices = (
+        superseded_coverage_evidence_indices(check_runs) if ignore_opencode else set()
+    )
+    status_contexts = [
+        node
+        for node in context_nodes(pr)
+        if node.get("__typename") != "CheckRun"
+    ]
 
     successful_status_contexts = {
         node.get("context")
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+    for index, node in enumerate(check_runs):
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if index in superseded_coverage_indices:
+                continue
+            if ignore_opencode and node.get("name") == "opencode-review":
+                continue
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
             if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
@@ -1552,6 +1705,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     for node in status_contexts:
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
+            if ignore_opencode and is_opencode_context(node):
+                continue
             failed.append(node.get("context") or "status-context")
     return failed
 
@@ -2112,6 +2267,46 @@ def active_opencode_run_refs(
     )
 
 
+def latest_opencode_dispatch_started_at(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+) -> datetime | None:
+    """Return the latest completed same-head OpenCode dispatch start time."""
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
+    head = str(pr.get("headRefOid") or "").lower()
+    number = int(pr["number"])
+    title_prefixes = tuple(
+        f"{title} {target_repo}#{number}@"
+        for title in sorted(
+            {"Required OpenCode Review", *OPENCODE_WORKFLOW_NAMES},
+            key=len,
+            reverse=True,
+        )
+    )
+    latest: datetime | None = None
+    for run_data in active_workflow_runs(dispatch_repo, ("completed",)):
+        if run_data.get("event") != "repository_dispatch":
+            continue
+        display_title = str(run_data.get("display_title") or "")
+        prefix = next(
+            (candidate for candidate in title_prefixes if display_title.startswith(candidate)),
+            None,
+        )
+        if prefix is None:
+            continue
+        dispatched_head = display_title.removeprefix(prefix).lower()
+        if not GIT_SHA_RE.fullmatch(dispatched_head) or dispatched_head != head:
+            continue
+        started_at = parse_github_datetime(
+            run_data.get("run_started_at") or run_data.get("created_at")
+        )
+        if started_at and (latest is None or started_at > latest):
+            latest = started_at
+    return latest
+
+
 def active_opencode_run_ids(
     repo: str,
     workflow: str,
@@ -2535,16 +2730,102 @@ def inspect_pr(
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
+        coverage_retry_progress = opencode_progress_state(
+            pr, stale_after_minutes=stale_opencode_minutes
+        )
+        coverage_ready = (
+            merge_state not in {"DIRTY", "CONFLICTING"}
+            and trigger_reviews
+            and review_dispatch_allowed
+            and current_head_coverage_change_request(pr)
+            and coverage_evidence_state(pr) == "complete"
+            and strix_evidence_state(pr) == "complete"
+            and not failed_status_checks(pr, ignore_opencode=True)
+        )
+        if coverage_ready:
+            if coverage_retry_progress == "running":
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                "current-head OpenCode coverage evidence is complete; disable "
+                                "auto-merge while same-head re-review is already running"
+                            ),
+                        )
+                    )
+                return decide(
+                    "wait",
+                    "current-head OpenCode coverage evidence is complete; "
+                    "same-head OpenCode re-review is already running",
+                )
+            retry_wait_reason = coverage_retry_wait_reason(
+                pr,
+                repo=repo if not dry_run else None,
+                workflow=workflow if not dry_run else None,
+            )
+            if retry_wait_reason:
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                f"{retry_wait_reason}; disable auto-merge until the same-head "
+                                "coverage retry floor elapses"
+                            ),
+                        )
+                    )
+                return decide("wait", retry_wait_reason)
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=(
+                            "current-head OpenCode coverage blocker is cleared; disable auto-merge "
+                            "before same-head re-review"
+                        ),
+                    )
+                )
+            wait_reason = repository_dispatch_wait_reason(repo, workflow)
+            if wait_reason:
+                return decide("wait", wait_reason)
+            dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return decide(
+                    "wait",
+                    "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active",
+                )
+            return decide(
+                "review_dispatch",
+                "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched",
+            )
+        conflict_suffix = (
+            f"; {merge_conflict_guidance(pr, merge_state)}"
+            if merge_state in {"DIRTY", "CONFLICTING"}
+            else ""
+        )
         if pr.get("autoMergeRequest"):
             return finish(
                 disable_auto_merge_decision(
                     repo,
                     pr,
                     dry_run=dry_run,
-                    reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                    reason=(
+                        "current-head OpenCode review requested changes; address the review "
+                        f"before re-enabling auto-merge{conflict_suffix}"
+                    ),
                 )
             )
-        return decide("block", "current-head OpenCode review requested changes")
+        return decide(
+            "block",
+            f"current-head OpenCode review requested changes{conflict_suffix}",
+        )
 
     current_head_approved = has_current_head_approval(pr)
     approval_reason = merge_approval_block_reason(pr) if current_head_approved else None

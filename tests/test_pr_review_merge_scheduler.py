@@ -933,6 +933,7 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.context_nodes(make_pr()) == []
     assert sched.compare_behind_by({"compareBehindBy": "2"}) == 2
     assert sched.compare_behind_by({"compareBehindBy": "unknown"}) == 0
+    assert not sched.is_opencode_check_run({"context": "opencode-review"})
     assert sched.is_opencode_context({"__typename": "CheckRun", "name": "opencode-review"})
     assert sched.is_opencode_context(
         {
@@ -1107,6 +1108,549 @@ def test_central_progress_ignores_required_workflow_checkrun_placeholder(
     )
 
 
+def test_central_coverage_retry_ignores_failed_required_workflow_placeholder(
+    monkeypatch,
+):
+    """A non-authoritative OpenCode CheckRun cannot self-block its retry."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        **opencode_check(status="COMPLETED"),
+                        "conclusion": "FAILURE",
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "review_dispatch"
+    assert decision.reason == (
+        "current-head OpenCode coverage blocker is cleared; "
+        "same-head OpenCode re-dispatched"
+    )
+
+
+def test_coverage_retry_disables_auto_merge_before_dispatch(monkeypatch):
+    """A coverage retry must not leave an unsafe auto-merge request enabled."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    disabled = []
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        **opencode_check(status="COMPLETED"),
+                        "conclusion": "FAILURE",
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "disable_auto_merge"
+    assert "before same-head re-review" in decision.reason
+    assert disabled == [("owner/repo", 1, True)]
+    assert dispatched == []
+
+
+def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
+    """A visible same-head OpenCode run prevents duplicate coverage dispatch."""
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    opencode_check(
+                        status="IN_PROGRESS",
+                        started_at=datetime.now(timezone.utc).isoformat(),
+                    ),
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "current-head OpenCode coverage evidence is complete; "
+        "same-head OpenCode re-review is already running"
+    )
+    assert dispatched == []
+
+
+def test_coverage_retry_disables_auto_merge_for_visible_opencode_run(monkeypatch):
+    """An active same-head re-review disables any pre-existing auto-merge request."""
+    disabled = []
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+    coverage_request = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    opencode_check(
+                        status="IN_PROGRESS",
+                        started_at=datetime.now(timezone.utc).isoformat(),
+                    ),
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "disable_auto_merge"
+    assert disabled == [("owner/repo", 1, True)]
+
+
+def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
+    """A fresh coverage-only review disables auto-merge during its retry floor."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    disabled = []
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2999-01-01T00:00:00Z",
+                    ),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "disable_auto_merge"
+    assert "same-head OpenCode coverage retry floor has not elapsed" in decision.reason
+    assert "disable auto-merge until the same-head coverage retry floor elapses" in decision.reason
+    assert disabled == [("owner/repo", 1, True)]
+    assert dispatched == []
+
+
+def test_coverage_retry_floor_uses_latest_dispatch_timestamp(monkeypatch):
+    """A completed dispatch without a review still receives a bounded retry floor."""
+    coverage_review = {
+        **opencode_review(
+            "CHANGES_REQUESTED",
+            "head",
+            submitted_at="2026-08-24T00:00:00Z",
+        ),
+        "body": (
+            "OpenCode cannot approve yet because required coverage evidence did not pass. "
+            "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+        ),
+    }
+    coverage_request = make_pr(reviews={"nodes": [coverage_review]})
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 1, 59, tzinfo=timezone.utc),
+    ) == "same-head OpenCode coverage retry floor has not elapsed"
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc),
+    ) is None
+
+
+def test_coverage_retry_wait_reason_fails_closed_without_coverage_review():
+    """A non-coverage change request cannot authorize a retry."""
+    assert sched.coverage_retry_wait_reason(make_pr()) is None
+
+
+def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavailable(
+    monkeypatch,
+):
+    """Unavailable dispatch history prevents an unbounded same-head retry."""
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2026-08-24T00:00:00Z",
+                    ),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: (_ for _ in ()).throw(RuntimeError("temporary API failure")),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+    ) == "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
+
+
+def test_coverage_retry_floor_keeps_newer_review_timestamp(monkeypatch):
+    """An older dispatch cannot extend or replace the newer review timestamp."""
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2026-08-24T02:00:00Z",
+                    ),
+                    "body": (
+                        "coverage evidence did not pass; coverage-evidence reported that "
+                        "required test/docstring evidence was not proven"
+                    ),
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "latest_opencode_dispatch_started_at",
+        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert sched.coverage_retry_wait_reason(
+        coverage_request,
+        repo="owner/repo",
+        workflow="OpenCode Review",
+        now=datetime(2026, 8, 24, 2, 30, tzinfo=timezone.utc),
+    ) == "same-head OpenCode coverage retry floor has not elapsed"
+
+
+def test_coverage_retry_without_timestamp_fails_closed(monkeypatch):
+    """A coverage-only review without a timestamp cannot authorize redispatch."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    coverage_review = opencode_review("CHANGES_REQUESTED", "head")
+    coverage_review.pop("submittedAt")
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **coverage_review,
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "wait"
+    assert "no valid submission timestamp" in decision.reason
+
+
+def test_coverage_retry_keeps_failed_opencode_workflow_siblings_fail_closed(
+    monkeypatch,
+):
+    """Only the superseded review job is ignored during coverage retry."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        **opencode_check(status="COMPLETED"),
+                        "conclusion": "FAILURE",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-source-tree",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "checkSuite": {
+                            "workflowRun": {
+                                "workflow": {"name": "Required OpenCode Review"}
+                            }
+                        },
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert sched.failed_status_checks(coverage_request, ignore_opencode=True) == [
+        "coverage-source-tree"
+    ]
+    assert decision.action == "block"
+    assert decision.reason == "current-head OpenCode review requested changes"
+    assert dispatched == []
+
+
+def test_conflicting_coverage_retry_blocks_with_conflict_guidance(monkeypatch):
+    """Coverage-only retries never dispatch while the exact head conflicts."""
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        mergeStateStatus="CONFLICTING",
+        restMergeableState="CONFLICTING",
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "block"
+    assert "merge conflict: CONFLICTING" in decision.reason
+    assert dispatched == []
+
+
 def test_review_state_and_failed_checks():
     pr = make_pr(reviews={"nodes": [opencode_review("APPROVED", "old"), opencode_review("APPROVED", "head")]})
     assert sched.current_head_review_state(pr, "APPROVED")
@@ -1263,6 +1807,102 @@ def test_review_state_and_failed_checks():
     assert sched.has_current_head_approval(superseded)
     assert not sched.has_current_head_changes_requested(superseded)
 
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
+                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                ]
+            }
+        },
+    )
+    assert sched.current_head_coverage_change_request(coverage_request)
+    assert sched.coverage_evidence_state(coverage_request) == "complete"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "PENDING"}]}
+            }
+        )
+    ) == "running"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {
+                            "__typename": "CheckRun",
+                            "name": "coverage-evidence",
+                            "status": "IN_PROGRESS",
+                        }
+                    ]
+                }
+            }
+        )
+    ) == "running"
+    assert sched.coverage_evidence_state(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
+    ) == "missing"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {"name": "coverage-evidence", "state": "SUCCESS"},
+                        {"name": "lint", "state": "SUCCESS"},
+                    ]
+                }
+            }
+        )
+    ) == "complete"
+    assert sched.coverage_evidence_state(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "FAILURE"}]}
+            }
+        )
+    ) == "failed"
+    assert sched.coverage_evidence_state(make_pr()) == "missing"
+    human_coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head", login="human"),
+                    "body": "coverage evidence did not pass; coverage-evidence; required test/docstring evidence",
+                }
+            ]
+        }
+    )
+    assert not sched.current_head_coverage_change_request(human_coverage_request)
+    assert not sched.current_head_coverage_change_request(
+        make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
+    )
+    ordinary_request = make_pr(
+        reviews={
+            "nodes": [
+                {**opencode_review("CHANGES_REQUESTED", "head"), "body": "Fix the estimator."}
+            ]
+        }
+    )
+    assert not sched.current_head_coverage_change_request(ordinary_request)
+
     stale_gate_reviews = make_pr(
         reviews={
             "nodes": [
@@ -1344,6 +1984,22 @@ def test_review_state_and_failed_checks():
         }
     )
     assert sched.failed_status_checks(failed) == ["strix", "lint"]
+    assert sched.failed_status_checks(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        {
+                            "__typename": "StatusContext",
+                            "context": "opencode-review",
+                            "state": "FAILURE",
+                        }
+                    ]
+                }
+            }
+        ),
+        ignore_opencode=True,
+    ) == []
     action_required = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1756,6 +2412,139 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
         }
     )
     assert sched.failed_status_checks(missing_then_timestamped) == []
+
+
+def test_coverage_evidence_state_prefers_newest_rerun():
+    """An older failed rerun cannot hide newer successful coverage evidence."""
+
+    def coverage_check(started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check("2026-08-24T02:00:00Z", "SUCCESS"),
+                    coverage_check("2026-08-24T01:00:00Z", "FAILURE"),
+                ]
+            }
+        }
+    )
+
+    assert sched.coverage_evidence_state(pr) == "complete"
+
+
+def test_coverage_evidence_state_prefers_newest_run_across_workflows():
+    """Coverage evidence uses time, not rollup order, across workflow names."""
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "SUCCESS",
+                    ),
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T01:00:00Z",
+                        "FAILURE",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.coverage_evidence_state(pr) == "complete"
+
+
+def test_coverage_retry_ignores_superseded_failure_across_workflows():
+    """A newer successful workflow supersedes an older coverage failure."""
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T01:00:00Z",
+                        "FAILURE",
+                    ),
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "SUCCESS",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr) == ["coverage-evidence"]
+    assert sched.failed_status_checks(pr, ignore_opencode=True) == []
+
+
+def test_coverage_retry_keeps_newest_failed_run_authoritative_across_workflows():
+    """An unsuccessful newest run remains a blocking coverage failure."""
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T01:00:00Z",
+                        "SUCCESS",
+                    ),
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "FAILURE",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.failed_status_checks(pr, ignore_opencode=True) == ["coverage-evidence"]
 
 
 def test_run_command_failure_scrubs_secrets(monkeypatch):
@@ -2434,6 +3223,74 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
         in capsys.readouterr().out
     )
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_latest_opencode_dispatch_started_at_matches_exact_completed_run(monkeypatch):
+    """Completed same-head repository dispatch runs provide a retry timestamp."""
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses: [
+            {"event": "push", "display_title": "irrelevant"},
+            {
+                "event": "repository_dispatch",
+                "display_title": "Different workflow owner/repo#1@" + head_sha,
+                "created_at": "2026-08-24T00:30:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "run_started_at": "2026-08-24T01:00:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "created_at": "2026-08-24T02:00:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+                "created_at": "2026-08-24T01:30:00Z",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
+            },
+            {
+                "event": "repository_dispatch",
+                "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
+                "created_at": "2026-08-24T03:00:00Z",
+            },
+        ],
+    )
+
+    assert sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
+
+
+def test_latest_opencode_dispatch_started_at_returns_none_without_exact_run(monkeypatch):
+    """Unrelated completed runs cannot become a same-head retry marker."""
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses: [
+            {
+                "event": "repository_dispatch",
+                "display_title": "Required OpenCode Review owner/repo#1@" + "b" * 40,
+                "created_at": "2026-08-24T02:00:00Z",
+            }
+        ],
+    )
+
+    assert sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid="a" * 40),
+    ) is None
 
 
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
@@ -3274,10 +4131,101 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
             )
         )
         assert conflict_with_stale_review.action == "block"
-        assert conflict_with_stale_review.reason == (
-            "current-head OpenCode review requested changes"
+        assert conflict_with_stale_review.reason.startswith(
+            "current-head OpenCode review requested changes; merge conflict:"
         )
+        assert merge_state in conflict_with_stale_review.reason
     assert update_calls == []
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
+                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "checkSuite": {
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}}
+                        },
+                    },
+                ]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(
+            (repo, workflow, pr["headRefOid"], dry_run)
+        )
+        or "dispatched",
+    )
+    monkeypatch.setattr(
+        sched,
+        "repository_dispatch_wait_reason",
+        lambda repo, workflow: "review dispatch waits",
+    )
+    coverage_wait = inspect(coverage_request)
+    assert coverage_wait.action == "wait"
+    assert coverage_wait.reason == "review dispatch waits"
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    coverage_active = inspect(coverage_request)
+    assert coverage_active.action == "wait"
+    assert coverage_active.reason == (
+        "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active"
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(
+            (repo, workflow, pr["headRefOid"], dry_run)
+        )
+        or "dispatched",
+    )
+    coverage_decision = inspect(coverage_request)
+    assert coverage_decision.action == "review_dispatch"
+    assert coverage_decision.reason == (
+        "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
+    )
+    assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+
+    coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
+        {
+            "__typename": "CheckRun",
+            "name": "Security Scan",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+        }
+    )
+    unrelated_failure = inspect(coverage_request)
+    assert unrelated_failure.action == "block"
+    assert unrelated_failure.reason == "current-head OpenCode review requested changes"
+
     action_required_pr = make_pr(
         statusCheckRollup={
             "contexts": {
