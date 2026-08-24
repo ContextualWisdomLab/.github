@@ -3316,14 +3316,9 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
 case "${FAKE_STRIX_SCENARIO:?}" in
-	success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
 		exit 0
-		;;
-	provider-not-provided)
-		echo "LLM CONNECTION FAILED"
-		echo "Error: litellm.BadRequestError: LLM Provider NOT provided"
-		exit 1
 		;;
 	scan-working-directory-isolated)
 		if [ "$PWD" = "$target_path" ] || [[ "$PWD" == "$target_path"/* ]]; then
@@ -5945,16 +5940,6 @@ run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
 	"")
 		return 0
-		;;
-	provider-not-provided)
-		run_gate_case "provider-not-provided" \
-			"vertex_ai/provider-not-provided" \
-			"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
-			"1" \
-			"Configured Vertex model and fallback models were unavailable." \
-			"3" \
-			"vertex_ai/provider-not-provided|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
-			"<unset>|<unset>|<unset>"
 		;;
 	success)
 		run_gate_case "success" \
@@ -10820,17 +10805,6 @@ run_gate_case "below-threshold-with-requests-connection-error" \
 	"1" \
 	"vertex_ai/info-conn-requests-primary" \
 	"<unset>"
-
-# Guard test 3d: a provider-prefix error is an LLM infrastructure error and
-# must fail closed rather than being mistaken for an application failure.
-run_gate_case "provider-not-provided" \
-	"vertex_ai/provider-not-provided" \
-	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
-	"1" \
-	"Configured Vertex model and fallback models were unavailable." \
-	"3" \
-	"vertex_ai/provider-not-provided|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
-	"<unset>|<unset>|<unset>"
 
 # Guard test 4: MEDIUM finding + MidStreamFallbackError → should fail (exit 1).
 # Midstream is vertex-retryable, so the gate also tries fallback models

@@ -2828,17 +2828,7 @@ PY
 	return 1
 }
 
-is_llm_provider_misconfiguration_error() {
-	if grep -Eiq 'litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" &&
-		grep -Eiq 'LLM Provider NOT provided' "$STRIX_LOG"; then
-		return 0
-	fi
-
-	return 1
-}
-
 is_llm_api_connection_error() {
-
 	if grep -Eiq 'litellm(\.exceptions)?\.APIConnectionError' "$STRIX_LOG" &&
 		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
 		return 0
@@ -2902,11 +2892,6 @@ is_model_behavior_error() {
 is_transient_same_model_retry_error() {
 	local model="${1-}"
 	if is_timeout_error; then
-		return 1
-	fi
-	# A missing LiteLLM provider is a permanent selector/configuration error:
-	# skip same-model backoff, then let the distinct-model fallback path decide.
-	if is_llm_provider_misconfiguration_error; then
 		return 1
 	fi
 	if is_llm_api_connection_error; then
@@ -3234,10 +3219,6 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_llm_api_connection_error; then
-		return 0
-	fi
-
-	if is_llm_provider_misconfiguration_error; then
 		return 0
 	fi
 
@@ -4104,10 +4085,6 @@ is_model_retryable_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
-		return 0
-	fi
-
-	if is_llm_provider_misconfiguration_error; then
 		return 0
 	fi
 

@@ -60,36 +60,6 @@ def _classifies_as_model_behavior_error(log_text: str) -> bool:
     return completed.returncode == 0
 
 
-def _classifies_as_provider_misconfiguration_error(log_text: str) -> bool:
-    """Execute the permanent provider-selector classifier on one log."""
-
-    gate_source = STRIX_GATE.read_text(encoding="utf-8")
-    function_source = _function_block(
-        gate_source,
-        "is_llm_provider_misconfiguration_error",
-    )
-    with tempfile.TemporaryDirectory(prefix="strix-provider-config-") as temp_dir:
-        log_path = Path(temp_dir) / "strix.log"
-        log_path.write_text(log_text, encoding="utf-8")
-        script = "\n".join(
-            (
-                "set -euo pipefail",
-                'STRIX_LOG="$1"',
-                function_source,
-                "is_llm_provider_misconfiguration_error",
-            )
-        )
-        completed = subprocess.run(
-            ["bash", "-c", script, "strix-classifier", str(log_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    if completed.returncode not in {0, 1}:
-        raise AssertionError(completed.stderr)
-    return completed.returncode == 0
-
-
 def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     """Extract one single-quoted POSIX ERE assigned in the Strix workflow."""
 
@@ -196,31 +166,6 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
         self.assertIn("is_model_behavior_error", infrastructure)
         self.assertIn("is_model_behavior_error", retryable)
         self.assertNotIn("is_model_behavior_error", same_model_retry)
-
-    def test_provider_selector_error_skips_same_model_retry(self) -> None:
-        """Do not spend backoff budget retrying a permanently invalid selector."""
-
-        log = "Error: litellm.BadRequestError: LLM Provider NOT provided\n"
-        self.assertTrue(_classifies_as_provider_misconfiguration_error(log))
-        self.assertFalse(
-            _classifies_as_provider_misconfiguration_error(
-                "the target application reported LLM Provider NOT provided\n"
-            )
-        )
-
-        gate_source = STRIX_GATE.read_text(encoding="utf-8")
-        infrastructure = _function_block(
-            gate_source,
-            "has_detected_infrastructure_error",
-        )
-        retryable = _function_block(gate_source, "is_model_retryable_error")
-        same_model_retry = _function_block(
-            gate_source,
-            "is_transient_same_model_retry_error",
-        )
-        self.assertIn("is_llm_provider_misconfiguration_error", infrastructure)
-        self.assertIn("is_llm_provider_misconfiguration_error", retryable)
-        self.assertIn("is_llm_provider_misconfiguration_error", same_model_retry)
 
     def test_outer_workflow_classifies_zero_finding_protocol_flake(self) -> None:
         """Empty scans that hit ModelBehaviorError receive typed diagnostics."""
