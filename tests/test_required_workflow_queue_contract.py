@@ -32,6 +32,20 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
+def run_strix_smoke(tmp_path: Path, workflow: str) -> subprocess.CompletedProcess[str]:
+    """Run the trusted smoke checker against one candidate workflow."""
+    workflow_path = tmp_path / ".github" / "workflows" / "strix.yml"
+    workflow_path.parent.mkdir(parents=True)
+    workflow_path.write_text(workflow, encoding="utf-8")
+    return subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "ci" / "strix_required_workflow_smoke.sh")],
+        env={**os.environ, "TRUSTED_WORKSPACE": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     """Keep the default scheduler dispatch bounded to one review."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
@@ -543,6 +557,102 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     assert noema.returncode == 1
     assert "Noema LLM is unconfigured" in noema.stdout
     assert noema_probe.read_text() == "synthetic-openai-key"
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "gpt-5.6-luna\nforged<<enabled=true",
+        "gpt-5.6-luna\rforged=true",
+    ),
+)
+def test_strix_gate_rejects_multiline_model_outputs(
+    tmp_path: Path,
+    model: str,
+) -> None:
+    """Untrusted dispatch data cannot inject GitHub output records."""
+    output_path = tmp_path / "strix-output"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            textwrap.dedent(
+                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                .split("        run: |\n", 1)[1]
+            ),
+        ],
+        env={
+            **os.environ,
+            "GITHUB_OUTPUT": str(output_path),
+            "STRIX_MODEL": model,
+            "STRIX_MODEL_REQUESTED": model,
+            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
+            "STRIX_OPENROUTER_API_KEY": "",
+            "STRIX_NVIDIA_NIM_API_KEY": "",
+            "STRIX_VERTEX_CREDENTIALS": "",
+            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
+            "TARGET_REPOSITORY_PRIVATE": "false",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "must not contain carriage returns or newlines" in result.stdout
+    assert not output_path.exists()
+
+
+def test_strix_manual_status_uses_only_live_validated_identifiers() -> None:
+    """Failed dispatch validation cannot write a caller-selected commit status."""
+    workflow = workflow_text("strix.yml")
+    publish_step = workflow_step(workflow, "Publish same-head manual Strix status")
+
+    assert "id: dispatch_metadata" in workflow
+    assert (
+        "dispatch_metadata_validated: "
+        "${{ steps.dispatch_metadata.outputs.validated }}"
+    ) in workflow
+    assert (
+        "github.event_name == 'repository_dispatch' && "
+        "needs.strix.outputs.dispatch_metadata_validated == 'true'"
+    ) in workflow
+    assert (
+        "TARGET_REPOSITORY: ${{ needs.strix.outputs.dispatch_target_repository }}"
+        in publish_step
+    )
+    assert (
+        "PR_HEAD_SHA: ${{ needs.strix.outputs.dispatch_head_sha }}" in publish_step
+    )
+    assert "github.event.client_payload.target_repository" not in publish_step
+    assert "github.event.client_payload.pr_head_sha" not in publish_step
+    assert workflow.count("success:true)") == 1
+
+
+def test_strix_smoke_rejects_workflow_contract_expansion(tmp_path: Path) -> None:
+    """Unknown jobs, broader permissions, and mutable actions fail closed."""
+    workflow = workflow_text("strix.yml")
+    baseline = run_strix_smoke(tmp_path / "baseline", workflow)
+    assert baseline.returncode == 0, baseline.stderr
+
+    variants = {
+        "unknown-job": workflow
+        + "\n  attacker-persistence:\n    runs-on: ubuntu-latest\n    steps:\n"
+        + "      - uses: attacker/persistence-action@main\n",
+        "broader-permission": workflow.replace(
+            "    permissions:\n      actions: read\n      contents: read",
+            "    permissions:\n      actions: read\n      contents: write",
+            1,
+        ),
+        "mutable-action": workflow.replace(
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+            "actions/setup-python@main",
+            1,
+        ),
+    }
+    for name, candidate in variants.items():
+        result = run_strix_smoke(tmp_path / name, candidate)
+        assert result.returncode != 0, name
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
@@ -1520,7 +1630,7 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
-    assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
+    assert "(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:" in workflow
     assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
     assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
     assert 'exit "$strix_rc"' in workflow
@@ -1533,25 +1643,45 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     )
 
 
-def test_strix_cross_repo_dispatch_uses_target_token_for_pr_scoping() -> None:
-    """Bind cross-repository Strix scans to the target PR and authorized token."""
+def test_strix_scan_cannot_read_target_pr_or_publish_status() -> None:
+    """Keep target reads and status authority outside the credentialed scan step.
+
+    Protected main's trusted required-workflow smoke pins ``statuses: write``
+    to the strix scan job's token, so the workflow keeps that grant there.
+    What this contract actually protects is the scanner boundary: the Run
+    Strix step receives no GH_TOKEN, so the scan process (and anything it
+    spawns) cannot publish statuses regardless of the job token's scopes.
+    Manual-evidence publication stays in the isolated follow-up job, whose
+    own GITHUB_TOKEN carries no status scope; its writes use exchanged
+    app/secret tokens only.
+    """
     workflow = workflow_text("strix.yml")
+    strix_job = workflow.split("\n  strix:", 1)[1].split(
+        "\n  publish-manual-pr-evidence-status:", 1
+    )[0]
+    dispatch_validation = workflow.split(
+        "      - name: Validate repository dispatch against live pull request metadata",
+        1,
+    )[1].split("      - name:", 1)[0]
     run_step = workflow.split("      - name: Run Strix (quick)", 1)[1].split(
         "      - name:", 1
     )[0]
+    publish_job = workflow.split("\n  publish-manual-pr-evidence-status:", 1)[1]
 
     assert "STRIX_TARGET_PATH:" in run_step
-    assert "github.event_name == 'repository_dispatch'" in run_step
-    assert "github.event.client_payload.pr_number != ''" in run_step
+    assert "GH_TOKEN:" not in run_step
+    assert "statuses: write" in strix_job
     assert (
         "steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || "
         "github.token"
-    ) in run_step
-    assert "github.event_name == 'pull_request_target' && github.token" in run_step
-    assert (
-        "(github.event_name == 'pull_request_target' || "
-        "github.event.client_payload.pr_number != '') && github.token"
-    ) not in run_step
+    ) in dispatch_validation
+    assert 'echo "validated=true" >>"$GITHUB_OUTPUT"' in dispatch_validation
+    publish_permissions = publish_job.split("permissions:", 1)[1].split(
+        "steps:", 1
+    )[0]
+    assert "statuses: write" not in publish_permissions
+    assert "id-token: write" in publish_permissions
+    assert "needs.strix.outputs.dispatch_metadata_validated == 'true'" in publish_job
 
 
 def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gates() -> (
