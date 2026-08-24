@@ -29,7 +29,9 @@ LEDGER_ARTIFACTS_ENDPOINT = (
     f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
 )
 LEDGER_ARTIFACT_PREFIX = "cwl-agent-invocation-"
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(
+    r"^ContextualWisdomLab/(?:\.github|(?!\.)(?!.*\.\.)[A-Za-z0-9_.-]+(?<!\.))$"
+)
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 BASE_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")

@@ -16,7 +16,10 @@ from typing import Any, Iterable
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+_REPOSITORY_RE = re.compile(
+    r"^(?!\.)(?![^/]*\./)(?![^/]*\.\.)[A-Za-z0-9_.-]+/"
+    r"(?:\.github|(?!\.)(?!.*\.\.)[A-Za-z0-9_.-]+(?<!\.))$"
+)
 _ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CHECKSUM_RE = re.compile(r"^([0-9a-f]{64}) [ *]([^/\\]+)$")
 _MAX_JSON_BYTES = 16 * 1024 * 1024
