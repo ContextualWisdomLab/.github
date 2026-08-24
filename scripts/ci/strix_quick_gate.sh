@@ -3072,6 +3072,10 @@ is_timeout_error() {
 		return 0
 	fi
 
+	if grep -Fq 'litellm.Timeout' "$STRIX_LOG"; then
+		return 0
+	fi
+
 	if grep -Fq 'Strix run timed out after' "$STRIX_LOG"; then
 		return 0
 	fi
