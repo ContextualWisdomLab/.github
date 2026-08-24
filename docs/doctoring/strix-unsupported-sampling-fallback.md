@@ -42,8 +42,8 @@ cannot manufacture a provider capability error from separate log lines.
 
 ## Verification
 
-- The reproduced single-line Azure failure reaches the configured GitHub
-  Models fallback exactly once and succeeds only when that scan completes.
+- The reproduced single-line Azure failure reaches the configured direct
+  OpenAI fallback exactly once and succeeds only when that scan completes.
 - The configured `openai-direct/gpt-5.6-luna` alias normalizes to the canonical
   `openai_direct/gpt-5.6-luna` selector, then dispatches through LiteLLM as
   `openai/gpt-5.6-luna`.
