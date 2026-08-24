@@ -173,11 +173,11 @@ warning already flags this model as "not a recommended frontier model...
 weaker models may miss vulnerabilities or produce lower-quality findings",
 and this run is a concrete instance of that risk materializing as a false
 required-check failure, not a missed finding. Fix: `STRIX_FALLBACK_MODELS`
-now falls back to `openai_direct/gpt-5.6-luna` (Strix's own top-recommended
+now falls back to `openai-direct/gpt-5.6-luna` (Strix's own top-recommended
 model, already wired via `STRIX_OPENAI_API_KEY`/`OPENAI_API_KEY`) instead of
 the dead GitHub Models pair, on all four provider-mode branches. The
 `nvidia_nim` branch keeps its NVIDIA-hosted fallback as an interim retry
-before this openai_direct fallback; that retains the existing free/low-cost
+before this openai-direct fallback; that retains the existing free/low-cost
 NVIDIA-first policy and is a separate cost/quality tradeoff this fix does not
 revisit. GitHub Models remains a selectable `github_models` primary mode for
 now (unchanged scope) but is no longer relied on as a silent universal
