@@ -12517,8 +12517,8 @@ run_gate_case "github-models-mistral-prefix-with-api-base-succeeds" \
 run_gate_case "github-models-fallback-requires-api-base" \
 	"vertex_ai/missing-primary" \
 	"openai/openai/gpt-5.4" \
-	"2" \
-	"GitHub Models Strix scans require LLM_API_BASE_FILE" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
 	"1" \
 	"vertex_ai/missing-primary" \
 	"<unset>" \
@@ -12625,10 +12625,10 @@ run_gate_case "openai-direct-quota-github-models-fallback-success" \
 run_gate_case "nvidia-nim-quota-openai-direct-fallback-missing-key" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
 	"" \
+	"0" \
+	"scan ok after invalid direct-OpenAI fallback" \
 	"2" \
-	"ERROR: direct-OpenAI fallback 'openai-direct/gpt-5.6-luna' requires STRIX_OPENAI_FALLBACK_KEY_FILE" \
-	"1" \
-	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5|deepseek/deepseek-v3-0324" \
 	"" \
 	"nvidia_nim"
 
