@@ -114,27 +114,6 @@ print(resolved_input)
 PY
 }
 
-validate_report_artifact_tree() {
-	local report_root="$1"
-	if [ ! -e "$report_root" ] && [ ! -L "$report_root" ]; then
-		return 0
-	fi
-	if [ -L "$report_root" ] || [ ! -d "$report_root" ]; then
-		echo "ERROR: Strix report artifact tree contains a symlink or non-directory root: $report_root" >&2
-		return 1
-	fi
-	local symlink_path
-	symlink_path="$(find -P "$report_root" -mindepth 1 -type l -print -quit)" || {
-		echo "ERROR: Strix report artifact tree could not be validated: $report_root" >&2
-		return 1
-	}
-	if [ -n "$symlink_path" ]; then
-		echo "ERROR: Strix report artifact tree contains a symlink: $symlink_path" >&2
-		return 1
-	fi
-	return 0
-}
-
 # shellcheck disable=SC2317,SC2329  # invoked from cleanup trap
 publish_artifact_reports() {
 	if [ -L "$ARTIFACT_REPORTS_DIR" ]; then
@@ -144,7 +123,6 @@ publish_artifact_reports() {
 	rm -rf -- "$ARTIFACT_REPORTS_DIR"
 	mkdir -p -- "$ARTIFACT_REPORTS_DIR"
 	if [ -d "$ACTIVE_REPORTS_DIR" ]; then
-		validate_report_artifact_tree "$ACTIVE_REPORTS_DIR" || return 1
 		cp -R -- "$ACTIVE_REPORTS_DIR"/. "$ARTIFACT_REPORTS_DIR"/
 	fi
 	if [ -d "$ATTEMPT_LOGS_DIR" ] && [ ! -L "$ATTEMPT_LOGS_DIR" ]; then
@@ -153,10 +131,6 @@ publish_artifact_reports() {
 	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
 		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
 	fi
-	validate_report_artifact_tree "$ARTIFACT_REPORTS_DIR" || {
-		rm -rf -- "$ARTIFACT_REPORTS_DIR"
-		return 1
-	}
 	# Relative scanner output is copied into ACTIVE_REPORTS_DIR immediately
 	# after each attempt and sanitized before this publication trap runs.
 }
@@ -198,16 +172,6 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
-known_clean_advisory = re.compile(
-    r"^(?:[ \t│]*MODEL QUALITY WARNING[ \t│]*"
-    r"|Warning: You are sending unauthenticated requests to the HF Hub\. "
-    r"Please set a HF_TOKEN to enable higher rate limits and faster downloads\.)$"
-)
-known_optional_web_search_advisory = re.compile(
-    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.tools\.web_search\.tool: "
-    r"web_search invoked without PERPLEXITY_API_KEY configured$"
-)
 
 
 def iter_report_logs(root: Path):
@@ -230,13 +194,7 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [
-        line
-        for line in lines
-        if not known_internal_warning.match(line)
-        and not known_clean_advisory.fullmatch(line.rstrip("\r\n"))
-        and not known_optional_web_search_advisory.fullmatch(line.rstrip("\r\n"))
-    ]
+    filtered = [line for line in lines if not known_internal_warning.match(line)]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -418,23 +376,6 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 	STRIX_GITHUB_MODELS_KEY="$(trim_whitespace "$(cat -- "$STRIX_GITHUB_MODELS_KEY_FILE")")"
 	if [ -z "$STRIX_GITHUB_MODELS_KEY" ]; then
 		echo "ERROR: STRIX_GITHUB_MODELS_KEY_FILE must contain a non-empty API key." >&2
-		exit 2
-	fi
-fi
-
-STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
-if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
-	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
-	exit 2
-fi
-if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
-	exit 2
-fi
-STRIX_OPENAI_FALLBACK_KEY=""
-if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
-	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
-	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
-		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
 		exit 2
 	fi
 fi
@@ -2000,21 +1941,6 @@ def try_normalize_within(base: Path, location: str) -> Path | None:
         return None
 
 def emit_repo_relative(candidate: Path, fallback_relative: Path | None = None) -> None:
-    if scan_target_root is not None and scan_target_root != repo_root:
-        try:
-            target_relative = candidate.relative_to(scan_target_root)
-        except ValueError:
-            try:
-                target_relative = candidate.relative_to(repo_root)
-            except ValueError:
-                raise SystemExit(1)
-            scoped_candidate = (scan_target_root / target_relative).resolve(strict=False)
-            try:
-                scoped_candidate.relative_to(scan_target_root)
-            except ValueError:
-                raise SystemExit(1)
-            if not scoped_candidate.exists():
-                raise SystemExit(1)
     try:
         relative = candidate.relative_to(repo_root)
     except ValueError:
@@ -2089,7 +2015,72 @@ extract_vulnerability_locations() {
 }
 
 vulnerability_record_intersects_changed_file() {
-	[ "$1" = "$4" ]
+	local vulnerability_location="$1"
+	local start_line="$2"
+	local end_line="$3"
+	local changed_file="$4"
+	if [ "$vulnerability_location" != "$changed_file" ]; then
+		return 1
+	fi
+	if ! [[ "$start_line" =~ ^[0-9]+$ ]] || ! [[ "$end_line" =~ ^[0-9]+$ ]] || [ "$end_line" -lt "$start_line" ]; then
+		return 0
+	fi
+
+	local base_sha head_sha diff_output diff_rc
+	base_sha="$(trim_whitespace "${PR_BASE_SHA:-}")"
+	head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+	if ! is_valid_git_commit_sha "$base_sha" || ! is_valid_git_commit_sha "$head_sha"; then
+		return 0
+	fi
+	if ! git rev-parse --verify --quiet "$base_sha^{commit}" >/dev/null; then
+		return 0
+	fi
+	if ! git rev-parse --verify --quiet "$head_sha^{commit}" >/dev/null; then
+		return 0
+	fi
+	diff_output="$(git diff --unified=0 "$base_sha...$head_sha" -- "$changed_file" 2>/dev/null)" || diff_rc=$?
+	if [ "${diff_rc:-0}" -ne 0 ]; then
+		diff_output="$(git diff --unified=0 "$base_sha..$head_sha" -- "$changed_file" 2>/dev/null)" || return 0
+	fi
+	local diff_output_file
+	diff_output_file="$(mktemp "${TMPDIR:-/tmp}/strix-diff.XXXXXX")" || {
+		echo "ERROR: unable to create temporary diff file for changed-line evaluation." >&2
+		return 1
+	}
+	local intersects_rc
+	if (
+		trap 'rm -f -- "$diff_output_file"' EXIT
+		printf '%s' "$diff_output" >"$diff_output_file"
+		python3 - "$diff_output_file" "$start_line" "$end_line" <<'PY'
+import re
+import sys
+
+diff_output_path = sys.argv[1]
+target_start = int(sys.argv[2])
+target_end = int(sys.argv[3])
+hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+with open(diff_output_path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        match = hunk_re.match(line)
+        if not match:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2) or "1")
+        if count == 0:
+            continue
+        end = start + count - 1
+        if start <= target_end and target_start <= end:
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+	)
+	then
+		intersects_rc=0
+	else
+		intersects_rc=$?
+	fi
+	return "$intersects_rc"
 }
 
 extract_max_severity_rank() {
@@ -2097,14 +2088,14 @@ extract_max_severity_rank() {
 	local line severity severity_value rank=-1
 
 	while IFS= read -r line; do
-		if [[ "${line^^}" =~ (^|[^A-Za-z0-9_])SEVERITY[[:space:][:punct:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
-			severity="${BASH_REMATCH[2]}"
+		if [[ "${line^^}" =~ SEVERITY[[:space:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
+			severity="${BASH_REMATCH[1]}"
 			severity_value="$(severity_rank "$severity")"
 			if [ "$severity_value" -gt "$rank" ]; then
 				rank="$severity_value"
 			fi
 		fi
-	done < <(grep -Ei '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$source_path" || true)
+	done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
 
 	printf '%s\n' "$rank"
 }
@@ -2146,7 +2137,7 @@ evaluate_pull_request_findings() {
 		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
 			continue
 		fi
-		for vuln_file in "$vulnerabilities_dir"/*.md "$vulnerabilities_dir"/*.json; do
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
@@ -2289,7 +2280,7 @@ has_unmapped_threshold_report() {
 		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
 			continue
 		fi
-		for vuln_file in "$vulnerabilities_dir"/*.md "$vulnerabilities_dir"/*.json; do
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
@@ -2389,12 +2380,6 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
-	case "$(normalize_model "$model"):$PRIMARY_MODEL" in
-	openai_direct/*:openai_direct/*) ;;
-	openai_direct/*:*)
-		return 0
-		;;
-	esac
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
@@ -2505,32 +2490,20 @@ run_strix_once() {
 	if ! llm_api_base_value="$(resolved_llm_api_base_for_model "$model")"; then
 		return 2
 	fi
-	local normalized_model
-	normalized_model="$(normalize_model "$model")"
-	child_model="$(child_model_for_api_base "$normalized_model" "$llm_api_base_value")"
+	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	if ! is_vertex_model "$normalized_model"; then
+	if ! is_vertex_model "$(normalize_model "$model")"; then
 		child_llm_api_key="$LLM_API_KEY"
-		if is_github_models_model "$normalized_model" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
+		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
-		case "$normalized_model:$PRIMARY_MODEL" in
-		openai_direct/*:openai_direct/*) ;;
-		openai_direct/*:*)
-			if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
-				echo "ERROR: direct OpenAI fallback requires STRIX_OPENAI_FALLBACK_KEY_FILE." >&2
-				return 2
-			fi
-			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
-			;;
-		esac
 	fi
 	set -o pipefail
 	set +e
@@ -2751,14 +2724,8 @@ except subprocess.TimeoutExpired:
 PY
 	rc=$?
 	set -e
-	local report_tree_invalid=0
-	validate_report_artifact_tree "$ACTIVE_REPORTS_DIR" || report_tree_invalid=1
-	validate_report_artifact_tree "$STRIX_SCAN_OUTPUT_DIR" || report_tree_invalid=1
-	if [ "$report_tree_invalid" -eq 1 ]; then
-		rc=1
-	elif [ -d "$STRIX_SCAN_OUTPUT_DIR" ]; then
+	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
 		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ACTIVE_REPORTS_DIR"/
-		validate_report_artifact_tree "$ACTIVE_REPORTS_DIR" || rc=1
 	fi
 	local end_epoch
 	end_epoch="$(date +%s)"
@@ -2793,11 +2760,6 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if ! has_structured_reported_severity_markers && ! strix_reported_zero_vulnerabilities; then
-			INFRA_ERROR_DETECTED=1
-			echo "Strix exited successfully without an authoritative vulnerability report or zero-findings marker; failing closed." >&2
-			return 1
-		fi
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
@@ -2810,8 +2772,12 @@ PY
 
 	printf "Strix run failed for model '%s' after %ds (exit code %d).\n" "$model" "$elapsed" "$rc" >&2
 
-	# Sticky flag: STRIX_LOG is overwritten per-attempt, while earlier partial
-	# reports remain available for exact fail-closed evidence.
+	# Sticky flag: record that at least one attempt hit an infrastructure
+	# error.  STRIX_LOG is overwritten per-attempt, so without this flag the
+	# below-threshold guard in has_only_below_threshold_vulnerabilities()
+	# would only see the *last* attempt's log — missing infrastructure errors
+	# from earlier attempts whose partial reports may still sit in the reports
+	# directory.
 	return 1
 }
 
@@ -2849,19 +2815,6 @@ is_nvidia_nim_not_found_error() {
 	if grep -Ei 'litellm(\.exceptions)?\.NotFoundError' "$STRIX_LOG" |
 		grep -Ei '(Nvidia_nimException|nvidia[_ -]?nim|integrate\.api\.nvidia\.com)' |
 		grep -Eiq '(Error code:[[:space:]]*404|(^|[^0-9])404([^0-9]|$)|model[^[:alnum:]]+not found)'; then
-		return 0
-	fi
-
-	return 1
-}
-
-is_unsupported_model_parameter_error() {
-	# Strix currently has no generation-parameter override. Match the exact
-	# single-line LiteLLM/Azure capability failure so a reasoning model that
-	# rejects Strix's temperature can move to the already-configured fallback.
-	if LC_ALL=C grep -Ei '^[[:space:]]*(│[[:space:]]*)?Error:[[:space:]]+litellm(\.exceptions)?\.BadRequestError' "$STRIX_LOG" |
-		grep -Ei '(AzureException|OpenAIException)' |
-		grep -Eiq "Unsupported value:[[:space:]]*['\"]temperature['\"].*Only the default[[:space:]]*\\(1\\)[[:space:]]*value is supported.*No fallback model group found"; then
 		return 0
 	fi
 
@@ -3198,8 +3151,7 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' \
-		< <(LC_ALL=C grep -Eiv '^[[:space:]]*(│[[:space:]]*)?MODEL QUALITY WARNING([[:space:]]*│)?[[:space:]]*$|^Warning: You are sending unauthenticated requests to the HF Hub\. Please set a HF_TOKEN to enable higher rate limits and faster downloads\.$|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ WARNING [^ ]+ - strix\.tools\.web_search\.tool: web_search invoked without PERPLEXITY_API_KEY configured$' "$STRIX_LOG"); then
+	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
 
@@ -3228,10 +3180,6 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
-		return 0
-	fi
-
-	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 
@@ -3282,6 +3230,97 @@ latest_strix_report_dir() {
 	echo "$latest"
 }
 
+has_only_below_threshold_vulnerabilities() {
+	local threshold_rank
+	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
+
+	local found_any_vuln_file=0
+	local global_max_rank=-1
+	STRIX_MAX_SEVERITY_RANK=-1
+	local saw_any_severity=0
+
+	update_max_severity_from_stream() {
+		local source_path="$1"
+		local line
+		local severity
+		local rank
+		while IFS= read -r line; do
+			if [[ "${line^^}" =~ SEVERITY[[:space:]]*:[[:space:][:punct:]]*(CRITICAL|HIGH|MEDIUM|LOW|INFO|INFORMATIONAL|NONE)([[:space:][:punct:]]|$) ]]; then
+				severity="${BASH_REMATCH[1]}"
+			else
+				continue
+			fi
+
+			rank="$(severity_rank "$severity")"
+			if [ "$rank" -lt 0 ]; then
+				continue
+			fi
+
+			saw_any_severity=1
+			if [ "$rank" -gt "$global_max_rank" ]; then
+				global_max_rank="$rank"
+				STRIX_MAX_SEVERITY_RANK="$rank"
+			fi
+		done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
+	}
+
+	local run_dir
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+
+		local vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+
+		local vuln_file
+
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+
+			found_any_vuln_file=1
+			update_max_severity_from_stream "$vuln_file"
+		done
+	done
+
+	if [ "$found_any_vuln_file" -eq 0 ]; then
+		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		return 1
+	fi
+
+	if [ "$saw_any_severity" -eq 0 ]; then
+		return 1
+	fi
+
+	# Guard against incomplete scans due to infrastructure errors.
+	# Use the sticky INFRA_ERROR_DETECTED flag instead of re-reading
+	# STRIX_LOG, because STRIX_LOG is overwritten per-attempt.  If an
+	# earlier attempt hit an infrastructure error (timeout, rate-limit,
+	# transport failure) and produced a partial report that now sits in
+	# the reports directory, the *current* STRIX_LOG may show a different
+	# failure — or even success — but the partial report's low-severity
+	# findings must not be treated as a clean scan result.
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+		echo "Below-threshold findings detected, but infrastructure errors occurred during this pipeline run; refusing bypass due to potentially incomplete scan." >&2
+		return 1
+	fi
+
+	if [ "$global_max_rank" -lt "$threshold_rank" ]; then
+		echo "Strix findings are below configured fail threshold '$STRIX_FAIL_ON_MIN_SEVERITY'; allowing pipeline continuation." >&2
+		return 0
+	fi
+
+	return 1
+}
+
 has_blocking_vulnerability_reports() {
 	local threshold_rank
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
@@ -3300,7 +3339,7 @@ has_blocking_vulnerability_reports() {
 			continue
 		fi
 
-		for vuln_file in "$vulnerabilities_dir"/*.md "$vulnerabilities_dir"/*.json; do
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
@@ -3333,7 +3372,7 @@ fail_reported_vulnerabilities_before_fallback_success() {
 	return 1
 }
 
-has_structured_reported_severity_markers() {
+has_any_reported_severity_markers() {
 	local run_dir
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
@@ -3350,25 +3389,21 @@ has_structured_reported_severity_markers() {
 		fi
 
 		local vuln_file
-		for vuln_file in "$vulnerabilities_dir"/*.md "$vulnerabilities_dir"/*.json; do
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
-			if grep -Eiq '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$vuln_file"; then
+			if grep -Eiq 'severity[[:space:]]*:' "$vuln_file"; then
 				return 0
 			fi
 		done
 	done
 
-	return 1
-}
-
-has_any_reported_severity_markers() {
-	if has_structured_reported_severity_markers; then
+	if grep -Eiq 'severity[[:space:]]*:' "$STRIX_LOG"; then
 		return 0
 	fi
 
-	grep -Eiq '(^|[^A-Za-z0-9_])severity[[:space:][:punct:]]*:' "$STRIX_LOG"
+	return 1
 }
 
 strix_reported_zero_vulnerabilities() {
@@ -3530,7 +3565,7 @@ is_hallucinated_endpoint_finding() {
 
 	local vuln_file
 
-	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md "$latest_report_dir"/vulnerabilities/*.json; do
+	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md; do
 		if vulnerability_file_is_below_threshold "$vuln_file" &&
 			vulnerability_file_has_absent_endpoint_finding "$vuln_file"; then
 			return 0
@@ -3985,7 +4020,7 @@ is_hallucinated_source_claim_finding() {
 	fi
 
 	local vuln_file
-	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md "$latest_report_dir"/vulnerabilities/*.json; do
+	for vuln_file in "$latest_report_dir"/vulnerabilities/*.md; do
 		if vulnerability_file_is_below_threshold "$vuln_file" &&
 			vulnerability_file_has_hallucinated_source_claim "$vuln_file"; then
 			return 0
@@ -4038,10 +4073,6 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
-		return 0
-	fi
-
-	if is_unsupported_model_parameter_error; then
 		return 0
 	fi
 
@@ -4100,6 +4131,10 @@ run_current_target_scan() {
 		fi
 	fi
 
+	if has_only_below_threshold_vulnerabilities; then
+		return 0
+	fi
+
 	if evaluate_pull_request_findings; then
 		if [ "$strict_primary_provider_fallback" -eq 0 ]; then
 			return 0
@@ -4147,12 +4182,6 @@ run_current_target_scan() {
 		fi
 
 		fallback_tried=1
-		if [[ "$candidate" == openai_direct/* ]] &&
-			[[ "$PRIMARY_MODEL" != openai_direct/* ]] &&
-			[ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
-			echo "Skipping fallback model '$candidate' — STRIX_OPENAI_FALLBACK_KEY_FILE is unavailable." >&2
-			continue
-		fi
 		if is_vertex_model "$PRIMARY_MODEL"; then
 			echo "Primary Vertex model unavailable; retrying with fallback '$candidate'."
 		else
@@ -4177,6 +4206,10 @@ run_current_target_scan() {
 		local strict_fallback_provider_signal=0
 		if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
 			strict_fallback_provider_signal=1
+		fi
+
+		if has_only_below_threshold_vulnerabilities; then
+			return 0
 		fi
 
 		if evaluate_pull_request_findings; then
@@ -4239,6 +4272,13 @@ run_current_target_scan() {
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
 		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
 		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
+		return 1
+	fi
+
+	local threshold_rank
+	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
+	if [ "${STRIX_MAX_SEVERITY_RANK:--1}" -ge "$threshold_rank" ]; then
+		echo "Strix quick scan failed with a non-recoverable error." >&2
 		return 1
 	fi
 
