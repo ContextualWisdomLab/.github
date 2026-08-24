@@ -279,14 +279,15 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
 
-def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
+def test_strix_serializes_provider_evidence_per_repository() -> None:
     """Serialize Strix per repository so shared provider keys are not rate-limited.
 
     Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
     the shared NVIDIA NIM key three times, producing litellm.RateLimitError
-    storms and fail-closed gate failures on every open PR. The queue now scopes
-    one scan at a time per repository and event class while preserving every
-    evidence run (queue: max, nothing cancelled).
+    storms and fail-closed gate failures on every open PR. The concurrency group
+    now scopes one scan at a time per repository and event class. GitHub retains
+    one active and one pending run per group; the scheduler re-dispatches exact
+    current-head evidence when a pending run is superseded.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -309,10 +310,11 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    # Nothing is dropped: scans queue sequentially instead of cancelling.
+    # Running scans are not cancelled; GitHub's native group has one pending slot.
     assert "cancel-in-progress: false" in workflow
     assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
-    assert "queue: max" in workflow
+    assert "queue: max" not in workflow
+    assert "scheduler" in concurrency_contract
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
     assert "RateLimitError" in concurrency_contract
     assert (

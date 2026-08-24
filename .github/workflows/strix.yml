@@ -42,8 +42,9 @@ on:
     # concurrency group is scoped per repository and event class to prevent
     # shared-provider key rate-limit storms. Strix runs intentionally do not
     # cancel in progress because a pre-job cancellation leaves no scanner log to
-    # review. Queue pressure is preserved by queue: max, which keeps every queued
-    # evidence run. For PRs the merge scheduler manages, same-head Strix evidence
+    # review. GitHub keeps one active and one pending run per group; the merge
+    # scheduler re-dispatches exact-head evidence when a pending run is
+    # superseded. For PRs the merge scheduler manages, same-head Strix evidence
     # is still forced at merge time via repository_dispatch (which paths-ignore
     # does not affect), so merged code never loses evidence.
     paths-ignore:
@@ -80,9 +81,10 @@ concurrency:
   # the shared NVIDIA NIM key up to three times, producing guaranteed
   # litellm.RateLimitError storms and fail-closed gate failures across every
   # open PR (observed 2026-08-23/24). Serializing per repository keeps at most
-  # one provider-backed scan in flight per repository; queue: max preserves
-  # every queued evidence run (nothing is dropped), and accuracy is prioritized
-  # over scan latency.
+  # one provider-backed scan in flight per repository. GitHub's native
+  # concurrency contract retains one active and one pending run; the scheduler
+  # re-dispatches the exact current head after pending-run supersession, and
+  # accuracy is prioritized over scan latency.
   group: >-
     strix-${{
       github.event_name == 'pull_request_target' &&
@@ -91,7 +93,6 @@ concurrency:
       format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository)
     }}
   cancel-in-progress: false
-  queue: max
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
