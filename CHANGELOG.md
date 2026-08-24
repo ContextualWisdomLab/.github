@@ -75,6 +75,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Keep the central required-workflow coverage placeholder from superseding a
+  failed repository-dispatch coverage run; coverage retry and merge decisions
+  now use authoritative execution evidence for the central scheduler.
 - Re-dispatch an exact-head OpenCode review after its coverage-only blocker is
   cleared, selecting the newest coverage rerun by timestamp across workflow
   names and ignoring only the superseded `opencode-review` failure and central

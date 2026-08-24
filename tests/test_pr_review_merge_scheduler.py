@@ -2477,6 +2477,43 @@ def test_coverage_evidence_state_prefers_newest_run_across_workflows():
     assert sched.coverage_evidence_state(pr) == "complete"
 
 
+def test_central_coverage_placeholder_cannot_mask_dispatch_failure(monkeypatch):
+    """Central metadata-only coverage success cannot hide failed dispatch evidence."""
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+
+    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
+        return {
+            "__typename": "CheckRun",
+            "name": "coverage-evidence",
+            "status": "COMPLETED",
+            "conclusion": conclusion,
+            "startedAt": started_at,
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    coverage_check(
+                        "Required OpenCode Review",
+                        "2026-08-24T03:00:00Z",
+                        "SUCCESS",
+                    ),
+                    coverage_check(
+                        "OpenCode Review Dispatch",
+                        "2026-08-24T02:00:00Z",
+                        "FAILURE",
+                    ),
+                ]
+            }
+        }
+    )
+
+    assert sched.coverage_evidence_state(pr) == "failed"
+    assert sched.failed_status_checks(pr) == ["coverage-evidence"]
+
+
 def test_coverage_retry_ignores_superseded_failure_across_workflows():
     """A newer successful workflow supersedes an older coverage failure."""
 
