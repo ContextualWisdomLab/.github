@@ -25,7 +25,9 @@ signals:
 
 That exact capability failure is infrastructure evidence and may move directly
 to an already-configured distinct outer fallback. It is not eligible for a
-same-model retry. The shared model normalizer translates the workflow's
+same-model retry. A direct-OpenAI primary has no second approved direct model
+configured, so its bounded same-model retries are followed by a fail-closed
+result rather than a duplicate fallback entry. The shared model normalizer translates the workflow's
 accepted `openai-direct/` alias to the canonical `openai_direct/` selector;
 the LiteLLM child dispatch then uses its provider-compatible `openai/` form. A
 cross-provider direct OpenAI fallback reads
@@ -42,8 +44,10 @@ cannot manufacture a provider capability error from separate log lines.
 
 ## Verification
 
-- The reproduced single-line Azure failure reaches the configured direct
-  OpenAI fallback exactly once and succeeds only when that scan completes.
+- The reproduced single-line Azure failure reaches the configured distinct
+  outer fallback exactly once and succeeds only when that scan completes.
+- A direct-OpenAI primary does not attempt its normalized primary model again
+  as a fallback after bounded same-model retries.
 - The configured `openai-direct/gpt-5.6-luna` alias normalizes to the canonical
   `openai_direct/gpt-5.6-luna` selector, then dispatches through LiteLLM as
   `openai/gpt-5.6-luna`.

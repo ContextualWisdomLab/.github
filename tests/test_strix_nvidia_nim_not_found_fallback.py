@@ -267,6 +267,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             f"'{FREE_NVIDIA_FALLBACK} openai_direct/gpt-5.6-luna'",
             workflow,
         )
+        self.assertIn(
+            "steps.gate.outputs.provider_mode == 'openai_direct' && ''",
+            workflow,
+        )
         fallback_lines = [
             line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
         ]
