@@ -60,6 +60,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Route Strix `openai_direct` primary scans to a distinct `github_models/openai/gpt-5`
+  fallback instead of repeating the unavailable `openai-direct/gpt-5.6-luna` model,
+  so public-repository PRs whose NVIDIA NIM key is missing do not exhaust an
+  identical fallback and fail closed on provider infrastructure evidence.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
