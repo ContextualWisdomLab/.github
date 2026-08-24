@@ -222,5 +222,14 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
         self.assertIn('      - "tests/test_strix_model_behavior_error.py"', workflow)
 
 
+
+    def test_finish_scan_text_turn_is_retryable(self) -> None:
+        """Recognize the explicit text-turn failure as retryable."""
+        log = (
+            "ended without calling finish_scan. The agent emitted a text-only turn instead of a lifecycle tool call\n"
+            "Vulnerabilities 0\n"
+        )
+        self.assertTrue(_classifies_as_model_behavior_error(log))
+
 if __name__ == "__main__":
     unittest.main()
