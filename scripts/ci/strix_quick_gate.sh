@@ -2504,6 +2504,13 @@ child_model_for_api_base() {
 		printf 'openai/%s\n' "${model#*/}"
 		return 0
 		;;
+	# The workflow contract spells the direct-OpenAI fallback with a hyphen
+	# (openai-direct/...). litellm cannot infer a provider from that prefix,
+	# so both spellings must resolve to the litellm openai/<model> form.
+	openai-direct/*)
+		printf 'openai/%s\n' "${model#openai-direct/}"
+		return 0
+		;;
 	esac
 
 	printf '%s\n' "$model"
@@ -2560,6 +2567,12 @@ run_strix_once() {
 			# Cross-provider fallback: github_models/* models authenticate
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
+		fi
+		if is_explicit_openai_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			# Cross-provider fallback: explicit direct-OpenAI models
+			# authenticate with the OpenAI key, not the primary provider's
+			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
 		fi
 	fi
 	set -o pipefail

@@ -677,6 +677,7 @@ jobs:
         if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
         env:
           GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
         run: |
           # Direct-OpenAI scans keep GitHub Models candidates as fallbacks, so
           # a provider quota outage degrades to a slower model instead of a
@@ -687,14 +688,25 @@ jobs:
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$trimmed" ]; then
             echo '::notice::No GitHub Models token available; direct-OpenAI Strix scans run without GitHub Models fallbacks.'
-            exit 0
+          else
+            github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
+            printf '%s' "$sanitized" > "$github_models_key_file"
+            echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
+            github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
+            printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
+            echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
           fi
-          github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
-          printf '%s' "$sanitized" > "$github_models_key_file"
-          echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
-          github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
-          printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
-          echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
+          # openai-direct/* fallback models (the contracted final fallback for
+          # NVIDIA NIM and OpenRouter chains) authenticate against the direct
+          # OpenAI API, so they need the OpenAI key instead of the primary
+          # provider's key.
+          openai_sanitized="$(printf '%s' "$OPENAI_FALLBACK_KEY" | tr -d '\r\n')"
+          openai_trimmed="$(printf '%s' "$openai_sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$openai_trimmed" ]; then
+            openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
+            printf '%s' "$openai_trimmed" > "$openai_fallback_key_file"
+            echo "STRIX_OPENAI_FALLBACK_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
+          fi
 
       - name: Prepare direct-OpenAI fallback credentials
         # The nvidia_nim, github_models, and openrouter fallback matrices all
