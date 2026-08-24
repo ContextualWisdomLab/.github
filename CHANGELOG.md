@@ -30,6 +30,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Refresh the live product and technical gap baseline against the current
+  open-PR queue, with SHA-bound snapshot rows, a same-session open/close
+  delta section, ADR Figma File ID N/A, and APA 7th doctoring. The inventory
+  is not merge authorization.
+
 - Classify Strix `ModelBehaviorError` and provider exhaustion as typed
   `STRIX_PROVIDER_UNAVAILABLE` evidence while preserving a nonzero required
   check. Incomplete scans and reported vulnerabilities both fail closed.
