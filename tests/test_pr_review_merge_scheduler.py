@@ -2509,7 +2509,7 @@ def test_coverage_retry_ignores_superseded_failure_across_workflows():
         }
     )
 
-    assert sched.failed_status_checks(pr) == ["coverage-evidence"]
+    assert sched.failed_status_checks(pr) == []
     assert sched.failed_status_checks(pr, ignore_opencode=True) == []
 
 

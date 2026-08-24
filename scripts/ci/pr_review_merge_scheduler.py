@@ -1103,6 +1103,7 @@ def parse_github_datetime(value: str | None) -> datetime | None:
 
 def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the newest check run for each workflow and check-name pair."""
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
     latest: dict[
         tuple[str, str],
         tuple[datetime | None, int, dict[str, Any]],
@@ -1126,8 +1127,8 @@ def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
         if previous_started_at is None and started_at is not None:
             latest[key] = (started_at, index, node)
             continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+        if (started_at or epoch, index) >= (
+            previous_started_at or epoch,
             previous_index,
         ):
             latest[key] = (started_at, index, node)
@@ -1677,9 +1678,7 @@ def failed_status_checks(
     """
     failed: list[str] = []
     check_runs = latest_check_runs(pr)
-    superseded_coverage_indices = (
-        superseded_coverage_evidence_indices(check_runs) if ignore_opencode else set()
-    )
+    superseded_coverage_indices = superseded_coverage_evidence_indices(check_runs)
     status_contexts = [
         node
         for node in context_nodes(pr)
