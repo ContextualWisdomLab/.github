@@ -2612,6 +2612,8 @@ def inspect_pr(
             and current_head_coverage_change_request(pr)
             and coverage_evidence_state(pr) == "complete"
             and strix_evidence_state(pr) == "complete"
+            and opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+            != "running"
             and not failed_status_checks(pr, ignore_opencode=True)
         )
         if coverage_ready:

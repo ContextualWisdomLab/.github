@@ -1211,6 +1211,54 @@ def test_coverage_retry_disables_auto_merge_before_dispatch(monkeypatch):
     assert dispatched == []
 
 
+def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
+    """A visible same-head OpenCode run prevents duplicate coverage dispatch."""
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review("CHANGES_REQUESTED", "head"),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    opencode_check(
+                        status="IN_PROGRESS",
+                        started_at=datetime.now(timezone.utc).isoformat(),
+                    ),
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "block"
+    assert decision.reason == "current-head OpenCode review requested changes"
+    assert dispatched == []
+
+
 def test_coverage_retry_keeps_failed_opencode_workflow_siblings_fail_closed(
     monkeypatch,
 ):
