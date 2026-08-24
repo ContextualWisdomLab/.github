@@ -47,3 +47,9 @@
 ## 2026-08-09 - [대용량 로그 스캔 시 정규표현식 실행 전 O(N) 서브스트링 검증 선행]
 **Learning:** `classify_testthat_failure`에서 테스트 실패 내역이 없는 2MB 로그 파일을 대상으로 정규표현식을 실행하면 약 20ms가 소요되지만, 단순 문자열 검색은 약 1ms만 소요됩니다. 문자열 존재 여부가 정규표현식 매칭의 전제 조건일 때, 콜드 패스(Cold Path)에서 순서 최적화는 매우 큰 성능 차이를 만듭니다.
 **Action:** 대용량 텍스트 입력(CI 로그 등)에서 복잡한 정규표현식을 파싱하기 전에 항상 빠른 O(N) 문자열 존재 여부 확인을 먼저 수행하십시오.
+## 2026-08-10 - Compile Combined Regexes for Multiple Substitutions
+**Learning:** In `scripts/ci/redact_sensitive_log.py`, an iteration was looping over a tuple of pre-compiled regex objects (`PROVIDER_TOKEN_RES`) and repeatedly calling `.sub()` to redact strings. This resulted in O(M * N) overhead, where M is the number of regex patterns.
+**Action:** When performing multiple regex replacements on the same text string where the replacements are identical (e.g., redacting text with a common marker), combine the regular expressions into a single compiled pattern using the `|` (alternation) operator. This allows `re.sub()` to process the string in a single O(N) pass, significantly reducing overhead in hot loops.
+## 2026-08-11 - Match Bash String Manipulation Prefixes
+**Learning:** In the `strix_quick_gate.sh` CI script, model prefix mapping translates `openai_direct/*` internally to litellm's expected `openai/*`. However, the GitHub Actions YAML defined the fallback models using hyphens (`openai-direct/gpt...`), causing the prefix matching to fail (`model#openai_direct/`) and passing the unknown literal `openai-direct/` string directly to the litellm provider engine.
+**Action:** When configuring parameters for bash scripts that perform strict pattern matching and prefix replacement, ensure the configuration strings (like GitHub Actions environment variables) use the exact separator characters (e.g., underscores instead of hyphens) expected by the downstream string manipulation logic.
