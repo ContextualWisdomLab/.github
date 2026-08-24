@@ -147,6 +147,42 @@ def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     return match.group(1)
 
 
+def _resolve_api_base_for_model(model: str, primary_model: str, api_base: str) -> str:
+    """Execute the production fallback API-base resolver with a trusted stub."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    function_source = "\n".join(
+        (
+            STRIX_MODEL_UTILS.read_text(encoding="utf-8"),
+            _function_block(gate_source, "is_vertex_model"),
+            _function_block(gate_source, "is_github_models_api_base"),
+            _function_block(gate_source, "is_github_models_model"),
+            _function_block(gate_source, "resolved_llm_api_base_for_model"),
+        )
+    )
+    with tempfile.TemporaryDirectory(prefix="strix-openai-base-") as temp_dir:
+        base_file = Path(temp_dir) / "openai-base.txt"
+        base_file.write_text(api_base, encoding="utf-8")
+        script = "\n".join(
+            (
+                "set -euo pipefail",
+                "resolve_trusted_input_file() { printf '%s\\n' \"$2\"; }",
+                function_source,
+                f'PRIMARY_MODEL="{primary_model}"',
+                'LLM_API_BASE_FILE=""',
+                f'STRIX_OPENAI_FALLBACK_API_BASE_FILE="{base_file}"',
+                f'resolved_llm_api_base_for_model "{model}"',
+            )
+        )
+        completed = subprocess.run(
+            ["bash", "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return completed.stdout.strip()
+
+
 def _workflow_classifies_backend_unavailable(log_text: str) -> bool:
     """Execute the outer workflow's backend-neutralization condition."""
 
@@ -276,6 +312,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             fallback_lines[0],
         )
         self.assertNotIn("openai-direct/gpt-5.6-luna", fallback_lines[0])
+        self.assertIn(
+            "STRIX_OPENAI_FALLBACK_API_BASE_FILE=$",
+            workflow,
+        )
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
@@ -315,6 +355,18 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
                 DEFAULT_NVIDIA_MODEL,
             ),
             "openai/gpt-5.6-luna",
+        )
+
+    def test_cross_provider_direct_openai_fallback_uses_openai_api_base(self) -> None:
+        """Route direct OpenAI fallback away from the exhausted primary endpoint."""
+
+        self.assertEqual(
+            _resolve_api_base_for_model(
+                "openai_direct/gpt-5.6-luna",
+                DEFAULT_NVIDIA_MODEL,
+                "https://api.openai.com/v1",
+            ),
+            "https://api.openai.com/v1",
         )
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:

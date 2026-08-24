@@ -439,6 +439,15 @@ if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
 	fi
 fi
 
+STRIX_OPENAI_FALLBACK_API_BASE_FILE="${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_API_BASE_FILE must reference a regular file containing the API base URL." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_API_BASE_FILE" ] && ! STRIX_OPENAI_FALLBACK_API_BASE_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_API_BASE_FILE" "$STRIX_OPENAI_FALLBACK_API_BASE_FILE")"; then
+	exit 2
+fi
+
 require_non_negative_integer() {
 	local value="$1"
 	local label="$2"
@@ -2385,6 +2394,8 @@ has_distinct_fallback_model_for_model() {
 
 resolved_llm_api_base_for_model() {
 	local model="$1"
+	local api_base_file="$LLM_API_BASE_FILE"
+	local api_base_file_name="LLM_API_BASE_FILE"
 
 	if is_vertex_model "$model"; then
 		return 0
@@ -2392,12 +2403,17 @@ resolved_llm_api_base_for_model() {
 	case "$(normalize_model "$model"):$PRIMARY_MODEL" in
 	openai_direct/*:openai_direct/*) ;;
 	openai_direct/*:*)
-		return 0
+		if [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+			# Cross-provider fallback: direct OpenAI must not inherit a NIM,
+			# OpenRouter, or GitHub Models endpoint.
+			api_base_file="$STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+			api_base_file_name="STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		else
+			return 0
+		fi
 		;;
 	esac
 
-	local api_base_file="$LLM_API_BASE_FILE"
-	local api_base_file_name="LLM_API_BASE_FILE"
 	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback

@@ -31,11 +31,11 @@ configured, so its bounded same-model retries are followed by a fail-closed
 result rather than a duplicate fallback entry. The shared model normalizer translates the workflow's
 accepted `openai-direct/` alias to the canonical `openai_direct/` selector;
 the LiteLLM child dispatch then uses its provider-compatible `openai/` form. A
-cross-provider direct OpenAI fallback reads
-the established OpenAI secret from a trusted runtime file and clears the
-primary provider's API base; otherwise a NVIDIA or OpenRouter run would send
-the fallback to the wrong endpoint with the wrong credential. If the fallback
-credential is unavailable, the attempted fallback fails configuration closed.
+cross-provider direct OpenAI fallback reads the established OpenAI secret and
+the explicit `https://api.openai.com/v1` endpoint from trusted runtime files;
+otherwise a NVIDIA or OpenRouter run could send the fallback to the wrong
+endpoint with the wrong credential. If either input is unavailable, the
+attempted fallback fails configuration closed.
 If no distinct fallback exists or every fallback fails, the required Strix
 check remains non-passing. Existing changed, unmapped, manifest,
 `ModelBehaviorError`, and vulnerability-report boundaries remain fail closed.
@@ -53,7 +53,7 @@ cannot manufacture a provider capability error from separate log lines.
   `openai_direct/gpt-5.6-luna` selector, then dispatches through LiteLLM as
   `openai/gpt-5.6-luna`.
 - A NVIDIA-primary run dispatches that fallback with the OpenAI credential and
-  no inherited NVIDIA API base.
+  the explicit OpenAI API base, with no inherited NVIDIA API base.
 - A split-line imitation is non-recoverable and never dispatches the fallback.
 - The full Python suite, native workflow validation, Bash syntax checks, and
   complete Strix shell regression suite run on the final tree.

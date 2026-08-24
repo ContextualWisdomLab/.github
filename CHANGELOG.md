@@ -50,9 +50,10 @@ Semantic Versioning where the repository publishes a release.
   imitations. The workflow's `openai-direct/` alias now normalizes to the
   canonical `openai_direct/` selector, while LiteLLM dispatch uses its `openai/`
   provider form. Cross-provider
-  attempts now switch to the trusted OpenAI credential and clear the primary
-  provider API base, without turning an incomplete provider scan into passing
-  evidence. Exact clean model-quality and Hugging Face advisories are filtered
+  attempts now switch to the trusted OpenAI credential and explicit
+  `https://api.openai.com/v1` fallback endpoint, without turning an incomplete
+  provider scan into passing evidence. Exact clean model-quality and Hugging
+  Face advisories are filtered
   consistently from console and report logs, while any appended warning text
   remains fail closed. The incident and fail-closed boundary are recorded in
   `docs/doctoring/strix-unsupported-sampling-fallback.md`; changes to that
