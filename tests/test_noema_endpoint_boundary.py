@@ -198,14 +198,32 @@ def test_pinned_https_connection_preserves_proxy_tunnel_hostname(
     assert connection.sock is wrapped_socket
 
 
-def test_pinned_connection_supports_ipv6_destination_shape() -> None:
-    """Preserve the four-field socket address shape required by IPv6 connect."""
-    assert noema._socket_target(noema.ipaddress.ip_address("::1"), 443) == (
-        "::1",
-        443,
-        0,
-        0,
+def test_pinned_connection_supports_ipv6_destination_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass IPv6 literals to create_connection in its accepted two-field form."""
+    fake_socket = object()
+    observed: list[tuple[object, ...]] = []
+
+    def fake_create_connection(
+        target: tuple[object, ...],
+        _timeout: float | object,
+        _source_address: object,
+    ) -> object:
+        observed.append(target)
+        return fake_socket
+
+    monkeypatch.setattr(noema.socket, "create_connection", fake_create_connection)
+    connection = noema.PinnedHTTPConnection(
+        "model.example.test",
+        port=443,
+        validated_addresses=frozenset({noema.ipaddress.ip_address("::1")}),
     )
+
+    connection.connect()
+
+    assert connection.sock is fake_socket
+    assert observed == [("::1", 443)]
 
 
 def test_pinned_connection_retries_only_other_validated_addresses(

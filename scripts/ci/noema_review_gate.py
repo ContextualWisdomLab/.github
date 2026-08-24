@@ -429,10 +429,8 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
-def _socket_target(address: IpAddress, port: int) -> tuple[object, ...]:
+def _socket_target(address: IpAddress, port: int) -> tuple[str, int]:
     """Return a socket destination that contains only a validated IP literal."""
-    if address.version == 6:
-        return (str(address), port, 0, 0)
     return (str(address), port)
 
 
