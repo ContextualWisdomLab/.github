@@ -645,12 +645,17 @@ jobs:
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
+            trusted_vcs_license_validator="${GITHUB_WORKSPACE}/scripts/ci/validate_vcs_dependency_license.py"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
               echo "::error::Trusted base Python lock installer must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_vcs_license_validator" ] || [ -L "$trusted_vcs_license_validator" ]; then
+              echo "::error::Trusted VCS dependency license validator must be a regular non-symlink file."
               exit 1
             fi
             sudo rm -rf "$coverage_build_dir"
@@ -660,6 +665,8 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
+            install -m 0755 "$trusted_vcs_license_validator" \
+              "$coverage_build_dir/validate-vcs-dependency-license.py"
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
@@ -756,6 +763,7 @@ jobs:
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
+          COPY validate-vcs-dependency-license.py /usr/local/libexec/validate-vcs-dependency-license.py
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \
               site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -766,6 +774,10 @@ jobs:
               jq -r '.[] | [.import_name, .repository, .commit] | @tsv' \
                 /tmp/base-python-requirements/vcs-manifest.json >"$dependency_list"; \
               while IFS="$(printf '\t')" read -r import_name repository commit; do \
+                    license_spdx="$(python3 -I /usr/local/libexec/validate-vcs-dependency-license.py \
+                      --repository "$repository" --commit "$commit")"; \
+                    printf 'Validated permitted VCS dependency license: repository=%s commit=%s SPDX=%s\n' \
+                      "$repository" "$commit" "$license_spdx"; \
                     destination="$(printf '/opt/base-vcs-dependencies/dependency-%03d' "$dependency_index")"; \
                     git init --quiet "$destination"; \
                     git -C "$destination" remote add origin \

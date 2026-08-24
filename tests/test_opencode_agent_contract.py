@@ -685,7 +685,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
+    assert 'install -m 0755 "$trusted_vcs_license_validator"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
+    assert "COPY validate-vcs-dependency-license.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
     assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
     assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
@@ -694,6 +696,16 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
+    license_validation = measure_step.index(
+        'python3 -I /usr/local/libexec/validate-vcs-dependency-license.py'
+    )
+    vcs_clone = measure_step.index('git init --quiet "$destination"')
+    vcs_registration = measure_step.index(
+        'printf \'%s\\n\' "$python_root" >>"$path_file"'
+    )
+    assert license_validation < vcs_clone < vcs_registration
+    assert '--repository "$repository" --commit "$commit"' in measure_step
+    assert "Validated permitted VCS dependency license" in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step
     assert "has a missing or ambiguous import root" in measure_step
