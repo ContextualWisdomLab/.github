@@ -4542,6 +4542,35 @@ EOS
 		echo "scan ok but unknown report warning remains"
 		exit 0
 		;;
+	console-model-quality-warning-banner-sanitized)
+		# Reproduces Strix's own startup banner, printed to the console
+		# (not a report artifact) whenever the configured model is not on
+		# its hardcoded "recommended frontier model" list. It must be
+		# sanitized out of $STRIX_LOG before has_detected_infrastructure_error
+		# runs, or a completely clean 0-vulnerability scan on a non-listed
+		# model is misclassified as a provider infrastructure failure.
+		cat <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  MODEL QUALITY WARNING                                                       │
+│                                                                              │
+│  'vertex_ai/console-model-quality-warning-banner-sanitized' is not a         │
+│  recommended frontier model for Strix.                                       │
+│                                                                              │
+│  You can continue, but weaker models may miss vulnerabilities or produce     │
+│  lower-quality findings.                                                     │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Penetration test completed                                                  │
+│                                                                              │
+│  Vulnerabilities 0                                                           │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+EOS
+		exit 0
+		;;
 	bare-timeout-with-provider-marker)
 		# Emit bare "Connection timed out" alongside a provider marker so
 		# is_timeout_error() matches the Tier 3 branch gated on
@@ -6366,6 +6395,16 @@ run_filtered_gate_case_if_requested() {
 		"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
 		"1" \
 		"vertex_ai/report-known-internal-warning-sanitized" \
+		"<unset>"
+		;;
+	console-model-quality-warning-banner-sanitized)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/console-model-quality-warning-banner-sanitized" \
+		"" \
+		"0" \
+		"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
+		"1" \
+		"vertex_ai/console-model-quality-warning-banner-sanitized" \
 		"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
@@ -10411,6 +10450,36 @@ run_gate_case "report-known-internal-warning-sanitized" \
 	"Strix run succeeded for model 'vertex_ai/report-known-internal-warning-sanitized'" \
 	"1" \
 	"vertex_ai/report-known-internal-warning-sanitized" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "console-model-quality-warning-banner-sanitized" \
+	"vertex_ai/console-model-quality-warning-banner-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
+	"1" \
+	"vertex_ai/console-model-quality-warning-banner-sanitized" \
 	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \

@@ -172,6 +172,19 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+# Strix prints this box-drawn banner at startup whenever the configured
+# model is not on its own hardcoded "recommended frontier model" list. It
+# is a static disclaimer about model choice, unrelated to this run's
+# outcome, but its literal "WARNING" text otherwise satisfies the generic
+# Fatal/Denied/Warn/Warning provider-failure-signal matcher below and
+# turns every clean scan on a non-listed model into a false fail-closed.
+model_quality_banner = re.compile(
+    r"╭─[^\n]*╮\n"
+    r"(?:[^\n]*\n)*?"
+    r"[^\n]*MODEL QUALITY WARNING[^\n]*\n"
+    r"(?:[^\n]*\n)*?"
+    r"╰─[^\n]*╯\n?"
+)
 
 
 def iter_report_logs(root: Path):
@@ -191,14 +204,50 @@ def iter_report_logs(root: Path):
 
 for log_path in iter_report_logs(root):
     try:
-        lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        text = log_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         continue
+    original = text
+    text = model_quality_banner.sub("", text)
+    lines = text.splitlines(keepends=True)
     filtered = [line for line in lines if not known_internal_warning.match(line)]
-    if filtered != lines:
-        log_path.write_text("".join(filtered), encoding="utf-8")
+    text = "".join(filtered)
+    if text != original:
+        log_path.write_text(text, encoding="utf-8")
 PY
 	done
+}
+
+# Strips the same benign MODEL QUALITY WARNING startup banner (see above)
+# from the raw Strix console transcript so has_detected_infrastructure_error
+# does not mistake it for a real provider/infrastructure failure signal.
+sanitize_strix_console_log() {
+	local log_path="$1"
+	if [ -z "$log_path" ] || [ ! -f "$log_path" ] || [ -L "$log_path" ]; then
+		return 0
+	fi
+	python3 - "$log_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+log_path = Path(sys.argv[1])
+model_quality_banner = re.compile(
+    r"╭─[^\n]*╮\n"
+    r"(?:[^\n]*\n)*?"
+    r"[^\n]*MODEL QUALITY WARNING[^\n]*\n"
+    r"(?:[^\n]*\n)*?"
+    r"╰─[^\n]*╯\n?"
+)
+
+try:
+    text = log_path.read_text(encoding="utf-8")
+except UnicodeDecodeError:
+    raise SystemExit(0)
+sanitized = model_quality_banner.sub("", text)
+if sanitized != text:
+    log_path.write_text(sanitized, encoding="utf-8")
+PY
 }
 
 has_strix_report_failure_signal() {
@@ -2790,6 +2839,7 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
+	sanitize_strix_console_log "$STRIX_LOG"
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
