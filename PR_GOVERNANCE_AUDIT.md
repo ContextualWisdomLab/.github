@@ -183,6 +183,34 @@ revisit. GitHub Models remains a selectable `github_models` primary mode for
 now (unchanged scope) but is no longer relied on as a silent universal
 fallback.
 
+2026-08-24 KST provider-string wiring bug: the `STRIX_FALLBACK_MODELS`
+fallback wired on 2026-08-22 used the hyphenated `openai-direct/gpt-5.6-luna`
+alias, but `child_model_for_api_base()` in `scripts/ci/strix_quick_gate.sh`
+only recognizes the underscore `openai_direct/gpt-5.6-luna` form when
+translating a fallback candidate to the real litellm provider name
+(`openai/gpt-5.6-luna`). The hyphenated alias therefore reached litellm
+unmodified on every fallback attempt and failed immediately with
+`litellm.BadRequestError: LLM Provider NOT provided`, independent of any
+quota/capacity state -- confirmed org-wide across ContextualWisdomLab/.github
+issue #624's evidence trail (`.github#1246`, LineageWeave #355/#258). Root-
+caused via static reading of `child_model_for_api_base()` and
+`normalize_model()` in `scripts/ci/strix_model_utils.sh` (no hyphen/underscore
+normalization happens anywhere in that path, so an unrecognized case falls
+through to the catch-all `printf '%s\n' "$model"`, passing the string through
+unchanged). Fix: corrected all four `STRIX_FALLBACK_MODELS` branches
+(`github_models`, `openai_direct`, `openrouter`, `nvidia_nim`) to the
+underscore form already used correctly by the primary-model translation case
+statement (`.github/workflows/strix.yml`'s "Prepare Strix model input file"
+step) and by every other `openai_direct/*` reference in this workflow.
+Updated the three tests pinning the old (buggy) literal string
+(`scripts/ci/test_strix_quick_gate.sh`, `strix_required_workflow_smoke.sh`,
+`tests/test_strix_nvidia_nim_not_found_fallback.py`) and added a regression
+guard rejecting the hyphenated form outright. Does not touch, and does not
+resolve, the separate NVIDIA NIM/OpenRouter/OpenAI billing/quota exhaustion
+documented in `.github#624` -- that remains a capacity problem requiring an
+org-billing action, not a wiring bug; this fix only ensures the
+`openai_direct` fallback slot is reachable at all once capacity exists.
+
 ## Live Repository Inventory
 
 Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, #71, #79, and #80 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The 2026-07-02 18:15 KST refresh found 17 public non-fork repositories, adding `kaefa` and `waf-ids-ai-soc` to the prior public non-fork inventory. The public fork inventory still contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.

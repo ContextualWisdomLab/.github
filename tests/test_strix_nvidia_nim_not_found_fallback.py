@@ -202,9 +202,14 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
+            f"'{FREE_NVIDIA_FALLBACK} openai_direct/gpt-5.6-luna'",
             workflow,
         )
+        # Regression guard: the hyphenated openai-direct/ alias reaches
+        # litellm unmodified and fails "LLM Provider NOT provided" --
+        # child_model_for_api_base() in strix_quick_gate.sh only matches
+        # the underscore openai_direct/ form.
+        self.assertNotIn("openai-direct/gpt-5.6-luna", workflow)
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
