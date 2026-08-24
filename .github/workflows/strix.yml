@@ -112,6 +112,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
       CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Cancel queued and running scans for the closed pull request
@@ -123,11 +124,11 @@ jobs:
             local status="$1"
             local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?event=pull_request_target&status=${status}&per_page=100"
             gh api --paginate "$runs_url" |
-              jq -r --arg pr "$CLOSED_PR_NUMBER" --arg current "$CURRENT_RUN_ID" '
+              jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
                 | select(.name == "Strix Security Scan")
-                | select(any(.pull_requests[]?; ((.number | tostring) == $pr)))
+                | select(.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr)))
                 | .id
               ' |
               while IFS= read -r run_id; do
