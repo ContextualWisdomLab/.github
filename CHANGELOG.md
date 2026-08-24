@@ -60,6 +60,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Synchronized the Strix quick-gate contract with the current-attempt OpenCode
+  coverage-artifact download step, keeping the self-test aligned with the
+  exact-head artifact provenance boundary.
 - Bound OpenCode coverage source evidence to the current workflow attempt and
   immutable upload artifact ID, failing closed with full-rerun guidance when a
   failed-jobs-only rerun cannot obtain exact current-attempt evidence.

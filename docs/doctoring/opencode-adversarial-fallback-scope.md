@@ -30,6 +30,9 @@ Foundation, 2020).
 `tests/test_opencode_agent_contract.py` pins both exact paths in the workflow.
 The allowlist stays closed: unrelated files remain ineligible, and every merge
 still requires the existing exact-head checks and independent review policy.
+The Strix quick-gate self-test names the current-attempt coverage artifact
+download step, so a coverage-artifact hardening rename cannot silently leave
+the protected workflow contract stale.
 
 ## References
 
