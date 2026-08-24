@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -117,6 +117,7 @@ OPEN_PRS_PAGE_SIZE = 25
 # remains deliberately larger than the job cap while recovering genuine zombie
 # checks in the same operating window instead of leaving them for seven hours.
 DEFAULT_STALE_OPENCODE_MINUTES = 90
+DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {
@@ -1325,16 +1326,47 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
-def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
-    """Return whether the latest current-head request is only a coverage gate."""
+def latest_current_head_coverage_change_request(
+    pr: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the latest exact-head OpenCode request that only cites coverage."""
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
         if not is_opencode_review(review) or not review_matches_current_head(review, pr):
             continue
         if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
-            return False
+            return None
         body = (review.get("body") or "").lower()
-        return all(marker in body for marker in COVERAGE_REVIEW_MARKERS)
-    return False
+        return review if all(marker in body for marker in COVERAGE_REVIEW_MARKERS) else None
+    return None
+
+
+def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
+    """Return whether the latest current-head request is only a coverage gate."""
+    return latest_current_head_coverage_change_request(pr) is not None
+
+
+def coverage_retry_wait_reason(
+    pr: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    floor_minutes: int = DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES,
+) -> str | None:
+    """Return a wait reason until one same-head coverage retry interval elapses.
+
+    The review submission timestamp is the durable same-head retry marker. Missing
+    or malformed timestamps fail closed so a repeated coverage-only review cannot
+    create an unbounded dispatch loop.
+    """
+    review = latest_current_head_coverage_change_request(pr)
+    if review is None:
+        return None
+    submitted_at = parse_github_datetime(review.get("submittedAt"))
+    if submitted_at is None:
+        return "current-head OpenCode coverage review has no valid submission timestamp; defer same-head re-review"
+    current_time = now or datetime.now(timezone.utc)
+    if current_time < submitted_at + timedelta(minutes=max(0, floor_minutes)):
+        return "same-head OpenCode coverage retry floor has not elapsed"
+    return None
 
 
 def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]:
@@ -2617,6 +2649,9 @@ def inspect_pr(
             and not failed_status_checks(pr, ignore_opencode=True)
         )
         if coverage_ready:
+            retry_wait_reason = coverage_retry_wait_reason(pr)
+            if retry_wait_reason:
+                return decide("wait", retry_wait_reason)
             if pr.get("autoMergeRequest"):
                 return finish(
                     disable_auto_merge_decision(

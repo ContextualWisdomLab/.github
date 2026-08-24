@@ -1259,6 +1259,103 @@ def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
     assert dispatched == []
 
 
+def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
+    """A fresh coverage-only review cannot immediately redispatch itself."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
+    )
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **opencode_review(
+                        "CHANGES_REQUESTED",
+                        "head",
+                        submitted_at="2999-01-01T00:00:00Z",
+                    ),
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "wait"
+    assert decision.reason == "same-head OpenCode coverage retry floor has not elapsed"
+    assert dispatched == []
+
+
+def test_coverage_retry_without_timestamp_fails_closed(monkeypatch):
+    """A coverage-only review without a timestamp cannot authorize redispatch."""
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
+    coverage_review = opencode_review("CHANGES_REQUESTED", "head")
+    coverage_review.pop("submittedAt")
+    coverage_request = make_pr(
+        reviews={
+            "nodes": [
+                {
+                    **coverage_review,
+                    "body": (
+                        "OpenCode cannot approve yet because required coverage evidence "
+                        "did not pass. The coverage-evidence gate reported that required "
+                        "test/docstring evidence was not proven."
+                    ),
+                }
+            ]
+        },
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    strix_check(),
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    },
+                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
+                ]
+            }
+        },
+    )
+
+    decision = inspect(coverage_request)
+
+    assert decision.action == "wait"
+    assert "no valid submission timestamp" in decision.reason
+
+
 def test_coverage_retry_keeps_failed_opencode_workflow_siblings_fail_closed(
     monkeypatch,
 ):
