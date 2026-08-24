@@ -39,3 +39,7 @@
 **Vulnerability:** The `wait_for_url` function in `scripts/ci/sandboxed_web_e2e.py` did not validate the URL hostname before making requests, creating a Server-Side Request Forgery (SSRF) risk.
 **Learning:** Arbitrary URLs passed to internal utilities must be rigorously validated, especially in CI environments, to ensure they do not access unintended network locations or internal services.
 **Prevention:** Always use `urllib.parse.urlparse` to validate that the parsed URL hostname is restricted to safe loopback addresses (e.g., `localhost` or `127.0.0.1`) before opening the URL, particularly for sandbox or internal healthcheck endpoints.
+## 2026-08-24 - Classify Strix Text-Only Turn as ModelBehaviorError
+**Vulnerability:** Unreliable LLM Fallback Mechanism
+**Learning:** If the agent fails to call the `finish_scan` tool and instead emits a plain-text turn, the Strix workflow fails. If this failure isn't mapped to `ModelBehaviorError`, the CI system treats it as a hard CI failure rather than falling back to alternative models.
+**Prevention:** Include `ended without calling finish_scan` in the regex for `ModelBehaviorError` in `.github/workflows/strix.yml` and `scripts/ci/strix_quick_gate.sh` so that the pipeline can gracefully fall back to a stronger model.
