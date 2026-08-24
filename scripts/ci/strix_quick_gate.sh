@@ -28,6 +28,8 @@ STRIX_RUNTIME_DIR="$(mktemp -d /tmp/strix-runtime.XXXXXX)"
 STRIX_LOG="$STRIX_RUNTIME_DIR/strix.log"
 ACTIVE_REPORTS_DIR="$STRIX_RUNTIME_DIR/reports"
 ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
+STRIX_SCAN_WORKING_DIR="$STRIX_RUNTIME_DIR/scan-cwd"
+STRIX_SCAN_OUTPUT_DIR="$STRIX_SCAN_WORKING_DIR/strix_runs"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
 STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
@@ -129,13 +131,8 @@ publish_artifact_reports() {
 	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
 		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
 	fi
-	local scope_dir scope_reports_dir
-	for scope_dir in "${PULL_REQUEST_SCOPE_DIRS[@]}"; do
-		scope_reports_dir="$scope_dir/strix_runs"
-		if [ -d "$scope_reports_dir" ] && [ ! -L "$scope_reports_dir" ]; then
-			cp -R -- "$scope_reports_dir"/. "$ARTIFACT_REPORTS_DIR"/
-		fi
-	done
+	# Relative scanner output is copied into ACTIVE_REPORTS_DIR immediately
+	# after each attempt and sanitized before this publication trap runs.
 }
 
 preserve_attempt_log() {
@@ -169,9 +166,11 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ produced "
-    r"non-lifecycle final output in non-interactive mode; forcing tool "
-    r"continuation \(\d+/\d+\): "
+    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"(?:"
+    r"produced non-lifecycle final output in non-interactive mode"
+    r"|ended a turn without a lifecycle tool call \(interactive=False\)"
+    r"); forcing tool continuation \(\d+/\d+\): "
 )
 
 
@@ -209,8 +208,44 @@ has_strix_report_failure_signal() {
 		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
 			continue
 		fi
+		# A fallback attempt must be judged by its own newest structured report.
+		# Older attempt directories remain published for audit evidence, but a
+		# provider warning from an earlier failed model must not poison a complete
+		# later fallback report.
+		if [ "$report_root" = "$STRIX_REPORTS_DIR" ]; then
+			local newest_report_root
+			newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+			if [ -z "$newest_report_root" ]; then
+				continue
+			fi
+			report_root="$newest_report_root"
+		fi
 		while IFS= read -r -d '' report_log; do
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
+				return 0
+			fi
+		done < <(find "$report_root" -type f -name '*.log' -print0)
+	done
+	return 1
+}
+
+has_strix_report_provider_failure_signal() {
+	local report_root
+	local report_log
+	for report_root in "$@"; do
+		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+			continue
+		fi
+		if [ "$report_root" = "$STRIX_REPORTS_DIR" ]; then
+			local newest_report_root
+			newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+			if [ -z "$newest_report_root" ]; then
+				continue
+			fi
+			report_root="$newest_report_root"
+		fi
+		while IFS= read -r -d '' report_log; do
+			if grep -Eiq 'RateLimitError|Nvidia_nimException|Too Many Requests|Error code:[[:space:]]*429|provider.{0,80}(unavailable|exhausted|rate.?limit|timeout|connection)' "$report_log"; then
 				return 0
 			fi
 		done < <(find "$report_root" -type f -name '*.log' -print0)
@@ -232,6 +267,16 @@ cleanup_runtime() {
 }
 
 trap cleanup_runtime EXIT INT TERM
+
+make_pull_request_scope_dir() {
+	local scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"
+	if [ -L "$scope_parent" ]; then
+		echo "ERROR: pull request scope parent must not be a symlink." >&2
+		return 2
+	fi
+	mkdir -p -- "$scope_parent"
+	mktemp -d "$scope_parent/strix-pr-scope.XXXXXX"
+}
 
 STRIX_LLM_FILE="${STRIX_LLM_FILE:-}"
 if [ -z "$STRIX_LLM_FILE" ]; then
@@ -334,6 +379,40 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 		exit 2
 	fi
 fi
+
+# Optional cross-provider fallback credentials for direct-OpenAI fallback
+# models (openai-direct/... or openai_direct/...). When the primary model runs
+# against NVIDIA NIM, OpenRouter, or GitHub Models, its LLM_API_KEY cannot
+# authenticate a direct-OpenAI fallback; this file carries the OpenAI key.
+# Optional: without it, explicit direct-OpenAI models keep using LLM_API_KEY,
+# which is correct whenever the primary already runs against direct OpenAI.
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+is_explicit_openai_model() {
+	case "$1" in
+	openai_direct/* | openai-direct/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
 
 require_non_negative_integer() {
 	local value="$1"
@@ -614,7 +693,7 @@ copy_pr_head_blob_to_file() {
 
 is_supported_source_file() {
 	case "$1" in
-	*.java | *.kt | *.kts | *.groovy | *.scala | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
+	*.java | *.kt | *.kts | *.groovy | *.scala | *.rs | *.py | *.js | *.jsx | *.ts | *.tsx | *.vue | *.yaml | *.yml | *.sh | *.sql | *.xml | *.json | *.html | *.css | *.md)
 		return 0
 		;;
 	Dockerfile | */Dockerfile | Dockerfile.* | */Dockerfile.* | Containerfile | */Containerfile | Makefile | */Makefile)
@@ -628,7 +707,7 @@ is_supported_source_file() {
 
 is_dependency_manifest_path() {
 	case "$1" in
-	pom.xml | */pom.xml | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
+	pom.xml | */pom.xml | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock | package.json | */package.json | package-lock.json | */package-lock.json | pnpm-lock.yaml | */pnpm-lock.yaml | yarn.lock | */yarn.lock | pyproject.toml | */pyproject.toml | requirements.txt | */requirements.txt | requirements-*.txt | */requirements-*.txt | uv.lock | */uv.lock)
 		return 0
 		;;
 	*)
@@ -1184,6 +1263,8 @@ is_scannable_changed_file() {
 
 pull_request_scope_context_files() {
 	local needs_backend_python=0
+	local needs_backend_app_python=0
+	local needs_contextual_orchestrator_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
 	local changed_file normalized_changed_file
@@ -1194,6 +1275,12 @@ pull_request_scope_context_files() {
 			if [[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]; then
 				needs_backend_python=1
 			fi
+			if [[ "$normalized_changed_file" =~ ^backend/app/.+\.py$ ]]; then
+				needs_backend_app_python=1
+			fi
+			;;
+		contextual_orchestrator/*.py)
+			needs_contextual_orchestrator_python=1
 			;;
 		# The app shell, email components, threading URL builder, and API client can
 		# shape frontend email retrieval flows; include backend auth context with them.
@@ -1213,6 +1300,8 @@ pull_request_scope_context_files() {
 	if [ "$needs_backend_python" -eq 1 ]; then
 		cat <<'EOF'
 backend/requirements.txt
+backend/app/__init__.py
+backend/app/auth.py
 backend/api/__init__.py
 backend/api/accounts.py
 backend/api/auth.py
@@ -1255,6 +1344,80 @@ backend/services/llm_provider_urls.py
 backend/services/text_safety.py
 backend/services/threading_service.py
 EOF
+		# PostgreSQL introspection helpers are a security boundary for repositories
+		# that expose this package. Include their trusted base copies when present;
+		# the conditional keeps the shared gate usable by repositories without it.
+		local context_file
+		for context_file in \
+			backend/app/pg_introspect/__init__.py \
+			backend/app/pg_introspect/column_examples.py \
+			backend/app/pg_introspect/dsn_guard.py \
+			backend/app/pg_introspect/forward_ddl.py \
+			backend/app/pg_introspect/introspect.py \
+			backend/app/pg_introspect/queries.py \
+			backend/app/pg_introspect/snapshot_collect.py; do
+			if [ -f "$REPO_ROOT/$context_file" ] && [ ! -L "$REPO_ROOT/$context_file" ]; then
+				printf '%s\n' "$context_file"
+			fi
+		done
+	fi
+
+	if [ "$needs_backend_app_python" -eq 1 ]; then
+		local backend_app_head_sha
+		backend_app_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if { [ -z "$backend_app_head_sha" ] || ! is_valid_git_commit_sha "$backend_app_head_sha"; } && pull_request_head_blob_required; then
+			echo "ERROR: backend/app PR-head context requires an exact head SHA; failing closed." >&2
+			return 2
+		elif [ -n "$backend_app_head_sha" ] && is_valid_git_commit_sha "$backend_app_head_sha"; then
+			local backend_app_tree_file context_file normalized_context_file
+			backend_app_tree_file="$(mktemp "${RUNNER_TEMP:-/tmp}/strix-backend-app-context.XXXXXX")" || return 2
+			if ! git -c core.quotepath=false ls-tree -rz --name-only "$backend_app_head_sha" -- backend/app >"$backend_app_tree_file"; then
+				rm -f -- "$backend_app_tree_file"
+				echo "ERROR: backend/app PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r -d '' context_file; do
+				normalized_context_file="$(normalize_changed_file_path "$context_file")" || {
+					rm -f -- "$backend_app_tree_file"
+					return 2
+				}
+				case "$normalized_context_file" in
+				backend/app/*.py)
+					printf '%s\n' "$normalized_context_file"
+					;;
+				esac
+			done <"$backend_app_tree_file"
+			rm -f -- "$backend_app_tree_file"
+		fi
+	fi
+
+	if [ "$needs_contextual_orchestrator_python" -eq 1 ]; then
+		local contextual_orchestrator_head_sha
+		contextual_orchestrator_head_sha="$(trim_whitespace "${PR_HEAD_SHA:-}")"
+		if { [ -z "$contextual_orchestrator_head_sha" ] || ! is_valid_git_commit_sha "$contextual_orchestrator_head_sha"; } && pull_request_head_blob_required; then
+			echo "ERROR: contextual_orchestrator PR-head context requires an exact head SHA; failing closed." >&2
+			return 2
+		elif [ -n "$contextual_orchestrator_head_sha" ] && is_valid_git_commit_sha "$contextual_orchestrator_head_sha"; then
+			local contextual_orchestrator_tree_file context_file normalized_context_file
+			contextual_orchestrator_tree_file="$(mktemp "${RUNNER_TEMP:-/tmp}/strix-contextual-orchestrator-context.XXXXXX")" || return 2
+			if ! git -c core.quotepath=false ls-tree -rz --name-only "$contextual_orchestrator_head_sha" -- contextual_orchestrator >"$contextual_orchestrator_tree_file"; then
+				rm -f -- "$contextual_orchestrator_tree_file"
+				echo "ERROR: contextual_orchestrator PR-head context could not be enumerated; failing closed." >&2
+				return 2
+			fi
+			while IFS= read -r -d '' context_file; do
+				normalized_context_file="$(normalize_changed_file_path "$context_file")" || {
+					rm -f -- "$contextual_orchestrator_tree_file"
+					return 2
+				}
+				case "$normalized_context_file" in
+				contextual_orchestrator/*.py)
+					printf '%s\n' "$normalized_context_file"
+					;;
+				esac
+			done <"$contextual_orchestrator_tree_file"
+			rm -f -- "$contextual_orchestrator_tree_file"
+		fi
 	fi
 
 	if [ "$needs_frontend_email_api_context" -eq 1 ]; then
@@ -1286,6 +1449,17 @@ docker-compose.yml
 render.yaml
 VERSION
 EOF
+		# Workflow changes in a Rust workspace need dependency, toolchain, and
+		# policy context so Strix can analyze the repository as a complete unit.
+		if [ -f "$REPO_ROOT/Cargo.toml" ]; then
+			cat <<'EOF'
+Cargo.toml
+Cargo.lock
+rust-toolchain.toml
+rust-toolchain
+deny.toml
+EOF
+		fi
 	fi
 }
 
@@ -1302,7 +1476,7 @@ changed_file_list_contains() {
 
 build_pull_request_scope_dir() {
 	local scope_dir
-	scope_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-pr-scope.XXXXXX")"
+	scope_dir="$(make_pull_request_scope_dir)" || return 2
 	scope_dir="$({ CDPATH='' && cd -P -- "$scope_dir" && pwd -P; })"
 	PULL_REQUEST_SCOPE_DIRS+=("$scope_dir")
 
@@ -1475,7 +1649,7 @@ PY
 
 build_pull_request_head_tree_scope_dir() {
 	local scope_dir
-	scope_dir="$(mktemp -d "${TMPDIR:-/tmp}/strix-pr-scope.XXXXXX")"
+	scope_dir="$(make_pull_request_scope_dir)" || return 2
 	scope_dir="$({ CDPATH='' && cd -P -- "$scope_dir" && pwd -P; })"
 	PULL_REQUEST_SCOPE_DIRS+=("$scope_dir")
 
@@ -2312,6 +2486,13 @@ child_model_for_api_base() {
 		printf 'openai/%s\n' "${model#openai_direct/}"
 		return 0
 		;;
+	# The workflow contract spells the direct-OpenAI fallback with a hyphen
+	# (openai-direct/...). litellm cannot infer a provider from that prefix,
+	# so both spellings must resolve to the litellm openai/<model> form.
+	openai-direct/*)
+		printf 'openai/%s\n' "${model#openai-direct/}"
+		return 0
+		;;
 	esac
 
 	printf '%s\n' "$model"
@@ -2364,6 +2545,12 @@ run_strix_once() {
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
+		if is_explicit_openai_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			# Cross-provider fallback: explicit direct-OpenAI models
+			# authenticate with the OpenAI key, not the primary provider's
+			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		fi
 	fi
 	set -o pipefail
 	set +e
@@ -2375,7 +2562,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
-	python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" <<'PY'
+python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
 import os
@@ -2389,6 +2576,7 @@ timeout_seconds = int(sys.argv[1])
 target_path = sys.argv[2]
 scan_mode = sys.argv[3]
 log_path = pathlib.Path(sys.argv[4])
+scan_working_dir = pathlib.Path(sys.argv[5])
 # Failure classifiers read this path even when trusted executable or target
 # validation fails before a child process starts. Materialize it first so the
 # primary log shows one configuration error instead of repeated grep noise.
@@ -2528,12 +2716,29 @@ if any(ch in str(target_cwd) for ch in ("\x00", "\n", "\r")):
     sys.stderr.write("ERROR: Strix target path contains unsupported control characters.\n")
     raise SystemExit(2)
 
-command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]
+if scan_working_dir.is_symlink():
+    sys.stderr.write("ERROR: Strix scan working directory must not be a symlink.\n")
+    raise SystemExit(2)
+scan_working_dir.mkdir(parents=True, exist_ok=True)
+scan_output_dir = scan_working_dir / "strix_runs"
+if scan_output_dir.is_symlink():
+    sys.stderr.write("ERROR: Strix scan output directory must not be a symlink.\n")
+    raise SystemExit(2)
+if scan_output_dir.exists():
+    import shutil
+
+    shutil.rmtree(scan_output_dir)
+scan_output_dir.mkdir()
+
+# Keep scanner-created state and relative report files outside the untrusted
+# scan target. The target remains explicit and absolute, so changing cwd cannot
+# change which source tree is scanned.
+command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
 
 try:
     process = subprocess.Popen(
         command,
-        cwd=str(target_cwd),
+        cwd=str(scan_working_dir),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -2566,6 +2771,9 @@ except subprocess.TimeoutExpired:
 PY
 	rc=$?
 	set -e
+	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
+		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ACTIVE_REPORTS_DIR"/
+	fi
 	local end_epoch
 	end_epoch="$(date +%s)"
 	local elapsed=$((end_epoch - start_epoch))
@@ -2660,13 +2868,25 @@ is_nvidia_nim_not_found_error() {
 	return 1
 }
 
+is_model_behavior_error() {
+	# Classify only a module-qualified Strix/Agents SDK protocol exception.
+	# A bare source-file mention of ModelBehaviorError is not retryable.
+	# Cross-model fallback may continue; same-model retry does not.
+	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 ## Determines whether the last strix failure is a transient error eligible
 ## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
-## Four error families qualify:
+## Five error families qualify:
 ##   - RateLimit / RESOURCE_EXHAUSTED / HTTP 429
 ##   - litellm API connection failures with LLM-provider evidence
 ##   - litellm service-unavailable / high-demand provider failures
 ##   - MidStreamFallbackError (litellm mid-stream provider switch)
+##   - Caido bootstrap timing failures (guest login before the local proxy is up)
 ## Timeouts are infrastructure failures. In strict CI mode they fail closed;
 ## otherwise the caller may still move to fallback model evaluation.
 is_transient_same_model_retry_error() {
@@ -2684,6 +2904,9 @@ is_transient_same_model_retry_error() {
 		return 0
 	fi
 	if is_midstream_fallback_error; then
+		return 0
+	fi
+	if is_caido_bootstrap_timing_error; then
 		return 0
 	fi
 	return 1
@@ -2747,6 +2970,8 @@ run_strix_with_transient_retry() {
 			retry_reason="LLM service unavailable"
 		elif is_midstream_fallback_error; then
 			retry_reason="midstream fallback"
+		elif is_caido_bootstrap_timing_error; then
+			retry_reason="Caido sandbox bootstrap timing"
 		fi
 		echo "Retrying model '$model' due to $retry_reason (attempt $((attempt + 1))/$max_attempts)." >&2
 		sleep "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
@@ -2811,6 +3036,18 @@ strix_log_has_github_models_context() {
 }
 
 is_github_models_unavailable_model_error() {
+	# GitHub Models may retire a provider model with HTTP 410. Treat that as a
+	# bounded family-unavailable signal only when one physical provider-error
+	# line carries all three facts: an anchored LiteLLM/OpenAI exception, trusted
+	# GitHub Models context, and a complete HTTP 410 token. Anchoring the provider
+	# exception prevents target/repository output prefixes from spoofing fallback;
+	# the non-digit boundary rejects numeric continuations such as 4100/4104.
+	if grep -Ei '^[[:space:]]*(Error:[[:space:]]*)?((litellm(\.exceptions)?|openai)\.[A-Za-z0-9_]*(Error|Exception)|OpenAIException)([[:space:]:-]|$)' "$STRIX_LOG" |
+		grep -Ei '(models\.github\.ai|GitHub Models|github_models)' |
+		grep -Eq 'HTTP[[:space:]]+410([^0-9]|$)'; then
+		return 0
+	fi
+
 	if grep -Eiq 'Unavailable model:[[:space:]]*[^[:space:]]+' "$STRIX_LOG" &&
 		grep -Eiq '(litellm\.BadRequestError|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|models\.github\.ai|GitHub Models|openai)' "$STRIX_LOG"; then
 		return 0
@@ -2924,6 +3161,23 @@ is_midstream_fallback_error() {
 	return 1
 }
 
+## Detects the upstream strix-agent Caido sandbox bootstrap timing race
+## (usestrix/strix#1036, #1037, #1056): the sandbox container runs a
+## chown -R before starting caido-cli, and a slow CI runner can exceed
+## Strix's fixed 10-attempt loginAsGuest budget before the proxy is
+## reachable, even though the penetration test itself never started. This
+## is local sandbox/container timing, not model-specific, so it is
+## same-model-retry-eligible only; switching LLM models would not change
+## how long the sandbox takes to boot.
+is_caido_bootstrap_timing_error() {
+	if grep -Fq 'loginAsGuest failed after' "$STRIX_LOG" &&
+		grep -Eq 'Failed to connect to 127\.0\.0\.1 port [0-9]+' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 # Narrower variant: LLM providers only, excluding HTTP transport libraries
 # (httpx, httpcore, requests). Used for generic transport failures where
 # library names alone are insufficient to prove the timeout/connection error
@@ -2973,6 +3227,14 @@ has_detected_infrastructure_error() {
 	fi
 
 	if is_nvidia_nim_not_found_error; then
+		return 0
+	fi
+
+	if is_model_behavior_error; then
+		return 0
+	fi
+
+	if is_caido_bootstrap_timing_error; then
 		return 0
 	fi
 
@@ -3826,6 +4088,10 @@ is_model_retryable_error() {
 		return 0
 	fi
 
+	if is_model_behavior_error; then
+		return 0
+	fi
+
 	if is_github_models_api_compatible_model "$model" && is_github_models_unavailable_model_error; then
 		return 0
 	fi
@@ -3854,6 +4120,16 @@ is_model_retryable_error() {
 	fi
 
 	if is_llm_service_unavailable_error; then
+		return 0
+	fi
+
+	# A provider failure can be recorded only in Strix's structured report log.
+	# run_strix_once already marks that evidence as infrastructure failure, but
+	# the child stdout log used by the classifiers may not contain the provider
+	# exception. In strict mode, let configured distinct fallbacks run instead of
+	# treating the report-only signal as a non-recoverable source failure.
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled &&
+		has_strix_report_provider_failure_signal "$ACTIVE_REPORTS_DIR" "${TARGET_PATH%/}/strix_runs"; then
 		return 0
 	fi
 
@@ -4018,7 +4294,7 @@ run_current_target_scan() {
 			echo "Strix quick scan failed with a non-recoverable error." >&2
 			return 1
 		fi
-		done
+	done
 
 	if should_fail_pull_request_infra_zero_findings; then
 		return 1
@@ -4037,6 +4313,12 @@ run_current_target_scan() {
 		else
 			echo "ERROR: All configured fallback models are the same as the primary model" >&2
 		fi
+		return 1
+	fi
+
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
+		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
 		return 1
 	fi
 
