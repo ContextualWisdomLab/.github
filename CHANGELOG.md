@@ -6,6 +6,7 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Isolated explicit direct-OpenAI Strix fallback models (`openai-direct/*`, `openai_direct/*`) from the ambient `LLM_API_BASE` inside `resolved_llm_api_base_for_model`: in `nvidia_nim` or `openrouter` modes the final OpenAI fallback previously inherited the primary provider's gateway, which answered an OpenAI-keyed chat request with a literal "404 page not found", so the contracted last-resort fallback could never succeed and every NIM rate-limit storm failed closed with no working fallback. The resolver now returns an empty base for these models so litellm uses its default `https://api.openai.com/v1` endpoint, matching how direct-OpenAI primaries already route; GitHub Models and same-provider fallback behavior is unchanged. Covered by a function-execution regression contract that pins NVIDIA-base inheritance for non-OpenAI models and base isolation for both OpenAI spellings.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification

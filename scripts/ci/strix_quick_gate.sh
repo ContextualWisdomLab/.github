@@ -2415,6 +2415,18 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 
+	if is_explicit_openai_model "$model"; then
+		# Cross-provider fallback: an explicit direct-OpenAI model must never
+		# inherit another provider's ambient API base. In nvidia_nim or
+		# openrouter modes LLM_API_BASE_FILE points at that provider's gateway,
+		# which answers an OpenAI-keyed chat request with a literal
+		# "404 page not found". Returning empty lets litellm use its default
+		# https://api.openai.com/v1 endpoint, exactly like openai_direct
+		# primaries, while run_strix_once already swaps in the dedicated
+		# STRIX_OPENAI_FALLBACK_KEY for authentication.
+		return 0
+	fi
+
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
 	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
