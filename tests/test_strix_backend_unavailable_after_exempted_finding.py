@@ -63,9 +63,12 @@ def _extract_neutralization_block(workflow: str) -> str:
     stale logic.
     """
 
-    start_marker = (
-        "          # Recognized signals that the LLM backend was unavailable"
-    )
+    # The classification block starts at the neutralization-scope assignment
+    # and runs to the terminal failure exit. The gate-execution retry loop and
+    # the raw signal definitions live outside this region; the signal values
+    # are injected by _run_gate_tail so the extracted decision logic stays the
+    # single tested authority.
+    start_marker = '          strix_neutralization_scope_log="$strix_run_log"'
     terminal_failure_marker = (
         '          echo "Strix reported security findings or failed for a '
         'non-backend reason; failing the required check'
@@ -77,6 +80,23 @@ def _extract_neutralization_block(workflow: str) -> str:
     return workflow[start:end]
 
 
+def _extract_signal_definitions(workflow: str) -> str:
+    """Return the canonical backend-outage / finding-signal definitions.
+
+    Bounded by the same unique anchors used in production so the injected
+    patterns cannot drift from the ones the gate itself classifies with.
+    """
+
+    start_marker = (
+        "          # Recognized signals that the LLM backend was unavailable"
+    )
+    end_marker = "reported_vulnerability_signal="
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start)
+    end = workflow.index("\n", end) + 1
+    return workflow[start:end]
+
+
 def _run_gate_tail(log_text: str) -> int:
     """Execute the extracted block against a synthetic log; return its exit code.
 
@@ -85,6 +105,7 @@ def _run_gate_tail(log_text: str) -> int:
     """
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+    signals = _extract_signal_definitions(workflow)
     block = _extract_neutralization_block(workflow)
     with tempfile.TemporaryDirectory(prefix="strix-tail-scope-") as temp_dir:
         strix_run_log = Path(temp_dir) / "strix_gate_console.log"
@@ -94,6 +115,7 @@ def _run_gate_tail(log_text: str) -> int:
                 "set -uo pipefail",
                 'strix_run_log="$1"',
                 "strix_rc=1",
+                signals,
                 block,
             )
         )
