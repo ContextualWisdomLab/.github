@@ -155,8 +155,8 @@ def _extract_retry_loop_region(workflow: str) -> str:
     return workflow[start:end]
 
 
-def _run_gate_retry(gate_script: str) -> tuple[int, int]:
-    """Run the extracted retry loop against a scripted gate; return (rc, calls).
+def _run_gate_retry(gate_script: str) -> tuple[int, int, str]:
+    """Run the extracted retry loop; return (rc, calls, raw attempt audit).
 
     The fake gate appends one line to a call-counter file on every invocation
     so tests can prove exactly how many attempts the loop spent.
@@ -195,7 +195,9 @@ def _run_gate_retry(gate_script: str) -> tuple[int, int]:
             env={"RUNNER_TEMP": temp_dir, "PATH": "/usr/bin:/bin"},
         )
         calls = int(counter.read_text().strip())
-    return completed.returncode, calls
+        audit_path = Path(temp_dir) / "strix_gate_attempts.log"
+        audit = audit_path.read_text(encoding="utf-8") if audit_path.exists() else ""
+    return completed.returncode, calls, audit
 
 
 class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
@@ -279,9 +281,13 @@ fi
 echo "scan complete"
 exit 0
 """
-        returncode, calls = _run_gate_retry(gate)
+        returncode, calls, audit = _run_gate_retry(gate)
         self.assertEqual(returncode, 0)
         self.assertEqual(calls, 2)
+        self.assertIn("outer-attempt=1 rc=1", audit)
+        self.assertIn("outer-attempt=2 rc=0", audit)
+        self.assertIn("LLM CONNECTION FAILED", audit)
+        self.assertIn("scan complete", audit)
 
     def test_real_finding_after_continuation_never_retries(self) -> None:
         """A tail-scoped real finding is authoritative: zero retries, fail closed."""
@@ -295,9 +301,11 @@ printf '%s\n' \
   "Vulnerability Report" "Severity: CRITICAL" "Vulnerabilities 1"
 exit 1
 """
-        returncode, calls = _run_gate_retry(gate)
+        returncode, calls, audit = _run_gate_retry(gate)
         self.assertEqual(returncode, 1)
         self.assertEqual(calls, 1)
+        self.assertIn("outer-attempt=1 rc=1", audit)
+        self.assertIn("Vulnerabilities 1", audit)
 
 
 if __name__ == "__main__":
