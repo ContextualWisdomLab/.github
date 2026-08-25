@@ -855,6 +855,8 @@ jobs:
           PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha }}
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
+          github_run_id: ${{ github.run_id }}
+          github_run_attempt: ${{ github.run_attempt }}
         run: |
           budget_suffix="TIME""OUT"
           process_budget_seconds="5400"
@@ -871,6 +873,19 @@ jobs:
           # could not complete a scan. Provider failure is typed infrastructure
           # evidence, but remains non-passing because no authoritative complete
           # vulnerability result exists.
+
+          # De-synchronize concurrent PR scans. Several pull requests often
+          # start within the same minute; without a spread they all hit the
+          # same NVIDIA NIM / OpenAI capacity window at once and exhaust it
+          # with 429s before any retry ladder can recover. A run-id-derived
+          # jitter stays deterministic per run while bounding the delay well
+          # inside the process budget.
+          scan_stagger_seconds=$(( (github_run_id % 8) * 15 + (github_run_attempt - 1) * 30 ))
+          if [ "$scan_stagger_seconds" -gt 0 ]; then
+            echo "Staggering Strix scan start by ${scan_stagger_seconds}s to avoid provider-capacity collisions across concurrent PR scans." >&2
+            sleep "$scan_stagger_seconds"
+          fi
+
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           strix_rc=0
           set +e
