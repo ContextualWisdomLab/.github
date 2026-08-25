@@ -237,9 +237,11 @@ def strip_model_quality_warning_boxes(text: str) -> str:
 try:
     text = src.read_text(encoding="utf-8")
 except UnicodeDecodeError:
-    # Never let a previous attempt's classified copy be inspected after a
-    # malformed console transcript. The raw source remains untouched.
-    dest.write_text("", encoding="utf-8")
+    # Preserve byte-level evidence so ASCII failure markers in an otherwise
+    # malformed transcript still reach the fail-closed grep classifiers. This
+    # also replaces any previous attempt's classified copy without mutating
+    # the raw source.
+    dest.write_bytes(src.read_bytes())
     raise SystemExit(0)
 text = strip_model_quality_warning_boxes(text)
 text = "".join(
