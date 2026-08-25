@@ -915,6 +915,28 @@ jobs:
           strix_gate_deadline=$(( SECONDS + 6000 ))
           set +e
           while : ; do
+            # Rebind every invocation to the remaining outer deadline. The
+            # original 5700/5400 split reserves 300 seconds for gate cleanup;
+            # retain that internal reserve plus 300 seconds for workflow
+            # artifact/status cleanup even when a late retry starts.
+            remaining_seconds=$(( strix_gate_deadline - SECONDS ))
+            if [ "$remaining_seconds" -le 600 ]; then
+              : > "$strix_run_log"
+              echo "Configured model and fallback models were unavailable before another bounded retry could start: only ${remaining_seconds}s remain in the outer Strix deadline." | tee "$strix_run_log" >&2
+              strix_rc=1
+              break
+            fi
+            attempt_budget_seconds=$(( remaining_seconds - 300 ))
+            if [ "$attempt_budget_seconds" -gt 5700 ]; then
+              attempt_budget_seconds=5700
+            fi
+            attempt_process_budget_seconds=$(( attempt_budget_seconds - 300 ))
+            if [ "$attempt_process_budget_seconds" -gt "$process_budget_seconds" ]; then
+              attempt_process_budget_seconds="$process_budget_seconds"
+            fi
+            export "STRIX_TOTAL_${budget_suffix}_SECONDS=$attempt_budget_seconds"
+            export "STRIX_PROCESS_${budget_suffix}_SECONDS=$attempt_process_budget_seconds"
+
             : > "$strix_run_log"
             bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_run_log"
             strix_rc="${PIPESTATUS[0]}"
