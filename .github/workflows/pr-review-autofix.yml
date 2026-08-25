@@ -486,7 +486,7 @@ jobs:
                   exit 1
                   ;;
               esac
-            done < <(git diff --name-status -- "$protected_path")
+			done < <(git diff HEAD --name-status -- "$protected_path")
           done
 
       - name: Validate changed files

@@ -1333,6 +1333,8 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
         "- name: Reject protected security-contract deletions and renames", 1
     )[1].split("- name: Validate changed files", 1)[0]
     assert "if: env.RESOLVE_CONFLICT" not in protected_step
+    assert "git diff HEAD --name-status -- \"$protected_path\"" in protected_step
+    assert "git diff --name-status -- \"$protected_path\"" not in protected_step
 
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
