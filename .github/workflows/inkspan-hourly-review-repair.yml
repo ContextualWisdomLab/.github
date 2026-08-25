@@ -18,6 +18,9 @@ permissions:
 jobs:
   dispatch-review-repair:
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    permissions:
+      contents: read
+      id-token: write
     with:
       target_repository: ContextualWisdomLab/inkspan
       base_branch: main

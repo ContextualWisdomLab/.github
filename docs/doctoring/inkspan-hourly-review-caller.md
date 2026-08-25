@@ -13,8 +13,8 @@ repair per heartbeat.
 
 A paying buyer of commercial-grade editor tooling would feel live Inkspan pull
 requests stalling while the hourly NVIDIA NIM repair loop scanned only other
-products in the organization. Live heads such as inkspan#299 (stacked-PR CI
-gates), inkspan#362 (editor contrast and keyboard focus), and the
+products in the organization. Live heads such as ContextualWisdomLab/inkspan#299
+(stacked-PR CI gates), ContextualWisdomLab/inkspan#362 (editor contrast and keyboard focus), and the
 writing-diagnostics stack sit in exactly that blind spot when their checks are
 green but central review evidence is missing or stale.
 
@@ -33,7 +33,7 @@ transitions documented in the central scheduler contract: refetch live state,
 establish the causal chain, enumerate materially distinct minimal remedies,
 reject infeasible ones, and dispatch at most one repair per heartbeat.
 
-Minute 56 avoids every existing hourly heartbeat minute (2, 10, 14, 16, 21,
+Minute 56 avoids every existing hourly heartbeat minute (2, 7, 10, 14, 16, 21,
 23, 27, 37, 43, 49, 53, 58) so runner capacity is not contested at dispatch
 time.
 
@@ -45,3 +45,15 @@ time.
   unrelated PR lanes moving every hour.
 - No COPILOT_GITHUB_TOKEN is used; existing review-agent key chains are
   untouched.
+- The reusable job receives `id-token: write` and `contents: read`, enabling
+  its documented OIDC fallback while preserving least privilege.
+
+The protected merge path still requires an independent non-author approval at
+the exact head. The workflow forwards the existing `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN`; the NVIDIA model credential is supplied by the
+central worker as `NVIDIA_NIM_API_KEY` and is never embedded in this caller.
+
+## APA 7th references
+
+GitHub. (n.d.). *OpenID Connect in GitHub Actions*. Retrieved August 25, 2026,
+from https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect
