@@ -6,7 +6,6 @@ on:
       - .github/workflows/pr-review-fix-scheduler.yml
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
-      - .github/workflows/accounting-information-platform-hourly-review-repair.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
@@ -66,7 +65,6 @@ on:
       - .github/workflows/pr-review-fix-scheduler.yml
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
-      - .github/workflows/accounting-information-platform-hourly-review-repair.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
