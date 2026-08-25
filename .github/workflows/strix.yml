@@ -271,8 +271,8 @@ jobs:
             exit 1
           fi
           case "$EVENT_REPOSITORY_VISIBILITY" in
-            PUBLIC) is_private=false ;;
-            PRIVATE | INTERNAL) is_private=true ;;
+            PUBLIC | public) is_private=false ;;
+            PRIVATE | private | INTERNAL | internal) is_private=true ;;
             "")
               is_private=""
               for target_visibility_attempt in 1 2 3 4 5 6; do
@@ -287,7 +287,7 @@ jobs:
               done
               ;;
             *)
-              echo "::error::Target repository event visibility was not PUBLIC, PRIVATE, or INTERNAL."
+              echo "::error::Target repository event visibility was not public, private, or internal."
               exit 1
               ;;
           esac
