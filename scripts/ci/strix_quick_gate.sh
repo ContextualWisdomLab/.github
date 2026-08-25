@@ -154,7 +154,7 @@ preserve_attempt_log() {
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
-		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		if [ -z "$report_root" ] || { [ ! -d "$report_root" ] && [ ! -f "$report_root" ]; } || [ -L "$report_root" ]; then
 			continue
 		fi
 		python3 - "$report_root" <<'PY'
@@ -172,9 +172,16 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_scanner_warning = re.compile(
+    r"^(?:│  MODEL QUALITY WARNING\s+│|"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+)
 
 
 def iter_report_logs(root: Path):
+    if root.is_file() and root.suffix == ".log":
+        yield root
+        return
     for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current_root)
         dir_names[:] = [
@@ -194,7 +201,12 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_scanner_warning.match(line)
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -807,6 +819,17 @@ is_github_models_api_base() {
 	local api_base="$1"
 	case "$api_base" in
 	https://models.github.ai | https://models.github.ai/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_known_foreign_provider_api_base() {
+	case "$1" in
+	https://models.github.ai/* | https://integrate.api.nvidia.com/* | https://openrouter.ai/*)
 		return 0
 		;;
 	*)
@@ -2414,10 +2437,20 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
-
-	local api_base_file="$LLM_API_BASE_FILE"
+	local api_base_file="${LLM_API_BASE_FILE:-}"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: openai-direct/* candidates must reach the
+		# direct OpenAI API even when the primary provider selected a
+		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
+		# this the fallback hits the primary gateway and 404s.
+		api_base_file="$STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		# The workflow always provisions this file for cross-provider fallbacks.
+		# In standalone runs, an explicitly supplied LLM_API_BASE_FILE remains
+		# a caller-owned custom OpenAI-compatible endpoint rather than being
+		# silently discarded.
+	elif is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback
 		# attempts must still route through the GitHub Models inference endpoint.
@@ -2452,6 +2485,15 @@ resolved_llm_api_base_for_model() {
 	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]]; then
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
+	fi
+	# Never let a known provider-specific base leak into an explicit
+	# direct-OpenAI fallback when no separate OpenAI override was provisioned.
+	# Other caller-supplied OpenAI-compatible endpoints remain valid standalone
+	# configuration and are intentionally preserved.
+	if is_explicit_openai_model "$model" \
+		&& [ -z "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ] \
+		&& is_known_foreign_provider_api_base "$llm_api_base_value"; then
+		return 0
 	fi
 	if is_github_models_api_base "$llm_api_base_value" && ! is_github_models_api_compatible_model "$model"; then
 		echo "ERROR: LLM_API_BASE may route through GitHub Models only when STRIX_LLM uses a GitHub Models-compatible model." >&2
@@ -2791,7 +2833,7 @@ PY
 	fi
 	preserve_attempt_log "$model" "$rc"
 
-	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
@@ -2846,8 +2888,8 @@ is_llm_api_connection_error() {
 
 is_llm_service_unavailable_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
-		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|Service Unavailable)' "$STRIX_LOG"; then
+		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
+		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
 		return 0
 	fi
 
