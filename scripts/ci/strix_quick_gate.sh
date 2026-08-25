@@ -172,20 +172,12 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
-# Strix prints this box-drawn banner at startup whenever the configured
-# model is not on its own hardcoded "recommended frontier model" list. It
-# is a static disclaimer about model choice, unrelated to this run's
-# outcome, but its literal "WARNING" text otherwise satisfies the generic
-# Fatal/Denied/Warn/Warning provider-failure-signal matcher below and
-# turns every clean scan on a non-listed model into a false fail-closed.
-model_quality_banner = re.compile(
-    r"^╭─[^\n]*╮\n"
-    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
-    r"^[^\n]*MODEL QUALITY WARNING[^\n]*\n"
-    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
-    r"^╰─[^\n]*╯\n?",
-    re.MULTILINE,
-)
+# Strix prints this exact box-content heading at startup whenever the
+# configured model is not on its own hardcoded "recommended frontier
+# model" list. Remove only that one cosmetic line: deleting the whole box
+# could hide a real provider failure emitted beside the heading.
+model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
+ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def iter_report_logs(root: Path):
@@ -209,9 +201,13 @@ for log_path in iter_report_logs(root):
     except UnicodeDecodeError:
         continue
     original = text
-    text = model_quality_banner.sub("", text)
     lines = text.splitlines(keepends=True)
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not model_quality_heading.fullmatch(ansi_csi.sub("", line.rstrip("\r\n")))
+        and not known_internal_warning.match(line)
+    ]
     text = "".join(filtered)
     if text != original:
         log_path.write_text(text, encoding="utf-8")
@@ -233,20 +229,18 @@ import re
 import sys
 
 log_path = Path(sys.argv[1])
-model_quality_banner = re.compile(
-    r"^╭─[^\n]*╮\n"
-    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
-    r"^[^\n]*MODEL QUALITY WARNING[^\n]*\n"
-    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
-    r"^╰─[^\n]*╯\n?",
-    re.MULTILINE,
-)
+model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
+ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 try:
     text = log_path.read_text(encoding="utf-8")
 except UnicodeDecodeError:
     raise SystemExit(0)
-sanitized = model_quality_banner.sub("", text)
+sanitized = "".join(
+    line
+    for line in text.splitlines(keepends=True)
+    if not model_quality_heading.fullmatch(ansi_csi.sub("", line.rstrip("\r\n")))
+)
 if sanitized != text:
     log_path.write_text(sanitized, encoding="utf-8")
 PY
