@@ -220,6 +220,18 @@ flowchart LR
 | #790 | fix(coverage): retry transient trusted uv downloads | `463ddbad84ee40f56f2196af2aa41f1dd4100907` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `3ffde3c5d3c98f0c840abcba151af08cf0255b46` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 
+## 2026-08-25 central Strix fallback contract recheck
+
+- `main` at `a724582a0768129d481385070bf8f05b2620dd2c` changed the direct-OpenAI
+  fallback to `gpt-5.4`, but the required-workflow smoke script still required
+  the retired `gpt-5.6-luna` string. The privileged OpenCode model pool also
+  retained the retired candidate while its contract tests expected `gpt-5.4`.
+- This exact mismatch caused consumer Strix checks to fail before scanning the
+  target repository; it was observed on ContextualWisdomLab/disksage#247 at
+  exact head `a9c868a6e9c8d68a9c6ea6de381e188740b8f5db`. The focused repair keeps
+  provider errors and vulnerability findings fail-closed and only aligns the
+  executable model and its assertions.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
