@@ -2,10 +2,10 @@ name: Contextual Orchestrator Hourly Review Repair
 
 on:
   schedule:
-    # Minute 31 avoids the minute-zero runner surge and every existing sibling
-    # heartbeat (2, 10, 14, 16, 17 central scheduler, 21, 23, 27, 37, 43, 49,
-    # 53, 58).
-    - cron: "31 * * * *"
+    # Minute 34 avoids the minute-zero runner surge and every existing sibling
+    # heartbeat (2, 7, 10, 14, 16, 17 central scheduler, 21, 23, 27, 31,
+    # 37, 41, 43, 49, 53, 58, 59).
+    - cron: "34 * * * *"
 
 concurrency:
   group: contextual-orchestrator-hourly-review-repair
@@ -19,6 +19,9 @@ permissions:
 jobs:
   dispatch-review-repair:
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    permissions:
+      contents: read
+      id-token: write
     with:
       target_repository: ContextualWisdomLab/contextual-orchestrator
       base_branch: main

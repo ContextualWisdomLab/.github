@@ -4,7 +4,7 @@
 
 ContextualWisdomLab operates one protected hourly caller for
 `ContextualWisdomLab/contextual-orchestrator`, the org's LLM gateway consumed by
-gyeot and scopeweave. The caller runs at minute 31, delegates to the
+gyeot and scopeweave. The caller runs at minute 34, delegates to the
 product-neutral central review-fix scheduler, inspects at most 50 open pull
 requests, and dispatches at most one bounded repair per heartbeat.
 
@@ -45,8 +45,9 @@ gate and is never synthesized by the repair worker.
 
 The caller uses a single concurrency group and `cancel-in-progress: false`.
 This preserves an in-flight bounded RCA instead of discarding its evidence when
-the next hourly heartbeat arrives. Minute 31 avoids the minute-zero runner surge
-and every existing sibling heartbeat.
+the next hourly heartbeat arrives. Minute 34 avoids the minute-zero runner surge
+and every existing sibling heartbeat. The organization ledger records minute 34
+for contextual-orchestrator; minute 31 remains reserved for Scopeweave.
 
 The caller sets a **two-hour same-head retry floor**. Central OpenCode and
 NVIDIA NIM work can legitimately approach two hours, so an hourly redispatch of
@@ -61,7 +62,8 @@ controls every mutation and merge decision.
 
 ## Credential and model boundary
 
-The queue-scanning caller has only `contents: read`. It maps only the established
+The queue-scanning caller has `contents: read` and job-scoped `id-token: write`
+for the scheduler's OIDC fallback. It maps only the established
 `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` scheduler credentials and
 does not use `secrets: inherit`.
 

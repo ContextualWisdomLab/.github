@@ -18,7 +18,7 @@ def test_contextual_orchestrator_caller_is_hourly_bounded_and_non_cancelling() -
     """The gateway repo receives one realistic repair opportunity without cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "31 * * * *"' in caller
+    assert 'cron: "34 * * * *"' in caller
     assert "group: contextual-orchestrator-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
@@ -35,7 +35,7 @@ def test_contextual_orchestrator_caller_preserves_credentials_and_read_only_scop
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n" not in jobs_scope
+    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
