@@ -7,10 +7,10 @@ A Strix cross-provider fallback to an explicit direct-OpenAI model
 inference endpoint, never through the primary provider's `LLM_API_BASE`. The
 gate now prefers an explicit `STRIX_OPENAI_FALLBACK_API_BASE_FILE` for such
 models. In standalone runs, a caller-supplied `LLM_API_BASE_FILE` remains in
-force for an OpenAI-compatible endpoint; a GitHub Models primary endpoint is
-not inherited. Litellm uses its default `https://api.openai.com/v1` endpoint
-only when no base file is supplied (or when that provider-specific base is
-rejected).
+force for an OpenAI-compatible endpoint; known GitHub Models, NVIDIA NIM, and
+OpenRouter primary endpoints are not inherited. Litellm uses its default
+`https://api.openai.com/v1` endpoint only when no base file is supplied (or
+when that provider-specific base is rejected).
 
 The central workflow writes `https://api.openai.com/v1` into
 `$RUNNER_TEMP/openai_fallback_api_base.txt` and exports
@@ -49,9 +49,10 @@ API-base files: it must be a regular non-symlink file inside the trusted input
 root, must trim to a single `https://` URL, and must not contain whitespace or
 control characters. Absent or empty overrides preserve a caller-supplied
 `LLM_API_BASE_FILE` for standalone local gate runs; when both files are absent,
-litellm selects its default endpoint. A GitHub Models base is explicitly
-rejected for a direct OpenAI model so a missing OpenAI key remains a
-provider-unavailable outcome instead of a configuration error.
+litellm selects its default endpoint. Known GitHub Models, NVIDIA NIM, and
+OpenRouter bases are explicitly rejected for a direct OpenAI model so a
+missing OpenAI key remains a provider-unavailable outcome instead of a
+configuration error.
 
 ## Verification contract
 
@@ -62,7 +63,8 @@ Regression evidence proves that:
 2. without either base file, the resolver returns no base so litellm defaults
    to `https://api.openai.com/v1`;
 3. a standalone caller-supplied custom `LLM_API_BASE_FILE` remains effective;
-4. a GitHub Models primary base is not inherited by a direct-OpenAI fallback;
+4. known GitHub Models, NVIDIA NIM, and OpenRouter primary bases are not
+   inherited by a direct-OpenAI fallback;
 5. NVIDIA NIM primary attempts keep resolving through the NIM edge;
 6. `github_models/*` fallbacks keep their dedicated GitHub Models endpoint;
 7. a non-https override fails configuration (exit 2) instead of scanning;

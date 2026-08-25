@@ -50,6 +50,7 @@ def _resolver_helpers() -> list[str]:
         ("is_vertex_model", gate_source),
         ("is_github_models_model", gate_source),
         ("is_github_models_api_base", gate_source),
+        ("is_known_foreign_provider_api_base", gate_source),
         ("is_github_models_api_compatible_model", gate_source),
         ("is_explicit_openai_model", gate_source),
         ("resolve_trusted_input_file", gate_source),
@@ -150,11 +151,21 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         """A standalone caller's explicit custom endpoint remains effective."""
 
         rc, api_base = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "https://api.example.com/v1"},
+            "openai-direct/gpt-5.4",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "https://api.example.com/v1")
+
+    def test_nvidia_base_is_not_inherited_without_override(self) -> None:
+        """A cross-provider fallback never inherits the NVIDIA NIM base."""
+
+        rc, api_base = _resolve_api_base(
             {"LLM_API_BASE_FILE": "https://integrate.api.nvidia.com/v1"},
             "openai-direct/gpt-5.4",
         )
         self.assertEqual(rc, 0)
-        self.assertEqual(api_base, "https://integrate.api.nvidia.com/v1")
+        self.assertEqual(api_base, "")
 
     def test_direct_openai_without_any_base_uses_default_openai(self) -> None:
         """With no base file, LiteLLM still selects the native OpenAI endpoint."""
