@@ -8,7 +8,7 @@ on:
     # DiagramWeave (12), pg-erd-cloud (13), mhtml-etl-gateway (14),
     # html4tree (15), nonnest2 (16), orchestrator (17), newsdom-api (18),
     # noema (19), github (21), Clearfolio (23), accounting-information-platform (27),
-    # Keyverse (29), Scopeweave (31), DiskSage (37), Appguardrail (41),
+    # Keyverse (29), Scopeweave (31), contextual-orchestrator (34), DiskSage (37), Appguardrail (41),
     # governance-risk-compliance (43), Inkspan (47), fast-mlsirm (49),
     # BandScope (53), orgmetra (58), and semantic-data-portal (59).
     - cron: "2 * * * *"
