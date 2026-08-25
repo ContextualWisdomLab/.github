@@ -58,6 +58,20 @@ assert_file_contains_either() {
 	fi
 }
 
+assert_file_contains_any() {
+	local file_path="$1"
+	local message="$2"
+	shift 2
+
+	for needle in "$@"; do
+		if grep -Fq -- "$needle" "$file_path"; then
+			return
+		fi
+	done
+
+	record_failure "$message (missing all accepted fallback contracts)"
+}
+
 assert_status_permissions_scoped() {
 	local output
 
@@ -168,11 +182,13 @@ assert_file_contains "$gate_script" "NPM_CONFIG_IGNORE_SCRIPTS" "Strix gate disa
 assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardened" "Full Strix harness remains available outside the required path"
 
 assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
-assert_file_contains_either \
+assert_file_contains_any \
 	"$workflow_file" \
+	"Strix tries another NVIDIA hosted model before falling back to direct OpenAI" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.4" \
 	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4" \
-	"Strix tries another NVIDIA hosted model before falling back to direct OpenAI"
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.6-luna" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna"
 assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
