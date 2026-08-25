@@ -693,7 +693,10 @@ jobs:
           echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
       - name: Prepare GitHub Models fallback credentials
-        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
+        # github_models is included because its STRIX_FALLBACK_MODELS chain
+        # ends in openai-direct/gpt-5.4, which needs the direct-OpenAI key and
+        # API base to authenticate and route after the primary is exhausted.
+        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'github_models'
         env:
           GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -725,6 +728,9 @@ jobs:
             openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
             printf '%s' "$openai_trimmed" > "$openai_fallback_key_file"
             echo "STRIX_OPENAI_FALLBACK_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
+            openai_fallback_api_base_file="$RUNNER_TEMP/openai_fallback_api_base.txt"
+            printf '%s' 'https://api.openai.com/v1' > "$openai_fallback_api_base_file"
+            echo "STRIX_OPENAI_FALLBACK_API_BASE_FILE=$openai_fallback_api_base_file" >> "$GITHUB_ENV"
           fi
 
       - name: Prepare Vertex AI credentials
@@ -857,6 +863,7 @@ jobs:
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
+          STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"

@@ -2426,15 +2426,23 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
-	if is_explicit_openai_model "$model" && ! is_explicit_openai_model "$PRIMARY_MODEL"; then
-		# A direct-OpenAI fallback must not inherit a foreign primary provider's
-		# endpoint (for example NVIDIA NIM or OpenRouter).
+	if is_explicit_openai_model "$model" && [ -z "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Without workflow provisioning, an explicit direct-OpenAI model must
+		# still not inherit a foreign primary base: resolve no override so
+		# litellm defaults to https://api.openai.com/v1.
 		return 0
 	fi
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: openai-direct/* candidates must reach the
+		# direct OpenAI API even when the primary provider selected a
+		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
+		# this the fallback hits the primary gateway and 404s.
+		api_base_file="$STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+	elif is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback
 		# attempts must still route through the GitHub Models inference endpoint.
