@@ -283,11 +283,13 @@ def trusted_dispatch_status_artifacts(
     source_root = tmp_path / "source"
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
     runner_temp.mkdir()
+    runner_temp.chmod(0o755)
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"\n".join(DISPATCH_SOURCE_LINES) + b"\n")
 
     changed_files = runner_temp / "opencode-changed-files.txt"
     changed_files.write_text(".github/workflows/opencode-review.yml\n", encoding="utf-8")
+    changed_files.chmod(0o644)
     manifest = runner_temp / "opencode-artifact-manifest.json"
     manifest.write_text(
         json.dumps(
@@ -300,6 +302,7 @@ def trusted_dispatch_status_artifacts(
         ),
         encoding="utf-8",
     )
+    manifest.chmod(0o644)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
