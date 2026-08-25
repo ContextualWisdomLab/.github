@@ -68,7 +68,7 @@ def _extract_neutralization_block(workflow: str) -> str:
     # the raw signal definitions live outside this region; the signal values
     # are injected by _run_gate_tail so the extracted decision logic stays the
     # single tested authority.
-    start_marker = '          strix_neutralization_scope_log="$strix_run_log"'
+    start_marker = '          strix_neutralization_scope_log="$strix_terminal_log"'
     terminal_failure_marker = (
         '          echo "Strix reported security findings or failed for a '
         'non-backend reason; failing the required check'
@@ -114,6 +114,7 @@ def _run_gate_tail(log_text: str) -> int:
             (
                 "set -uo pipefail",
                 'strix_run_log="$1"',
+                'strix_terminal_log="$strix_run_log"',
                 "strix_rc=1",
                 signals,
                 block,
@@ -179,6 +180,8 @@ def _run_gate_retry(gate_script: str) -> tuple[int, int]:
                 "set -uo pipefail",
                 f"export TRUSTED_STRIX_GATE={shlex.quote(str(gate_path))}",
                 "export RUNNER_TEMP=" + shlex.quote(temp_dir),
+                "process_budget_seconds=5400",
+                "export STRIX_TOTAL_TIMEOUT_SECONDS=5700",
                 "export STRIX_GATE_RETRY_BACKOFF_SECONDS=1",
                 signals,
                 region,
@@ -271,6 +274,18 @@ exit 1
         returncode, calls = _run_gate_retry(gate)
         self.assertEqual(returncode, 1)
         self.assertEqual(calls, 1)
+
+    def test_retry_contract_preserves_logs_and_full_attempt_budget(self) -> None:
+        """Retries retain every attempt and reserve the complete gate budget."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_', workflow)
+        self.assertIn('cat "$strix_attempt_log" >> "$strix_run_log"', workflow)
+        self.assertIn(
+            'strix_gate_attempt_budget_seconds="${STRIX_TOTAL_TIMEOUT_SECONDS:-$process_budget_seconds}"',
+            workflow,
+        )
+        self.assertNotIn('remaining_seconds" -lt 600', workflow)
 
 
 if __name__ == "__main__":

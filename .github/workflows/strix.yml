@@ -910,14 +910,20 @@ jobs:
           # deterministic 120-minute job budget, and all-terminal outcomes
           # remain fail-closed.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
+          : > "$strix_run_log"
+          strix_terminal_log="$strix_run_log"
           strix_rc=0
           strix_gate_attempt=1
           strix_gate_deadline=$(( SECONDS + 6000 ))
+          strix_gate_attempt_budget_seconds="${STRIX_TOTAL_TIMEOUT_SECONDS:-$process_budget_seconds}"
           set +e
           while : ; do
-            : > "$strix_run_log"
-            bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_run_log"
+            strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_${strix_gate_attempt}.log"
+            : > "$strix_attempt_log"
+            bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_attempt_log"
             strix_rc="${PIPESTATUS[0]}"
+            cat "$strix_attempt_log" >> "$strix_run_log"
+            strix_terminal_log="$strix_attempt_log"
             if [ "$strix_rc" -eq 0 ]; then
               break
             fi
@@ -929,11 +935,11 @@ jobs:
             # last pipeline-continuation marker, exactly like the terminal
             # classification below: an already-exempted finding before the
             # marker must not mask a retryable outage after it.
-            strix_retry_scope_log="$strix_run_log"
-            if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+            strix_retry_scope_log="$strix_terminal_log"
+            if grep -Fq 'allowing pipeline continuation' "$strix_terminal_log"; then
               strix_retry_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
               awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
-                "$strix_run_log" > "$strix_retry_scope_log"
+                "$strix_terminal_log" > "$strix_retry_scope_log"
             fi
             # A reported vulnerability is authoritative evidence: never retry
             # and never risk downgrading it.
@@ -945,12 +951,13 @@ jobs:
               && ! grep -Eq "$model_behavior_error_signal" "$strix_retry_scope_log"; then
               break
             fi
+            backoff_seconds=$(( ${STRIX_GATE_RETRY_BACKOFF_SECONDS:-90} * strix_gate_attempt ))
+            retry_reserve_seconds=$(( strix_gate_attempt_budget_seconds + backoff_seconds ))
             remaining_seconds=$(( strix_gate_deadline - SECONDS ))
-            if [ "$strix_gate_attempt" -ge 3 ] || [ "$remaining_seconds" -lt 600 ]; then
+            if [ "$strix_gate_attempt" -ge 3 ] || [ "$remaining_seconds" -lt "$retry_reserve_seconds" ]; then
               echo "Provider-unavailable Strix attempt ${strix_gate_attempt} reached the bounded retry limit or the remaining job time budget (${remaining_seconds}s) is too small to retry; failing closed." >&2
               break
             fi
-            backoff_seconds=$(( ${STRIX_GATE_RETRY_BACKOFF_SECONDS:-90} * strix_gate_attempt ))
             echo "Strix provider outage on attempt ${strix_gate_attempt}; retrying after ${backoff_seconds}s backoff." >&2
             sleep "$backoff_seconds"
             strix_gate_attempt=$(( strix_gate_attempt + 1 ))
@@ -972,11 +979,11 @@ jobs:
           # been exempted by the trusted gate. Classify a later provider
           # outage from the tail after the last continuation marker, but keep
           # that incomplete later scan non-passing.
-          strix_neutralization_scope_log="$strix_run_log"
-          if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+          strix_neutralization_scope_log="$strix_terminal_log"
+          if grep -Fq 'allowing pipeline continuation' "$strix_terminal_log"; then
             strix_neutralization_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
             awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
-              "$strix_run_log" > "$strix_neutralization_scope_log"
+              "$strix_terminal_log" > "$strix_neutralization_scope_log"
           fi
 
           # Classify provider/backend exhaustion only when no vulnerability
