@@ -1393,6 +1393,20 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     norm.current_changed_files.cache_clear()
     assert norm.mentions_full_coverage("", no_source_summary)
     assert not norm.contradicts_changed_file_kinds("", no_source_summary)
+
+
+def test_label_section_scans_repeated_labels_once():
+    """Repeated docstring labels do not trigger quadratic rescans or false stops."""
+    text = (
+        ("docstring coverage: 100% " * 500)
+        + "coverage: first evidence "
+        + "coverage: last evidence "
+        + "accessibility/i18n: complete"
+    )
+
+    section = norm.label_section(text, "coverage:")
+
+    assert section == " last evidence "
     suite_passed_summary = FULL_SUMMARY.replace(
         "coverage execution evidence proves 100% test coverage",
         "coverage execution evidence reports supported repository test suites passed",

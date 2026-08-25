@@ -961,34 +961,22 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
 
-    def label_starts(candidate: str) -> list[int]:
-        """Return exact verification-label starts without suffix collisions."""
-        starts = []
-        pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
-        if pattern is None:
-            pattern = re.compile(re.escape(candidate))
-        for match in pattern.finditer(text):
-            index = match.start()
-            if (
-                candidate == "coverage:"
-                and text[max(0, index - 10) : index] == "docstring "
-            ):
-                continue
-            starts.append(index)
-        return starts
+    actual_matches: list[tuple[int, str]] = []
+    for match in ANY_LABEL_PATTERN.finditer(text):
+        candidate = match.group(0)
+        index = match.start()
+        if candidate == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
+            continue
+        actual_matches.append((index, candidate))
 
-    starts = label_starts(label)
+    starts = [index for index, candidate in actual_matches if candidate == label]
     if not starts:
         return ""
     start = starts[-1] + len(label)
 
-    match = ANY_LABEL_PATTERN.search(text, start)
-    while match:
-        idx = match.start()
-        matched_label = match.group(0)
-        if matched_label != label and idx in label_starts(matched_label):
-            return text[start:idx]
-        match = ANY_LABEL_PATTERN.search(text, match.end())
+    for index, candidate in actual_matches:
+        if index >= start and candidate != label:
+            return text[start:index]
 
     return text[start:]
 
