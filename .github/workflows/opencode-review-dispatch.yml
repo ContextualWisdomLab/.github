@@ -2467,7 +2467,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/contextual-orchestrator
-          ref: d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc
+          ref: 838b3de160c341a6f36bf588ae9fcc09989c040c
           path: trusted-contextual-orchestrator
           fetch-depth: 1
           persist-credentials: false
@@ -4070,8 +4070,8 @@ jobs:
                   "apiKey": "{env:OPENAI_API_KEY}"
                 },
                 "models": {
-                  "gpt-5.6-luna": {
-                    "name": "OpenAI GPT-5.6 Luna (direct)",
+                  "gpt-5.4": {
+                    "name": "OpenAI GPT-5.4 (direct)",
                     "tool_call": true,
                     "reasoning": true,
                     "options": {
@@ -4517,17 +4517,13 @@ jobs:
           # or used for product/model improvement, so private repositories
           # include neither NIM nor anonymous free candidates and start at the
           # existing keyed fallback list: OpenCode Zen GPT-5.6 Terra, DeepSeek
-          # V3, the direct GPT-5.6 Luna slot, and pinned PAID
+          # V3, the direct GPT-5.4 slot, and pinned PAID
           # OpenRouter coder models (free-tier candidates hit the shared
           # free-models-per-day cap and hung for the full candidate timeout,
           # so the OpenRouter slots use cheap paid models billed against the
           # org's OpenRouter credits), then the full-size GPT-4.1 long-context
           # endpoint and provider-specific GPT/o3 fallbacks.
-          # The direct-OpenAI slot runs GPT-5.6 Luna: the newest family's
-          # cost-efficient tier, cheaper than the legacy gpt-5 it replaced
-          # ($1/$6 vs $1.25/$10 per 1M tokens) so the org OpenAI budget
-          # stretches further between top-ups.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'contextual-orchestrator/contextual-orchestrator nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'contextual-orchestrator/contextual-orchestrator nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.

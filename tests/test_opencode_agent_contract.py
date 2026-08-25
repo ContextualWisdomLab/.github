@@ -191,7 +191,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "qwen3.6-plus-free"],
         ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.6-luna"],
+        ["openai", "gpt-5.4"],
         ["openrouter", "deepseek/deepseek-v3.2"],
         ["openrouter", "qwen/qwen3-coder"],
         ["github-models", "openai/gpt-4.1"],
@@ -202,7 +202,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "deepseek/deepseek-r1"],
     ]
     assert zen_models == ["gpt-5.6-terra"]
-    assert direct_openai_models == ["gpt-5.6-luna"]
+    assert direct_openai_models == ["gpt-5.4"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
@@ -1747,7 +1747,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         "opencode/gpt-5.6-terra "
         "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
@@ -1895,7 +1895,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "

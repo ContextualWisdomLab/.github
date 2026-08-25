@@ -13,7 +13,7 @@ WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
 RUNNER = ROOT / "scripts/ci/run_opencode_review_model_pool.sh"
 OPENCODE_CONFIG = ROOT / "opencode.jsonc"
 DOCTORING = ROOT / "docs/doctoring/contextual-orchestrator-opencode-gateway.md"
-GATEWAY_COMMIT = "d3a27db0a69f09f245a19a189ec41d3aa2f6b2fc"
+GATEWAY_COMMIT = "838b3de160c341a6f36bf588ae9fcc09989c040c"
 SPDX_MIT_LICENSE_BLOB_SHA = "591bbf197b355e60604618c8a8a50bc5a839b204"
 GATEWAY_CANDIDATE = "contextual-orchestrator/contextual-orchestrator"
 
