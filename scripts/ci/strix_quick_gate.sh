@@ -2475,6 +2475,15 @@ resolved_llm_api_base_for_model() {
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
 	fi
+	# Never let a provider-specific GitHub Models base leak into an explicit
+	# direct-OpenAI fallback when no separate OpenAI override was provisioned.
+	# Other caller-supplied OpenAI-compatible endpoints remain valid standalone
+	# configuration and are intentionally preserved.
+	if is_explicit_openai_model "$model" \
+		&& [ -z "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ] \
+		&& is_github_models_api_base "$llm_api_base_value"; then
+		return 0
+	fi
 	if is_github_models_api_base "$llm_api_base_value" && ! is_github_models_api_compatible_model "$model"; then
 		echo "ERROR: LLM_API_BASE may route through GitHub Models only when STRIX_LLM uses a GitHub Models-compatible model." >&2
 		return 2

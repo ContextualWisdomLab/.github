@@ -7,13 +7,14 @@ Semantic Versioning where the repository publishes a release.
 ## [Unreleased]
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
-  inheriting the primary provider's `LLM_API_BASE`: the workflow now
-  provisions `STRIX_OPENAI_FALLBACK_API_BASE_FILE`
-  (`https://api.openai.com/v1`), the gate prefers it for explicit OpenAI
-  fallback models and otherwise resolves no override so litellm defaults to
-  OpenAI, and a non-https override fails configuration. This removes the
-  NVIDIA-NIM-edge `404 page not found` that made the contracted final
-  fallback unreachable after NIM exhaustion.
+  inheriting a provider-specific primary base: the workflow now provisions
+  `STRIX_OPENAI_FALLBACK_API_BASE_FILE` (`https://api.openai.com/v1`), while
+  standalone caller-supplied `LLM_API_BASE_FILE` values remain honored for
+  OpenAI-compatible endpoints. A GitHub Models base is never inherited, and
+  LiteLLM uses native OpenAI defaults only when no base is supplied. A
+  non-https override fails configuration. This removes the NVIDIA-NIM-edge
+  `404 page not found` that made the contracted final fallback unreachable
+  after NIM exhaustion.
 - Align stale `gpt-5.6-luna` test expectations with the valid `gpt-5.4`
   contract left behind by the earlier model rename.
 - Honor each trusted base project's exact, integrity-bearing pnpm

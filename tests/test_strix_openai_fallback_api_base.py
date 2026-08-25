@@ -163,6 +163,16 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(api_base, "")
 
+    def test_github_models_base_is_not_inherited_without_override(self) -> None:
+        """A cross-provider fallback never inherits GitHub Models routing."""
+
+        rc, api_base = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "https://models.github.ai/inference"},
+            "openai-direct/gpt-5.4",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "")
+
     def test_primary_provider_models_keep_their_base(self) -> None:
         """NVIDIA NIM primary attempts still resolve through the NIM edge."""
 
