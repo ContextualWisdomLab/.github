@@ -136,7 +136,8 @@ repeatable compile command.
   breakout. Do not reintroduce bash fast-path extraction.
 - **Cloudflare changes are dry-run by default**; nothing is deleted unless `prune = true` is set
   explicitly. PRs never see the Cloudflare API token.
-- **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
+- **Org-wide binding conventions** (the commercial license allowlist permits permissive licenses
+  plus the explicit weak-copyleft MPL-2.0 exception — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.

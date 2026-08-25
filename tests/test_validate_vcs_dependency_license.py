@@ -12,6 +12,7 @@ import pytest
 
 
 SCRIPT = Path("scripts/ci/validate_vcs_dependency_license.py")
+MASTER_CONTEXT = Path("docs/CWL-MASTER-CONTEXT.md")
 COMMIT = "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6"
 
 
@@ -91,7 +92,7 @@ class RawOpener:
     ],
 )
 def test_permitted_exact_spdx_identifiers_pass(spdx_id: str) -> None:
-    """Every explicitly governed commercial/permissive SPDX ID passes."""
+    """Every explicitly governed commercially acceptable SPDX ID passes."""
     validator = load_validator()
     opener = FakeOpener(spdx_id)
 
@@ -102,6 +103,15 @@ def test_permitted_exact_spdx_identifiers_pass(spdx_id: str) -> None:
     )
 
 
+def test_canonical_policy_distinguishes_mpl_from_strong_copyleft() -> None:
+    """Canonical prose must not contradict the explicit MPL-2.0 allowlist."""
+    policy = MASTER_CONTEXT.read_text(encoding="utf-8")
+
+    assert "MIT/Apache-2.0/BSD/ISC/MPL-2.0/PostgreSQL" in policy
+    assert "NO GPL/AGPL/strong copyleft/non-commercial" in policy
+    assert "NO GPL/AGPL/copyleft/non-commercial" not in policy
+
+
 @pytest.mark.parametrize(
     "spdx_id",
     ["GPL-3.0-only", "AGPL-3.0-or-later", "LGPL-2.1-only", "NOASSERTION", None],
@@ -109,7 +119,7 @@ def test_permitted_exact_spdx_identifiers_pass(spdx_id: str) -> None:
 def test_disallowed_or_unknown_spdx_identifiers_fail_closed(
     spdx_id: str | None,
 ) -> None:
-    """Copyleft, unknown, and absent metadata never enter the trusted image."""
+    """Strong-copyleft, unknown, and absent metadata never enter the image."""
     validator = load_validator()
 
     with pytest.raises(ValueError, match="not permitted"):
