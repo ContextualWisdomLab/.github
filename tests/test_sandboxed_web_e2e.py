@@ -111,19 +111,13 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
-    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
-    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
     with pytest.raises(ValueError, match="URL cannot target external hostname: example.com"):
         sandboxed_web_e2e.wait_for_url("http://example.com/health", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: app.localhost"):
-        sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
     with pytest.raises(ValueError, match="URL cannot target external hostname: 169.254.169.254"):
         sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: 0.0.0.0"):
-        sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 

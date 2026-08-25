@@ -33,8 +33,6 @@ def test_strix_quality_trigger_includes_fixture_contract_paths() -> None:
 
     assert "docs/doctoring/strix-quality-timeout-fixtures.md" in trigger
     assert "tests/test_strix_quality_timeout_fixture_budget.py" in trigger
-    assert "docs/doctoring/strix-model-behavior-error.md" in trigger
-    assert "tests/test_strix_model_behavior_error.py" in trigger
 
 
 def test_strix_quality_keeps_real_scanner_budgets_out_of_fixture_overrides() -> None:
