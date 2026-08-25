@@ -2,13 +2,15 @@ name: Contextual Orchestrator Hourly Review Repair
 
 on:
   schedule:
-    # Run at minute 17 each hour; the slot is shared with the three-hourly
-    # pr-auto-rebase workflow, so both workflows use independent concurrency groups.
-    - cron: "17 * * * *"
+    # Minute 34 avoids the minute-zero runner surge and every existing sibling
+    # heartbeat (2, 7, 10, 14, 16, 17 central scheduler, 21, 23, 27, 31,
+    # 37, 41, 43, 49, 53, 58, 59).
+    - cron: "34 * * * *"
 
 concurrency:
   group: contextual-orchestrator-hourly-review-repair
-  # A complete exact-head review can exceed one hour; keep it alive for the next heartbeat.
+  # The queue scan is bounded and the worker has its own exact-head lease. Do not
+  # discard an in-flight RCA merely because the next hourly heartbeat arrives.
   cancel-in-progress: false
 
 permissions:
@@ -16,17 +18,20 @@ permissions:
 
 jobs:
   dispatch-review-repair:
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
       target_repository: ContextualWisdomLab/contextual-orchestrator
       base_branch: main
       max_prs: "50"
       max_dispatches: "1"
-      resolve_unreviewed_conflicts: true
+      # Central OpenCode/NVIDIA NIM work can legitimately approach two hours.
+      # A two-hour same-head floor avoids duplicate writers without freezing the
+      # next eligible PR or confusing provider latency with a source-code defect.
       retry_hours: "2"
     secrets:
       PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
       OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+

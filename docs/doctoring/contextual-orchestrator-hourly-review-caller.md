@@ -1,60 +1,126 @@
-# Contextual Orchestrator Hourly Review-Repair Caller
+# Contextual Orchestrator hourly review-repair caller
 
-## Customer action
+## Decision
 
-Keep `ContextualWisdomLab/contextual-orchestrator` on the protected `main`
-branch, then confirm the central autofix gateway contract in
-`ContextualWisdomLab/.github#1168` is merged before enabling this scheduled
-caller. After the caller runs, inspect the target PR's exact-head review,
-Checks, and independent approval; merge only through the protected normal path.
+ContextualWisdomLab operates one protected hourly caller for
+`ContextualWisdomLab/contextual-orchestrator`, the org's LLM gateway consumed by
+gyeot and scopeweave. The caller runs at minute 34, delegates to the
+product-neutral central review-fix scheduler, inspects at most 50 open pull
+requests, and dispatches at most one bounded repair per heartbeat.
 
-## Runtime boundary
+The caller does not implement review or mutation logic itself. It keeps the
+gateway independently operable while centralizing privileged automation in
+`ContextualWisdomLab/.github`. The reusable worker performs exact-head
+root-cause analysis, tests remediation feasibility, and edits only when one
+small reversible action can change the diagnosed cause inside its sealed
+writer authority.
 
-The workflow runs at minute 17 of every hour and calls the central
-`pr-review-fix-scheduler.yml` reusable workflow. It scans at most 50 open PRs,
-dispatches one bounded repair, permits unresolved conflict repair, and waits
-two hours before retrying the same head. Non-cancelling concurrency preserves a
-long-running exact-head OpenCode, Noema, or security operation.
+## Root-cause analysis and remediation feasibility
 
-The caller grants read-only contents access and OIDC token exchange only. It
-forwards the established `PR_REVIEW_MERGE_TOKEN` and
-`OPENCODE_APPROVE_TOKEN` paths explicitly; it does not inherit all secrets and
-does not receive `NVIDIA_NIM_API_KEY` or `COPILOT_GITHUB_TOKEN`. The central
-target allowlist must include `ContextualWisdomLab/contextual-orchestrator` in
-`OPENCODE_REPOSITORY_DISPATCH_TARGETS`.
+An unbounded loop that drains the whole queue, polls checks indefinitely, and
+merges on a single heartbeat is not operationally realistic: one OpenCode or
+GitHub Actions cycle can outlive the next heartbeat, and provider rate limits,
+runner capacity, or protected-setting gaps cannot be repaired by inventing a
+repository change. The gateway's own required Strix gate demonstrated this in
+August 2026 when shared NVIDIA NIM quota turned concurrent per-PR scans into
+fail-closed 429 storms across every open pull request.
 
-## Gateway dependency and evidence
+The caller therefore enforces these transitions:
 
-The reusable scheduler dispatches the default-branch central autofix workflow.
-Merge `ContextualWisdomLab/.github#1168` first so that this caller's write path
-uses the contextual-orchestrator gateway's automatic model discovery and
-bounded OpenCode tool loop. The worker must keep provider credentials in the
-gateway KV boundary and must fail closed when gateway configuration is absent.
+1. Refetch the exact live head, base, reviews, checks, changed paths, and writer
+   state.
+2. Establish the causal chain rather than repeat the terminal symptom.
+3. Enumerate materially distinct minimal remedies.
+4. Reject remedies that lack writer authority, cross sealed paths, require
+   unavailable credentials or protected-setting changes, violate stack order,
+   cannot be verified, or do not alter the diagnosed cause.
+5. Dispatch at most one feasible repair. Otherwise leave the tree unchanged so
+   another eligible pull request can be considered by a later heartbeat.
 
-Every dispatched repair is diagnostic until the target PR's live head is
-revalidated. A changed head invalidates earlier review and Checks evidence.
-Queued, cancelled, unavailable, or synthetic evidence never authorizes a
-merge. A customer should open the target PR, resolve actionable review threads,
-wait for terminal required Checks, obtain an independent review and non-author approval,
-and then use the repository's protected merge control.
+A queued or pending check remains a merge blocker but is not itself a code
+finding. The independent non-author approval remains an external authorization
+gate and is never synthesized by the repair worker.
 
-## Verification
+## Cadence and concurrency
 
-Run the caller contract test and `actionlint` against the exact commit before
-changing the target allowlist or credential bindings:
+The caller uses a single concurrency group and `cancel-in-progress: false`.
+This preserves an in-flight bounded RCA instead of discarding its evidence when
+the next hourly heartbeat arrives. Minute 34 avoids the minute-zero runner surge
+and every existing sibling heartbeat. The organization ledger records minute 34
+for contextual-orchestrator; minute 31 remains reserved for Scopeweave.
 
-```text
-python3 -m pytest -q tests/test_contextual_orchestrator_hourly_review_caller.py
-actionlint .github/workflows/contextual-orchestrator-hourly-review-repair.yml
-```
+The caller sets a **two-hour same-head retry floor**. Central OpenCode and
+NVIDIA NIM work can legitimately approach two hours, so an hourly redispatch of
+the same unchanged head would create duplicate writer pressure rather than
+faster remediation. A later hourly scan can still select another eligible pull
+request.
+
+GitHub scheduled workflows can be delayed under load and execute only from the
+default branch. Consequently, the cron expression is a heartbeat rather than a
+real-time service-level promise. Exact-head state, not elapsed wall-clock time,
+controls every mutation and merge decision.
+
+## Credential and model boundary
+
+The queue-scanning caller has `contents: read` and job-scoped `id-token: write`
+for the scheduler's OIDC fallback. It maps only the established
+`PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` scheduler credentials and
+does not use `secrets: inherit`.
+
+Model execution remains inside the central worker. The model credential is the
+GitHub Secret `NVIDIA_NIM_API_KEY`; the caller does not receive or forward it.
+`COPILOT_GITHUB_TOKEN` is prohibited. GitHub tokens and GitHub Models are not
+model credentials for this write-capable path. The independent review-agent
+credential contract is unchanged; this repository's five-key auto-discovery
+(`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`) flows through its KV registry, not
+through this caller.
+
+## Security, standalone operation, and modularity
+
+The caller adds no contextual-orchestrator runtime dependency, database object,
+network endpoint, tenant authority, or product credential. The gateway continues
+to run as a standalone application. naruon, gyeot, scopeweave, and other CWL
+services may consume its OpenAI-compatible contracts, but they cannot weaken its
+local validation, protected-branch, exact-head, approval, or security gates.
+
+The reusable workflow source is bound to the called workflow repository, SHA,
+ref, and file path before privileged scheduler logic runs. The worker cannot
+approve, merge, release, weaken checks, change reviewer identities, or modify
+protected settings. Queued, pending, absent, failed, cancelled, skipped-required,
+neutral-required, stale-head, or synthetic-merge evidence is not success.
+
+## Verification and rollback
+
+Repository contracts require the exact cron, target repository, one-dispatch
+budget, two-hour retry floor, non-cancelling single-flight policy, read-only
+workflow token, explicit secret mapping, and absence of both
+`NVIDIA_NIM_API_KEY` and `COPILOT_GITHUB_TOKEN` from the caller.
+
+Rollback is a reviewed source change. Do not disable exact-head binding, reduce
+the independent approval requirement, increase dispatch volume, use inherited
+secrets, or convert provider latency into a fabricated code edit. If the
+heartbeat becomes too frequent or too slow, change only the caller cadence and
+retry floor after examining observed run duration and queue throughput; preserve
+the central RCA, feasibility, lease, and credential contracts.
 
 ## APA 7th references
 
-GitHub. (n.d.). *Events that trigger workflows*. Retrieved August 21, 2026,
-from https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+GitHub. (n.d.). *Control the concurrency of workflows and jobs*. Retrieved
+August 24, 2026, from
+https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
 
-GitHub. (n.d.). *Reuse workflows*. Retrieved August 21, 2026, from
-https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
+GitHub. (n.d.). *Events that trigger workflows: Schedule*. Retrieved August 24,
+2026, from
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
 
-OpenCode. (n.d.). *Permissions*. Retrieved August 21, 2026, from
-https://opencode.ai/docs/permissions
+GitHub. (n.d.). *Reuse workflows*. Retrieved August 24, 2026, from
+https://docs.github.com/en/actions/how-tos/sharing-automations/reusing-workflows
+
+NVIDIA. (n.d.). *NVIDIA NIM for large language models documentation*. Retrieved
+August 24, 2026, from
+https://docs.nvidia.com/nim/large-language-models/latest/
+
+OpenCode. (n.d.). *OpenCode documentation*. Retrieved August 24, 2026, from
+https://opencode.ai/docs/
+
