@@ -123,4 +123,3 @@ https://docs.nvidia.com/nim/large-language-models/latest/
 
 OpenCode. (n.d.). *OpenCode documentation*. Retrieved August 24, 2026, from
 https://opencode.ai/docs/
-

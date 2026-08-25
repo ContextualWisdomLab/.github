@@ -86,4 +86,3 @@ def test_focused_quality_workflow_tracks_contextual_orchestrator_contracts() -> 
     assert quality.count(
         "tests/test_contextual_orchestrator_hourly_review_caller.py"
     ) == 3
-
