@@ -1001,6 +1001,21 @@ def test_validate_head_pnpm_lock_accepts_multi_key_resolution_mappings() -> None
         )
 
 
+def test_validate_head_pnpm_lock_accepts_fetch_words_in_deprecation_text() -> None:
+    """Metadata prose cannot be reclassified as an artifact source declaration."""
+    integrity = "sha512-" + ("F" * 86) + "=="
+    content = (
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  example@1.0.0:\n"
+        f"    resolution: {{integrity: {integrity}}}\n"
+        "    deprecated: migrate from git+https://example.invalid/source; "
+        "the tarball: note is informational only\n"
+    )
+    materializer.validate_head_pnpm_lock(
+        "pnpm-lock.yaml", content.encode("utf-8")
+    )
+
 def test_validate_head_pnpm_lock_rejects_empty_and_git_sources() -> None:
     """Empty locks and VCS fetch sources fail closed."""
     with pytest.raises(ValueError, match="empty"):
