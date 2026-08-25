@@ -154,7 +154,7 @@ preserve_attempt_log() {
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
-		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		if [ -z "$report_root" ] || { [ ! -d "$report_root" ] && [ ! -f "$report_root" ]; } || [ -L "$report_root" ]; then
 			continue
 		fi
 		python3 - "$report_root" <<'PY'
@@ -179,6 +179,9 @@ known_scanner_warning = re.compile(
 
 
 def iter_report_logs(root: Path):
+    if root.is_file() and root.suffix == ".log":
+        yield root
+        return
     for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current_root)
         dir_names[:] = [
@@ -2805,7 +2808,7 @@ PY
 	fi
 	preserve_attempt_log "$model" "$rc"
 
-	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1

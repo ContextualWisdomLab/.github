@@ -4558,6 +4558,8 @@ EOS
 		esac
 		;;
 	report-known-internal-warning-sanitized)
+		printf '%s\n' '│  MODEL QUALITY WARNING                                                       │'
+		echo 'Warning: You are sending unauthenticated requests to the HF Hub.'
 		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning/strix.log" <<'EOS'
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal agent coordination note
