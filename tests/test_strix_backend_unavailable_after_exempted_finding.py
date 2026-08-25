@@ -236,6 +236,31 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
 
         self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 1)
 
+    def test_each_attempt_is_capped_by_the_remaining_outer_deadline(self) -> None:
+        """A late retry cannot inherit a fresh 5700-second gate budget."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        region = _extract_retry_loop_region(workflow)
+        before_gate, _ = region.split(
+            'bash "$TRUSTED_STRIX_GATE"', maxsplit=1
+        )
+        self.assertIn(
+            "remaining_seconds=$(( strix_gate_deadline - SECONDS ))",
+            before_gate,
+        )
+        self.assertIn(
+            "attempt_budget_seconds=$(( remaining_seconds - 300 ))",
+            before_gate,
+        )
+        self.assertIn(
+            'export "STRIX_TOTAL_${budget_suffix}_SECONDS=$attempt_budget_seconds"',
+            before_gate,
+        )
+        self.assertIn(
+            'export "STRIX_PROCESS_${budget_suffix}_SECONDS=$attempt_process_budget_seconds"',
+            before_gate,
+        )
+
     def test_exempted_finding_then_outage_recovers_on_second_attempt(self) -> None:
         """An exempt finding before continuation must not block outage retry."""
 
