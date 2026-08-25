@@ -818,3 +818,181 @@ def test_script_entrypoint_exits_through_main(
     with pytest.raises(SystemExit) as raised:
         runpy.run_path(str(module_path), run_name="__main__")
     assert raised.value.code == 1
+
+
+def _bounded_head_pnpm_lock() -> str:
+    """Return a realistic registry- and integrity-bounded pnpm lockfile body."""
+    return (
+        "lockfileVersion: '9.0'\n"
+        "\n"
+        "settings:\n"
+        "  autoInstallPeers: true\n"
+        "\n"
+        "packages:\n"
+        "  fast-uri@3.1.5:\n"
+        "    resolution: {integrity: sha512-" + ("B" * 86) + "==}\n"
+        "\n"
+        "snapshots:\n"
+        "  fast-uri@3.1.5: {}\n"
+    )
+
+
+def pnpm_head_fixture_repo(tmp_path: Path) -> tuple[Path, str]:
+    """Create a pnpm repository whose head raises a dependency floor."""
+    repo = tmp_path / "pnpm-head-repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+
+    frontend = repo / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text(
+        json.dumps({"packageManager": "pnpm@11.5.3"}) + "\n",
+        encoding="utf-8",
+    )
+    (frontend / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  fast-uri@3.1.4:\n"
+        "    resolution: {integrity: sha512-" + ("A" * 86) + "==}\n"
+        "\n"
+        "snapshots:\n"
+        "  fast-uri@3.1.4: {}\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "pnpm base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "frontend" / "package.json").write_text(
+        json.dumps({"packageManager": "pnpm@11.5.3"}) + "\n",
+        encoding="utf-8",
+    )
+    (repo / "frontend" / "pnpm-lock.yaml").write_text(
+        _bounded_head_pnpm_lock(),
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "pnpm bounded head")
+    return repo, base_sha
+
+
+def test_materializes_strict_changed_head_pnpm_lock_after_base(
+    tmp_path: Path,
+) -> None:
+    """A registry- and hash-bounded head pnpm lock joins the trusted store."""
+    repo, base_sha = pnpm_head_fixture_repo(tmp_path)
+    head_sha = git(repo, "rev-parse", "HEAD")
+    output = tmp_path / "output"
+
+    manifest = materializer.materialize(repo, base_sha, output, head_sha=head_sha)
+
+    assert {entry["revision_sha"] for entry in manifest} == {base_sha, head_sha}
+    head_entry = next(
+        entry
+        for entry in manifest
+        if entry["revision_sha"] == head_sha and entry["source"] == "frontend/pnpm-lock.yaml"
+    )
+    assert head_entry["lock_blob"] == git(
+        repo, "rev-parse", f"{head_sha}:frontend/pnpm-lock.yaml"
+    )
+    assert (
+        output / head_entry["directory"] / "pnpm-lock.yaml"
+    ).read_text(encoding="utf-8") == _bounded_head_pnpm_lock()
+
+
+def test_unchanged_head_pnpm_lock_is_not_materialized_twice(
+    tmp_path: Path,
+) -> None:
+    """An unchanged head pnpm lock reuses the exact base cache entry."""
+    repo, base_sha = pnpm_head_fixture_repo(tmp_path)
+
+    manifest = materializer.materialize(
+        repo,
+        base_sha,
+        tmp_path / "output",
+        head_sha=base_sha,
+    )
+
+    assert len(manifest) == 1
+    assert manifest[0]["revision_sha"] == base_sha
+
+
+def test_rejects_malformed_changed_head_pnpm_lock(tmp_path: Path) -> None:
+    """A head pnpm lock without an integrity pin cannot enter the store."""
+    repo, base_sha = pnpm_head_fixture_repo(tmp_path)
+    (repo / "frontend" / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\npackages:\n  hostile@9.9.9: {}\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "hostile pnpm head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="has no resolution entry"):
+        materializer.materialize(repo, base_sha, tmp_path / "output", head_sha=head_sha)
+
+
+def test_rejects_off_registry_tarball_in_changed_head_pnpm_lock(
+    tmp_path: Path,
+) -> None:
+    """A non-npmjs tarball source is refused before image build."""
+    repo, base_sha = pnpm_head_fixture_repo(tmp_path)
+    (repo / "frontend" / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  evil@1.0.0:\n"
+        "    resolution: {tarball: https://evil.invalid/evil/-/evil-1.0.0.tgz,"
+        " integrity: sha512-" + ("C" * 86) + "==}\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "off-registry tarball head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="must resolve from https"):
+        materializer.materialize(repo, base_sha, tmp_path / "output", head_sha=head_sha)
+
+
+def test_rejects_unsafe_workspace_link_in_changed_head_pnpm_lock(
+    tmp_path: Path,
+) -> None:
+    """Workspace links must stay inside the project tree."""
+    repo, base_sha = pnpm_head_fixture_repo(tmp_path)
+    (repo / "frontend" / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  escape@1.0.0:\n"
+        "    resolution: {directory: ../../secrets, link: true}\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "escaping workspace link head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="unsafe directory target"):
+        materializer.materialize(repo, base_sha, tmp_path / "output", head_sha=head_sha)
+
+
+def test_validate_head_pnpm_lock_accepts_bounded_lock() -> None:
+    """The validator accepts exactly the lock shape the store can prefetch."""
+    materializer.validate_head_pnpm_lock(
+        "pnpm-lock.yaml", _bounded_head_pnpm_lock().encode("utf-8")
+    )
+
+
+def test_validate_head_pnpm_lock_rejects_empty_and_git_sources() -> None:
+    """Empty locks and VCS fetch sources fail closed."""
+    with pytest.raises(ValueError, match="empty"):
+        materializer.validate_head_pnpm_lock("pnpm-lock.yaml", b"")
+    with pytest.raises(ValueError, match="must resolve from https"):
+        content = (
+            "lockfileVersion: '9.0'\n"
+            "packages:\n"
+            "  gitdep@1.0.0:\n"
+            "    resolution: {tarball: https://codeload.github.com/example/example/tar.gz/abc123,"
+            " integrity: sha512-" + ("D" * 86) + "==}\n"
+            "    # git+https://example.invalid/example.git\n"
+        )
+        materializer.validate_head_pnpm_lock("pnpm-lock.yaml", content.encode("utf-8"))

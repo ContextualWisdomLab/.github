@@ -1430,6 +1430,17 @@ jobs:
             writable_npm_cache_dir="$destination"
           }
 
+          trusted_manifest_records_lock_revision() {
+            local relative_lock="$1"
+            local head_blob="$2"
+            jq -e \
+              --arg source "$relative_lock" \
+              --arg revision "$PR_HEAD_SHA" \
+              --arg blob "$head_blob" \
+              'any(.[]; .source == $source and .revision_sha == $revision and .lock_blob == $blob)' \
+              /opt/javascript-package-locks/manifest.json >/dev/null 2>&1
+          }
+
           trusted_pnpm_lock_matches_base() {
             local relative_dir
             local relative_lock
@@ -1455,10 +1466,6 @@ jobs:
               return 1
             fi
 
-            base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}" 2>/dev/null)" || {
-              echo "::error::Validated base does not contain ${relative_lock}; refusing to trust a PR-added lockfile."
-              return 1
-            }
             head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}" 2>/dev/null)" || {
               echo "::error::Validated head does not contain ${relative_lock}."
               return 1
@@ -1470,10 +1477,27 @@ jobs:
               echo "::error::Could not hash current pnpm lock ${relative_lock}."
               return 1
             }
-            if [ "$base_blob" != "$head_blob" ] || [ "$head_blob" != "$worktree_blob" ]; then
-              echo "::error::Current pnpm lock ${relative_lock} differs from the validated base; refusing --trust-lockfile for PR-controlled dependency resolution."
+            if [ "$head_blob" != "$worktree_blob" ]; then
+              echo "::error::Current pnpm lock ${relative_lock} does not match the validated HEAD; refusing --trust-lockfile because the coverage source artifact was tampered with."
               return 1
             fi
+
+            base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}" 2>/dev/null)" || base_blob=""
+            if [ -n "$base_blob" ] && [ "$base_blob" = "$head_blob" ]; then
+              return 0
+            fi
+
+            # A PR-mutated lock is trusted only when the trusted materializer
+            # recorded this exact lock blob from the validated HEAD revision.
+            # That record proves the offline store was prefetched from the same
+            # hash-bounded lock (registry- and integrity-validated at image
+            # build), so a frozen offline install cannot resolve anything else.
+            if trusted_manifest_records_lock_revision "$relative_lock" "$head_blob"; then
+              return 0
+            fi
+
+            echo "::error::Current pnpm lock ${relative_lock} differs from the validated base and was not materialized from the validated HEAD; refusing --trust-lockfile for PR-controlled dependency resolution."
+            return 1
           }
 
           prepare_writable_pnpm_store() {

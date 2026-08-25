@@ -6,6 +6,14 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 
+- Trust a PR-mutated `pnpm-lock.yaml` in OpenCode coverage evidence only when
+  the trusted materializer recorded that exact lock blob from the validated
+  HEAD revision: materialization now validates changed head pnpm locks
+  fail-closed (one SHA-512 SRI per package, HTTPS registry.npmjs.org tarballs
+  only, relative in-project workspace links), and the sandbox consults the
+  trusted manifest record while keeping worktree-vs-HEAD tamper evidence.
+  Dependency-raising security PRs no longer fail coverage-evidence solely for
+  mutating their lockfile.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification
