@@ -276,7 +276,15 @@ jobs:
             "")
               is_private=""
               for target_visibility_attempt in 1 2 3 4 5 6; do
-                if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
+                if is_private="$(
+                  gh api "repos/${TARGET_REPOSITORY}" --jq '
+                    (.visibility // "" | ascii_downcase) as $visibility
+                    | if $visibility == "public" then "false"
+                      elif $visibility == "private" or $visibility == "internal" then "true"
+                      else empty
+                      end
+                  '
+                )"; then
                   break
                 fi
                 is_private=""
