@@ -3,10 +3,10 @@
 # automatic model fallback, transient-error retry, and severity-based
 # pass/fail decisions.
 #
-# STRIX_LOG is a per-attempt temp file consumed only by
-# is_transient_same_model_retry_error(); cumulative report dirs in
-# STRIX_REPORTS_DIR are never overwritten.  Refer to ARCHITECTURE.md
-# for the 3-tier timeout classification hierarchy.
+# RAW_STRIX_LOG is the immutable per-attempt console evidence. STRIX_LOG points
+# to it while the scanner runs, then to a private sanitized classification copy.
+# Cumulative report dirs in STRIX_REPORTS_DIR are never overwritten. Refer to
+# ARCHITECTURE.md for the 3-tier timeout classification hierarchy.
 set -euo pipefail
 
 SCRIPT_DIR="$({ CDPATH='' && cd -P -- "$(dirname -- "$0")" && pwd -P; })"
@@ -25,7 +25,9 @@ RAW_SCAN_MODE="${STRIX_SCAN_MODE:-quick}"
 SCAN_MODE=""
 ARTIFACT_REPORTS_DIR="$REPO_ROOT/strix_runs"
 STRIX_RUNTIME_DIR="$(mktemp -d /tmp/strix-runtime.XXXXXX)"
-STRIX_LOG="$STRIX_RUNTIME_DIR/strix.log"
+RAW_STRIX_LOG="$STRIX_RUNTIME_DIR/strix.log"
+STRIX_CLASSIFICATION_LOG="$STRIX_RUNTIME_DIR/strix-classification.log"
+STRIX_LOG="$RAW_STRIX_LOG"
 ACTIVE_REPORTS_DIR="$STRIX_RUNTIME_DIR/reports"
 ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
 STRIX_SCAN_WORKING_DIR="$STRIX_RUNTIME_DIR/scan-cwd"
@@ -128,8 +130,8 @@ publish_artifact_reports() {
 	if [ -d "$ATTEMPT_LOGS_DIR" ] && [ ! -L "$ATTEMPT_LOGS_DIR" ]; then
 		cp -R -- "$ATTEMPT_LOGS_DIR" "$ARTIFACT_REPORTS_DIR/gate-attempts"
 	fi
-	if [ -f "$STRIX_LOG" ] && [ ! -L "$STRIX_LOG" ]; then
-		cp -- "$STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
+	if [ -f "$RAW_STRIX_LOG" ] && [ ! -L "$RAW_STRIX_LOG" ]; then
+		cp -- "$RAW_STRIX_LOG" "$ARTIFACT_REPORTS_DIR/gate-last-attempt.log"
 	fi
 	# Relative scanner output is copied into ACTIVE_REPORTS_DIR immediately
 	# after each attempt and sanitized before this publication trap runs.
@@ -215,8 +217,8 @@ PY
 	done
 }
 
-# Strips the same benign MODEL QUALITY WARNING startup banner (see above)
-# from the raw Strix console transcript so has_detected_infrastructure_error
+# Strips the same benign MODEL QUALITY WARNING startup heading (see above)
+# from the private classification copy so has_detected_infrastructure_error
 # does not mistake it for a real provider/infrastructure failure signal.
 sanitize_strix_console_log() {
 	local log_path="$1"
@@ -301,7 +303,7 @@ has_strix_report_provider_failure_signal() {
 # shellcheck disable=SC2317,SC2329  # invoked from EXIT/INT/TERM trap
 cleanup_runtime() {
 	publish_artifact_reports || true
-	rm -f "$STRIX_LOG"
+	rm -f "$RAW_STRIX_LOG" "$STRIX_CLASSIFICATION_LOG"
 	rm -rf "$STRIX_RUNTIME_DIR"
 	local scope_dir
 	for scope_dir in "${PULL_REQUEST_SCOPE_DIRS[@]}"; do
@@ -2557,6 +2559,10 @@ run_strix_once() {
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
+	# Every invocation writes an untouched raw console transcript. Classifiers
+	# switch to a sanitized private copy only after the raw attempt is archived.
+	STRIX_LOG="$RAW_STRIX_LOG"
+	rm -f -- "$STRIX_CLASSIFICATION_LOG"
 	if [ "$RUN_START_EPOCH" -le 0 ]; then
 		RUN_START_EPOCH="$(date +%s)"
 	fi
@@ -2835,6 +2841,8 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
+	cp -- "$RAW_STRIX_LOG" "$STRIX_CLASSIFICATION_LOG"
+	STRIX_LOG="$STRIX_CLASSIFICATION_LOG"
 	sanitize_strix_console_log "$STRIX_LOG"
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"

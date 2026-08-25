@@ -5933,6 +5933,19 @@ PY
 			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
+	if [ "$scenario" = "console-model-quality-warning-banner-sanitized" ]; then
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
+			"MODEL QUALITY WARNING" \
+			"scenario=$scenario preserves the raw last-attempt console artifact"
+		local raw_attempt_log=""
+		raw_attempt_log="$(find "$repo_root_dir/strix_runs/gate-attempts" -type f -name '*.log' -print -quit 2>/dev/null || true)"
+		assert_file_contains \
+			"$raw_attempt_log" \
+			"MODEL QUALITY WARNING" \
+			"scenario=$scenario preserves the raw per-attempt console artifact"
+	fi
+
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
 		assert_file_contains \
 			"$output_log" \
