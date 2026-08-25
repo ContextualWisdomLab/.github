@@ -1319,6 +1319,16 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     )
     assert 'git push origin "HEAD:${PR_HEAD_REF}"' not in worker
 
+    for protected_path in (
+        "backend/core/local_http.py",
+        "backend/core/url_validation.py",
+        "backend/tests/test_local_http.py",
+        "backend/tests/test_url_validation.py",
+        "docs/doctoring/local-http-origin-port-validation.md",
+    ):
+        assert protected_path in worker
+    assert "Autofix cannot delete or rename protected security-contract path" in worker
+
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
         encoding="utf-8"

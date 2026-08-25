@@ -494,6 +494,29 @@ jobs:
               exit 1
             fi
           done
+
+          # Security-contract files may be edited only when a review explicitly
+          # names them, but an autofix must never delete or rename them. This
+          # keeps an unrelated optimization from removing origin validation,
+          # its regression evidence, or the standards record.
+          protected_security_paths=(
+            "backend/core/local_http.py"
+            "backend/core/url_validation.py"
+            "backend/tests/test_local_http.py"
+            "backend/tests/test_url_validation.py"
+            "docs/doctoring/local-http-origin-port-validation.md"
+          )
+          for protected_path in "${protected_security_paths[@]}"; do
+            while IFS=$'\t' read -r status _; do
+              case "$status" in
+                D|R*)
+                  echo "::error::Autofix cannot delete or rename protected security-contract path: $protected_path"
+                  exit 1
+                  ;;
+              esac
+            done < <(git diff --name-status -- "$protected_path")
+          done
+
           changed_python_files=()
           changed_workflows=()
           for changed_file in "${changed_files[@]}"; do
