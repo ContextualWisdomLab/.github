@@ -1438,7 +1438,7 @@ jobs:
               --arg manager "pnpm" \
               --arg revision "${PR_HEAD_SHA,,}" \
               --arg blob "${head_blob,,}" \
-              'any(.[]; .source == $source and .package_manager == $manager and .revision_sha == $revision and .lock_blob == $blob)' \
+              'any(.[]; .source == $source and (.package_manager | startswith($manager + "@")) and .revision_sha == $revision and .lock_blob == $blob)' \
               /opt/javascript-package-locks/manifest.json >/dev/null 2>&1
           }
 
