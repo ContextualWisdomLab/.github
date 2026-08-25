@@ -70,6 +70,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Restricted sandboxed web E2E readiness polling to standard-library-classified
+  loopback addresses and literal `localhost`, including IPv6 `::1` and the
+  complete IPv4 loopback block, while rejecting userinfo, missing hosts,
+  IPv4-mapped public addresses, unspecified bind addresses, and metadata
+  destinations before any request is opened.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
