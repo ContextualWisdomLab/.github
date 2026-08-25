@@ -5,7 +5,18 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-
+- Route Strix cross-provider fallbacks to explicit direct-OpenAI models
+  (`openai-direct/...`) through the OpenAI inference endpoint instead of
+  inheriting a provider-specific primary base: the workflow now provisions
+  `STRIX_OPENAI_FALLBACK_API_BASE_FILE` (`https://api.openai.com/v1`), while
+  standalone caller-supplied `LLM_API_BASE_FILE` values remain honored for
+  OpenAI-compatible endpoints. Known GitHub Models, NVIDIA NIM, and OpenRouter
+  bases are never inherited, and LiteLLM uses native OpenAI defaults only when
+  no base is supplied. A non-https override fails configuration. This removes the NVIDIA-NIM-edge
+  `404 page not found` that made the contracted final fallback unreachable
+  after NIM exhaustion.
+- Align stale `gpt-5.6-luna` test expectations with the valid `gpt-5.4`
+  contract left behind by the earlier model rename.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification
@@ -69,6 +80,15 @@ Semantic Versioning where the repository publishes a release.
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
 
 ### Fixed
+
+- Resolve Strix visibility from the trusted GitHub event for ordinary push,
+  schedule, and pull-request runs, reserving API retries for cross-repository
+  dispatches whose workflow token may not see the target repository.
+- Reconciled the Strix required-workflow smoke contract and the privileged
+  OpenCode model pool with the current `gpt-5.4` direct-OpenAI fallback after
+  `gpt-5.6-luna` was retired. This prevents every consumer repository's
+  required Strix check from failing on a stale central assertion or selecting a
+  nonexistent direct model.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
