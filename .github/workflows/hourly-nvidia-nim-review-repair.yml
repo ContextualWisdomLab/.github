@@ -7,6 +7,7 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
+      - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
@@ -32,6 +33,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_contextual_orchestrator_hourly_review_caller.py
       - tests/test_afipc_hourly_review_caller.py
       - tests/test_appguardrail_hourly_review_caller.py
       - tests/test_macos_utility_packs_hourly_review_caller.py
@@ -60,6 +62,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/contextual-orchestrator-hourly-review-caller.md
       - docs/doctoring/afipc-hourly-review-caller.md
       - docs/doctoring/appguardrail-hourly-review-caller.md
       - docs/doctoring/macos-utility-packs-hourly-review-caller.md
@@ -69,6 +72,7 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
+      - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
@@ -94,6 +98,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_contextual_orchestrator_hourly_review_caller.py
       - tests/test_afipc_hourly_review_caller.py
       - tests/test_appguardrail_hourly_review_caller.py
       - tests/test_macos_utility_packs_hourly_review_caller.py
@@ -122,6 +127,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/contextual-orchestrator-hourly-review-caller.md
       - docs/doctoring/afipc-hourly-review-caller.md
       - docs/doctoring/appguardrail-hourly-review-caller.md
       - docs/doctoring/macos-utility-packs-hourly-review-caller.md
@@ -182,6 +188,7 @@ jobs:
             tests/test_orgmetra_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
             tests/test_quarantine_sandbox_hourly_review_caller.py \
+            tests/test_contextual_orchestrator_hourly_review_caller.py \
             tests/test_afipc_hourly_review_caller.py \
             tests/test_appguardrail_hourly_review_caller.py \
             tests/test_macos_utility_packs_hourly_review_caller.py \
