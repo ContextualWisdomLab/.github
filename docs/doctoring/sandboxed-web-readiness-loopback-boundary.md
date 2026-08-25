@@ -6,7 +6,10 @@
 `require_loopback_readiness_url` accepts it. The accepted destinations are
 literal `localhost` (a trailing FQDN dot is stripped) or an address that
 Python's standard-library `ipaddress` module classifies as loopback after
-IPv4-mapped IPv6 addresses are unwrapped. Redirects remain disabled.
+IPv4-mapped IPv6 addresses are unwrapped. Literal `localhost` is then
+resolved; every A/AAAA answer must itself be loopback, so a poisoned hosts
+file cannot smuggle a public address through the name allowlist. Redirects
+remain disabled.
 
 This supports the complete IPv4 loopback block, including `127.0.0.2`, and
 IPv6 `::1`. It rejects `0.0.0.0`, `::`, public hosts, `.localhost`
@@ -37,17 +40,17 @@ The regression exercises literal `localhost`, a trailing-dot `localhost.`,
 `127.0.0.1`, another address in `127.0.0.0/8`, IPv6 `::1`, mapped loopback
 `::ffff:127.0.0.1`, an unspecified address, a `.localhost` subdomain, a
 public hostname, the common cloud metadata address, mapped public IPv6,
-userinfo, and a missing host. Only the literal name avoids another DNS
-resolution boundary. The existing no-redirect test continues to prove that
-an allowed readiness endpoint cannot redirect the poller across the
-boundary.
+userinfo, a missing host, and poisoned localhost resolution (public A,
+mapped public AAAA, empty answers, resolver errors, and non-IP answers).
+The existing no-redirect test continues to prove that an allowed readiness
+endpoint cannot redirect the poller across the boundary.
 
 ```mermaid
 flowchart TD
   Url["Readiness URL"]
   Scheme{"http or https?"}
   Userinfo{"userinfo present?"}
-  Host{"localhost or loopback IP after mapped unwrap?"}
+  Host{"loopback IP, or localhost whose every resolved answer is loopback?"}
   Open["Poll with redirects disabled"]
   Reject["Fail closed before any request"]
 

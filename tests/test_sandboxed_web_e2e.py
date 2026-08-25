@@ -261,6 +261,56 @@ def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path)
     sandboxed_web_e2e.stop_service(exited_service)
 
 
+def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
+    """Literal localhost is allowed only when every resolved address is loopback."""
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited.wait(timeout=5)
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("8.8.8.8", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", lambda host, port: [])
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    def _unresolved(host, port):
+        raise socket.gaierror("name not known")
+
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", _unresolved)
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("not-an-ip", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("::ffff:8.8.8.8", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("::ffff:127.0.0.1", 0))],
+    )
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
+    sandboxed_web_e2e.stop_service(exited_service)
+
+
 def test_no_redirect_handler_raises_httperror_without_following():
     """Readiness checks must raise HTTPError on redirects to prevent attacker-controlled internal URLs."""
     import urllib.error
