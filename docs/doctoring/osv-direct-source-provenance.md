@@ -14,8 +14,9 @@ facts agree:
 2. the pnpm package key and `resolution.tarball` canonical HTTPS URL;
 3. the official `cdn.sheetjs.com` origin and versioned release path;
 4. one valid SHA-512 integrity receipt; and
-5. an advisory-provided, machine-checkable exclusive affected upper bound that
-   the exact artifact version is outside.
+5. an advisory-provided, machine-checkable affected upper bound (`<` or `<=`)
+   that the exact artifact version is outside. Equality at a `<=` boundary
+   remains affected.
 
 An affected version remains a finding. Missing integrity, an unknown host,
 version disagreement, malformed JSON or an absent/ambiguous affected range is
