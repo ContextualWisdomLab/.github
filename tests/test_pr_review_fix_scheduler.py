@@ -163,6 +163,22 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     assert payload["autofix_dispatches"] == 1
 
 
+def test_process_queue_can_repair_stacked_prs_when_caller_selects_all_bases(monkeypatch, capsys):
+    """An explicit wildcard includes reviewed stacked heads without changing other callers."""
+    pr = make_pr(baseRefName="feature-base")
+    calls = []
+
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("current-head OpenCode requested changes",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "dispatch_autofix", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+
+    assert fix.main(["--repo", "owner/repo", "--base-branch", "*", "--dry-run"]) == 0
+    assert len(calls) == 1
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["autofix_dispatches"] == 1
+
+
 def test_autofix_context_filters_outdated_threads_and_renders_checks():
     """The context helper filters stale threads and renders compact checks."""
     assert context.repo_parts("owner/repo") == ("owner", "repo")

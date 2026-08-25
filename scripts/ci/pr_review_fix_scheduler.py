@@ -104,6 +104,11 @@ def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
     return ((pr.get("headRepository") or {}).get("nameWithOwner") or "") == repo
 
 
+def matches_base_branch(pr: dict[str, Any], base_branch: str) -> bool:
+    """Match one base branch, or every base when the caller explicitly uses ``*``."""
+    return base_branch == "*" or pr.get("baseRefName") == base_branch
+
+
 def latest_current_head_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
     """Return the newest OpenCode review for the current head, if present."""
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
@@ -293,7 +298,7 @@ def inspect_pr(
     number = int(pr["number"])
     if pr.get("isDraft"):
         return "skip", ("draft PR",)
-    if pr.get("baseRefName") != args.base_branch:
+    if not matches_base_branch(pr, args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
         )
@@ -363,7 +368,7 @@ def process_queue(args: argparse.Namespace) -> int:
     for pr in prs:
         if pr.get("isDraft"):
             continue
-        if pr.get("baseRefName") != args.base_branch:
+        if not matches_base_branch(pr, args.base_branch):
             continue
         if not same_repository_head(args.repo, pr):
             continue

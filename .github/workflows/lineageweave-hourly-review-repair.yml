@@ -21,7 +21,8 @@ jobs:
     uses: ./.github/workflows/pr-review-fix-scheduler.yml
     with:
       target_repository: ContextualWisdomLab/LineageWeave
-      base_branch: main
+      # LineageWeave uses stacked PRs; repair reviewed heads on every base.
+      base_branch: "*"
       max_prs: "50"
       max_dispatches: "1"
       # Strix, coverage-source-tree, and the full backend suite can exceed one

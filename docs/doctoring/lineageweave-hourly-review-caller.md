@@ -2,8 +2,10 @@
 
 The central repository owns the bounded hourly review-repair caller for
 `ContextualWisdomLab/LineageWeave`. It invokes the reusable scheduler with the
-protected `main` branch, inspects at most 50 open pull requests, and dispatches
-at most one repair per heartbeat.
+explicit all-base selector because LineageWeave uses stacked pull requests,
+inspects at most 50 open pull requests, and dispatches at most one repair per
+heartbeat. Merge automation remains protected-`main`-only in the separate
+central merge scheduler.
 
 LineageWeave uses minute `4`, which is reserved for this product in the shared
 heartbeat registry. Minute `47` belongs to Inkspan and must not be reused here.

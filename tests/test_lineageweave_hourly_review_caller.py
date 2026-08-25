@@ -1,5 +1,6 @@
-from pathlib import Path
+"""Contracts for the LineageWeave stacked-PR hourly repair caller."""
 
+from pathlib import Path
 
 CALLER = Path(".github/workflows/lineageweave-hourly-review-repair.yml")
 REUSABLE_SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
@@ -22,7 +23,7 @@ def test_lineageweave_uses_reserved_heartbeat_and_target() -> None:
         in jobs_scope
     )
     assert "target_repository: ContextualWisdomLab/LineageWeave" in caller
-    assert "base_branch: main" in caller
+    assert 'base_branch: "*"' in caller
     assert 'max_prs: "50"' in caller
     assert 'max_dispatches: "1"' in caller
     assert 'retry_hours: "2"' in caller
