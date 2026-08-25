@@ -29,8 +29,8 @@ NPM_REGISTRY_HOST = "registry.npmjs.org"
 SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 PNPM_PACKAGE_ENTRY_RE = re.compile(r"^  ([^ #][^:]*):(?:\s.*)?$")
 PNPM_RESOLUTION_RE = re.compile(r"resolution:\s*\{(.*)\}\s*$")
-PNPM_TARBALL_RE = re.compile(r"tarball:\s*(\S+)")
-PNPM_INTEGRITY_RE = re.compile(r"integrity:\s*(\S+)")
+PNPM_TARBALL_RE = re.compile(r"tarball:\\s*([^,\\s}]+)")
+PNPM_INTEGRITY_RE = re.compile(r"integrity:\\s*([^,\\s}]+)")
 PNPM_DIRECTORY_RE = re.compile(r"directory:\s*\"?([^,\"}]+)\"?")
 PNPM_LINK_TRUE_RE = re.compile(r"link:\s*true\b")
 
