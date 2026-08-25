@@ -177,6 +177,8 @@ def _run_gate_retry(gate_script: str) -> tuple[int, int]:
         script = "\n".join(
             (
                 "set -uo pipefail",
+                "budget_suffix=TIMEOUT",
+                "process_budget_seconds=5400",
                 f"export TRUSTED_STRIX_GATE={shlex.quote(str(gate_path))}",
                 "export RUNNER_TEMP=" + shlex.quote(temp_dir),
                 "export STRIX_GATE_RETRY_BACKOFF_SECONDS=1",
