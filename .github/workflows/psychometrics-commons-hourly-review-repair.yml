@@ -2,8 +2,8 @@ name: psychometrics-commons Hourly Review Repair
 
 on:
   schedule:
-    # Minute 53 avoids minute-zero pressure and the existing product callers.
-    - cron: "53 * * * *"
+    # Minute 9 avoids minute-zero pressure and the existing product callers.
+    - cron: "9 * * * *"
 
 concurrency:
   group: psychometrics-commons-hourly-review-repair
