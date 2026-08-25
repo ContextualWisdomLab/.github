@@ -282,9 +282,14 @@ exit 1
         self.assertIn('strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_', workflow)
         self.assertIn('cat "$strix_attempt_log" >> "$strix_run_log"', workflow)
         self.assertIn(
-            'strix_gate_attempt_budget_seconds="${STRIX_TOTAL_TIMEOUT_SECONDS:-$process_budget_seconds}"',
+            'strix_gate_attempt_budget_var="STRIX_TOTAL_${budget_suffix}_SECONDS"',
             workflow,
         )
+        self.assertIn(
+            'strix_gate_attempt_budget_seconds="${!strix_gate_attempt_budget_var:-$process_budget_seconds}"',
+            workflow,
+        )
+        self.assertNotIn("STRIX_TOTAL_TIMEOUT_SECONDS:", workflow)
         self.assertNotIn('remaining_seconds" -lt 600', workflow)
 
 
