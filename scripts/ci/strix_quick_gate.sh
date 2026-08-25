@@ -151,6 +151,63 @@ preserve_attempt_log() {
 	fi
 }
 
+# Write a classification copy of the raw console transcript. Never mutate
+# $STRIX_LOG: publish_artifact_reports copies it to gate-last-attempt.log.
+# Remove only a complete box that itself contains MODEL QUALITY WARNING.
+# A cross-box wildcard from the first ╭ to a later ╰ would erase a
+# preceding Fatal/Denied box (fail-open).
+sanitize_strix_console_log() {
+	local src="$1"
+	local dest="$2"
+	if [ -z "$src" ] || [ -z "$dest" ] || [ ! -f "$src" ] || [ -L "$src" ]; then
+		return 0
+	fi
+	if [ -L "$dest" ]; then
+		return 0
+	fi
+	python3 - "$src" "$dest" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+
+
+def strip_model_quality_warning_boxes(text: str) -> str:
+    pieces: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        start = text.find("╭", index)
+        if start < 0:
+            pieces.append(text[index:])
+            break
+        pieces.append(text[index:start])
+        close = text.find("╰", start)
+        if close < 0:
+            pieces.append(text[start:])
+            break
+        line_end = text.find("\n", close)
+        if line_end < 0:
+            box = text[start:]
+            index = length
+        else:
+            box = text[start : line_end + 1]
+            index = line_end + 1
+        if "MODEL QUALITY WARNING" in box:
+            continue
+        pieces.append(box)
+    return "".join(pieces)
+
+
+try:
+    text = src.read_text(encoding="utf-8")
+except UnicodeDecodeError:
+    raise SystemExit(0)
+dest.write_text(strip_model_quality_warning_boxes(text), encoding="utf-8")
+PY
+}
+
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
@@ -174,6 +231,33 @@ known_internal_warning = re.compile(
 )
 
 
+def strip_model_quality_warning_boxes(text: str) -> str:
+    pieces: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        start = text.find("╭", index)
+        if start < 0:
+            pieces.append(text[index:])
+            break
+        pieces.append(text[index:start])
+        close = text.find("╰", start)
+        if close < 0:
+            pieces.append(text[start:])
+            break
+        line_end = text.find("\n", close)
+        if line_end < 0:
+            box = text[start:]
+            index = length
+        else:
+            box = text[start : line_end + 1]
+            index = line_end + 1
+        if "MODEL QUALITY WARNING" in box:
+            continue
+        pieces.append(box)
+    return "".join(pieces)
+
+
 def iter_report_logs(root: Path):
     for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current_root)
@@ -191,12 +275,15 @@ def iter_report_logs(root: Path):
 
 for log_path in iter_report_logs(root):
     try:
-        lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        original = log_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         continue
+    text = strip_model_quality_warning_boxes(original)
+    lines = text.splitlines(keepends=True)
     filtered = [line for line in lines if not known_internal_warning.match(line)]
-    if filtered != lines:
-        log_path.write_text("".join(filtered), encoding="utf-8")
+    text = "".join(filtered)
+    if text != original:
+        log_path.write_text(text, encoding="utf-8")
 PY
 	done
 }
@@ -2790,6 +2877,12 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
+	local classified_log="${STRIX_LOG}.classified"
+	sanitize_strix_console_log "$STRIX_LOG" "$classified_log"
+	local inspect_log="$STRIX_LOG"
+	if [ -f "$classified_log" ] && [ ! -L "$classified_log" ]; then
+		inspect_log="$classified_log"
+	fi
 
 	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
@@ -2798,7 +2891,7 @@ PY
 		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
 	fi
 
-	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error; then
+	if [ "$report_failure_signal" -eq 1 ] || STRIX_LOG="$inspect_log" has_detected_infrastructure_error; then
 		INFRA_ERROR_DETECTED=1
 		if [ "$rc" -eq 0 ] && provider_signal_fail_closed_enabled; then
 			echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
