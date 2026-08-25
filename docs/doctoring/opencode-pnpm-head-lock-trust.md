@@ -60,9 +60,6 @@ allowlists, or the networkless PR sandbox.
 
 ## APA 7th references
 
-GitHub, Inc. (n.d.). *GH CLI manual: gh api --paginate*. GitHub Docs.
-Retrieved August 25, 2026, from https://cli.github.com/manual/gh_api
-
 MITRE. (2026). *CWE-494: Download of code without integrity check*.
 https://cwe.mitre.org/data/definitions/494.html
 
@@ -74,8 +71,8 @@ https://doi.org/10.6028/NIST.SP.800-218
 npm, Inc. (n.d.). *Package lock specification: integrity fields*. npm Docs.
 Retrieved August 25, 2026, from https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json
 
+Open Worldwide Application Security Project. (2025). *OWASP Top 10: A06
+— vulnerable and outdated components*. https://owasp.org/Top10/A06_2021-Vulnerable_and-Outdated-Components/
+
 pnpm. (n.d.). *Settings: lockfile and frozen-lockfile*. pnpm Docs.
 Retrieved August 25, 2026, from https://pnpm.io/settings
-
-Open Worldwide Application Security Project. (2025). *OWASP Top 10: A06
-— vulnerable and outdated components*. https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/
