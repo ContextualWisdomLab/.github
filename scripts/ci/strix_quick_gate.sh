@@ -172,6 +172,10 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_scanner_warning = re.compile(
+    r"^(?:│  MODEL QUALITY WARNING\s+│|"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+)
 
 
 def iter_report_logs(root: Path):
@@ -194,7 +198,12 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_scanner_warning.match(line)
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
