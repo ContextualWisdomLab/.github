@@ -124,7 +124,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "glm-5-free"],
         ["opencode-free", "kimi-k2.5-free"],
         ["opencode-free", "qwen3.6-plus-free"],
-        ["openai", "gpt-5.6-luna"],
+        ["openai", "gpt-5.4"],
         ["openrouter", "deepseek/deepseek-v3.2"],
         ["openrouter", "qwen/qwen3-coder"],
     ]
@@ -132,7 +132,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert github_candidate_models == []
     assert "opencode/gpt-5.6-terra" not in candidates_text
     assert "github-models/" not in candidates_text
-    assert direct_openai_models == ["gpt-5.6-luna"]
+    assert direct_openai_models == ["gpt-5.4"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
@@ -1682,7 +1682,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "opencode-free/glm-5-free "
         "opencode-free/kimi-k2.5-free "
         "opencode-free/qwen3.6-plus-free "
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder"
     ) in workflow
@@ -1690,7 +1690,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "OPENCODE_MODEL_CANDIDATES:", 1
     )[1].split("OPENCODE_MODEL_ATTEMPTS:", 1)[0]
     assert (
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder"
     ) in workflow
@@ -1841,7 +1841,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
     assert (
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder"
     ) in workflow

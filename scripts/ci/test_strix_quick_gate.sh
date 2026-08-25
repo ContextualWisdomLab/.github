@@ -304,6 +304,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
 	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
+	assert_file_contains "$workflow_file" "EVENT_REPOSITORY_VISIBILITY:" "strix workflow uses trusted event visibility before cross-repository API lookup"
+	assert_file_contains "$workflow_file" "PUBLIC | public) is_private=false" "strix workflow accepts GitHub's lowercase public visibility"
+	assert_file_contains "$workflow_file" "PRIVATE | private | INTERNAL | internal) is_private=true" "strix workflow keeps private and internal repositories off public-only providers"
+	assert_file_contains "$workflow_file" '(.visibility // "" | ascii_downcase) as $visibility' "strix dispatch visibility maps the authoritative API visibility instead of the lossy private boolean"
+	assert_file_not_contains "$workflow_file" "gh api \"repos/\${TARGET_REPOSITORY}\" --jq '.private'" "strix dispatch visibility does not misclassify internal repositories through the private boolean"
+	assert_file_contains "$REPO_ROOT/tests/test_strix_repository_visibility_contract.py" "test_dispatch_api_visibility_preserves_internal_privacy" "strix visibility contract executes public, private, and internal dispatch fixtures"
 	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
@@ -325,6 +331,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
 	assert_file_contains "$GATE_SCRIPT" "sanitize_known_strix_report_warnings" "strix gate sanitizes only known internal Strix report warnings"
+	assert_file_contains "$GATE_SCRIPT" 'MODEL QUALITY WARNING' "strix gate accepts the scanner's informational fallback-model banner"
+	assert_file_contains "$GATE_SCRIPT" 'unauthenticated requests to the HF Hub' "strix gate accepts the scanner dependency's non-fatal download warning"
+	assert_file_not_contains "$GATE_SCRIPT" 'known_scanner_warning = re.compile(r".*Warn' "strix gate does not broadly suppress warning-class evidence"
 	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_reports_documented_opencode_env_api_key_reference" "strix gate fact-checks documented OpenCode env apiKey references before accepting secret-templating reports"
 	assert_file_contains "$GATE_SCRIPT" "iter_report_logs" "strix gate enumerates report logs through a safe walker"
 	assert_file_contains "$GATE_SCRIPT" "os.walk(root, topdown=True, followlinks=False)" "strix gate does not recurse into symlinked report directories"
@@ -780,7 +789,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review includes a broad catalog fallback pool"
 	assert_file_not_contains "$workflow_file" "steps.opencode_review_model_pool.outcome == 'success'" "opencode approval gate still runs after model pool failure to publish a reason"
 	assert_file_contains "$workflow_file" "opencode-free/north-mini-code-free" "opencode review starts public repository reviews with a free coding model"
-	assert_file_contains "$workflow_file" "openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review keeps keyed Luna and OpenRouter after NIM and free-tier"
+	assert_file_contains "$workflow_file" "openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review keeps keyed GPT-5.4 and OpenRouter after NIM and free-tier"
 	assert_file_not_contains "$workflow_file" "opencode/gpt-5.6-terra" "opencode review omits Copilot-class Zen Terra from the model pool"
 	assert_file_not_contains "$workflow_file" "github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review omits github-models GPT fallbacks from the model pool"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
@@ -933,7 +942,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "7200"' "opencode catalog fallback preserves legitimate two-hour provider sessions"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
-	assert_file_contains "$workflow_file" "openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review tries keyed Luna and OpenRouter after NIM and free-tier"
+	assert_file_contains "$workflow_file" "openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review tries keyed GPT-5.4 and OpenRouter after NIM and free-tier"
 	assert_file_not_contains "$workflow_file" "opencode/gpt-5.6-terra" "opencode catalog fallback omits Copilot-class Zen Terra from the model pool"
 	assert_file_not_contains "$workflow_file" '"deepseek/deepseek-r1-0528"' "opencode isolated catalog no longer defines GitHub Models DeepSeek R1 0528"
 	assert_file_not_contains "$workflow_file" '"deepseek/deepseek-r1"' "opencode isolated catalog no longer defines GitHub Models DeepSeek R1"
@@ -1289,7 +1298,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review starts the central model pool"
 	assert_file_contains "$workflow_file" "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free" "opencode review keeps all NVIDIA NIM candidates inside the public-repository pool"
-	assert_file_contains "$workflow_file" "openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review keeps keyed Luna and OpenRouter after NIM and free-tier"
+	assert_file_contains "$workflow_file" "openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder" "opencode review keeps keyed GPT-5.4 and OpenRouter after NIM and free-tier"
 	assert_file_not_contains "$workflow_file" "opencode/gpt-5.6-terra" "opencode review omits Copilot-class Zen Terra from the model pool"
 	assert_file_not_contains "$workflow_file" '"deepseek/deepseek-r1-0528"' "opencode isolated catalog no longer defines GitHub Models DeepSeek R1"
 	assert_file_contains "$workflow_file" "MODEL: nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" "opencode publish-stage diagnosis uses NVIDIA NIM"
@@ -3449,6 +3458,31 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-rate-limit-openai-direct-fallback-clears-api-base)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/rate-limited-primary)
+			echo "LLM CONNECTION FAILED"
+			echo "Error: litellm.RateLimitError: Nvidia_nimException - Error code: 429 Too Many Requests"
+			exit 1
+			;;
+		openai/gpt-5.4)
+			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
+				echo "unexpected direct-OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
+				exit 26
+			fi
+			if [ -n "${LLM_API_BASE:-}" ]; then
+				echo "direct OpenAI fallback inherited foreign API base ${LLM_API_BASE}" >&2
+				exit 27
+			fi
+			echo "scan ok after direct-OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected cross-provider model ${STRIX_LLM:-}" >&2
+			exit 28
+			;;
+		esac
+		;;
 	openai-direct-quota-github-models-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5.4)
@@ -3938,6 +3972,24 @@ EOS
 			;;
 		*)
 			echo "Error: high-demand retry path unexpected (${STRIX_LLM:-})" >&2
+			exit 37
+			;;
+		esac
+		;;
+	nvidia-overloaded-direct-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/overloaded-primary)
+			echo "LLM CONNECTION FAILED"
+			echo "Could not establish connection to the language model."
+			echo "Error: litellm.ServiceUnavailableError: Nvidia_nimException - Service temporarily overloaded"
+			exit 1
+			;;
+		nvidia_nim/nvidia/fallback-one)
+			echo "scan ok after NVIDIA overload fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: NVIDIA overload fallback path unexpected (${STRIX_LLM:-})" >&2
 			exit 37
 			;;
 		esac
@@ -4559,6 +4611,8 @@ EOS
 		esac
 		;;
 	report-known-internal-warning-sanitized)
+		printf '%s\n' '│  MODEL QUALITY WARNING                                                       │'
+		echo 'Warning: You are sending unauthenticated requests to the HF Hub.'
 		mkdir -p "$STRIX_REPORTS_DIR/fake-known-internal-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-known-internal-warning/strix.log" <<'EOS'
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal agent coordination note
@@ -5695,6 +5749,10 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
+	if [ "$scenario" = "nvidia-rate-limit-openai-direct-fallback-clears-api-base" ]; then
+		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+	fi
 	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
 		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
@@ -5795,6 +5853,7 @@ PY
 			-u STRIX_VERTEX_FALLBACK_MODELS \
 			-u STRIX_GEMINI_FALLBACK_MODELS \
 			-u STRIX_FALLBACK_MODELS \
+			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
 			"${env_cmd[@]}" \
 			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
@@ -6146,6 +6205,36 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	nvidia-rate-limit-openai-direct-fallback-clears-api-base)
+		run_gate_case_allow_provider_signal "nvidia-rate-limit-openai-direct-fallback-clears-api-base" \
+			"nvidia_nim/nvidia/rate-limited-primary" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'openai-direct/gpt-5.4' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/rate-limited-primary|openai/gpt-5.4" \
+			"https://integrate.api.nvidia.com/v1|<unset>" \
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"openai-direct/gpt-5.4"
 		;;
 	openai-direct-quota-github-models-fallback-success)
 		run_gate_case "openai-direct-quota-github-models-fallback-success" \
@@ -6656,6 +6745,36 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"backend/app/pg_introspect/introspect.py"
+		;;
+	nvidia-overloaded-direct-fallback-success)
+		run_gate_case_allow_provider_signal "nvidia-overloaded-direct-fallback-success" \
+			"nvidia_nim/nvidia/overloaded-primary" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-one' in [0-9]+s\\." \
+			"3" \
+			"nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/fallback-one" \
+			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1" \
+			"" \
+			"1" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"nvidia_nim/nvidia/fallback-one openai-direct/gpt-5.4"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -10125,6 +10244,64 @@ run_gate_case_allow_provider_signal "gemini-high-demand-retry-same-model-success
 	"__DEFAULT__" \
 	"" \
 	"1"
+
+run_gate_case_allow_provider_signal "nvidia-overloaded-direct-fallback-success" \
+	"nvidia_nim/nvidia/overloaded-primary" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-one' in [0-9]+s\\." \
+	"3" \
+	"nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/fallback-one" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"1" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"nvidia_nim/nvidia/fallback-one openai-direct/gpt-5.4"
+
+run_gate_case_allow_provider_signal "nvidia-rate-limit-openai-direct-fallback-clears-api-base" \
+	"nvidia_nim/nvidia/rate-limited-primary" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'openai-direct/gpt-5.4' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/rate-limited-primary|openai/gpt-5.4" \
+	"https://integrate.api.nvidia.com/v1|<unset>" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"openai-direct/gpt-5.4"
 
 run_gate_case_allow_provider_signal "gemini-timeout-direct-fallback-success" \
 	"gemini/retry-timeout-primary" \

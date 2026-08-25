@@ -4200,8 +4200,8 @@ jobs:
                   "apiKey": "{env:OPENAI_API_KEY}"
                 },
                 "models": {
-                  "gpt-5.6-luna": {
-                    "name": "OpenAI GPT-5.6 Luna (direct)",
+                  "gpt-5.4": {
+                    "name": "OpenAI GPT-5.4 (direct)",
                     "tool_call": true,
                     "reasoning": true,
                     "options": {
@@ -4414,7 +4414,7 @@ jobs:
           # falling through to GitHub Models. Free-tier, Luna, and OpenRouter
           # run only after a configured NIM attempt. Trial/free-period NIM data
           # may be logged, retained, or used for product/model improvement.
-          OPENCODE_MODEL_CANDIDATES: "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder"
+          OPENCODE_MODEL_CANDIDATES: "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
