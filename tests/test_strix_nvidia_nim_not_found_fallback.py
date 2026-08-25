@@ -192,7 +192,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         default_expression = (
             "steps.target_visibility.outputs.is_private == 'false' && "
-            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.4'"
+            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.6-luna'"
         )
         self.assertIn(default_expression, workflow)
         self.assertIn(
@@ -202,7 +202,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.4'",
+            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
             workflow,
         )
 

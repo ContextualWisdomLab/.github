@@ -7,7 +7,7 @@ on:
     # psychometrics-commons (9), OriginWeave (10), naruon (11),
     # DiagramWeave (12), pg-erd-cloud (13), mhtml-etl-gateway (14),
     # html4tree (15), orchestrator (17), noema (19), Clearfolio (23),
-    # Keyverse (29), Scopeweave (31), contextual-orchestrator (34), DiskSage (37), Appguardrail (41),
+    # Keyverse (29), Scopeweave (31), DiskSage (37), Appguardrail (41),
     # newsdom-api (43), Inkspan (47), fast-mlsirm (49), BandScope (53),
     # and semantic-data-portal (59).
     - cron: "16 * * * *"

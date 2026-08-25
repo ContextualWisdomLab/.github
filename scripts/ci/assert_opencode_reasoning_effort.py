@@ -44,7 +44,7 @@ def strip_jsonc_comments(text: str) -> str:
     # Fast-path regex replacement for standard valid JSONC input
     # that doesn't trigger complex character-by-character parsing bottlenecks.
     def replacer(match: re.Match[str]) -> str:
-        """Return the replacement for one matched string or comment token."""
+        """Replace regex matches depending on the captured group."""
         if match.group("string") is not None:
             return str(match.group("string"))
         if match.group("line_comment") is not None:

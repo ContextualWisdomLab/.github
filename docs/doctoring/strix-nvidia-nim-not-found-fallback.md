@@ -64,15 +64,6 @@ current NVIDIA documentation whenever a provider returns a catalog 404. This
 change does not treat arbitrary provider errors as success and does not weaken
 Strix severity, changed-file attribution, or independent approval requirements.
 
-## Current fallback contract (2026-08-25)
-
-The direct-OpenAI fallback is `gpt-5.4`. The retired `gpt-5.6-luna` identifier
-must not appear in the executable workflow, required smoke contract, or model
-pool. A central workflow update without its smoke and model-pool assertions is
-invalid because every consumer repository would fail before its own scan. The
-contract is verified by `scripts/ci/strix_required_workflow_smoke.sh` and the
-focused `test_strix_quick_gate.sh` case; provider failures remain non-passing.
-
 ## References
 
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC
