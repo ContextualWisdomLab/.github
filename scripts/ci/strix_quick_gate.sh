@@ -179,11 +179,12 @@ known_internal_warning = re.compile(
 # Fatal/Denied/Warn/Warning provider-failure-signal matcher below and
 # turns every clean scan on a non-listed model into a false fail-closed.
 model_quality_banner = re.compile(
-    r"╭─[^\n]*╮\n"
-    r"(?:[^\n]*\n)*?"
-    r"[^\n]*MODEL QUALITY WARNING[^\n]*\n"
-    r"(?:[^\n]*\n)*?"
-    r"╰─[^\n]*╯\n?"
+    r"^╭─[^\n]*╮\n"
+    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
+    r"^[^\n]*MODEL QUALITY WARNING[^\n]*\n"
+    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
+    r"^╰─[^\n]*╯\n?",
+    re.MULTILINE,
 )
 
 
@@ -233,11 +234,12 @@ import sys
 
 log_path = Path(sys.argv[1])
 model_quality_banner = re.compile(
-    r"╭─[^\n]*╮\n"
-    r"(?:[^\n]*\n)*?"
-    r"[^\n]*MODEL QUALITY WARNING[^\n]*\n"
-    r"(?:[^\n]*\n)*?"
-    r"╰─[^\n]*╯\n?"
+    r"^╭─[^\n]*╮\n"
+    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
+    r"^[^\n]*MODEL QUALITY WARNING[^\n]*\n"
+    r"(?:(?!^╭─|^╰─)[^\n]*\n)*?"
+    r"^╰─[^\n]*╯\n?",
+    re.MULTILINE,
 )
 
 try:

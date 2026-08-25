@@ -4542,6 +4542,20 @@ EOS
 		echo "scan ok but unknown report warning remains"
 		exit 0
 		;;
+	report-model-quality-warning-preserves-prior-failure)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-model-quality-prior-failure"
+		cat >"$STRIX_REPORTS_DIR/fake-model-quality-prior-failure/strix.log" <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  Provider WARNING: report evidence is incomplete                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  MODEL QUALITY WARNING                                                       │
+│  This cosmetic banner alone is not a provider failure.                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+EOS
+		echo "scan returned zero findings with an incomplete provider report"
+		exit 0
+		;;
 	console-model-quality-warning-banner-sanitized)
 		# Reproduces Strix's own startup banner, printed to the console
 		# (not a report artifact) whenever the configured model is not on
@@ -4567,6 +4581,26 @@ EOS
 │                                                                              │
 │  Vulnerabilities 0                                                           │
 │                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+EOS
+		exit 0
+		;;
+	console-model-quality-warning-preserves-prior-failure)
+		# A real provider failure may be emitted in an earlier Strix box.
+		# Sanitizing the later cosmetic model-quality banner must not consume
+		# that preceding box or the failure signal between box boundaries.
+		cat <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  Provider WARNING: backend returned incomplete scan evidence                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  MODEL QUALITY WARNING                                                       │
+│  'vertex_ai/console-model-quality-warning-preserves-prior-failure' is not a  │
+│  recommended frontier model for Strix.                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  Penetration test completed                                                  │
+│  Vulnerabilities 0                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 EOS
 		exit 0
@@ -6397,6 +6431,16 @@ run_filtered_gate_case_if_requested() {
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
 		;;
+	report-model-quality-warning-preserves-prior-failure)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-model-quality-warning-preserves-prior-failure" \
+		"" \
+		"1" \
+		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+		"1" \
+		"vertex_ai/report-model-quality-warning-preserves-prior-failure" \
+		"<unset>"
+		;;
 	console-model-quality-warning-banner-sanitized)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/console-model-quality-warning-banner-sanitized" \
@@ -6405,6 +6449,16 @@ run_filtered_gate_case_if_requested() {
 		"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
 		"1" \
 		"vertex_ai/console-model-quality-warning-banner-sanitized" \
+		"<unset>"
+		;;
+	console-model-quality-warning-preserves-prior-failure)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/console-model-quality-warning-preserves-prior-failure" \
+		"" \
+		"1" \
+		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+		"1" \
+		"vertex_ai/console-model-quality-warning-preserves-prior-failure" \
 		"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
@@ -10480,6 +10534,66 @@ run_gate_case "console-model-quality-warning-banner-sanitized" \
 	"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
 	"1" \
 	"vertex_ai/console-model-quality-warning-banner-sanitized" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "console-model-quality-warning-preserves-prior-failure" \
+	"vertex_ai/console-model-quality-warning-preserves-prior-failure" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/console-model-quality-warning-preserves-prior-failure" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"" \
+	"1"
+
+run_gate_case "report-model-quality-warning-preserves-prior-failure" \
+	"vertex_ai/report-model-quality-warning-preserves-prior-failure" \
+	"" \
+	"1" \
+	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+	"1" \
+	"vertex_ai/report-model-quality-warning-preserves-prior-failure" \
 	"<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \
