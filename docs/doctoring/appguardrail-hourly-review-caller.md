@@ -126,7 +126,11 @@ GitHub, Inc. (n.d.-b). *Reuse workflows*. GitHub Docs. Retrieved August
 25, 2026, from
 https://docs.github.com/en/actions/how-tos/sharing-automations/reuse-workflows
 
-GitHub, Inc. (n.d.-c). *Automatic token authentication*. GitHub Docs.
+GitHub, Inc. (n.d.-c). *OpenID Connect reference*. GitHub Docs. Retrieved
+August 25, 2026, from
+https://docs.github.com/en/actions/reference/security/oidc
+
+GitHub, Inc. (n.d.-d). *Automatic token authentication*. GitHub Docs.
 Retrieved August 25, 2026, from
 https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
 
