@@ -23,7 +23,7 @@ showed the NVIDIA NIM primary and first fallback exhausting provider
 availability, then the contracted final fallback `openai-direct/gpt-5.4`
 failing with a plain-text gateway error:
 
-```
+```text
 LLM CONNECTION FAILED
 Could not establish connection to the language model.
 Error: 404 page not found

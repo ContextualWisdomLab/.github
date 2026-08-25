@@ -674,7 +674,10 @@ jobs:
           echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
       - name: Prepare GitHub Models fallback credentials
-        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
+        # github_models is included because its STRIX_FALLBACK_MODELS chain
+        # ends in openai-direct/gpt-5.4, which needs the direct-OpenAI key and
+        # API base to authenticate and route after the primary is exhausted.
+        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'github_models'
         env:
           GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
