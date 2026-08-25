@@ -956,7 +956,7 @@ extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
 
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna')" \
+	"github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4')" \
 	"Strix PR scans must default to NVIDIA NIM Nemotron" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"

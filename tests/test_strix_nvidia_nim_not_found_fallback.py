@@ -220,7 +220,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         default_expression = (
             "steps.target_visibility.outputs.is_private == 'false' && "
-            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.6-luna'"
+            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.4'"
         )
         self.assertIn(default_expression, workflow)
         self.assertIn(
@@ -230,7 +230,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.6-luna'",
+            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.4'",
             workflow,
         )
 
@@ -245,23 +245,22 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Route the NIM-exhaustion fallback alias to a real LiteLLM provider.
 
         `STRIX_FALLBACK_MODELS`' NVIDIA NIM entry ends in the hyphenated
-        `openai-direct/gpt-5.6-luna` alias (the workflow's user-facing input
+        `openai-direct/gpt-5.4` alias (the workflow's user-facing input
         spelling, also pinned verbatim by protected main's own trusted
-        `strix_required_workflow_smoke.sh`, so this exact string cannot
-        change). The gate must still resolve it to LiteLLM's `openai/`
-        provider -- the same target the underscored `openai_direct/` alias
-        already reaches -- or NVIDIA NIM rate-limiting the primary and first
-        fallback model leaves the run one hop from
+        `strix_required_workflow_smoke.sh`). The gate must still resolve it
+        to LiteLLM's `openai/` provider -- the same target the underscored
+        `openai_direct/` alias already reaches -- or NVIDIA NIM rate-limiting
+        the primary and first fallback model leaves the run one hop from
         `litellm.BadRequestError: LLM Provider NOT provided`.
         """
 
         self.assertEqual(
-            _child_model_for_api_base("openai-direct/gpt-5.6-luna", ""),
-            "openai/gpt-5.6-luna",
+            _child_model_for_api_base("openai-direct/gpt-5.4", ""),
+            "openai/gpt-5.4",
         )
         self.assertEqual(
-            _child_model_for_api_base("openai_direct/gpt-5.6-luna", ""),
-            "openai/gpt-5.6-luna",
+            _child_model_for_api_base("openai_direct/gpt-5.4", ""),
+            "openai/gpt-5.4",
         )
 
     def test_direct_openai_aliases_share_one_reachable_case_arm(self) -> None:

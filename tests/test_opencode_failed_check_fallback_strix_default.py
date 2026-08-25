@@ -16,7 +16,7 @@ FALLBACK_EMITTER = (
 LIVE_STRIX_DEFAULT = (
     "github.event.client_payload.strix_llm || "
     "(steps.target_visibility.outputs.is_private == 'false' && "
-    "'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna')"
+    "'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4')"
 )
 
 
