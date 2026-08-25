@@ -331,6 +331,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
 	assert_file_contains "$GATE_SCRIPT" "sanitize_known_strix_report_warnings" "strix gate sanitizes only known internal Strix report warnings"
+	assert_file_contains "$GATE_SCRIPT" "known_internal_warning = re.compile" "strix gate sanitizes known internal console warnings"
+	assert_file_contains "$GATE_SCRIPT" 'dest.write_text("", encoding="utf-8")' "strix gate clears stale classified console output after decode errors"
 	assert_file_contains "$GATE_SCRIPT" 'MODEL QUALITY WARNING' "strix gate accepts the scanner's informational fallback-model banner"
 	assert_file_contains "$GATE_SCRIPT" 'unauthenticated requests to the HF Hub' "strix gate accepts the scanner dependency's non-fatal download warning"
 	assert_file_not_contains "$GATE_SCRIPT" 'known_scanner_warning = re.compile(r".*Warn' "strix gate does not broadly suppress warning-class evidence"
@@ -4534,6 +4536,14 @@ EOS
 		echo "Warning: provider response included incomplete scan state"
 		exit 0
 		;;
+	console-known-internal-warning-sanitized)
+		cat <<'EOS'
+2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal console coordination note
+2026-08-22 09:53:26.193 WARNING strix-pr-scope-example - strix.core.execution: agent 673f770f ended a turn without a lifecycle tool call (interactive=False); forcing tool continuation (1/500): <empty>
+scan completed with 0 vulnerability report(s)
+EOS
+		exit 0
+		;;
 	provider-denied-success-signal)
 		echo "Denied: provider credentials were rejected"
 		exit 0
@@ -6026,6 +6036,17 @@ PY
 		fi
 	fi
 
+	if [ "$scenario" = "console-known-internal-warning-sanitized" ]; then
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
+			"produced non-lifecycle final output" \
+			"scenario=$scenario preserves the raw non-lifecycle console warning"
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
+			"ended a turn without a lifecycle tool call" \
+			"scenario=$scenario preserves the raw lifecycle console warning"
+	fi
+
 	if [ "$scenario" = "console-model-quality-warning-preserves-prior-fatal-box" ]; then
 		assert_file_contains \
 			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
@@ -6628,6 +6649,16 @@ run_filtered_gate_case_if_requested() {
 			"Unable to map Strix findings to changed files; failing closed for pull request." \
 			"1" \
 			"vertex_ai/excluded-dir-primary" \
+			"<unset>"
+		;;
+	console-known-internal-warning-sanitized)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/console-known-internal-warning-sanitized" \
+			"" \
+			"0" \
+			"Strix run succeeded for model 'vertex_ai/console-known-internal-warning-sanitized'" \
+			"1" \
+			"vertex_ai/console-known-internal-warning-sanitized" \
 			"<unset>"
 		;;
 	pull-request-target-changed-backend-context)
@@ -10827,6 +10858,15 @@ run_gate_case "provider-warning-success-signal" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "console-known-internal-warning-sanitized" \
+	"vertex_ai/console-known-internal-warning-sanitized" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/console-known-internal-warning-sanitized'" \
+	"1" \
+	"vertex_ai/console-known-internal-warning-sanitized" \
+	"<unset>"
 
 run_gate_case "provider-report-rate-limit-fallback-success" \
 	"vertex_ai/report-rate-limit-primary" \

@@ -179,6 +179,14 @@ known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
     r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
 )
+known_internal_warning = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"(?:"
+    r"produced non-lifecycle final output in non-interactive mode"
+    r"|ended a turn without a lifecycle tool call \(interactive=False\)"
+    r"); forcing tool continuation \(\d+/\d+\): "
+)
 other_failure = re.compile(
     r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)"
     r"|Provider WARNING"
@@ -229,12 +237,18 @@ def strip_model_quality_warning_boxes(text: str) -> str:
 try:
     text = src.read_text(encoding="utf-8")
 except UnicodeDecodeError:
+    # Never let a previous attempt's classified copy be inspected after a
+    # malformed console transcript. The raw source remains untouched.
+    dest.write_text("", encoding="utf-8")
     raise SystemExit(0)
 text = strip_model_quality_warning_boxes(text)
 text = "".join(
     line
     for line in text.splitlines(keepends=True)
-    if not known_scanner_warning.match(ansi_csi.sub("", line))
+    if not (
+        known_scanner_warning.match(ansi_csi.sub("", line))
+        or known_internal_warning.match(ansi_csi.sub("", line))
+    )
 )
 dest.write_text(text, encoding="utf-8")
 PY
