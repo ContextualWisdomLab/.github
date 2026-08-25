@@ -70,6 +70,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Resolve Strix visibility from the trusted GitHub event for ordinary push,
+  schedule, and pull-request runs, reserving API retries for cross-repository
+  dispatches whose workflow token may not see the target repository.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
