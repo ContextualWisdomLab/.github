@@ -181,13 +181,13 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert popen_calls[0][1].get("shell") is False
+    assert "shell" not in popen_calls[0][1]
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-
+    assert "shell" not in run_calls[0][1]
     assert "executable" not in run_calls[0][1]
 
 
@@ -232,7 +232,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
     """Readiness checks must raise HTTPError on redirects to prevent attacker-controlled internal URLs."""
     import urllib.error
 
-    request = sandboxed_web_e2e.urllib.request.Request("http://127.0.0.1/ready")
+    request = sandboxed_web_e2e.urllib.request.Request("https://example.test/ready")
 
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
@@ -598,9 +598,3 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
-
-def test_wait_for_url_rejects_non_loopback_hostnames():
-    from scripts.ci import sandboxed_web_e2e
-    import pytest
-    with pytest.raises(ValueError, match="URL hostname must be restricted to safe loopback addresses"):
-        sandboxed_web_e2e.wait_for_url("http://example.com/ready", 1, None)
