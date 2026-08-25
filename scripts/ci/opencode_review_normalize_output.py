@@ -133,10 +133,6 @@ APPROVAL_VERIFICATION_LABELS = (
     "security/privacy:",
 )
 
-APPROVAL_VERIFICATION_PATTERNS = {
-    label: re.compile(re.escape(label)) for label in APPROVAL_VERIFICATION_LABELS
-}
-
 SOURCE_LIKE_CHANGED_FILE_EXTENSIONS = frozenset(
     {
         ".bash",
@@ -962,17 +958,20 @@ def label_section(text: str, label: str) -> str:
     def label_starts(candidate: str) -> list[int]:
         """Return exact verification-label starts without suffix collisions."""
         starts = []
-        pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
-        if pattern is None:
-            pattern = re.compile(re.escape(candidate))
-        for match in pattern.finditer(text):
-            index = match.start()
+        # ⚡ Bolt: Fast-path literal string search replaces expensive regex finditer
+        index = 0
+        while True:
+            index = text.find(candidate, index)
+            if index == -1:
+                break
             if (
                 candidate == "coverage:"
                 and text[max(0, index - 10) : index] == "docstring "
             ):
+                index += len(candidate)
                 continue
             starts.append(index)
+            index += len(candidate)
         return starts
 
     starts = label_starts(label)

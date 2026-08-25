@@ -180,3 +180,7 @@ Semantic Versioning where the repository publishes a release.
 - Added an organization-owned reusable exact-artifact SBOM attestation boundary that validates inert six-file wheel/sdist evidence, binds CycloneDX 1.7 predicates to exact SHA-256 subjects, signs through least-privilege GitHub artifact attestations, and exports online and offline verification bundles.
 - Hardened exact-artifact SBOM verification with strict finite RFC 8259 JSON, integer CycloneDX document versions, deterministic UUIDv5 subject identities, exact filename properties and single SHA-256 root bindings, environment-only shell input transfer, pinned Ubuntu 24.04 quality runners, and checksum-sealed beginner-readable offline evidence. The decision record now cites Bray (2017) so NaN and Infinity cannot be treated as sealed SBOM numbers.
 - Recorded the org control-plane architecture, including exact-artifact SBOM attestation, so agents reconstruct the signing trust boundary from the repo instead of private memory.
+
+## [Unreleased]
+### 성능 개선 (Performance)
+- **opencode_review_normalize_output.py**: `label_starts` 함수 내부에서 리터럴 문자열 검색 시 불필요하게 사용되던 정규표현식(`re.compile` 및 `finditer`)을 내장 `str.find`로 교체하여 O(N) 탐색 성능 향상 및 오버헤드 감소. 미사용 `APPROVAL_VERIFICATION_PATTERNS` 딕셔너리 제거.
