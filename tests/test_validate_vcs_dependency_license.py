@@ -121,8 +121,9 @@ def test_repository_and_commit_are_bounded_before_network_access() -> None:
     validator = load_validator()
     opener = FakeOpener("MIT")
 
-    with pytest.raises(ValueError, match="repository"):
-        validator.validate_license("../outside", COMMIT, opener=opener)
+    for repository in ("../outside", ".", ".."):
+        with pytest.raises(ValueError, match="repository"):
+            validator.validate_license(repository, COMMIT, opener=opener)
     with pytest.raises(ValueError, match="commit"):
         validator.validate_license("RankWeave", "main", opener=opener)
 

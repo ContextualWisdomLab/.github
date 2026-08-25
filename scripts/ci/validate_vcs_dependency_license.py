@@ -47,7 +47,7 @@ class RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _license_url(repository: str, commit: str) -> str:
     """Return the fixed-origin GitHub license URL for one exact revision."""
-    if REPOSITORY_RE.fullmatch(repository) is None:
+    if REPOSITORY_RE.fullmatch(repository) is None or repository in {".", ".."}:
         raise ValueError("VCS dependency repository is malformed")
     if COMMIT_RE.fullmatch(commit) is None:
         raise ValueError("VCS dependency commit is not an exact lowercase SHA")
