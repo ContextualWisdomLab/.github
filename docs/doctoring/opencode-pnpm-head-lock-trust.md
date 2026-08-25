@@ -72,7 +72,7 @@ npm, Inc. (n.d.). *Package lock specification: integrity fields*. npm Docs.
 Retrieved August 25, 2026, from https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json
 
 Open Worldwide Application Security Project. (2025). *OWASP Top 10: A06
-— vulnerable and outdated components*. https://owasp.org/Top10/A06_2021-Vulnerable_and-Outdated-Components/
+— vulnerable and outdated components*. https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/
 
 pnpm. (n.d.). *Settings: lockfile and frozen-lockfile*. pnpm Docs.
 Retrieved August 25, 2026, from https://pnpm.io/settings
