@@ -33,9 +33,9 @@ transitions documented in the central scheduler contract: refetch live state,
 establish the causal chain, enumerate materially distinct minimal remedies,
 reject infeasible ones, and dispatch at most one repair per heartbeat.
 
-Minute 56 avoids every existing hourly heartbeat minute (2, 7, 10, 14, 16, 21,
-23, 27, 37, 43, 49, 53, 58) so runner capacity is not contested at dispatch
-time.
+Minute 56 (this caller) shares no heartbeat minute with any other hourly
+caller: the occupied minutes are 2, 10, 14, 16, 21, 23, 27, 34, 37, 43, 49,
+53, and 58, so runner capacity is not contested at dispatch time.
 
 ## Consequences
 
