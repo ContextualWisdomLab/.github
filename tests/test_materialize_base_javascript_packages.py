@@ -982,6 +982,25 @@ def test_validate_head_pnpm_lock_accepts_bounded_lock() -> None:
     )
 
 
+def test_validate_head_pnpm_lock_accepts_multi_key_resolution_mappings() -> None:
+    """Comma-delimited inline values must retain exact token boundaries."""
+    integrity = "sha512-" + ("E" * 86) + "=="
+    tarball = "https://registry.npmjs.org/example/-/example-1.0.0.tgz"
+    for resolution in (
+        f"tarball: {tarball}, integrity: {integrity}",
+        f"integrity: {integrity}, tarball: {tarball}",
+    ):
+        content = (
+            "lockfileVersion: '9.0'\n"
+            "packages:\n"
+            "  example@1.0.0:\n"
+            f"    resolution: {{{resolution}}}\n"
+        )
+        materializer.validate_head_pnpm_lock(
+            "pnpm-lock.yaml", content.encode("utf-8")
+        )
+
+
 def test_validate_head_pnpm_lock_rejects_empty_and_git_sources() -> None:
     """Empty locks and VCS fetch sources fail closed."""
     with pytest.raises(ValueError, match="empty"):
