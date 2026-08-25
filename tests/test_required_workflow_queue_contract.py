@@ -513,7 +513,7 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     assert strix.returncode == 0, strix.stderr
     assert {
         "provider_mode=openai_direct",
-        "strix_model=gpt-5.6-luna",
+        "strix_model=gpt-5.4",
     } <= set(strix_output.read_text().splitlines())
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"

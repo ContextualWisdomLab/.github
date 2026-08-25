@@ -263,23 +263,42 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+          EVENT_REPOSITORY_VISIBILITY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.visibility || github.event_name != 'repository_dispatch' && github.event.repository.visibility || '' }}
         run: |
           set -euo pipefail
           if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
             echo "::error::Strix target repository must belong to ContextualWisdomLab."
             exit 1
           fi
-          is_private=""
-          for target_visibility_attempt in 1 2 3 4 5 6; do
-            if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
-              break
-            fi
-            is_private=""
-            if [ "$target_visibility_attempt" -lt 6 ]; then
-              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
-              sleep "$(( target_visibility_attempt * 5 ))"
-            fi
-          done
+          case "$EVENT_REPOSITORY_VISIBILITY" in
+            PUBLIC | public) is_private=false ;;
+            PRIVATE | private | INTERNAL | internal) is_private=true ;;
+            "")
+              is_private=""
+              for target_visibility_attempt in 1 2 3 4 5 6; do
+                if is_private="$(
+                  gh api "repos/${TARGET_REPOSITORY}" --jq '
+                    (.visibility // "" | ascii_downcase) as $visibility
+                    | if $visibility == "public" then "false"
+                      elif $visibility == "private" or $visibility == "internal" then "true"
+                      else empty
+                      end
+                  '
+                )"; then
+                  break
+                fi
+                is_private=""
+                if [ "$target_visibility_attempt" -lt 6 ]; then
+                  echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+                  sleep "$(( target_visibility_attempt * 5 ))"
+                fi
+              done
+              ;;
+            *)
+              echo "::error::Target repository event visibility was not public, private, or internal."
+              exit 1
+              ;;
+          esac
           case "$is_private" in
             true | false) ;;
             *)
