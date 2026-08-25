@@ -3892,6 +3892,24 @@ EOS
 			;;
 		esac
 		;;
+	nvidia-overloaded-direct-fallback-success)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/overloaded-primary)
+			echo "LLM CONNECTION FAILED"
+			echo "Could not establish connection to the language model."
+			echo "Error: litellm.ServiceUnavailableError: Nvidia_nimException - Service temporarily overloaded"
+			exit 1
+			;;
+		nvidia_nim/nvidia/fallback-one)
+			echo "scan ok after NVIDIA overload fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: NVIDIA overload fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 37
+			;;
+		esac
+		;;
 	gemini-timeout-direct-fallback-success)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-timeout-primary)
@@ -6606,6 +6624,36 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"backend/app/pg_introspect/introspect.py"
+		;;
+	nvidia-overloaded-direct-fallback-success)
+		run_gate_case_allow_provider_signal "nvidia-overloaded-direct-fallback-success" \
+			"nvidia_nim/nvidia/overloaded-primary" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-one' in [0-9]+s\\." \
+			"3" \
+			"nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/fallback-one" \
+			"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1" \
+			"" \
+			"1" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"nvidia_nim/nvidia/fallback-one openai-direct/gpt-5.4"
 		;;
 	*)
 		record_failure "unknown STRIX_TEST_CASE_FILTER '${STRIX_TEST_CASE_FILTER:-}'"
@@ -10075,6 +10123,35 @@ run_gate_case_allow_provider_signal "gemini-high-demand-retry-same-model-success
 	"__DEFAULT__" \
 	"" \
 	"1"
+
+run_gate_case_allow_provider_signal "nvidia-overloaded-direct-fallback-success" \
+	"nvidia_nim/nvidia/overloaded-primary" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'nvidia_nim/nvidia/fallback-one' in [0-9]+s\\." \
+	"3" \
+	"nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/overloaded-primary|nvidia_nim/nvidia/fallback-one" \
+	"https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1|https://integrate.api.nvidia.com/v1" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"1" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"nvidia_nim/nvidia/fallback-one openai-direct/gpt-5.4"
 
 run_gate_case_allow_provider_signal "gemini-timeout-direct-fallback-success" \
 	"gemini/retry-timeout-primary" \
