@@ -35,7 +35,3 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
-## 2026-08-25 - Localhost Restriction for E2E Web Sandbox Readiness Probes
-**Vulnerability:** The web E2E sandboxing script (`scripts/ci/sandboxed_web_e2e.py`) accepted any generic `http://` or `https://` URL for readiness probes (via `urllib.request.urlopen`).
-**Learning:** This could theoretically be manipulated to probe internal infrastructure from the CI runner, even though redirects were explicitly disabled.
-**Prevention:** In test harnesses that dynamically fetch URLs to verify local services, rigorously validate that the hostname parsed by `urllib.parse.urlparse` resolves specifically to `localhost` or its IP equivalents (`127.0.0.1`, `::1`).

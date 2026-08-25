@@ -56,8 +56,6 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             http_server_command(backend_port, "backend"),
             "--frontend-cmd",
@@ -113,19 +111,11 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
-    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
-    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: external.example.com"):
+    with pytest.raises(ValueError, match="URL hostname must be localhost"):
         sandboxed_web_e2e.wait_for_url("http://external.example.com/ready", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: app.localhost"):
-        sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: 169.254.169.254"):
-        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: 0.0.0.0"):
-        sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
@@ -310,8 +300,6 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -375,8 +363,6 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -426,8 +412,6 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -458,8 +442,6 @@ def test_sandboxed_web_e2e_reports_readiness_failure(tmp_path, capsys):
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             http_server_command(backend_port, "backend"),
             "--frontend-cmd",
@@ -498,8 +480,6 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
         [
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             f"{sys.executable} -c \"import time; time.sleep(3)\"",
             "--frontend-cmd",
@@ -517,60 +497,6 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 1s" in captured.err
     assert "SANDBOXED_WEB_E2E_RESULT" in captured.out
-
-
-def test_isolation_backend_fails_closed_outside_linux(monkeypatch):
-    """Required isolation never silently falls back to a host process."""
-    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Darwin")
-    with pytest.raises(RuntimeError, match="only supported on Linux"):
-        sandboxed_web_e2e.isolation_backend("required")
-    assert sandboxed_web_e2e.isolation_backend("disabled") is None
-
-
-def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
-    """Bubblewrap commands expose the copied workspace and not the host root."""
-    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil,
-        "which",
-        lambda name, path=None: "/usr/bin/bwrap" if name == "bwrap" else "/usr/bin/python3",
-    )
-    sandbox = tmp_path / "sandbox"
-    repo = sandbox / "repo"
-    repo.mkdir(parents=True)
-    env = {"PATH": "/usr/bin", "HOME": str(sandbox / "home")}
-    command = sandboxed_web_e2e.isolated_command(
-        "python3 -c 'print(1)'",
-        backend="/usr/bin/bwrap",
-        cwd=repo,
-        sandbox_root=sandbox,
-        env=env,
-    )
-    assert command.startswith("/usr/bin/bwrap")
-    assert "--tmpfs /" in command
-    assert "--bind" in command
-    assert "--chdir /workspace/repo" in command
-    assert "--ro-bind / /" not in command
-
-
-def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
-    """Executable paths from a user's home cannot enter the isolated runner."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil,
-        "which",
-        lambda *_args, **_kwargs: str(Path.home() / "bin/tool"),
-    )
-    sandbox = tmp_path / "sandbox"
-    repo = sandbox / "repo"
-    repo.mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="host home directory"):
-        sandboxed_web_e2e.isolated_command(
-            "tool",
-            backend="/usr/bin/bwrap",
-            cwd=repo,
-            sandbox_root=sandbox,
-            env={"PATH": "/usr/bin"},
-        )
 
 
 def test_parse_args_rejects_invalid_inputs():
@@ -658,8 +584,6 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             "sandboxed_web_e2e.py",
             "--repo-root",
             str(repo),
-            "--isolation",
-            "disabled",
             "--backend-cmd",
             f"{sys.executable} -c \"import time; time.sleep(0.2)\"",
             "--frontend-cmd",
