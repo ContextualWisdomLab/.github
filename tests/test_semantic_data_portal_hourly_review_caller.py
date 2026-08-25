@@ -37,7 +37,7 @@ def test_semantic_data_portal_caller_is_hourly_bounded_and_non_cancelling() -> N
     """The portal receives one realistic repair opportunity without overlap cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "31 * * * *"' in caller
+    assert 'cron: "59 * * * *"' in caller
     assert "group: semantic-data-portal-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
@@ -74,16 +74,16 @@ def test_semantic_data_portal_caller_preserves_credentials_and_read_only_token_s
 
 
 def test_semantic_data_portal_caller_cron_avoids_other_callers() -> None:
-    """Minute 31 does not collide with any other product caller heartbeat."""
+    """Minute 59 does not collide with any other product caller heartbeat."""
     caller = _read(CALLER)
-    assert '- cron: "31 * * * *"' in caller
+    assert '- cron: "59 * * * *"' in caller
     other_minutes = {
         minute
         for path in Path(".github/workflows").glob("*hourly-review-repair.yml")
         if path != CALLER
         for minute in re.findall(r'cron:\s*["\'](\d+) \* \* \* \*["\']', _read(path))
     }
-    assert "31" not in other_minutes
+    assert "59" not in other_minutes
 
 
 def test_semantic_data_portal_caller_doctoring_records_rca_feasibility_and_latency() -> None:
@@ -101,7 +101,7 @@ def test_semantic_data_portal_caller_doctoring_records_rca_feasibility_and_laten
         "PR_REVIEW_MERGE_TOKEN",
         "OPENCODE_APPROVE_TOKEN",
         "ContextualWisdomLab/semantic-data-portal",
-        "minute 31",
+        "minute 59",
     ):
         assert phrase in doctoring, phrase
 

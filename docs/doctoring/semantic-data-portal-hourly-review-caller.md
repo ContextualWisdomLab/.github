@@ -3,11 +3,12 @@
 ## Decision
 
 ContextualWisdomLab operates one protected hourly caller for
-`ContextualWisdomLab/semantic-data-portal`. The caller runs at minute 31,
+`ContextualWisdomLab/semantic-data-portal`. The caller runs at minute 59,
 delegates to the product-neutral central review-fix scheduler, inspects at most
 50 open pull requests, and dispatches at most one bounded repair per heartbeat.
-The minute avoids every other caller's cron slot (2, 10, 14, 16, 21, 23, 27,
-37, 43, 49, 53, 58) and the minute-zero runner surge.
+The minute is reserved for semantic-data-portal in the organization caller
+ledger and avoids every other caller's cron slot and the minute-zero runner
+surge.
 
 The caller does not implement review or mutation logic itself. It keeps the
 portal independently operable while centralizing privileged automation in

@@ -2,9 +2,10 @@ name: Semantic Data Portal Hourly Review Repair
 
 on:
   schedule:
-    # Minute 31 avoids the taken caller minutes (2, 10, 14, 16, 21, 23, 27,
-    # 37, 43, 49, 53, 58) and the minute-zero runner surge.
-    - cron: "31 * * * *"
+    # Minute 59 is reserved for semantic-data-portal in the organization
+    # caller ledger; it avoids every other product heartbeat and the
+    # minute-zero runner surge.
+    - cron: "59 * * * *"
 
 concurrency:
   group: semantic-data-portal-hourly-review-repair
