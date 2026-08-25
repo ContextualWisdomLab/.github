@@ -303,7 +303,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_TOTAL_TIMEOUT_SECONDS:" "strix workflow must not expose total timeout env names in GitHub logs"
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
-	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
+	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
 	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
@@ -360,9 +360,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "openai-direct/gpt-5.4" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
@@ -771,7 +771,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review includes a broad catalog fallback pool"
 	assert_file_not_contains "$workflow_file" "steps.opencode_review_model_pool.outcome == 'success'" "opencode approval gate still runs after model pool failure to publish a reason"
 	assert_file_contains "$workflow_file" "opencode-free/north-mini-code-free" "opencode review starts public repository reviews with a free coding model"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review retains paid Zen and DeepSeek V3 before full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review retains paid Zen and DeepSeek V3 before full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "The publish gate re-runs source-backed validation against PR-head data" "opencode review publish gate validates model output against the PR-head worktree"
 	assert_file_contains "$workflow_file" '"openai/o3"' "opencode config declares OpenAI o3 fallback"
 	assert_file_contains "$workflow_file" '"openai/o4-mini"' "opencode config declares OpenAI o4-mini fallback"
@@ -922,7 +922,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries paid Zen and DeepSeek V3 before OpenAI fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review tries paid Zen and DeepSeek V3 before OpenAI fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1" "opencode review keeps DeepSeek reasoning fallback coverage after OpenAI candidates"
 	assert_file_contains "$workflow_file" "coverage-source-tree:" "opencode workflow materializes coverage source before running PR-head tests"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
@@ -1273,7 +1273,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'repos/${GH_REPOSITORY}' "opencode review workflow uses env-backed repository context in shell commands"
 	assert_file_contains "$workflow_file" "Run OpenCode PR Review model pool" "opencode review starts the central model pool"
 	assert_file_contains "$workflow_file" "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free" "opencode review keeps all NVIDIA NIM candidates inside the public-repository pool"
-	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.6-luna openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review keeps paid Zen, DeepSeek V3, and full-size GPT fallbacks"
+	assert_file_contains "$workflow_file" "opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5" "opencode review keeps paid Zen, DeepSeek V3, and full-size GPT fallbacks"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-r1-0528" "opencode review keeps a reachable DeepSeek R1 reasoning fallback model"
 	assert_file_contains "$workflow_file" "github-models/deepseek/deepseek-v3-0324" "opencode review has a reachable DeepSeek V3 fallback model"
 	assert_file_not_contains "$workflow_file" "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" "opencode review never falls back from the scoped NVIDIA NIM secret to the legacy provider secret"
@@ -3398,7 +3398,7 @@ REPORT
 		;;
 	openai-direct-quota-github-models-fallback-success)
 		case "${STRIX_LLM:-}" in
-		openai/gpt-5.6-luna)
+		openai/gpt-5.4)
 			if [ "${LLM_API_KEY:-}" != "dummy" ]; then
 				echo "unexpected direct-OpenAI key for primary (${LLM_API_KEY:-<unset>})" >&2
 				exit 15
@@ -6226,12 +6226,12 @@ run_filtered_gate_case_if_requested() {
 		;;
 	openai-direct-quota-github-models-fallback-success)
 		run_gate_case "openai-direct-quota-github-models-fallback-success" \
-			"openai_direct/gpt-5.6-luna" \
+			"openai_direct/gpt-5.4" \
 			"" \
 			"0" \
 			"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
 			"2" \
-			"openai/gpt-5.6-luna|openai/o3" \
+			"openai/gpt-5.4|openai/o3" \
 			"<unset>|https://models.github.ai/inference" \
 			"vertex_ai" \
 			"" \
@@ -12708,12 +12708,12 @@ run_gate_case "github-models-token-limit-fallback-success" \
 # GitHub Models candidate, switching both the API base and the API key per
 # model (the fake strix asserts the key swap and exits nonzero on a leak).
 run_gate_case "openai-direct-quota-github-models-fallback-success" \
-	"openai_direct/gpt-5.6-luna" \
+	"openai_direct/gpt-5.4" \
 	"" \
 	"0" \
 	"REGEX:Strix quick scan succeeded with fallback model 'github_models/openai/o3' in [0-9]+s\\." \
 	"2" \
-	"openai/gpt-5.6-luna|openai/o3" \
+	"openai/gpt-5.4|openai/o3" \
 	"<unset>|https://models.github.ai/inference" \
 	"vertex_ai" \
 	"" \
