@@ -308,6 +308,17 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     )
 
 
+def test_strix_does_not_claim_cross_repository_concurrency_serialization() -> None:
+    """Keep cross-repository NIM serialization in the central dispatch queue."""
+    workflow = workflow_text("strix.yml")
+
+    assert "strix-org-wide-nim-scan" not in workflow
+    assert "GitHub Actions concurrency groups are repository-scoped" in workflow
+    assert "central default-branch repository_dispatch queue" in workflow
+    assert "ORG_SWEEP_REVIEW_DISPATCH_LIMIT" in workflow
+    assert "one pending run" in workflow
+
+
 def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
     """Normalize the Strix executable before its trusted hash is computed."""
     workflow = workflow_text("strix.yml")
@@ -505,7 +516,7 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     assert strix.returncode == 0, strix.stderr
     assert {
         "provider_mode=openai_direct",
-        "strix_model=gpt-5.6-luna",
+        "strix_model=gpt-5.4",
     } <= set(strix_output.read_text().splitlines())
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"

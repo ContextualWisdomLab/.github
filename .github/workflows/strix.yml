@@ -92,16 +92,14 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # Org-wide scan serialization: NVIDIA NIM's shared tenant key 429s when
-    # every member repo's PR scans fire in parallel, and the gate correctly
-    # fails closed on provider unavailability -- so unrelated PRs were failing
-    # with zero findings purely from org-self-inflicted rate limits. A single
-    # broad group with cancel-in-progress: false QUEUES scans instead of
-    # racing them into the provider. The workflow-level per-PR group above
-    # still cancels superseded runs of the same PR.
-    concurrency:
-      group: strix-org-wide-nim-scan
-      cancel-in-progress: false
+    # GitHub Actions concurrency groups are repository-scoped and retain only
+    # one pending run. A static job group here would neither serialize scans
+    # across repositories nor preserve every pending PR; it would silently
+    # cancel valid evidence. Organization-wide provider serialization belongs
+    # to the central default-branch repository_dispatch queue, whose
+    # ORG_SWEEP_REVIEW_DISPATCH_LIMIT is the bounded shared budget. The
+    # workflow-level group above remains responsible for stale same-repository
+    # event cleanup and current-head binding.
     # Large repositories can require a legitimate full-hour review. The scanner
     # gets a 90-minute process budget and a 95-minute total retry budget; the
     # 100-minute step and 120-minute job leave deterministic time to preserve
