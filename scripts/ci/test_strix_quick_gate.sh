@@ -4641,6 +4641,10 @@ EOS
 		exit 0
 		;;
 	console-model-quality-warning-preserves-same-box-ratelimit)
+		# RateLimitError is retryable. Keeping it in the classified copy
+		# therefore tries the two default Vertex fallbacks. Deleting the
+		# whole box would hide the token, inspect would pass, and the
+		# gate would stop after one successful call.
 		cat <<'EOS'
 ╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
 │  MODEL QUALITY WARNING                                                       │
@@ -6611,12 +6615,12 @@ run_filtered_gate_case_if_requested() {
 	console-model-quality-warning-preserves-same-box-ratelimit)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-		"" \
+		"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 		"1" \
 		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-		"1" \
-		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-		"<unset>"
+		"3" \
+		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+		"<unset>|<unset>|<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -10740,12 +10744,12 @@ run_gate_case "report-model-quality-warning-preserves-same-box-failure" \
 
 run_gate_case "console-model-quality-warning-preserves-same-box-ratelimit" \
 	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-	"" \
+	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
 	"1" \
 	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-	"1" \
-	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-	"<unset>"
+	"3" \
+	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>"
 
 run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"vertex_ai/report-known-internal-warning-variant-sanitized" \
