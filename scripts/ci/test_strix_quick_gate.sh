@@ -3405,6 +3405,31 @@ REPORT
 			;;
 		esac
 		;;
+	nvidia-rate-limit-openai-direct-fallback-clears-api-base)
+		case "${STRIX_LLM:-}" in
+		nvidia_nim/nvidia/rate-limited-primary)
+			echo "LLM CONNECTION FAILED"
+			echo "Error: litellm.RateLimitError: Nvidia_nimException - Error code: 429 Too Many Requests"
+			exit 1
+			;;
+		openai/gpt-5.4)
+			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
+				echo "unexpected direct-OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
+				exit 26
+			fi
+			if [ -n "${LLM_API_BASE:-}" ]; then
+				echo "direct OpenAI fallback inherited foreign API base ${LLM_API_BASE}" >&2
+				exit 27
+			fi
+			echo "scan ok after direct-OpenAI fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected cross-provider model ${STRIX_LLM:-}" >&2
+			exit 28
+			;;
+		esac
+		;;
 	openai-direct-quota-github-models-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5.4)
@@ -5669,6 +5694,10 @@ PY
 			FAKE_STRIX_OUTSIDE_REPORT_DIR="$repo_root_dir/outside-strix-report"
 		)
 	fi
+	if [ "$scenario" = "nvidia-rate-limit-openai-direct-fallback-clears-api-base" ]; then
+		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
+		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+	fi
 	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
 		printf '%s' 'github-models-fallback-token' >"$tmp_dir/github_models_key.txt"
@@ -5769,6 +5798,7 @@ PY
 			-u STRIX_VERTEX_FALLBACK_MODELS \
 			-u STRIX_GEMINI_FALLBACK_MODELS \
 			-u STRIX_FALLBACK_MODELS \
+			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
 			"${env_cmd[@]}" \
 			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
@@ -6120,6 +6150,36 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	nvidia-rate-limit-openai-direct-fallback-clears-api-base)
+		run_gate_case_allow_provider_signal "nvidia-rate-limit-openai-direct-fallback-clears-api-base" \
+			"nvidia_nim/nvidia/rate-limited-primary" \
+			"" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'openai-direct/gpt-5.4' in [0-9]+s\\." \
+			"2" \
+			"nvidia_nim/nvidia/rate-limited-primary|openai/gpt-5.4" \
+			"https://integrate.api.nvidia.com/v1|<unset>" \
+			"nvidia_nim" \
+			"https://integrate.api.nvidia.com/v1" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"" \
+			"0" \
+			"" \
+			"" \
+			"" \
+			"__SAME_AS_FALLBACK_MODELS__" \
+			"openai-direct/gpt-5.4"
 		;;
 	openai-direct-quota-github-models-fallback-success)
 		run_gate_case "openai-direct-quota-github-models-fallback-success" \
@@ -10158,6 +10218,35 @@ run_gate_case_allow_provider_signal "nvidia-overloaded-direct-fallback-success" 
 	"" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"nvidia_nim/nvidia/fallback-one openai-direct/gpt-5.4"
+
+run_gate_case_allow_provider_signal "nvidia-rate-limit-openai-direct-fallback-clears-api-base" \
+	"nvidia_nim/nvidia/rate-limited-primary" \
+	"" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'openai-direct/gpt-5.4' in [0-9]+s\\." \
+	"2" \
+	"nvidia_nim/nvidia/rate-limited-primary|openai/gpt-5.4" \
+	"https://integrate.api.nvidia.com/v1|<unset>" \
+	"nvidia_nim" \
+	"https://integrate.api.nvidia.com/v1" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__SAME_AS_FALLBACK_MODELS__" \
+	"openai-direct/gpt-5.4"
 
 run_gate_case_allow_provider_signal "gemini-timeout-direct-fallback-success" \
 	"gemini/retry-timeout-primary" \
