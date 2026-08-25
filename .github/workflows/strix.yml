@@ -910,6 +910,8 @@ jobs:
           # deterministic 120-minute job budget, and all-terminal outcomes
           # remain fail-closed.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
+          strix_attempt_audit_log="$RUNNER_TEMP/strix_gate_attempts.log"
+          : > "$strix_attempt_audit_log"
           strix_rc=0
           strix_gate_attempt=1
           strix_gate_deadline=$(( SECONDS + 6000 ))
@@ -924,6 +926,10 @@ jobs:
               : > "$strix_run_log"
               echo "Configured model and fallback models were unavailable before another bounded retry could start: only ${remaining_seconds}s remain in the outer Strix deadline." | tee "$strix_run_log" >&2
               strix_rc=1
+              {
+                printf "=== outer-attempt=%s rc=%s ===\\n" "$strix_gate_attempt" "$strix_rc"
+                cat "$strix_run_log"
+              } >> "$strix_attempt_audit_log"
               break
             fi
             attempt_budget_seconds=$(( remaining_seconds - 300 ))
@@ -940,6 +946,10 @@ jobs:
             : > "$strix_run_log"
             bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_run_log"
             strix_rc="${PIPESTATUS[0]}"
+            {
+              printf "=== outer-attempt=%s rc=%s ===\\n" "$strix_gate_attempt" "$strix_rc"
+              cat "$strix_run_log"
+            } >> "$strix_attempt_audit_log"
             if [ "$strix_rc" -eq 0 ]; then
               break
             fi
@@ -1030,6 +1040,10 @@ jobs:
           done
           if [ -f "$RUNNER_TEMP/strix_gate_console.log" ]; then
             cp "$RUNNER_TEMP/strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log"
+            copied_reports=1
+          fi
+          if [ -f "$RUNNER_TEMP/strix_gate_attempts.log" ]; then
+            cp "$RUNNER_TEMP/strix_gate_attempts.log" "$GITHUB_WORKSPACE/strix_runs/gate-attempts.log"
             copied_reports=1
           fi
           if [ -n "$(find "$GITHUB_WORKSPACE/strix_runs" -mindepth 1 -print -quit)" ]; then
