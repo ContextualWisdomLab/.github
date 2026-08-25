@@ -76,9 +76,10 @@ Semantic Versioning where the repository publishes a release.
   remain loopback, while rejecting userinfo, missing hosts, IPv4-mapped
   public addresses, unspecified bind addresses, and metadata destinations
   before any request is opened.
-- Strip only a complete Strix `MODEL QUALITY WARNING` box before
-  infrastructure-signal matching, keep a preceding Fatal/Denied box, and
-  classify a sanitized console copy so `gate-last-attempt.log` stays raw.
+- Strip only the Strix `MODEL QUALITY WARNING` heading line before
+  infrastructure-signal matching so a Fatal/Denied/Warning in the same
+  box stays visible, keep a preceding Fatal/Denied box, and classify a
+  sanitized console copy so `gate-last-attempt.log` stays raw.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning

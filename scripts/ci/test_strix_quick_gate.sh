@@ -4616,6 +4616,30 @@ EOS
 		echo "scan ok but prior fatal report box must remain"
 		exit 0
 		;;
+	console-model-quality-warning-preserves-same-box-failure)
+		# A whole-box delete would drop this Fatal with the heading
+		# and fail open. Strip only the cosmetic heading line.
+		cat <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  MODEL QUALITY WARNING                                                       │
+│  Fatal: LLM CONNECTION FAILED after 3 retries                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Penetration test completed
+Vulnerabilities 0 (No exploitable vulnerabilities detected)
+EOS
+		exit 0
+		;;
+	report-model-quality-warning-preserves-same-box-failure)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-model-quality-same-box-failure"
+		cat >"$STRIX_REPORTS_DIR/fake-model-quality-same-box-failure/strix.log" <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  MODEL QUALITY WARNING                                                       │
+│  Provider WARNING: report evidence is incomplete                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+EOS
+		echo "scan returned zero findings with incomplete evidence in the banner box"
+		exit 0
+		;;
 	bare-timeout-with-provider-marker)
 		# Emit bare "Connection timed out" alongside a provider marker so
 		# is_timeout_error() matches the Tier 3 branch gated on
@@ -5955,6 +5979,24 @@ PY
 			"scenario=$scenario still strips the cosmetic report banner"
 	fi
 
+	if [ "$scenario" = "console-model-quality-warning-preserves-same-box-failure" ]; then
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
+			"Fatal: LLM CONNECTION FAILED after 3 retries" \
+			"scenario=$scenario keeps the raw same-box Fatal line in last-attempt"
+	fi
+
+	if [ "$scenario" = "report-model-quality-warning-preserves-same-box-failure" ]; then
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/fake-model-quality-same-box-failure/strix.log" \
+			"Provider WARNING: report evidence is incomplete" \
+			"scenario=$scenario keeps same-box provider warning evidence"
+		assert_file_not_contains \
+			"$repo_root_dir/strix_runs/fake-model-quality-same-box-failure/strix.log" \
+			"MODEL QUALITY WARNING" \
+			"scenario=$scenario still strips only the cosmetic heading"
+	fi
+
 	if [ "$scenario" = "report-known-internal-warning-variant-sanitized" ]; then
 		assert_file_not_contains \
 			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
@@ -6526,6 +6568,26 @@ run_filtered_gate_case_if_requested() {
 		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
 		"1" \
 		"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
+		"<unset>"
+		;;
+	console-model-quality-warning-preserves-same-box-failure)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
+		"" \
+		"1" \
+		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+		"1" \
+		"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
+		"<unset>"
+		;;
+	report-model-quality-warning-preserves-same-box-failure)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
+		"" \
+		"1" \
+		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+		"1" \
+		"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
 		"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
@@ -10628,6 +10690,24 @@ run_gate_case "report-model-quality-warning-preserves-prior-fatal-box" \
 	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
 	"1" \
 	"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
+	"<unset>"
+
+run_gate_case "console-model-quality-warning-preserves-same-box-failure" \
+	"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
+	"<unset>"
+
+run_gate_case "report-model-quality-warning-preserves-same-box-failure" \
+	"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
+	"" \
+	"1" \
+	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+	"1" \
+	"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
 	"<unset>"
 
 run_gate_case "report-known-internal-warning-variant-sanitized" \

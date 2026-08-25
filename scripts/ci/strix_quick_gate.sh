@@ -153,9 +153,10 @@ preserve_attempt_log() {
 
 # Write a classification copy of the raw console transcript. Never mutate
 # $STRIX_LOG: publish_artifact_reports copies it to gate-last-attempt.log.
-# Remove only a complete box that itself contains MODEL QUALITY WARNING.
-# A cross-box wildcard from the first ╭ to a later ╰ would erase a
-# preceding Fatal/Denied box (fail-open).
+# Remove only the cosmetic MODEL QUALITY WARNING heading line. Deleting a
+# whole box would hide a Fatal/Denied/Warning emitted in that same box
+# (fail-open). A cross-box wildcard from the first ╭ to a later ╰ would
+# also erase a preceding Fatal/Denied box.
 sanitize_strix_console_log() {
 	local src="$1"
 	local dest="$2"
@@ -167,44 +168,30 @@ sanitize_strix_console_log() {
 	fi
 	python3 - "$src" "$dest" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 src = Path(sys.argv[1])
 dest = Path(sys.argv[2])
+model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
+ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
-def strip_model_quality_warning_boxes(text: str) -> str:
-    pieces: list[str] = []
-    index = 0
-    length = len(text)
-    while index < length:
-        start = text.find("╭", index)
-        if start < 0:
-            pieces.append(text[index:])
-            break
-        pieces.append(text[index:start])
-        close = text.find("╰", start)
-        if close < 0:
-            pieces.append(text[start:])
-            break
-        line_end = text.find("\n", close)
-        if line_end < 0:
-            box = text[start:]
-            index = length
-        else:
-            box = text[start : line_end + 1]
-            index = line_end + 1
-        if "MODEL QUALITY WARNING" in box:
+def strip_model_quality_warning_heading(text: str) -> str:
+    kept: list[str] = []
+    for line in text.splitlines(keepends=True):
+        plain = ansi_csi.sub("", line.rstrip("\r\n"))
+        if model_quality_heading.fullmatch(plain):
             continue
-        pieces.append(box)
-    return "".join(pieces)
+        kept.append(line)
+    return "".join(kept)
 
 
 try:
     text = src.read_text(encoding="utf-8")
 except UnicodeDecodeError:
     raise SystemExit(0)
-dest.write_text(strip_model_quality_warning_boxes(text), encoding="utf-8")
+dest.write_text(strip_model_quality_warning_heading(text), encoding="utf-8")
 PY
 }
 
@@ -231,31 +218,18 @@ known_internal_warning = re.compile(
 )
 
 
-def strip_model_quality_warning_boxes(text: str) -> str:
-    pieces: list[str] = []
-    index = 0
-    length = len(text)
-    while index < length:
-        start = text.find("╭", index)
-        if start < 0:
-            pieces.append(text[index:])
-            break
-        pieces.append(text[index:start])
-        close = text.find("╰", start)
-        if close < 0:
-            pieces.append(text[start:])
-            break
-        line_end = text.find("\n", close)
-        if line_end < 0:
-            box = text[start:]
-            index = length
-        else:
-            box = text[start : line_end + 1]
-            index = line_end + 1
-        if "MODEL QUALITY WARNING" in box:
+model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
+ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def strip_model_quality_warning_heading(text: str) -> str:
+    kept = []
+    for line in text.splitlines(keepends=True):
+        plain = ansi_csi.sub("", line.rstrip("\r\n"))
+        if model_quality_heading.fullmatch(plain):
             continue
-        pieces.append(box)
-    return "".join(pieces)
+        kept.append(line)
+    return "".join(kept)
 
 
 def iter_report_logs(root: Path):
@@ -278,7 +252,7 @@ for log_path in iter_report_logs(root):
         original = log_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         continue
-    text = strip_model_quality_warning_boxes(original)
+    text = strip_model_quality_warning_heading(original)
     lines = text.splitlines(keepends=True)
     filtered = [line for line in lines if not known_internal_warning.match(line)]
     text = "".join(filtered)
