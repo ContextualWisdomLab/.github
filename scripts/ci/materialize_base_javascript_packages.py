@@ -35,6 +35,24 @@ PNPM_DIRECTORY_RE = re.compile(r"directory:\s*\"?([^,\"}]+)\"?")
 PNPM_LINK_TRUE_RE = re.compile(r"link:\s*true\b")
 
 
+def _github_actions_escape(value: object) -> str:
+    """Escape untrusted text before writing it to a GitHub Actions log.
+
+    GitHub Actions recognizes workflow commands in log lines. Repository paths
+    and git diagnostics can contain command delimiters, newlines, or percent
+    escapes when a pull request controls the tree, so diagnostics must never be
+    emitted verbatim. The manifest itself remains raw; this helper only protects
+    the human-readable CLI output.
+    """
+    return (
+        str(value)
+        .replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace(":", "%3A")
+    )
+
+
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
     """Run one read-only git command in the materialized repository."""
     completed = subprocess.run(
@@ -609,7 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
-            f"::error::Could not materialize base JavaScript package locks: {exc}",
+            "::error::Could not materialize base JavaScript package locks: "
+            f"{_github_actions_escape(exc)}",
             file=sys.stderr,
         )
         return 1
@@ -618,9 +637,11 @@ def main(argv: list[str] | None = None) -> int:
         for entry in manifest:
             print(
                 "Materialized trusted JavaScript lock "
-                f"{entry['source']} for {entry['package_manager']} "
-                f"from {entry['revision_sha']} as "
-                f"{entry['directory']}/{pathlib.PurePosixPath(entry['source']).name}."
+                f"{_github_actions_escape(entry['source'])} for "
+                f"{_github_actions_escape(entry['package_manager'])} from "
+                f"{_github_actions_escape(entry['revision_sha'])} as "
+                f"{_github_actions_escape(entry['directory'])}/"
+                f"{_github_actions_escape(pathlib.PurePosixPath(entry['source']).name)}."
             )
     else:
         print(

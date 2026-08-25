@@ -793,6 +793,49 @@ def test_main_reports_materialized_lock(
     )
 
 
+def test_main_escapes_pull_request_paths_in_github_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malicious repository path cannot emit a second Actions command."""
+    malicious_source = "::set-output name=leak::value\nfrontend/package-lock.json"
+    monkeypatch.setattr(
+        materializer,
+        "materialize",
+        lambda *_args, **_kwargs: [
+            {
+                "directory": "project-000",
+                "lock_blob": "b" * 40,
+                "package_manager": "npm",
+                "revision_sha": "a" * 40,
+                "source": malicious_source,
+            }
+        ],
+    )
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "\n::set-output" not in output
+    assert (
+        "%3A%3Aset-output name=leak%3A%3Avalue%0Afrontend/package-lock.json"
+        in output
+    )
+
+
 def test_main_reports_empty_base(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
