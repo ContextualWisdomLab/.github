@@ -1435,8 +1435,8 @@ jobs:
             local head_blob="$2"
             jq -e \
               --arg source "$relative_lock" \
-              --arg revision "$PR_HEAD_SHA" \
-              --arg blob "$head_blob" \
+              --arg revision "${PR_HEAD_SHA,,}" \
+              --arg blob "${head_blob,,}" \
               'any(.[]; .source == $source and .revision_sha == $revision and .lock_blob == $blob)' \
               /opt/javascript-package-locks/manifest.json >/dev/null 2>&1
           }
