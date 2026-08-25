@@ -652,6 +652,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "because the coverage source artifact was tampered with"
     ) in pnpm_trust_block
     assert "trusted_manifest_records_lock_revision" in pnpm_trust_block
+    assert '--arg manager "pnpm"' in measure_step
+    assert ".package_manager == $manager" in measure_step
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
     assert ".revision_sha == $revision and .lock_blob == $blob" in measure_step
     # Manifest records normalize Git object identities to lowercase; pnpm trust
