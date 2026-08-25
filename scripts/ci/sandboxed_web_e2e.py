@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import signal
 import shutil
 import shlex
@@ -26,6 +27,7 @@ from scripts.ci import sandboxed_verify
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
+SANDBOX_MOUNT = "/workspace"
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -65,6 +67,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--e2e-timeout", type=int, default=600, help="Seconds to allow the E2E command to run.")
     parser.add_argument("--keep-sandbox", action="store_true", help="Keep the temporary sandbox after execution.")
     parser.add_argument(
+        "--isolation",
+        choices=("required", "disabled"),
+        default="required",
+        help=(
+            "Require a bubblewrap OS sandbox (the default). Use disabled only for "
+            "trusted local debugging when bubblewrap is unavailable."
+        ),
+    )
+    parser.add_argument(
         "--allow-env",
         action="append",
         default=[],
@@ -97,6 +108,70 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if not sandboxed_verify.ENV_NAME_RE.match(name):
             parser.error(f"--allow-env must be an environment variable name: {name}")
     return args
+
+
+def isolation_backend(mode: str) -> str | None:
+    """Resolve the requested OS isolation backend without silently downgrading."""
+    if mode == "disabled":
+        return None
+    if platform.system() != "Linux":
+        raise RuntimeError("required isolation is only supported on Linux with bubblewrap")
+    backend = shutil.which("bwrap")
+    if backend is None:
+        raise RuntimeError("required isolation needs bubblewrap (bwrap) on PATH")
+    return backend
+
+
+def _sandbox_environment(env: dict[str, str], sandbox_root: Path) -> dict[str, str]:
+    """Map host sandbox paths to the path exposed inside the bubblewrap mount."""
+    source = str(sandbox_root)
+    mapped = dict(env)
+    for key in ("HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        value = mapped.get(key)
+        if value:
+            mapped[key] = value.replace(source, SANDBOX_MOUNT, 1)
+    return mapped
+
+
+def isolated_command(
+    command: str,
+    *,
+    backend: str,
+    cwd: Path,
+    sandbox_root: Path,
+    env: dict[str, str],
+) -> str:
+    """Wrap one command in a read-only-root bubblewrap workspace."""
+    argv = shlex.split(command)
+    if not argv:
+        raise ValueError("command must not be empty")
+    executable = shutil.which(argv[0], path=env.get("PATH"))
+    if executable is not None and Path(executable).is_relative_to(Path.home()):
+        raise RuntimeError("commands from the host home directory are not allowed in isolation")
+    bind_roots = [Path(path) for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt") if Path(path).exists()]
+    args = [backend, "--die-with-parent", "--new-session", "--unshare-pid"]
+    for root in bind_roots:
+        args.extend(("--ro-bind", str(root), str(root)))
+    for path in ("/etc/ssl", "/etc/hosts", "/etc/resolv.conf", "/etc/localtime"):
+        if Path(path).exists():
+            args.extend(("--ro-bind", path, path))
+    args.extend(
+        (
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            "--bind",
+            str(sandbox_root),
+            SANDBOX_MOUNT,
+            "--chdir",
+            f"{SANDBOX_MOUNT}/{cwd.relative_to(sandbox_root)}",
+            "--",
+        )
+    )
+    return shlex.join([*args, *argv])
 
 
 def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs_dir: Path) -> Service:
@@ -202,6 +277,8 @@ def emit_result(
         "frontend_cmd": args.frontend_cmd,
         "frontend_ready": frontend_ready,
         "network": args.network,
+        "isolation": args.isolation,
+        "isolation_backend": getattr(args, "isolation_backend", "unknown"),
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
     }
@@ -223,13 +300,55 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
         env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
+        try:
+            backend = isolation_backend(args.isolation)
+        except RuntimeError as exc:
+            print(f"sandboxed-web-e2e: {exc}", file=sys.stderr)
+            args.isolation_backend = "unavailable"
+            exit_code = 126
+            return exit_code
+        args.isolation_backend = backend or "disabled"
         print(f"sandboxed-web-e2e: cwd={copied_repo}")
         if args.allow_env:
             print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
         if args.network != "default":
             print(f"sandboxed-web-e2e: network={args.network}")
-        services.append(start_service("backend", args.backend_cmd, copied_repo, env, logs_dir))
-        services.append(start_service("frontend", args.frontend_cmd, copied_repo, env, logs_dir))
+        command_env = _sandbox_environment(env, sandbox) if backend else env
+        backend_cmd = (
+            isolated_command(
+                args.backend_cmd,
+                backend=backend,
+                cwd=copied_repo,
+                sandbox_root=sandbox,
+                env=env,
+            )
+            if backend
+            else args.backend_cmd
+        )
+        frontend_cmd = (
+            isolated_command(
+                args.frontend_cmd,
+                backend=backend,
+                cwd=copied_repo,
+                sandbox_root=sandbox,
+                env=env,
+            )
+            if backend
+            else args.frontend_cmd
+        )
+        e2e_cmd = (
+            isolated_command(
+                args.e2e_cmd,
+                backend=backend,
+                cwd=copied_repo,
+                sandbox_root=sandbox,
+                env=env,
+            )
+            if backend
+            else args.e2e_cmd
+        )
+        services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
+        services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
         backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
         frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
         if not backend_ready or not frontend_ready:
@@ -237,7 +356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 125
             return exit_code
         try:
-            completed = run_shell(args.e2e_cmd, copied_repo, env, args.e2e_timeout)
+            completed = run_shell(e2e_cmd, copied_repo, command_env, args.e2e_timeout)
             if completed.stdout:
                 print(completed.stdout, end="")
             if completed.stderr:
