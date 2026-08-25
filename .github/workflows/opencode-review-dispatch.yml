@@ -4624,11 +4624,10 @@ jobs:
             CONTEXTUAL_ORCHESTRATOR_BASE_URL="http://127.0.0.1:18080/v1"
             export CONTEXTUAL_ORCHESTRATOR_TOKEN CONTEXTUAL_ORCHESTRATOR_BASE_URL
             echo "::add-mask::$CONTEXTUAL_ORCHESTRATOR_TOKEN"
-            export PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator${PYTHONPATH:+:$PYTHONPATH}"
             env -i \
               PATH="$PATH" \
               HOME="$HOME" \
-              PYTHONPATH="$PYTHONPATH" \
+              PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator${PYTHONPATH:+:$PYTHONPATH}" \
               BYTEZ_API_KEY="${BYTEZ_API_KEY:-}" \
               NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
               NVIDIA_NIM_API_KEY="${NVIDIA_NIM_API_KEY:-}" \

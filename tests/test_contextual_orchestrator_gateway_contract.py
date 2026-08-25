@@ -76,7 +76,10 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     )[0]
     assert "PATH=\"$PATH\"" in gateway_launch
     assert "HOME=\"$HOME\"" in gateway_launch
-    assert "PYTHONPATH=\"$PYTHONPATH\"" in gateway_launch
+    assert (
+        'PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator'
+        '${PYTHONPATH:+:$PYTHONPATH}"' in gateway_launch
+    )
     assert "BYTEZ_API_KEY=\"${BYTEZ_API_KEY:-}\"" in gateway_launch
     assert "NVIDIA_NIM_API_KEY=\"${NVIDIA_NIM_API_KEY:-}\"" in gateway_launch
     assert "NVIDIA_NIM_API_KEY_SUB=\"${NVIDIA_NIM_API_KEY_SUB:-}\"" in gateway_launch
@@ -122,6 +125,11 @@ def test_gateway_checkout_failure_preserves_existing_review_provider_pool():
         '[ -f "$GITHUB_WORKSPACE/trusted-contextual-orchestrator/'
         'contextual_orchestrator/review_gateway.py" ]'
         in model_step
+    )
+    assert 'export PYTHONPATH=' not in model_step
+    assert (
+        'PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator'
+        '${PYTHONPATH:+:$PYTHONPATH}"' in model_step
     )
 
 
