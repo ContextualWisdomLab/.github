@@ -2423,6 +2423,11 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
+	if is_explicit_openai_model "$model" && ! is_explicit_openai_model "$PRIMARY_MODEL"; then
+		# A direct-OpenAI fallback must not inherit a foreign primary provider's
+		# endpoint (for example NVIDIA NIM or OpenRouter).
+		return 0
+	fi
 
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
