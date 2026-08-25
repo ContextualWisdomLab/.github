@@ -915,7 +915,8 @@ jobs:
           strix_rc=0
           strix_gate_attempt=1
           strix_gate_deadline=$(( SECONDS + 6000 ))
-          strix_gate_attempt_budget_seconds="${STRIX_TOTAL_TIMEOUT_SECONDS:-$process_budget_seconds}"
+          strix_gate_attempt_budget_var="STRIX_TOTAL_${budget_suffix}_SECONDS"
+          strix_gate_attempt_budget_seconds="${!strix_gate_attempt_budget_var:-$process_budget_seconds}"
           set +e
           while : ; do
             strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_${strix_gate_attempt}.log"
