@@ -333,6 +333,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_known_strix_report_warnings" "strix gate sanitizes only known internal Strix report warnings"
 	assert_file_contains "$GATE_SCRIPT" "known_internal_warning = re.compile" "strix gate sanitizes known internal console warnings"
 	assert_file_contains "$GATE_SCRIPT" "dest.write_bytes(src.read_bytes())" "strix gate preserves byte-level console evidence after decode errors"
+	assert_file_contains "$GATE_SCRIPT" "A missing source must not leave a prior attempt's classified copy active" "strix gate removes stale classified console copies"
 	assert_file_contains "$GATE_SCRIPT" 'MODEL QUALITY WARNING' "strix gate accepts the scanner's informational fallback-model banner"
 	assert_file_contains "$GATE_SCRIPT" 'unauthenticated requests to the HF Hub' "strix gate accepts the scanner dependency's non-fatal download warning"
 	assert_file_not_contains "$GATE_SCRIPT" 'known_scanner_warning = re.compile(r".*Warn' "strix gate does not broadly suppress warning-class evidence"

@@ -160,7 +160,14 @@ preserve_attempt_log() {
 sanitize_strix_console_log() {
 	local src="$1"
 	local dest="$2"
-	if [ -z "$src" ] || [ -z "$dest" ] || [ ! -f "$src" ] || [ -L "$src" ]; then
+	if [ -z "$src" ] || [ -z "$dest" ]; then
+		return 0
+	fi
+	if [ ! -f "$src" ] || [ -L "$src" ]; then
+		# A missing source must not leave a prior attempt's classified copy active.
+		if [ -f "$dest" ] && [ ! -L "$dest" ]; then
+			rm -f -- "$dest"
+		fi
 		return 0
 	fi
 	if [ -L "$dest" ]; then
