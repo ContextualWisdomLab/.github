@@ -193,8 +193,6 @@ def _run_gate_retry(gate_script: str) -> tuple[int, int]:
             env={"RUNNER_TEMP": temp_dir, "PATH": "/usr/bin:/bin"},
         )
         calls = int(counter.read_text().strip())
-    if completed.stdout.endswith(f"RC={completed.returncode}"):
-        pass
     return completed.returncode, calls
 
 
