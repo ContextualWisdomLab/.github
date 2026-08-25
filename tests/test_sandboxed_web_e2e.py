@@ -547,6 +547,7 @@ def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
         env=env,
     )
     assert command.startswith("/usr/bin/bwrap")
+    assert "--tmpfs /" in command
     assert "--bind" in command
     assert "--chdir /workspace/repo" in command
     assert "--ro-bind / /" not in command

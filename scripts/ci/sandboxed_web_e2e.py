@@ -150,7 +150,7 @@ def isolated_command(
     if executable is not None and Path(executable).is_relative_to(Path.home()):
         raise RuntimeError("commands from the host home directory are not allowed in isolation")
     bind_roots = [Path(path) for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt") if Path(path).exists()]
-    args = [backend, "--die-with-parent", "--new-session", "--unshare-pid"]
+    args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
     for path in ("/etc/ssl", "/etc/hosts", "/etc/resolv.conf", "/etc/localtime"):
