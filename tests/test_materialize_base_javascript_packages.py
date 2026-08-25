@@ -1073,6 +1073,91 @@ def test_validate_head_pnpm_lock_accepts_fetch_words_in_deprecation_text() -> No
         "pnpm-lock.yaml", content.encode("utf-8")
     )
 
+
+@pytest.mark.parametrize(
+    ("directory", "accepted"),
+    (
+        ("packages/example", True),
+        ("/tmp/example", False),
+        ("../example", False),
+        ("node_modules/example", False),
+    ),
+)
+def test_validate_head_pnpm_lock_bounds_workspace_directory_variants(
+    directory: str, accepted: bool
+) -> None:
+    """Workspace targets are admitted only when they remain project-relative."""
+    content = (
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  workspace@example:\n"
+        f"    resolution: {{directory: {directory}, link: true}}\n"
+    ).encode("utf-8")
+
+    if accepted:
+        materializer.validate_head_pnpm_lock("pnpm-lock.yaml", content)
+    else:
+        with pytest.raises(ValueError, match="unsafe directory target"):
+            materializer.validate_head_pnpm_lock("pnpm-lock.yaml", content)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    (
+        (b"\xff", "invalid UTF-8"),
+        (b"lockfileVersion: '9.0'\npackages:\n  : malformed\n", "unexpected two-space entry"),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  first@1.0.0:\n  second@1.0.0:\n",
+            "first@1.0.0 has no resolution entry",
+        ),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  malformed@1.0.0:\n    resolution:\n",
+            "multi-line or malformed resolution mapping",
+        ),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  workspace@example:\n    resolution: {link: true}\n",
+            "must carry a relative directory target",
+        ),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  weak@1.0.0:\n    resolution: {integrity: sha256-weak}\n",
+            "must pin exactly one SHA-512 integrity value",
+        ),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  tarball@1.0.0:\n    tarball: https://registry.npmjs.org/tarball/-/tarball-1.0.0.tgz\n",
+            "carries an out-of-band fetch source",
+        ),
+        (
+            b"lockfileVersion: '9.0'\npackages:\n  git@1.0.0:\n    git+https://example.invalid/git.git\n",
+            "carries an out-of-band fetch source",
+        ),
+        (b"lockfileVersion: '9.0'\npackages:\n", "contains no package entries"),
+    ),
+)
+def test_validate_head_pnpm_lock_rejects_malformed_structures(
+    content: bytes, message: str
+) -> None:
+    """Every structural fail-closed path remains executable evidence."""
+    with pytest.raises(ValueError, match=message):
+        materializer.validate_head_pnpm_lock("pnpm-lock.yaml", content)
+
+
+def test_validate_head_pnpm_lock_rejects_invalid_tarball_port() -> None:
+    """A non-numeric registry port cannot escape URL validation as metadata."""
+    integrity = "sha512-" + ("G" * 86) + "=="
+    content = (
+        "lockfileVersion: '9.0'\n"
+        "packages:\n"
+        "  invalid-port@1.0.0:\n"
+        "    resolution: {tarball: "
+        "https://registry.npmjs.org:not-a-port/invalid-port/-/invalid-port-1.0.0.tgz, "
+        f"integrity: {integrity}}}\n"
+    )
+    with pytest.raises(ValueError, match="invalid tarball URL"):
+        materializer.validate_head_pnpm_lock(
+            "pnpm-lock.yaml", content.encode("utf-8")
+        )
+
+
 def test_validate_head_pnpm_lock_rejects_empty_and_git_sources() -> None:
     """Empty locks and VCS fetch sources fail closed."""
     with pytest.raises(ValueError, match="empty"):
