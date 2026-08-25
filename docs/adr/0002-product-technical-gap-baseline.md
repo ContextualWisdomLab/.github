@@ -18,3 +18,15 @@ exists. ContextualWisdomLab/.github#1295 exact head
 provider-404 regression contracts. This does not convert provider failure into
 clean security evidence or authorize a merge; current-head Checks and
 independent approvals remain required.
+
+## Amendment: central Strix fallback contract (2026-08-25)
+
+The current `main` workflow (`a724582`) intentionally replaced the unavailable
+direct-OpenAI `gpt-5.6-luna` fallback with `gpt-5.4`, but the required-workflow
+smoke script still asserted the retired model. The privileged OpenCode model
+pool also retained the retired candidate while its contract tests had already
+moved to `gpt-5.4`. This mismatch failed consumer Strix checks, including
+ContextualWisdomLab/disksage#247, before any target-repository security
+analysis ran. The workflow, smoke contract, model-pool configuration, and
+regression tests now share `gpt-5.4`; the change does not weaken provider
+failure or vulnerability fail-closed behavior.

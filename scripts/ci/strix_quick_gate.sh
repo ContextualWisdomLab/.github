@@ -154,7 +154,7 @@ preserve_attempt_log() {
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
-		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		if [ -z "$report_root" ] || { [ ! -d "$report_root" ] && [ ! -f "$report_root" ]; } || [ -L "$report_root" ]; then
 			continue
 		fi
 		python3 - "$report_root" <<'PY'
@@ -172,9 +172,16 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_scanner_warning = re.compile(
+    r"^(?:│  MODEL QUALITY WARNING\s+│|"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+)
 
 
 def iter_report_logs(root: Path):
+    if root.is_file() and root.suffix == ".log":
+        yield root
+        return
     for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current_root)
         dir_names[:] = [
@@ -194,7 +201,12 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_scanner_warning.match(line)
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -2415,6 +2427,11 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
+	if is_explicit_openai_model "$model" && ! is_explicit_openai_model "$PRIMARY_MODEL"; then
+		# A direct-OpenAI fallback must not inherit a foreign primary provider's
+		# endpoint (for example NVIDIA NIM or OpenRouter).
+		return 0
+	fi
 
 	if is_explicit_openai_model "$model" && ! is_explicit_openai_model "$PRIMARY_MODEL"; then
 		# Cross-provider fallback: direct-OpenAI models must always use the
@@ -2811,7 +2828,7 @@ PY
 	fi
 	preserve_attempt_log "$model" "$rc"
 
-	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
@@ -2866,8 +2883,8 @@ is_llm_api_connection_error() {
 
 is_llm_service_unavailable_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
-		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|Service Unavailable)' "$STRIX_LOG"; then
+		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
+		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
 		return 0
 	fi
 
