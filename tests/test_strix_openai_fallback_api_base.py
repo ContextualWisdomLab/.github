@@ -9,7 +9,8 @@ contracted fallback could never complete a scan.
 
 The gate must therefore prefer an explicit
 ``STRIX_OPENAI_FALLBACK_API_BASE_FILE`` for explicit direct-OpenAI models, and
-fall back to litellm's default OpenAI endpoint when the override is absent.
+    fall back to a caller-supplied ``LLM_API_BASE_FILE`` for standalone custom
+    endpoints, or to litellm's default OpenAI endpoint when no base is supplied.
 """
 
 from __future__ import annotations
@@ -145,13 +146,20 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(api_base, OPENAI_FALLBACK_BASE)
 
-    def test_nvidia_primary_without_override_uses_default_openai(self) -> None:
-        """Without an override the resolver returns no base (litellm default)."""
+    def test_standalone_custom_base_is_honored_without_override(self) -> None:
+        """A standalone caller's explicit custom endpoint remains effective."""
 
         rc, api_base = _resolve_api_base(
             {"LLM_API_BASE_FILE": "https://integrate.api.nvidia.com/v1"},
             "openai-direct/gpt-5.4",
         )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "https://integrate.api.nvidia.com/v1")
+
+    def test_direct_openai_without_any_base_uses_default_openai(self) -> None:
+        """With no base file, LiteLLM still selects the native OpenAI endpoint."""
+
+        rc, api_base = _resolve_api_base({}, "openai-direct/gpt-5.4")
         self.assertEqual(rc, 0)
         self.assertEqual(api_base, "")
 
