@@ -186,7 +186,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "qwen3.6-plus-free"],
         ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.6-luna"],
+        ["openai", "gpt-5.4"],
         ["openrouter", "deepseek/deepseek-v3.2"],
         ["openrouter", "qwen/qwen3-coder"],
         ["github-models", "openai/gpt-4.1"],
@@ -197,7 +197,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "deepseek/deepseek-r1"],
     ]
     assert zen_models == ["gpt-5.6-terra"]
-    assert direct_openai_models == ["gpt-5.6-luna"]
+    assert direct_openai_models == ["gpt-5.4"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
@@ -1319,6 +1319,35 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     )
     assert 'git push origin "HEAD:${PR_HEAD_REF}"' not in worker
 
+    for protected_path in (
+        "backend/core/local_http.py",
+        "backend/core/url_validation.py",
+        "backend/tests/test_local_http.py",
+        "backend/tests/test_url_validation.py",
+        "docs/doctoring/local-http-origin-port-validation.md",
+    ):
+        assert protected_path in worker
+    assert "Autofix cannot delete or rename protected security-contract path" in worker
+    assert (
+        "Conflict resolution cannot delete or rename protected security-contract path"
+        in worker
+    )
+    assert "- name: Reject protected security-contract deletions and renames" in worker
+    protected_step = worker.split(
+        "- name: Reject protected security-contract deletions and renames", 1
+    )[1].split("- name: Validate changed files", 1)[0]
+    assert "if: env.RESOLVE_CONFLICT" not in protected_step
+    assert "git diff HEAD --name-status -- \"$protected_path\"" in protected_step
+    assert "git diff --name-status -- \"$protected_path\"" not in protected_step
+    conflict_step = worker.split(
+        "- name: Merge base branch and resolve conflicts with OpenCode", 1
+    )[1]
+    conflict_guard = conflict_step.split(
+        "# Fail closed: never push unresolved conflict markers.", 1
+    )[0]
+    assert "Conflict resolution cannot delete or rename protected security-contract path" in conflict_guard
+    assert 'git diff HEAD --name-status -- "$protected_path"' in conflict_guard
+
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
         encoding="utf-8"
@@ -1740,7 +1769,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         "opencode/gpt-5.6-terra "
         "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
@@ -1887,7 +1916,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
+        "openai/gpt-5.4 "
         "openrouter/deepseek/deepseek-v3.2 "
         "openrouter/qwen/qwen3-coder "
         "github-models/openai/gpt-4.1 "
