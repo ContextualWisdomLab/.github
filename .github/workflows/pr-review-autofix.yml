@@ -667,6 +667,27 @@ jobs:
               --allowed-paths "$conflicted_paths_file"
           fi
 
+          # Conflict resolution edits happen after the ordinary autofix guard;
+          # re-check the protected security contract immediately before staging
+          # so conflict-mode deletion and rename attempts also fail closed.
+          protected_security_paths=(
+            "backend/core/local_http.py"
+            "backend/core/url_validation.py"
+            "backend/tests/test_local_http.py"
+            "backend/tests/test_url_validation.py"
+            "docs/doctoring/local-http-origin-port-validation.md"
+          )
+          for protected_path in "${protected_security_paths[@]}"; do
+            while IFS=$'\t' read -r status _; do
+              case "$status" in
+                D|R*)
+                  echo "::error::Conflict resolution cannot delete or rename protected security-contract path: $protected_path"
+                  exit 1
+                  ;;
+              esac
+            done < <(git diff HEAD --name-status -- "$protected_path")
+          done
+
           # Fail closed: never push unresolved conflict markers.
           git add -A
           marker_report="$(git diff --cached --check 2>&1 || true)"

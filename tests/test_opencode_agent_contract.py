@@ -1328,6 +1328,10 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     ):
         assert protected_path in worker
     assert "Autofix cannot delete or rename protected security-contract path" in worker
+    assert (
+        "Conflict resolution cannot delete or rename protected security-contract path"
+        in worker
+    )
     assert "- name: Reject protected security-contract deletions and renames" in worker
     protected_step = worker.split(
         "- name: Reject protected security-contract deletions and renames", 1
@@ -1335,6 +1339,14 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     assert "if: env.RESOLVE_CONFLICT" not in protected_step
     assert "git diff HEAD --name-status -- \"$protected_path\"" in protected_step
     assert "git diff --name-status -- \"$protected_path\"" not in protected_step
+    conflict_step = worker.split(
+        "- name: Merge base branch and resolve conflicts with OpenCode", 1
+    )[1]
+    conflict_guard = conflict_step.split(
+        "# Fail closed: never push unresolved conflict markers.", 1
+    )[0]
+    assert "Conflict resolution cannot delete or rename protected security-contract path" in conflict_guard
+    assert 'git diff HEAD --name-status -- "$protected_path"' in conflict_guard
 
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
