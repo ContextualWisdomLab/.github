@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 CALLER = Path(".github/workflows/lineageweave-hourly-review-repair.yml")
+REUSABLE_SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
 DOCTORING = Path("docs/doctoring/lineageweave-hourly-review-caller.md")
 
 
@@ -9,6 +10,7 @@ def test_lineageweave_uses_reserved_heartbeat_and_target() -> None:
     """The caller schedules the real LineageWeave repair boundary."""
     caller = CALLER.read_text(encoding="utf-8")
 
+    assert REUSABLE_SCHEDULER.is_file()
     assert 'cron: "4 * * * *"' in caller
     assert "group: lineageweave-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
