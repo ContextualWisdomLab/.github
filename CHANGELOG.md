@@ -81,6 +81,14 @@ Semantic Versioning where the repository publishes a release.
   Fatal/Denied/Timeout or Provider WARNING, keep those lines. Keep a
   preceding Fatal/Denied box, and classify a sanitized console copy so
   `gate-last-attempt.log` stays raw.
+- Resolve Strix visibility from the trusted GitHub event for ordinary push,
+  schedule, and pull-request runs, reserving API retries for cross-repository
+  dispatches whose workflow token may not see the target repository.
+- Reconciled the Strix required-workflow smoke contract and the privileged
+  OpenCode model pool with the current `gpt-5.4` direct-OpenAI fallback after
+  `gpt-5.6-luna` was retired. This prevents every consumer repository's
+  required Strix check from failing on a stale central assertion or selecting a
+  nonexistent direct model.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
