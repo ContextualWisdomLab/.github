@@ -66,9 +66,9 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "Private repositories never start or select the gateway" in doctoring
     assert 'license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"' in workflow
     assert "SPDX-License-Identifier: MIT" in workflow
-    assert "spdx_license_id=MIT" in workflow
+    assert 'license_heading="$(sed -n \'1p\' "$license_file" 2>/dev/null || true)"' in workflow
+    assert '[ "$license_heading" = "MIT License" ]' in workflow
     assert f"spdx_mit_license_blob_sha={SPDX_MIT_LICENSE_BLOB_SHA}" in workflow
-    assert "SPDX-License-Identifier: MIT" in doctoring
     assert SPDX_MIT_LICENSE_BLOB_SHA in doctoring
 
     gateway_launch = workflow.rsplit("            env -i \\\n", 1)[1].split(
@@ -89,6 +89,18 @@ def test_isolated_opencode_review_uses_pinned_contextual_gateway():
     assert "OPENCODE_API_KEY" not in gateway_launch
     assert "GITHUB_TOKEN" not in gateway_launch
     assert "GITHUB_STATE=/dev/null" in gateway_launch
+
+
+def test_contextual_gateway_cleanup_escalates_after_bounded_graceful_shutdown():
+    """A non-terminating sidecar cannot stall the required review step forever."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    cleanup = workflow.split("          cleanup_contextual_gateway() {", 1)[1].split(
+        "          trap cleanup_contextual_gateway EXIT", 1
+    )[0]
+
+    assert "for cleanup_attempt in 1 2 3 4 5; do" in cleanup
+    assert 'kill -0 "$contextual_gateway_pid"' in cleanup
+    assert 'kill -KILL "$contextual_gateway_pid"' in cleanup
 
 
 def test_contextual_gateway_review_job_stays_loopback_only():

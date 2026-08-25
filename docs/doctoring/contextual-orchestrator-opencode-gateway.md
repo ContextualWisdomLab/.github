@@ -20,9 +20,9 @@ The gateway candidate is first in the model pool only for public repositories,
 after the pinned checkout succeeds, the sidecar reaches the unauthenticated
 `/healthz` liveness check, and an authenticated `/v1/models` response contains
 at least one non-empty model id. `/healthz` is liveness only. A missing or
-unreadable pinned revision, missing `LICENSE`, or a license whose SPDX identity
-(`SPDX-License-Identifier: MIT`) is not the allowlisted `MIT` blob
-(`591bbf197b355e60604618c8a8a50bc5a839b204`) is non-fatal:
+unreadable pinned revision, missing `LICENSE`, a missing canonical `MIT License`
+heading, or a license whose exact allowlisted `MIT` blob
+(`591bbf197b355e60604618c8a8a50bc5a839b204`) is not present is non-fatal:
 the gateway candidate is skipped and the established provider-qualified pool
 remains available. Private repositories never start or select the gateway,
 because its auto-discovered catalog includes providers excluded by the review

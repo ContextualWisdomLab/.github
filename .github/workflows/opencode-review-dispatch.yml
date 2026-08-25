@@ -4592,7 +4592,17 @@ jobs:
           cleanup_contextual_gateway() {
             if [ -n "$contextual_gateway_pid" ]; then
               kill "$contextual_gateway_pid" 2>/dev/null || true
+              for cleanup_attempt in 1 2 3 4 5; do
+                if ! kill -0 "$contextual_gateway_pid" 2>/dev/null; then
+                  wait "$contextual_gateway_pid" 2>/dev/null || true
+                  contextual_gateway_pid=""
+                  return
+                fi
+                sleep 1
+              done
+              kill -KILL "$contextual_gateway_pid" 2>/dev/null || true
               wait "$contextual_gateway_pid" 2>/dev/null || true
+              contextual_gateway_pid=""
             fi
           }
           trap cleanup_contextual_gateway EXIT
@@ -4601,11 +4611,11 @@ jobs:
             gateway_license_allowed=false
             license_file="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"
             # SPDX-License-Identifier: MIT
-            spdx_license_id=MIT
+            license_heading="$(sed -n '1p' "$license_file" 2>/dev/null || true)"
             spdx_mit_license_blob_sha=591bbf197b355e60604618c8a8a50bc5a839b204
             if [ "$CONTEXTUAL_ORCHESTRATOR_CHECKOUT_SUCCEEDED" = "true" ] &&
               [ -f "$license_file" ] &&
-              [ "$spdx_license_id" = "MIT" ] &&
+              [ "$license_heading" = "MIT License" ] &&
               [ "$(git hash-object --no-filters "$license_file" 2>/dev/null)" = "$spdx_mit_license_blob_sha" ]; then
               gateway_license_allowed=true
             else
