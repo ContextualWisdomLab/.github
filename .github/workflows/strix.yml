@@ -111,6 +111,10 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      # Required-workflow repository_dispatch scans execute in the central
+      # repository, not in the PR's target repository.  Query both locations
+      # so closing a fork PR releases the same per-repository provider queue.
+      DISPATCH_REPOSITORY: ${{ format('{0}/.github', github.repository_owner) }}
       CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
       CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CURRENT_RUN_ID: ${{ github.run_id }}
@@ -122,20 +126,37 @@ jobs:
 
           cancel_runs() {
             local status="$1"
-            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?event=pull_request_target&status=${status}&per_page=100"
-            gh api --paginate "$runs_url" |
-              jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" --arg current "$CURRENT_RUN_ID" '
-                .workflow_runs[]
-                | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
-                | select(.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr)))
-                | .id
-              ' |
-              while IFS= read -r run_id; do
-                [ -n "$run_id" ] || continue
-                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null
-                echo "Cancelled Strix run ${run_id} for closed PR #${CLOSED_PR_NUMBER}."
-              done
+            local run_repository
+            local previous_repository=""
+            # A dispatch run is hosted by the central required-workflow
+            # repository. Avoid querying the same repository twice when the
+            # target itself is .github.
+            for run_repository in "$TARGET_REPOSITORY" "$DISPATCH_REPOSITORY"; do
+              [ "$run_repository" != "$previous_repository" ] || continue
+              previous_repository="$run_repository"
+              local runs_url="repos/${run_repository}/actions/runs?status=${status}&per_page=100"
+              gh api --paginate "$runs_url" |
+                jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
+                  --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
+                  .workflow_runs[]
+                  | select((.id | tostring) != $current)
+                  | select(.name == "Strix Security Scan")
+                  | select(
+                      (.event == "pull_request_target" and
+                        (.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr))))
+                      or
+                      (.event == "repository_dispatch" and
+                        (((.display_title // "") | startswith(("Strix Security Scan " + $target + "#" + $pr + "@")))
+                         or .head_sha == $head_sha))
+                    )
+                  | .id
+                ' |
+                while IFS= read -r run_id; do
+                  [ -n "$run_id" ] || continue
+                  gh api --method POST "repos/${run_repository}/actions/runs/${run_id}/cancel" >/dev/null
+                  echo "Cancelled Strix run ${run_id} in ${run_repository} for closed PR #${CLOSED_PR_NUMBER}."
+                done
+            done
           }
 
           cancel_runs queued
@@ -327,6 +348,9 @@ jobs:
             "")
               is_private=""
               for target_visibility_attempt in 1 2 3 4 5 6; do
+                # The single-quoted jq program intentionally expands jq's
+                # `$visibility`, not a shell variable (ShellCheck SC2016).
+                # shellcheck disable=SC2016
                 if is_private="$(
                   gh api "repos/${TARGET_REPOSITORY}" --jq '
                     (.visibility // "" | ascii_downcase) as $visibility
