@@ -5,7 +5,6 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-
 - Trust a PR-mutated `pnpm-lock.yaml` in OpenCode coverage evidence only when
   the trusted materializer recorded that exact lock blob from the validated
   HEAD revision: materialization now validates changed head pnpm locks
@@ -14,6 +13,18 @@ Semantic Versioning where the repository publishes a release.
   trusted manifest record while keeping worktree-vs-HEAD tamper evidence.
   Dependency-raising security PRs no longer fail coverage-evidence solely for
   mutating their lockfile.
+- Route Strix cross-provider fallbacks to explicit direct-OpenAI models
+  (`openai-direct/...`) through the OpenAI inference endpoint instead of
+  inheriting a provider-specific primary base: the workflow now provisions
+  `STRIX_OPENAI_FALLBACK_API_BASE_FILE` (`https://api.openai.com/v1`), while
+  standalone caller-supplied `LLM_API_BASE_FILE` values remain honored for
+  OpenAI-compatible endpoints. Known GitHub Models, NVIDIA NIM, and OpenRouter
+  bases are never inherited, and LiteLLM uses native OpenAI defaults only when
+  no base is supplied. A non-https override fails configuration. This removes the NVIDIA-NIM-edge
+  `404 page not found` that made the contracted final fallback unreachable
+  after NIM exhaustion.
+- Align stale `gpt-5.6-luna` test expectations with the valid `gpt-5.4`
+  contract left behind by the earlier model rename.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification
