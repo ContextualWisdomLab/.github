@@ -469,7 +469,9 @@ def validate_head_pnpm_lock(lock_path: str, lock_content: bytes) -> None:
             current_resolution_seen = True
             continue
 
-        if current_package_key and (\n            stripped.startswith("tarball:") or stripped.startswith("git+")\n        ):
+        if current_package_key and (
+            stripped.startswith("tarball:") or stripped.startswith("git+")
+        ):
             raise ValueError(
                 f"current-head pnpm lock {lock_path} package {current_package_key} "
                 "carries an out-of-band fetch source"
