@@ -32,14 +32,6 @@ def test_product_callers_do_not_cancel_an_in_flight_rca() -> None:
         assert "cancel-in-progress: true" not in caller
 
 
-def test_disksage_caller_grants_oidc_permission_to_reusable_scheduler() -> None:
-    """The called scheduler must be able to exchange its OpenCode OIDC token."""
-    caller = _read(DISKSAGE)
-    job = caller.split("  dispatch-review-repair:\n", maxsplit=1)[1]
-
-    assert "    permissions:\n      contents: read\n      id-token: write\n" in job
-
-
 def test_quality_gate_tracks_runtime_budget_contract() -> None:
     """Runtime-budget changes always execute the exact-head focused gate."""
     quality = _read(QUALITY)

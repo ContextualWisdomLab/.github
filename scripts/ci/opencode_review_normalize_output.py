@@ -972,13 +972,15 @@ def label_section(text: str, label: str) -> str:
     starts = [index for index, candidate in actual_matches if candidate == label]
     if not starts:
         return ""
+
     start = starts[-1] + len(label)
-
-    for index, candidate in actual_matches:
-        if index >= start and candidate != label:
-            return text[start:index]
-
-    return text[start:]
+    next_starts = [
+        index
+        for index, candidate in actual_matches
+        if candidate != label and index >= start
+    ]
+    end = min(next_starts) if next_starts else len(text)
+    return text[start:end]
 
 
 def coverage_section_is_valid(section: str) -> bool:

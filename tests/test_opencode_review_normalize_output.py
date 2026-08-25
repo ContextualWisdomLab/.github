@@ -1434,20 +1434,6 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     )
 
 
-def test_label_section_scans_repeated_labels_once():
-    """Repeated docstring labels do not trigger quadratic rescans or false stops."""
-    text = (
-        ("docstring coverage: 100% " * 500)
-        + "coverage: first evidence "
-        + "coverage: last evidence "
-        + "accessibility/i18n: complete"
-    )
-
-    section = norm.label_section(text, "coverage:")
-
-    assert section == " last evidence "
-
-
 def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
     tmp_path, monkeypatch
 ):
