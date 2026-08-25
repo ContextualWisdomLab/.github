@@ -1,0 +1,32 @@
+name: Inkspan Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 56 avoids every existing hourly heartbeat minute and the
+    # half-hourly merge scheduler ticks.
+    - cron: "56 * * * *"
+
+concurrency:
+  group: inkspan-hourly-review-repair
+  # The queue scan is bounded and the worker has its own exact-head lease. Do not
+  # discard an in-flight RCA merely because the next hourly heartbeat arrives.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/inkspan
+      base_branch: main
+      max_prs: "50"
+      max_dispatches: "1"
+      # Central OpenCode/NVIDIA NIM work can legitimately approach two hours.
+      # A two-hour same-head floor avoids duplicate writers without freezing the
+      # next eligible PR or confusing provider latency with a source-code defect.
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
