@@ -1,5 +1,6 @@
 """Contract tests for the semantic-data-portal bounded hourly review-repair caller."""
 
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,26 @@ DOCTORING = Path("docs/doctoring/semantic-data-portal-hourly-review-caller.md")
 def _read(path: Path) -> str:
     """Return one repository contract file as UTF-8 text."""
     return path.read_text(encoding="utf-8")
+
+
+def _permission_map(caller: str, header: str) -> dict[str, str]:
+    """Parse one exact YAML permission block without widening test dependencies."""
+    lines = caller.splitlines()
+    header_index = lines.index(header)
+    entry_indent = len(header) - len(header.lstrip()) + 2
+    permissions: dict[str, str] = {}
+    for line in lines[header_index + 1 :]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < entry_indent:
+            break
+        if indent != entry_indent:
+            continue
+        key, separator, value = line.strip().partition(":")
+        assert separator, f"malformed permission entry: {line!r}"
+        permissions[key] = value.strip()
+    return permissions
 
 
 def test_semantic_data_portal_caller_is_hourly_bounded_and_non_cancelling() -> None:
@@ -32,8 +53,11 @@ def test_semantic_data_portal_caller_preserves_credentials_and_read_only_token_s
     caller = _read(CALLER)
     workflow_scope, jobs_scope = caller.split("\njobs:\n", maxsplit=1)
 
-    assert "\npermissions:\n  contents: read\n" in workflow_scope
-    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
+    assert _permission_map(workflow_scope, "permissions:") == {"contents": "read"}
+    assert _permission_map(jobs_scope, "    permissions:") == {
+        "contents": "read",
+        "id-token": "write",
+    }
     assert "PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in caller
     assert "OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}" in caller
     assert "secrets: inherit" not in caller
@@ -51,10 +75,15 @@ def test_semantic_data_portal_caller_preserves_credentials_and_read_only_token_s
 
 def test_semantic_data_portal_caller_cron_avoids_other_callers() -> None:
     """Minute 31 does not collide with any other product caller heartbeat."""
-    taken = {str(m) for m in (2, 10, 14, 16, 21, 23, 27, 37, 43, 49, 53, 58)}
-    assert "31" not in taken
     caller = _read(CALLER)
     assert '- cron: "31 * * * *"' in caller
+    other_minutes = {
+        minute
+        for path in Path(".github/workflows").glob("*hourly-review-repair.yml")
+        if path != CALLER
+        for minute in re.findall(r'cron:\s*["\'](\d+) \* \* \* \*["\']', _read(path))
+    }
+    assert "31" not in other_minutes
 
 
 def test_semantic_data_portal_caller_doctoring_records_rca_feasibility_and_latency() -> None:

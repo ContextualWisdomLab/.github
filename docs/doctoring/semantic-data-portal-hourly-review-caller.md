@@ -108,21 +108,21 @@ the central RCA, feasibility, lease, and credential contracts.
 ## APA 7th references
 
 GitHub. (n.d.). *Control the concurrency of workflows and jobs*. Retrieved
-August 26, 2026, from
+August 25, 2026, from
 https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
 
-GitHub. (n.d.). *Events that trigger workflows: Schedule*. Retrieved August 26,
+GitHub. (n.d.). *Events that trigger workflows: Schedule*. Retrieved August 25,
 2026, from
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
 
-GitHub. (n.d.). *Reuse workflows*. Retrieved August 26, 2026, from
+GitHub. (n.d.). *Reuse workflows*. Retrieved August 25, 2026, from
 https://docs.github.com/en/actions/how-tos/sharing-automations/reusing-workflows
 
 NVIDIA. (n.d.). *NVIDIA NIM for large language models documentation*. Retrieved
-August 26, 2026, from
+August 25, 2026, from
 https://docs.nvidia.com/nim/large-language-models/latest/
 
-OpenCode. (n.d.). *OpenCode documentation*. Retrieved August 26, 2026, from
+OpenCode. (n.d.). *OpenCode documentation*. Retrieved August 25, 2026, from
 https://opencode.ai/docs/
 
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development
