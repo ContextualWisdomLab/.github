@@ -2457,14 +2457,6 @@ resolved_llm_api_base_for_model() {
 		api_base_file="$STRIX_GITHUB_MODELS_API_BASE_FILE"
 		api_base_file_name="STRIX_GITHUB_MODELS_API_BASE_FILE"
 	fi
-	if is_explicit_openai_model "$model"; then
-		# Cross-provider fallback: direct-OpenAI attempts must hit
-		# litellm's default api.openai.com endpoint, never the primary
-		# provider's base URL. Inheriting e.g. the NVIDIA NIM inference
-		# endpoint here made every openai-direct fallback 404 against the
-		# wrong host while carrying the OpenAI key (#1327).
-		return 0
-	fi
 
 	if [ -z "$api_base_file" ]; then
 		if is_github_models_model "$model"; then
