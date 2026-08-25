@@ -5,6 +5,40 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Route Strix cross-provider fallbacks to explicit direct-OpenAI models
+  (`openai-direct/...`) through the OpenAI inference endpoint instead of
+  inheriting the primary provider's `LLM_API_BASE`: the workflow now
+  provisions `STRIX_OPENAI_FALLBACK_API_BASE_FILE`
+  (`https://api.openai.com/v1`), the gate prefers it for explicit OpenAI
+  fallback models and otherwise resolves no override so litellm defaults to
+  OpenAI, and a non-https override fails configuration. This removes the
+  NVIDIA-NIM-edge `404 page not found` that made the contracted final
+  fallback unreachable after NIM exhaustion.
+- Align stale `gpt-5.6-luna` test expectations with the valid `gpt-5.4`
+  contract left behind by the earlier model rename.
+
+- Honor each trusted base project's exact, integrity-bearing pnpm
+  `packageManager` specification in OpenCode coverage images through the pinned
+  Node distribution's Corepack runtime, instead of admitting the specification
+  during materialization and then rejecting every version except pnpm 11.5.3;
+  route generic coverage and docstring package scripts through the same
+  Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Keep `--trust-lockfile` only for pnpm 11.3 and newer
+  (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
+  that flag and previously failed LineageWeave JavaScript coverage before
+  tests could run. Jest test scripts still receive `--coverage` because Jest
+  documents a native coverage flag.
+- Run declared JavaScript test scripts without synthesizing `--coverage` when
+  the package does not declare a compatible coverage command, but keep the
+  coverage result failed until the repository adds a lock-pinned provider and
+  owned coverage command. A generic `c8`, `nyc`, or Istanbul dependency no
+  longer makes an unrelated test runner receive an unsupported flag.
+- Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
+  dependencies without weakening registry hashes or the networkless PR sandbox,
+  reject namespace, ambiguous, linked, native-extension, and installed-metadata
+  layouts, and make exact roots readable by the unprivileged coverage user.
+
+
 
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned

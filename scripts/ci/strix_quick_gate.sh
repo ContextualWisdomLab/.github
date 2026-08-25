@@ -2415,6 +2415,13 @@ resolved_llm_api_base_for_model() {
 		return 0
 	fi
 
+	if is_explicit_openai_model "$model" && [ -z "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Without workflow provisioning, an explicit direct-OpenAI model must
+		# still not inherit a foreign primary base: resolve no override so
+		# litellm defaults to https://api.openai.com/v1.
+		return 0
+	fi
+
 	local api_base_file="$LLM_API_BASE_FILE"
 	local api_base_file_name="LLM_API_BASE_FILE"
 	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
