@@ -1,6 +1,8 @@
 name: PR Review Fix Scheduler
 
 on:
+  # Same-repository callers resolve this file from their own immutable commit;
+  # only the explicitly declared optional secrets below cross that boundary.
   workflow_call:
     inputs:
       dry_run:
