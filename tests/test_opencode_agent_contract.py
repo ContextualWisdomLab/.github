@@ -654,6 +654,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "trusted_manifest_records_lock_revision" in pnpm_trust_block
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
     assert ".revision_sha == $revision and .lock_blob == $blob" in measure_step
+    # Manifest records normalize Git object identities to lowercase; pnpm trust
+    # must match the npm path even when an input SHA uses uppercase hex.
+    assert '--arg revision "${PR_HEAD_SHA,,}"' in measure_step
+    assert '--arg blob "${head_blob,,}"' in measure_step
     assert "prepare_writable_pnpm_store()" in measure_step
     assert (
         'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"'
