@@ -263,23 +263,42 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+          EVENT_REPOSITORY_VISIBILITY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.visibility || github.event_name != 'repository_dispatch' && github.event.repository.visibility || '' }}
         run: |
           set -euo pipefail
           if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
             echo "::error::Strix target repository must belong to ContextualWisdomLab."
             exit 1
           fi
-          is_private=""
-          for target_visibility_attempt in 1 2 3 4 5 6; do
-            if is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"; then
-              break
-            fi
-            is_private=""
-            if [ "$target_visibility_attempt" -lt 6 ]; then
-              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
-              sleep "$(( target_visibility_attempt * 5 ))"
-            fi
-          done
+          case "$EVENT_REPOSITORY_VISIBILITY" in
+            PUBLIC | public) is_private=false ;;
+            PRIVATE | private | INTERNAL | internal) is_private=true ;;
+            "")
+              is_private=""
+              for target_visibility_attempt in 1 2 3 4 5 6; do
+                if is_private="$(
+                  gh api "repos/${TARGET_REPOSITORY}" --jq '
+                    (.visibility // "" | ascii_downcase) as $visibility
+                    | if $visibility == "public" then "false"
+                      elif $visibility == "private" or $visibility == "internal" then "true"
+                      else empty
+                      end
+                  '
+                )"; then
+                  break
+                fi
+                is_private=""
+                if [ "$target_visibility_attempt" -lt 6 ]; then
+                  echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+                  sleep "$(( target_visibility_attempt * 5 ))"
+                fi
+              done
+              ;;
+            *)
+              echo "::error::Target repository event visibility was not public, private, or internal."
+              exit 1
+              ;;
+          esac
           case "$is_private" in
             true | false) ;;
             *)
@@ -453,7 +472,7 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna') }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4') }}
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -464,7 +483,7 @@ jobs:
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
-            strix_model="gpt-5.6-luna"
+            strix_model="gpt-5.4"
           fi
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           case "$strix_model" in
@@ -677,6 +696,7 @@ jobs:
         if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim'
         env:
           GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
         run: |
           # Direct-OpenAI scans keep GitHub Models candidates as fallbacks, so
           # a provider quota outage degrades to a slower model instead of a
@@ -687,14 +707,25 @@ jobs:
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$trimmed" ]; then
             echo '::notice::No GitHub Models token available; direct-OpenAI Strix scans run without GitHub Models fallbacks.'
-            exit 0
+          else
+            github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
+            printf '%s' "$sanitized" > "$github_models_key_file"
+            echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
+            github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
+            printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
+            echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
           fi
-          github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
-          printf '%s' "$sanitized" > "$github_models_key_file"
-          echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
-          github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
-          printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
-          echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
+          # openai-direct/* fallback models (the contracted final fallback for
+          # NVIDIA NIM and OpenRouter chains) authenticate against the direct
+          # OpenAI API, so they need the OpenAI key instead of the primary
+          # provider's key.
+          openai_sanitized="$(printf '%s' "$OPENAI_FALLBACK_KEY" | tr -d '\r\n')"
+          openai_trimmed="$(printf '%s' "$openai_sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$openai_trimmed" ]; then
+            openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
+            printf '%s' "$openai_trimmed" > "$openai_fallback_key_file"
+            echo "STRIX_OPENAI_FALLBACK_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
+          fi
 
       - name: Prepare Vertex AI credentials
         if: steps.gate.outputs.provider_mode == 'vertex_ai'
@@ -822,9 +853,10 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.6-luna' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
+          STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"

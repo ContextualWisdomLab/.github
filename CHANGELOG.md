@@ -12,12 +12,27 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Keep `--trust-lockfile` only for pnpm 11.3 and newer
+  (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
+  that flag and previously failed LineageWeave JavaScript coverage before
+  tests could run. Jest test scripts still receive `--coverage` because Jest
+  documents a native coverage flag.
+- Run declared JavaScript test scripts without synthesizing `--coverage` when
+  the package does not declare a compatible coverage command, but keep the
+  coverage result failed until the repository adds a lock-pinned provider and
+  owned coverage command. A generic `c8`, `nyc`, or Istanbul dependency no
+  longer makes an unrelated test runner receive an unsupported flag.
 - Fix OpenCode coverage evidence for exact-base, organization-owned Python VCS
   dependencies without weakening registry hashes or the networkless PR sandbox,
   reject namespace, ambiguous, linked, native-extension, and installed-metadata
   layouts, and make exact roots readable by the unprivileged coverage user.
 
 ### Added
+
+- Refresh the live product and technical gap baseline against the current
+  open-PR queue after ContextualWisdomLab/.github#1252 merged, with SHA-bound
+  snapshot rows, a same-session open/close delta, ADR Figma File ID N/A, and
+  APA 7th doctoring. The inventory is not merge authorization.
 
 - Classify Strix `ModelBehaviorError` and provider exhaustion as typed
   `STRIX_PROVIDER_UNAVAILABLE` evidence while preserving a nonzero required
@@ -74,6 +89,15 @@ Semantic Versioning where the repository publishes a release.
   `errexit`. Both OIDC and App-token HTTP requests now use a 10-second connect
   timeout and 30-second total timeout so a stalled exchange fails within the
   bounded coordinator step.
+- Resolve Strix visibility from the trusted GitHub event for ordinary push,
+  schedule, and pull-request runs, reserving API retries for cross-repository
+  dispatches whose workflow token may not see the target repository.
+- Reconciled the Strix required-workflow smoke contract and the privileged
+  OpenCode model pool with the current `gpt-5.4` direct-OpenAI fallback after
+  `gpt-5.6-luna` was retired. This prevents every consumer repository's
+  required Strix check from failing on a stale central assertion or selecting a
+  nonexistent direct model.
+
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
