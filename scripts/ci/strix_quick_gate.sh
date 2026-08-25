@@ -180,8 +180,8 @@ ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 def strip_model_quality_warning_heading(text: str) -> str:
     kept: list[str] = []
     for line in text.splitlines(keepends=True):
-        plain = ansi_csi.sub("", line.rstrip("\r\n"))
-        if model_quality_heading.fullmatch(plain):
+        plain = ansi_csi.sub("", line)
+        if model_quality_heading.search(plain):
             continue
         kept.append(line)
     return "".join(kept)
@@ -225,8 +225,8 @@ ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 def strip_model_quality_warning_heading(text: str) -> str:
     kept = []
     for line in text.splitlines(keepends=True):
-        plain = ansi_csi.sub("", line.rstrip("\r\n"))
-        if model_quality_heading.fullmatch(plain):
+        plain = ansi_csi.sub("", line)
+        if model_quality_heading.search(plain):
             continue
         kept.append(line)
     return "".join(kept)
