@@ -21,6 +21,7 @@ and executes it against synthetic logs shaped like the real PR #392 run.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -135,6 +136,69 @@ def _run_gate_tail(log_text: str) -> int:
     return completed.returncode
 
 
+
+def _extract_retry_loop_region(workflow: str) -> str:
+    """Return the bounded provider-outage retry region, verbatim from the yml.
+
+    Spans the signal definitions through the post-loop success exit so the
+    retry decision, its tail-scoping, and its terminal success path are all
+    exercised against a scripted fake gate.
+    """
+
+    start_marker = (
+        "          # Recognized signals that the LLM backend was unavailable"
+    )
+    end_marker = (
+        "          # Preserve configuration failures (exit 2) and any unexpected exit"
+    )
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start)
+    return workflow[start:end]
+
+
+def _run_gate_retry(gate_script: str) -> tuple[int, int]:
+    """Run the extracted retry loop against a scripted gate; return (rc, calls).
+
+    The fake gate appends one line to a call-counter file on every invocation
+    so tests can prove exactly how many attempts the loop spent.
+    """
+
+    workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+    signals = _extract_signal_definitions(workflow)
+    region = _extract_retry_loop_region(workflow)
+    with tempfile.TemporaryDirectory(prefix="strix-retry-scope-") as temp_dir:
+        counter = Path(temp_dir) / "gate_calls"
+        counter.write_text("0\n", encoding="utf-8")
+        gate_path = Path(temp_dir) / "fake_gate.sh"
+        gate_path.write_text(
+            gate_script.replace("__COUNTER__", str(counter)),
+            encoding="utf-8",
+        )
+        gate_path.chmod(0o755)
+        script = "\n".join(
+            (
+                "set -uo pipefail",
+                f"export TRUSTED_STRIX_GATE={shlex.quote(str(gate_path))}",
+                "export RUNNER_TEMP=" + shlex.quote(temp_dir),
+                "export STRIX_GATE_RETRY_BACKOFF_SECONDS=1",
+                signals,
+                region,
+                'exit "$strix_rc"',
+            )
+        )
+        completed = subprocess.run(
+            ["bash", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"RUNNER_TEMP": temp_dir, "PATH": "/usr/bin:/bin"},
+        )
+        calls = int(counter.read_text().strip())
+    if completed.stdout.endswith(f"RC={completed.returncode}"):
+        pass
+    return completed.returncode, calls
+
+
 class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
     """Protect the PR #392-shaped scenario without weakening the real gate."""
 
@@ -174,6 +238,42 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
         """A pure outage still lacks authoritative scan evidence."""
 
         self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 1)
+
+    def test_exempted_finding_then_outage_recovers_on_second_attempt(self) -> None:
+        """An exempt finding before continuation must not block outage retry."""
+
+        gate = r"""#!/usr/bin/env bash
+calls=$(( $(cat __COUNTER__) + 1 ))
+echo "$calls" > __COUNTER__
+if [ "$calls" -le 1 ]; then
+  printf '%s\n' \
+    "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+    "LLM CONNECTION FAILED" \
+    "Configured model and fallback models were unavailable."
+  exit 1
+fi
+echo "scan complete"
+exit 0
+"""
+        returncode, calls = _run_gate_retry(gate)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(calls, 2)
+
+    def test_real_finding_after_continuation_never_retries(self) -> None:
+        """A tail-scoped real finding is authoritative: zero retries, fail closed."""
+
+        gate = r"""#!/usr/bin/env bash
+calls=$(( $(cat __COUNTER__) + 1 ))
+echo "$calls" > __COUNTER__
+printf '%s\n' \
+  "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+  "LLM CONNECTION FAILED" \
+  "Vulnerability Report" "Severity: CRITICAL" "Vulnerabilities 1"
+exit 1
+"""
+        returncode, calls = _run_gate_retry(gate)
+        self.assertEqual(returncode, 1)
+        self.assertEqual(calls, 1)
 
 
 if __name__ == "__main__":

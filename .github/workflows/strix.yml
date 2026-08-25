@@ -906,14 +906,24 @@ jobs:
             if [ "$strix_rc" -ne 1 ]; then
               break
             fi
+            # Scope this attempt's retry decision to the log tail after the
+            # last pipeline-continuation marker, exactly like the terminal
+            # classification below: an already-exempted finding before the
+            # marker must not mask a retryable outage after it.
+            strix_retry_scope_log="$strix_run_log"
+            if grep -Fq 'allowing pipeline continuation' "$strix_run_log"; then
+              strix_retry_scope_log="$RUNNER_TEMP/strix_gate_console_tail.log"
+              awk '/allowing pipeline continuation/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}' \
+                "$strix_run_log" > "$strix_retry_scope_log"
+            fi
             # A reported vulnerability is authoritative evidence: never retry
             # and never risk downgrading it.
-            if grep -Eiq "$reported_vulnerability_signal" "$strix_run_log"; then
+            if grep -Eiq "$reported_vulnerability_signal" "$strix_retry_scope_log"; then
               break
             fi
             # Retry only recognized provider-outage / model-behavior classes.
-            if ! grep -Eiq "$backend_unavailable_signal" "$strix_run_log" \
-              && ! grep -Eq "$model_behavior_error_signal" "$strix_run_log"; then
+            if ! grep -Eiq "$backend_unavailable_signal" "$strix_retry_scope_log" \
+              && ! grep -Eq "$model_behavior_error_signal" "$strix_retry_scope_log"; then
               break
             fi
             remaining_seconds=$(( strix_gate_deadline - SECONDS ))
@@ -921,7 +931,7 @@ jobs:
               echo "Provider-unavailable Strix attempt ${strix_gate_attempt} reached the bounded retry limit or the remaining job time budget (${remaining_seconds}s) is too small to retry; failing closed." >&2
               break
             fi
-            backoff_seconds=$(( strix_gate_attempt * 90 ))
+            backoff_seconds=$(( ${STRIX_GATE_RETRY_BACKOFF_SECONDS:-90} * strix_gate_attempt ))
             echo "Strix provider outage on attempt ${strix_gate_attempt}; retrying after ${backoff_seconds}s backoff." >&2
             sleep "$backoff_seconds"
             strix_gate_attempt=$(( strix_gate_attempt + 1 ))
