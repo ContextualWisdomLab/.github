@@ -7,8 +7,9 @@ ContextualWisdomLab operates one protected hourly caller for
 delegates to the product-neutral central review-fix scheduler, inspects at most
 50 open pull requests, and dispatches at most one bounded repair per heartbeat.
 The minute is reserved for semantic-data-portal in the organization caller
-ledger and avoids every other caller's cron slot and the minute-zero runner
-surge.
+ledger and is unique among the product caller slots. GitHub may delay scheduled
+runs, so the cron is a heartbeat and does not promise avoidance of the
+minute-zero runner surge.
 
 The caller does not implement review or mutation logic itself. It keeps the
 portal independently operable while centralizing privileged automation in

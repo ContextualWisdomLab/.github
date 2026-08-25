@@ -3,8 +3,9 @@ name: Semantic Data Portal Hourly Review Repair
 on:
   schedule:
     # Minute 59 is reserved for semantic-data-portal in the organization
-    # caller ledger; it avoids every other product heartbeat and the
-    # minute-zero runner surge.
+    # caller ledger and is unique among product heartbeats. GitHub may delay
+    # scheduled runs, so this is a heartbeat rather than a minute-zero surge
+    # avoidance guarantee.
     - cron: "59 * * * *"
 
 concurrency:
