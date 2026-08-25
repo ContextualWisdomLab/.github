@@ -303,7 +303,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_TOTAL_TIMEOUT_SECONDS:" "strix workflow must not expose total timeout env names in GitHub logs"
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
-	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.6-luna'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
+	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
 	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
@@ -360,9 +360,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "https://integrate.api.nvidia.com/v1" "strix workflow routes NVIDIA NIM scans to the hosted endpoint"
 	assert_file_contains "$workflow_file" "LLM_API_BASE_FILE" "strix workflow passes the GitHub Models API base through a trusted input file"
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
-	assert_file_contains "$workflow_file" "openai-direct/gpt-5.6-luna" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.6-luna'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "openai-direct/gpt-5.4" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$GATE_SCRIPT" "STRIX_GITHUB_MODELS_KEY_FILE" "strix gate reads the optional GitHub Models fallback key file"
@@ -4640,6 +4640,17 @@ EOS
 		echo "scan returned zero findings with incomplete evidence in the banner box"
 		exit 0
 		;;
+	console-model-quality-warning-preserves-same-box-ratelimit)
+		cat <<'EOS'
+╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
+│  MODEL QUALITY WARNING                                                       │
+│  RateLimitError: Too Many Requests                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Penetration test completed
+Vulnerabilities 0 (No exploitable vulnerabilities detected)
+EOS
+		exit 0
+		;;
 	bare-timeout-with-provider-marker)
 		# Emit bare "Connection timed out" alongside a provider marker so
 		# is_timeout_error() matches the Tier 3 branch gated on
@@ -5997,6 +6008,13 @@ PY
 			"scenario=$scenario still strips only the cosmetic heading"
 	fi
 
+	if [ "$scenario" = "console-model-quality-warning-preserves-same-box-ratelimit" ]; then
+		assert_file_contains \
+			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
+			"RateLimitError: Too Many Requests" \
+			"scenario=$scenario keeps the raw same-box rate-limit line in last-attempt"
+	fi
+
 	if [ "$scenario" = "report-known-internal-warning-variant-sanitized" ]; then
 		assert_file_not_contains \
 			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
@@ -6588,6 +6606,16 @@ run_filtered_gate_case_if_requested() {
 		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
 		"1" \
 		"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
+		"<unset>"
+		;;
+	console-model-quality-warning-preserves-same-box-ratelimit)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
+		"" \
+		"1" \
+		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+		"1" \
+		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
 		"<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
@@ -10708,6 +10736,15 @@ run_gate_case "report-model-quality-warning-preserves-same-box-failure" \
 	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
 	"1" \
 	"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
+	"<unset>"
+
+run_gate_case "console-model-quality-warning-preserves-same-box-ratelimit" \
+	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
 	"<unset>"
 
 run_gate_case "report-known-internal-warning-variant-sanitized" \

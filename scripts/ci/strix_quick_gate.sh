@@ -176,7 +176,10 @@ dest = Path(sys.argv[2])
 model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
 ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 other_failure = re.compile(
-    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)|Provider WARNING",
+    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)"
+    r"|Provider WARNING"
+    r"|RateLimitError|Nvidia_nimException|LLM CONNECTION FAILED"
+    r"|APIConnectionError|Too Many Requests",
     re.I,
 )
 
@@ -253,7 +256,10 @@ known_internal_warning = re.compile(
 model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
 ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 other_failure = re.compile(
-    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)|Provider WARNING",
+    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)"
+    r"|Provider WARNING"
+    r"|RateLimitError|Nvidia_nimException|LLM CONNECTION FAILED"
+    r"|APIConnectionError|Too Many Requests",
     re.I,
 )
 
