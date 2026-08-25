@@ -191,6 +191,63 @@ def test_materializes_only_exact_base_pnpm_inputs(tmp_path: Path) -> None:
     )
 
 
+def test_workflow_accepts_versioned_pnpm_materializer_manifest_record(
+    tmp_path: Path,
+) -> None:
+    """The workflow predicate must accept the exact pnpm spec materialize emits."""
+    repo, revision_sha = fixture_repo(tmp_path)
+    manifest = materializer.materialize(repo, revision_sha, tmp_path / "output")
+    record = manifest[0]
+    assert record["package_manager"] == "pnpm@11.5.3"
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("trusted_manifest_records_lock_revision() {")
+    end = workflow.index("\n          }", start)
+    predicate_line = next(
+        line.strip()
+        for line in workflow[start:end].splitlines()
+        if line.strip().startswith("'any(.[];")
+    )
+    predicate = predicate_line.split("' \\", 1)[0][1:]
+    command = [
+        "jq",
+        "-e",
+        "--arg",
+        "source",
+        record["source"],
+        "--arg",
+        "manager",
+        "pnpm",
+        "--arg",
+        "revision",
+        record["revision_sha"],
+        "--arg",
+        "blob",
+        record["lock_blob"],
+        predicate,
+    ]
+    accepted = subprocess.run(
+        command,
+        input=json.dumps(manifest),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    wrong_manager = [{**record, "package_manager": "npm"}]
+    rejected = subprocess.run(
+        command,
+        input=json.dumps(wrong_manager),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode == 1, rejected.stderr
+
+
 def test_materializes_only_exact_base_npm_inputs(tmp_path: Path) -> None:
     """PR-modified npm metadata cannot enter the networked build context."""
     repo, base_sha = npm_fixture_repo(tmp_path)
