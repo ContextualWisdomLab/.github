@@ -181,6 +181,7 @@ def _run_gate_retry(gate_script: str) -> tuple[int, int]:
                 f"export TRUSTED_STRIX_GATE={shlex.quote(str(gate_path))}",
                 "export RUNNER_TEMP=" + shlex.quote(temp_dir),
                 "process_budget_seconds=5400",
+                "budget_suffix=TIMEOUT",
                 "export STRIX_TOTAL_TIMEOUT_SECONDS=5700",
                 "export STRIX_GATE_RETRY_BACKOFF_SECONDS=1",
                 signals,
