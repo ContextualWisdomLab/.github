@@ -359,19 +359,13 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
         if filename == "strix.yml":
-            assert "Cancel queued and running scans for the closed pull request" in workflow
-            assert "actions: write" in workflow
-            assert "DISPATCH_REPOSITORY" in workflow
-            assert 'actions/runs?status=${status}&per_page=100' in workflow
-            assert 'for run_repository in "$TARGET_REPOSITORY" "$DISPATCH_REPOSITORY"' in workflow
-            assert '(.event == "repository_dispatch" and' in workflow
-            assert '(.display_title // "") | startswith' in workflow
-            assert 'select(.name == "Strix Security Scan")' in workflow
-            assert "CLOSED_PR_HEAD_SHA" in workflow
-            assert '(.head_sha == $head_sha or any(.pull_requests[]?' in workflow
-            assert "any(.pull_requests[]?; ((.number | tostring) == $pr))" in workflow
-            assert 'actions/runs/${run_id}/cancel' in workflow
-            assert "CURRENT_RUN_ID" in workflow
+            assert "central queue hygiene owns Strix cancellation" in workflow
+            # pull_request_target must not gain a cross-repository mutation
+            # token; the central scheduler performs cancellation with its own
+            # explicitly scoped credential.
+            assert "DISPATCH_REPOSITORY" not in workflow
+            assert "CLOSED_PR_HEAD_SHA" not in workflow
+            assert "actions: write" not in workflow.split("  strix:", 1)[0]
         else:
             assert (
                 "PR closed; this run only cancels older runs through workflow concurrency."
