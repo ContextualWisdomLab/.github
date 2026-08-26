@@ -5808,6 +5808,7 @@ PY
 			-u STRIX_GEMINI_FALLBACK_MODELS \
 			-u STRIX_FALLBACK_MODELS \
 			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
+			-u STRIX_OPENAI_FALLBACK_API_BASE_FILE \
 			"${env_cmd[@]}" \
 			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
