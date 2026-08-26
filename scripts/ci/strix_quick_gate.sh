@@ -2580,6 +2580,14 @@ run_strix_once() {
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
+	case "$(normalize_model "$model")" in
+	openai-direct/gpt-5.4 | openai_direct/gpt-5.4)
+		# OpenAI rejects function tools plus reasoning_effort for GPT-5.4 on
+		# Chat Completions, the transport used by the pinned Strix scanner.
+		child_reasoning_effort="none"
+		;;
+	esac
 	if ! is_vertex_model "$(normalize_model "$model")"; then
 		child_llm_api_key="$LLM_API_KEY"
 		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
@@ -2597,6 +2605,7 @@ run_strix_once() {
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
+	STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort" \
 	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
@@ -2682,6 +2691,8 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+if os.environ.get("STRIX_CHILD_REASONING_EFFORT"):
+    child_env["STRIX_REASONING_EFFORT"] = os.environ["STRIX_CHILD_REASONING_EFFORT"]
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")
 if llm_api_base:
     child_env["LLM_API_BASE"] = llm_api_base
