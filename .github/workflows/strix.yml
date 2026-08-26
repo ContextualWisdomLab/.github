@@ -81,16 +81,20 @@ concurrency:
   # the shared NVIDIA NIM key up to three times, producing guaranteed
   # litellm.RateLimitError storms and fail-closed gate failures across every
   # open PR (observed 2026-08-23/24). Serializing per repository and event
-  # class keeps at most one provider-backed scan in flight per class. GitHub's native
-  # concurrency contract retains one active and one pending run; the scheduler
-  # re-dispatches the exact current head after pending-run supersession, and
-  # accuracy is prioritized over scan latency.
+  # class keeps at most one provider-backed PR scan in flight per class. Push
+  # and scheduled scans retain the branch ref so one protected branch cannot
+  # supersede another branch's pending evidence. GitHub's native concurrency
+  # contract retains one active and one pending run; the scheduler re-dispatches
+  # the exact current head after pending-run supersession, and accuracy is
+  # prioritized over scan latency.
   group: >-
     strix-${{
       github.event_name == 'pull_request_target' &&
       github.event.action == 'closed' &&
       format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number) ||
-      format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository)
+      (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
+      format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository) ||
+      format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
     }}
   cancel-in-progress: false
 

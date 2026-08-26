@@ -306,6 +306,10 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
         "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository)"
     ) in concurrency_contract
+    assert (
+        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
+        in concurrency_contract
+    )
     # Repository-level (not PR-level) grouping: no pr-{N} component remains.
     assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract

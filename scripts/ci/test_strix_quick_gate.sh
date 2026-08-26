@@ -195,6 +195,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "group: >-" "strix workflow defines an explicit concurrency group"
 	assert_file_contains "$workflow_file" "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number)" "strix workflow gives closed PR cleanup an independent concurrency group"
 	assert_file_contains "$workflow_file" "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository ||" "strix workflow scopes active evidence per repository and event class"
+	assert_file_contains "$workflow_file" "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)" "strix workflow keeps protected-branch push evidence in ref-specific queues"
 	assert_file_contains "$workflow_file" "github.event.client_payload.target_repository ||" "strix manual dispatch concurrency scopes to the target repository when provided"
 	assert_file_contains "$workflow_file" "github.repository }}" "strix workflow falls back to the workflow repository when no target repository is provided"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow serializes sibling PR scans at repository scope"
