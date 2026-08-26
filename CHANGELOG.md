@@ -5,12 +5,12 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Require Linux bubblewrap isolation for backend, frontend, and E2E commands
-  in the web verification helper, mount only a writable workspace, and reject
-  non-loopback readiness URLs or redirects so SSRF probes fail closed.
-- Fail closed when an isolated command resolves outside the mounted system
-  roots, return a coded readiness failure for invalid URLs, and cover required
-  isolation plus sandbox-environment path mapping in the 100% branch contract.
+- Web verification now runs backend, frontend, and E2E commands in an isolated
+  workspace and accepts only local readiness URLs. Run it on a supported Linux
+  runner; trusted local debugging may opt out with `--isolation disabled`.
+- Invalid readiness URLs and unavailable isolation now fail with clear
+  diagnostics before services start, so update the URL or runner instead of
+  retrying the same setup.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions
