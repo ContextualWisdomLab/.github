@@ -116,11 +116,12 @@ env -u GITHUB_TOKEN -u GH_TOKEN \
   -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL
 ```
 
-The child receives the NVIDIA model credential and non-secret execution
-controls, but cannot call GitHub APIs or mint an Actions OIDC token. GitHub
-credentials remain available only to reviewed shell logic before or after the
-child process. The key is never written to repository files, generated prompts,
-command arguments, or ordinary logs.
+The child receives only the gateway bearer token, loopback base URL, and
+non-secret execution controls; it cannot call GitHub APIs or mint an Actions
+OIDC token. GitHub credentials remain available only to reviewed shell logic
+before or after the child process. Provider keys are never passed to OpenCode
+or written to repository files, generated prompts, command arguments, or
+ordinary logs.
 
 ## OpenCode repair sandbox
 

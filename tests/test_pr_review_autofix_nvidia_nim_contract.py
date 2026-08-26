@@ -125,6 +125,10 @@ def test_provider_secrets_are_scoped_to_gateway_execution_steps() -> None:
     unset = "unset BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY"
     assert workflow.count(unset) == 2
 
+    doctoring = _workflow_text(DOCTORING_RECORD)
+    assert "The child receives the NVIDIA model credential" not in doctoring
+    assert "Provider keys are never passed to OpenCode" in doctoring
+
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
     """Strip GitHub write and OIDC credentials from both OpenCode processes."""
