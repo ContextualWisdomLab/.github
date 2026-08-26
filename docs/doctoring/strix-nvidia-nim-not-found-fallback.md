@@ -58,11 +58,13 @@ Regression evidence proves that:
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are present in the live NVIDIA catalog;
-7. direct OpenAI remains the later cross-provider fallback;
+7. OpenRouter's authenticated dynamic free router and direct OpenAI remain the
+   later cross-provider fallbacks;
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
-10. executable fallback expressions do not hard-code an OpenRouter model; and
+10. executable fallback expressions use OpenRouter's dynamic router rather than
+    hard-coding one of its underlying provider model ids; and
 11. the required-workflow smoke contract pins these properties.
 
 ## Limitations
