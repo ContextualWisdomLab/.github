@@ -3418,6 +3418,10 @@ REPORT
 			exit 1
 			;;
 		openai/gpt-5.4)
+			if [ "${STRIX_REASONING_EFFORT:-}" != "none" ]; then
+				echo "direct OpenAI GPT-5.4 fallback retained unsupported reasoning effort (${STRIX_REASONING_EFFORT:-<unset>})" >&2
+				exit 29
+			fi
 			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
 				echo "unexpected direct-OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
 				exit 26
@@ -5704,6 +5708,7 @@ PY
 	if [ "$scenario" = "nvidia-rate-limit-openai-direct-fallback-clears-api-base" ]; then
 		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
 		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+		env_cmd+=(STRIX_REASONING_EFFORT="high")
 	fi
 	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
