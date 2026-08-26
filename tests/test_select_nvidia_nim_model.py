@@ -294,6 +294,28 @@ def test_main_excludes_the_resolved_primary_from_fallback_selection(
     assert capsys.readouterr().out == "fallback/model\n"
 
 
+def test_main_treats_exclusion_only_empty_pool_as_temporarily_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid pool exhausted by exclusion keeps cross-provider failover available."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret-key")
+    _stub_catalog(monkeypatch, _catalog("primary/model"))
+
+    exit_code = resolver.main(
+        [
+            "--role",
+            "fallback",
+            "--candidates",
+            "primary/model",
+            "--exclude",
+            "primary/model",
+        ]
+    )
+
+    assert exit_code == resolver.EX_TEMPFAIL
+    assert "no distinct fallback" in capsys.readouterr().err
+
+
 def test_main_accepts_the_workflow_secret_name(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
