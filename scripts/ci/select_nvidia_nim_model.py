@@ -90,7 +90,7 @@ def fetch_served_model_ids(
     parts = urlsplit(normalized_base_url)
     request_path = f"{parts.path.rstrip('/')}/models"
     try:
-        connection = http.client.HTTPSConnection(
+        connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
             parts.hostname,
             parts.port or 443,
             timeout=timeout_seconds,

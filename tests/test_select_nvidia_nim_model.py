@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import http.client
 import json
+from pathlib import Path
 import ssl
 from typing import Any
 
@@ -87,6 +88,20 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[Any]:
 
     monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
     return requests
+
+
+def test_catalog_sink_has_one_scoped_semgrep_exception_and_explicit_tls() -> None:
+    """Keep the reviewed HTTPS sink suppressed only for its known false positive."""
+    source_text = Path(resolver.__file__).read_text(encoding="utf-8")
+    rule = "python.lang.security.audit.httpsconnection-detected.httpsconnection-detected"
+    sink_lines = [
+        line for line in source_text.splitlines() if "http.client.HTTPSConnection(" in line
+    ]
+
+    assert len(sink_lines) == 1
+    assert f"# nosemgrep: {rule}" in sink_lines[0]
+    assert source_text.count(f"# nosemgrep: {rule}") == 1
+    assert "context=ssl.create_default_context()" in source_text
 
 
 def test_parse_candidates_keeps_preference_order_without_duplicates() -> None:
