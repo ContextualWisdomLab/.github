@@ -227,6 +227,15 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn('case " $STRIX_NVIDIA_ALLOWED_MODELS " in', workflow)
         self.assertIn('*" ${strix_model#nvidia_nim/} "*)', workflow)
 
+        model_input = workflow.split(
+            "- name: Prepare Strix model input file",
+            maxsplit=1,
+        )[1]
+        model_input = model_input.split("- name: Run Strix", maxsplit=1)[0]
+        self.assertIn("nvidia_nim/*)", model_input)
+        self.assertNotIn("nvidia_nim/nvidia/nemotron-3-super", model_input)
+        self.assertNotIn("nvidia_nim/nvidia/llama-3.1-nemotron", model_input)
+
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
             "- name: Prepare LLM API key input file",

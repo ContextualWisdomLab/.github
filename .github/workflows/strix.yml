@@ -949,8 +949,7 @@ jobs:
             openrouter/free | openrouter/openrouter/free)
               printf '%s' 'openrouter/free' > "$strix_llm_file"
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | \
-            nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1)
+            nvidia_nim/*)
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
