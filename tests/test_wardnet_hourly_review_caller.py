@@ -54,7 +54,7 @@ def test_wardnet_caller_is_hourly_bounded_and_non_cancelling() -> None:
     """Wardnet receives one realistic SOC repair opportunity without cancellation."""
     caller = _read(CALLER)
 
-    assert 'cron: "7 * * * *"' in caller
+    assert 'cron: "46 * * * *"' in caller
     assert "group: wardnet-hourly-review-repair" in caller
     assert "cancel-in-progress: false" in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller

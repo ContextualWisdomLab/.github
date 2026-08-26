@@ -171,7 +171,5 @@ resolver conflict.
   — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
-- [`docs/doctoring/wardnet-hourly-review-caller.md`](docs/doctoring/wardnet-hourly-review-caller.md)
-  — Wardnet AI-SOC hourly NVIDIA NIM repair heartbeat.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.

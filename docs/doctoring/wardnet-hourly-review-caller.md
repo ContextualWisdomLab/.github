@@ -6,7 +6,7 @@
 
 ContextualWisdomLab operates one protected hourly caller for
 `ContextualWisdomLab/wardnet` (wardnet.io — WAF / IDS / AI SOC / software LB /
-APIM). The caller runs at minute 7, delegates to the product-neutral central
+APIM). The caller runs at minute 46, delegates to the product-neutral central
 review-fix scheduler, inspects at most 50 open pull requests targeting
 protected `main`, and dispatches at most one bounded repair per heartbeat.
 
@@ -83,7 +83,7 @@ exact-head, approval, or security gates.
 
 ## Verification and rollback
 
-Machine-checkable contracts require the exact target/base, minute 7 cadence,
+Machine-checkable contracts require the exact target/base, minute 46 cadence,
 non-cancelling single-flight group, one dispatch, two-hour retry floor,
 explicit secret mapping, read-only contents plus job-scoped `id-token: write`,
 focused path-filter coverage, and absence of model or Copilot credentials.

@@ -2,9 +2,8 @@ name: Wardnet Hourly Review Repair
 
 on:
   schedule:
-    # Minute 7 avoids Clearfolio (23), DiskSage (37), fast-mlsirm (49),
-    # BandScope (53), naruon (11), Inkspan (47), and orchestrator (17).
-    - cron: "7 * * * *"
+    # Minute 46 avoids every existing sibling heartbeat.
+    - cron: "46 * * * *"
 
 concurrency:
   group: wardnet-hourly-review-repair
