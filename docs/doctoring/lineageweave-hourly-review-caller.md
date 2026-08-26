@@ -8,7 +8,7 @@ heartbeat. Merge automation remains protected-`main`-only in the separate
 central merge scheduler.
 
 LineageWeave uses minute `4`, which is reserved for this product in the shared
-heartbeat registry. Minute `47` belongs to Inkspan and must not be reused here.
+heartbeat registry. Minute `56` belongs to Inkspan and must not be reused here.
 The caller preserves an in-flight repair and waits two hours before retrying
 the same exact head.
 
