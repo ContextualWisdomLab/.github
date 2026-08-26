@@ -552,11 +552,11 @@ jobs:
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           STRIX_NVIDIA_PRIMARY_CANDIDATES: >-
-            ${{ vars.STRIX_NVIDIA_PRIMARY_CANDIDATES ||
-            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
+            nvidia/nemotron-3-super-120b-a12b
+            nvidia/llama-3.1-nemotron-ultra-253b-v1
           STRIX_NVIDIA_FALLBACK_CANDIDATES: >-
-            ${{ vars.STRIX_NVIDIA_FALLBACK_CANDIDATES ||
-            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
+            nvidia/nemotron-3-super-120b-a12b
+            nvidia/llama-3.1-nemotron-ultra-253b-v1
         run: |
           set -euo pipefail
           if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
