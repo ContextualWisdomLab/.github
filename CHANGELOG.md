@@ -5,9 +5,8 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Scan approval-verification labels once when extracting sections, matching
-  longer labels first so `docstring coverage:` remains distinct from
-  `coverage:` as the label catalogue evolves.
+- Review summaries now report test and documentation coverage separately and
+  consistently. No action is required.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions
