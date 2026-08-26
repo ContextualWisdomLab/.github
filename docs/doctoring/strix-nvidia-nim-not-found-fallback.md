@@ -30,10 +30,12 @@ combining with an unrelated application `404` to spoof infrastructure fallback.
 Provider-side failure also remains a fail-closed incomplete scan until a distinct
 fallback produces complete evidence.
 
-The outer workflow may classify exhausted provider infrastructure as neutral only
-when the run log contains no vulnerability signal. Any reported severity or
-non-zero vulnerability count remains blocking. Scanner reports and attempt logs
-remain available as artifacts.
+Exhausted provider infrastructure remains fail-closed even when the trusted
+gate has classified every observed threshold finding as outside the pull
+request's changed files. That classification scopes authoritative findings; it
+cannot prove that an incomplete provider-exhausted scan observed every finding.
+Changed, unmapped, and changed-manifest findings also remain blocking. Scanner
+reports and attempt logs remain available as artifacts.
 
 ## Verification contract
 
@@ -48,8 +50,10 @@ Regression evidence proves that:
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are current NVIDIA hosted models;
 7. GitHub Models remain later cross-provider fallbacks;
-8. vulnerability signals prevent neutral infrastructure classification; and
-9. the required-workflow smoke contract pins these properties.
+8. provider exhaustion remains non-passing after unchanged baseline findings;
+9. changed, unmapped, and changed-manifest findings also block after provider
+   exhaustion; and
+10. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 
@@ -59,6 +63,15 @@ trial availability. The ordered model plan must therefore be reviewed against
 current NVIDIA documentation whenever a provider returns a catalog 404. This
 change does not treat arbitrary provider errors as success and does not weaken
 Strix severity, changed-file attribution, or independent approval requirements.
+
+## Current fallback contract (2026-08-25)
+
+The direct-OpenAI fallback is `gpt-5.4`. The retired `gpt-5.6-luna` identifier
+must not appear in the executable workflow, required smoke contract, or model
+pool. A central workflow update without its smoke and model-pool assertions is
+invalid because every consumer repository would fail before its own scan. The
+contract is verified by `scripts/ci/strix_required_workflow_smoke.sh` and the
+focused `test_strix_quick_gate.sh` case; provider failures remain non-passing.
 
 ## References
 
