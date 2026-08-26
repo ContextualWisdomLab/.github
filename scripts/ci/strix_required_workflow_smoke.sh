@@ -110,15 +110,15 @@ for line in lines[jobs_index + 1 :]:
     if not inside_permissions:
         continue
     if line.startswith("      "):
-        if line.strip() == "statuses: write":
+        if line.split("#", 1)[0].strip() == "statuses: write":
             status_write_jobs.append(current_job)
         continue
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs != ["strix"]:
+if status_write_jobs != ["strix", "publish-manual-pr-evidence-status"]:
     print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
+        "Strix workflow must scope statuses: write only to the scan and manual-status jobs; found: "
         + (", ".join(status_write_jobs) if status_write_jobs else "none"),
         file=sys.stderr,
     )
@@ -168,11 +168,18 @@ assert_file_contains "$gate_script" "NPM_CONFIG_IGNORE_SCRIPTS" "Strix gate disa
 assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardened" "Full Strix harness remains available outside the required path"
 
 assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
+assert_file_contains "$workflow_file" "openrouter/free openai-direct/gpt-5.4" "Strix crosses to OpenRouter's free router before direct OpenAI when NVIDIA is exhausted"
+fallback_expression="$(grep 'STRIX_FALLBACK_MODELS:' "$workflow_file")"
+if printf '%s' "$fallback_expression" | grep -Fq "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"; then
+	record_failure "Strix must not route to the retired NVIDIA fallback model"
+fi
+assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "Strix workflow provisions a trusted OpenRouter fallback key file"
+assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE" "Strix workflow provisions a trusted OpenRouter fallback API base file"
 assert_file_contains_either \
 	"$workflow_file" \
-	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4" \
-	"format('{0} openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback)" \
-	"Strix accepts the current static fallback or a live catalog fallback ending in direct OpenAI during migration"
+	"openrouter/free openai-direct/gpt-5.4" \
+	"format('{0} openrouter/free openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback)" \
+	"Strix accepts the current static fallback or a live catalog fallback crossing OpenRouter before direct OpenAI"
 assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
