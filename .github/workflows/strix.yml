@@ -105,14 +105,14 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
-    # The built-in token is intentionally read-only.  The established scheduler
-    # credential is optional here and is used only for cancellation requests.
-    # When it is unavailable, the close event remains green and the next
-    # central queue sweep records the unresolved run for operator action.
+    # Prefer the established scheduler credential, but let the close event use
+    # its job-scoped token so abandoned scans are cancelled even when that
+    # optional secret is unavailable. This job never checks out PR code.
     permissions:
+      actions: write
       contents: read
     env:
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
       CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
       CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -122,11 +122,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::Strix close cleanup skipped: no scheduler mutation credential is configured."
-            exit 0
-          fi
 
           cancel_runs() {
             local status="$1"
