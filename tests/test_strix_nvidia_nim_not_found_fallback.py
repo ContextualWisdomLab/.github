@@ -207,7 +207,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn(default_expression, workflow)
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            "format('{0} openrouter/free openai-direct/gpt-5.4', "
+            "format('{0} openai-direct/gpt-5.4', "
             "steps.resolve_nvidia_models.outputs.fallback)",
             workflow,
         )
