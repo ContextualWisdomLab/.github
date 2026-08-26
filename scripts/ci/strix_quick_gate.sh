@@ -2689,10 +2689,9 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
-parent_reasoning_effort = os.environ.get("STRIX_REASONING_EFFORT")
-if parent_reasoning_effort:
-    child_env["STRIX_REASONING_EFFORT"] = parent_reasoning_effort
-child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT")
+child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT") or os.environ.get(
+    "STRIX_REASONING_EFFORT"
+)
 if child_reasoning_effort:
     child_env["STRIX_REASONING_EFFORT"] = child_reasoning_effort
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")

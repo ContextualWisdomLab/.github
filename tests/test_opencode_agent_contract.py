@@ -3006,5 +3006,5 @@ def test_strix_direct_openai_fallback_overrides_child_reasoning_effort():
     assert 'if is_explicit_openai_model "$model"; then' in quick_gate
     assert 'child_reasoning_effort="none"' in quick_gate
     assert 'STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort"' in quick_gate
-    assert 'child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT")' in quick_gate
+    assert 'child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT") or os.environ.get(' in quick_gate
     assert 'child_env["STRIX_REASONING_EFFORT"] = child_reasoning_effort' in quick_gate
