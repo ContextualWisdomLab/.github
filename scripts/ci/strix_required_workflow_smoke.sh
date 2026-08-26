@@ -155,7 +155,8 @@ assert_file_contains "$gate_script" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "Strix ga
 assert_file_contains "$gate_script" "NPM_CONFIG_IGNORE_SCRIPTS" "Strix gate disables npm lifecycle scripts"
 assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardened" "Full Strix harness remains available outside the required path"
 
-assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
+assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
+assert_file_contains "$workflow_file" "nvidia_nim/*)" "Strix model preparation reuses the gate-validated NVIDIA provider namespace"
 assert_file_contains "$workflow_file" "steps.resolve_nvidia_models.outputs.fallback" "Strix resolves another live NVIDIA hosted model before falling back to direct OpenAI"
 assert_file_not_contains "$workflow_file" "nvidia/llama-3.3-nemotron-super-49b-v1.5" "Strix does not pin the retired NVIDIA hosted fallback"
 assert_file_contains "$workflow_file" "openrouter/free openai-direct/gpt-5.4" "Strix crosses to OpenRouter's free router before direct OpenAI when NVIDIA is exhausted"
