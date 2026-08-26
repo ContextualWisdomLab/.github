@@ -532,12 +532,14 @@ def test_main_reports_invalid_readiness_url(monkeypatch, tmp_path, capsys):
     """Invalid readiness input exits with the same clean readiness failure code."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    started = []
 
     class DoneProcess:
         def poll(self):
             return 0
 
     def fake_start(label, command, cwd, env, logs_dir):
+        started.append(label)
         log_path = logs_dir / f"{label}.log"
         log_path.write_text("ready\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
@@ -571,10 +573,59 @@ def test_main_reports_invalid_readiness_url(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert exit_code == 125
-    assert "invalid readiness URL: bad host" in captured.err
+    assert not started
+    assert "invalid readiness URL: URL cannot target external hostname" in captured.err
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
+
+
+def test_main_reports_readiness_exception_after_start(monkeypatch, tmp_path, capsys):
+    """Unexpected readiness errors after launch still clean up services."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+
+    class DoneProcess:
+        def poll(self):
+            return 0
+
+    def fake_start(label, command, cwd, env, logs_dir):
+        started.append(label)
+        log_path = logs_dir / f"{label}.log"
+        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "wait_for_url",
+        lambda url, timeout, service: (_ for _ in ()).throw(ValueError("bad host")),
+    )
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--backend-ready-url",
+            "http://127.0.0.1:8000/health",
+            "--frontend-ready-url",
+            "http://127.0.0.1:3000/",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert started == ["backend", "frontend"]
+    assert "invalid readiness URL: bad host" in captured.err
 
 
 def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):

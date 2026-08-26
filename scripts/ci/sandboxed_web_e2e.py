@@ -210,10 +210,10 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     return Service(label=label, command=command, process=process, log_path=log_path)
 
 
-def wait_for_url(url: str, timeout: int, service: Service) -> bool:
-    """Poll a readiness URL until it responds or the service exits."""
+def validate_readiness_url(url: str) -> None:
+    """Reject a readiness URL that is not an HTTP(S) loopback target."""
     if not url:
-        return True
+        return
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
 
@@ -225,6 +225,13 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         is_loopback = False
     if not is_loopback:
         raise ValueError(f"URL cannot target external hostname: {hostname}")
+
+
+def wait_for_url(url: str, timeout: int, service: Service) -> bool:
+    """Poll a validated readiness URL until it responds or the service exits."""
+    validate_readiness_url(url)
+    if not url:
+        return True
 
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
@@ -374,6 +381,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except RuntimeError as exc:
             print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
             exit_code = 126
+            return exit_code
+        try:
+            validate_readiness_url(args.backend_ready_url)
+            validate_readiness_url(args.frontend_ready_url)
+        except ValueError as exc:
+            print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
+            exit_code = 125
             return exit_code
         services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
         services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
