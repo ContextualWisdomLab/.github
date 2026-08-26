@@ -186,7 +186,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
     def test_workflow_resolves_live_nvidia_models(self) -> None:
-        """Resolve reviewed hosted NIM candidates instead of pinning retired ids."""
+        """Resolve live NIM candidates before cross-provider fallbacks."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Resolve live NVIDIA NIM Strix models", workflow)
@@ -207,7 +207,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn(default_expression, workflow)
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            "format('{0} openai-direct/gpt-5.4', "
+            "format('{0} openrouter/free openai-direct/gpt-5.4', "
             "steps.resolve_nvidia_models.outputs.fallback)",
             workflow,
         )
