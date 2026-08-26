@@ -1076,14 +1076,20 @@ jobs:
                 --paginate \
                 | jq -sr '
                     add[]
-                    | select(.head.repo.full_name != null and .head.ref != null)
-                    | [.head.repo.full_name, .head.ref]
+                    | [
+                        (if (.head.repo.full_name | type) == "string" then .head.repo.full_name else "" end),
+                        (if (.head.ref | type) == "string" then .head.ref else "" end)
+                      ]
                     | @tsv
                   '
             )"; then
               while IFS=$'\t' read -r head_repo head_ref; do
-                [ -n "$head_repo" ] && [ -n "$head_ref" ] || continue
-                encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | @uri')"
+                if [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
+                  echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has a malformed head repository or ref. No run will be cancelled from incomplete evidence."
+                  queue_hygiene_ready=false
+                  break
+                fi
+                encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | split("/") | map(@uri) | join("/")')"
                 if ! live_head_sha="$(
                   gh api \
                     -H "Accept: application/vnd.github+json" \

@@ -749,9 +749,12 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "/actions/runs?status=${active_status}&per_page=100" in workflow
     assert "for active_status in queued in_progress" in workflow
     assert '"/repos/${head_repo}/git/ref/heads/${encoded_head_ref}"' in workflow
+    assert '$value | split("/") | map(@uri) | join("/")' in workflow
     assert "--jq '.object.sha // empty'" in workflow
     assert 'open_pr_heads_json="$(\n                  jq' in workflow
     assert "live ref ${head_repo}:${head_ref} could not be resolved safely" in workflow
+    assert "an open PR has a malformed head repository or ref" in workflow
+    assert "select(.head.repo.full_name != null and .head.ref != null)" not in workflow
     assert '"pull_request" or .event == "pull_request_target"' in workflow
     assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
     assert ".head_sha != $current_default_sha" in workflow
