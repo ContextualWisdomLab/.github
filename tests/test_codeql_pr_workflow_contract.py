@@ -42,6 +42,20 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert 'git rev-parse "$MERGE_SHA^{tree}"' in workflow
     assert 'GITHUB_TOKEN: ${{ github.token }}' in workflow
     assert 'GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer $GITHUB_TOKEN"' in workflow
+    assert 'git fetch --no-tags origin "$BASE_SHA" "$MERGE_SHA"' in workflow
+    assert 'git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"' not in workflow
+    assert 'git cat-file -e "$HEAD_SHA^{commit}"' in workflow
+    assert 'fetch --no-tags origin "$HEAD_SHA"' in workflow
+    assert (
+        '"+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/'
+        'pr-${PR_NUMBER}-head"'
+    ) in workflow
+    assert (
+        'fetched_head_sha="$(git rev-parse '
+        '"refs/remotes/origin/pr-${PR_NUMBER}-head")"'
+    ) in workflow
+    assert '[ "$fetched_head_sha" = "$HEAD_SHA" ]' in workflow
+    assert "CodeQL merge preview could not resolve exact head SHA" in workflow
     assert 'git commit-tree "$expected_tree" -p "$BASE_SHA" -p "$HEAD_SHA"' in workflow
     assert 'git reset --hard "$local_merge_sha"' in workflow
     assert 'echo "merge_sha=$local_merge_sha"' in workflow
