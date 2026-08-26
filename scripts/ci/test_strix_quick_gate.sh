@@ -3793,7 +3793,7 @@ REPORT
 				echo "Could not establish connection to the language model."
 				echo "Error: litellm.APIError: APIError: OpenrouterException -"
 				echo '{"error":{"message":"Invalid URL:'
-				echo '","code":502,"metadata":{"provider_name":"Stealth"}}}'
+				echo '","code":502,"metadata":{"provider":{"region":"us"},"provider_name":"Stealth"}}}'
 				exit 1
 			fi
 			echo "scan ok after OpenRouter 502 same-model retry"
@@ -3808,6 +3808,27 @@ REPORT
 			exit 38
 			;;
 		esac
+		;;
+	non-openrouter-openrouter-502-nonrecoverable)
+		echo "Error: litellm.APIError: APIError: OpenrouterException -"
+		echo '{"error":{"message":"upstream","code":502,"metadata":{"provider_name":"Stealth"}}}'
+		exit 1
+		;;
+	openrouter-apierror-400-target-502-nonrecoverable)
+		echo "Error: litellm.APIError: APIError: OpenrouterException -"
+		echo '{"error":{"message":"bad request","code":400,"metadata":{"provider_name":"Stealth"}}}'
+		echo 'TARGET RESPONSE: {"error":{"code":502,"metadata":{"provider_name":"target-service"}}}'
+		exit 1
+		;;
+	openrouter-502-with-critical-report-fails-closed)
+		mkdir -p "$STRIX_REPORTS_DIR/openrouter-critical/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/openrouter-critical/vulnerabilities/vuln-0001.md" <<'REPORT'
+**Severity:** CRITICAL
+**Title:** OpenRouter retry must preserve this finding
+REPORT
+		echo "Error: litellm.APIError: APIError: OpenrouterException -"
+		echo '{"error":{"message":"upstream","code":502,"metadata":{"provider_name":"Stealth"}}}'
+		exit 1
 		;;
 	github-models-primary-unavailable-fallback-success|github-models-primary-denied-fallback-success)
 		case "${STRIX_LLM:-}" in
@@ -6213,6 +6234,48 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
 			"<unset>|https://example.invalid|https://example.invalid" \
 			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	non-openrouter-openrouter-502-nonrecoverable)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"custom/non-openrouter" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"custom/non-openrouter" \
+			"https://example.invalid" \
+			"custom" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	openrouter-apierror-400-target-502-nonrecoverable)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"openrouter/free" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openrouter/free" \
+			"https://example.invalid" \
+			"openrouter" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	openrouter-502-with-critical-report-fails-closed)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"openrouter/free" \
+			"vertex_ai/fallback-one" \
+			"1" \
+			"Strix scan failed after provider infrastructure or failure-signal output; failing closed." \
+			"1" \
+			"openrouter/free" \
+			"https://example.invalid" \
+			"openrouter" \
 			"__DEFAULT__" \
 			"" \
 			"1"
@@ -10015,6 +10078,45 @@ run_gate_case "openrouter-502-fallback-retry-same-model-success" \
 	"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
 	"<unset>|https://example.invalid|https://example.invalid" \
 	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "non-openrouter-openrouter-502-nonrecoverable" \
+	"custom/non-openrouter" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"custom/non-openrouter" \
+	"https://example.invalid" \
+	"custom" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-apierror-400-target-502-nonrecoverable" \
+	"openrouter/free" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openrouter/free" \
+	"https://example.invalid" \
+	"openrouter" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-502-with-critical-report-fails-closed" \
+	"openrouter/free" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix scan failed after provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"openrouter/free" \
+	"https://example.invalid" \
+	"openrouter" \
 	"__DEFAULT__" \
 	"" \
 	"1"

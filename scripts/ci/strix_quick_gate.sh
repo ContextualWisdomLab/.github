@@ -2869,7 +2869,7 @@ PY
 		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
 	fi
 
-	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error; then
+	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error "$model"; then
 		INFRA_ERROR_DETECTED=1
 		if [ "$rc" -eq 0 ] && provider_signal_fail_closed_enabled; then
 			echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
@@ -2915,7 +2915,58 @@ is_llm_api_connection_error() {
 	return 1
 }
 
+is_openrouter_upstream_502_error() {
+	local model="${1-}"
+	case "$model" in
+	openrouter/*) ;;
+	*) return 1 ;;
+	esac
+
+	# Parse only the JSON record attached to LiteLLM's OpenRouter APIError.
+	# Whole-log regexes can borrow an unrelated target 502, while JSON parsing
+	# also keeps metadata key order and nested values irrelevant.
+	python3 - "$STRIX_LOG" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+api_error = re.compile(r"litellm(?:\.exceptions)?\.APIError:.*OpenrouterException", re.I)
+lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+for index, line in enumerate(lines):
+    match = api_error.search(line)
+    if match is None:
+        continue
+    inline_start = line.find("{", match.end())
+    fragments = [line[inline_start:]] if inline_start >= 0 else lines[index + 1 : index + 33]
+    if not fragments or not fragments[0].lstrip().startswith("{"):
+        continue
+    record = ""
+    for fragment in fragments:
+        record += fragment.strip()
+        if len(record) > 65536:
+            break
+        try:
+            value = json.loads(record)
+        except json.JSONDecodeError:
+            continue
+        error = value.get("error", {}) if isinstance(value, dict) else {}
+        metadata = error.get("metadata", {}) if isinstance(error, dict) else {}
+        if (
+            type(error.get("code")) is int
+            and error["code"] == 502
+            and isinstance(metadata, dict)
+            and isinstance(metadata.get("provider_name"), str)
+            and metadata["provider_name"].strip()
+        ):
+            raise SystemExit(0)
+        break
+raise SystemExit(1)
+PY
+}
+
 is_llm_service_unavailable_error() {
+	local model="${1-}"
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
 		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
 		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
@@ -2926,9 +2977,7 @@ is_llm_service_unavailable_error() {
 	# APIError rather than ServiceUnavailableError. Require both LiteLLM's
 	# OpenRouter exception and OpenRouter's provider metadata so target-app 502
 	# output cannot independently trigger a provider retry.
-	if grep -Eiq 'litellm(\.exceptions)?\.APIError:.*OpenrouterException' "$STRIX_LOG" &&
-		grep -Eq '"code"[[:space:]]*:[[:space:]]*502' "$STRIX_LOG" &&
-		grep -Eq '"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$STRIX_LOG"; then
+	if is_openrouter_upstream_502_error "$model"; then
 		return 0
 	fi
 
@@ -2975,10 +3024,14 @@ is_transient_same_model_retry_error() {
 	if is_timeout_error; then
 		return 1
 	fi
+	if grep -Eiq 'Vulnerabilities[[:space:]]+[1-9][0-9]*' "$STRIX_LOG" ||
+		has_blocking_vulnerability_reports; then
+		return 1
+	fi
 	if is_llm_api_connection_error; then
 		return 0
 	fi
-	if is_llm_service_unavailable_error; then
+	if is_llm_service_unavailable_error "$model"; then
 		return 0
 	fi
 	if is_rate_limit_error; then
@@ -3047,7 +3100,7 @@ run_strix_with_transient_retry() {
 			retry_reason="rate limit"
 		elif is_llm_api_connection_error; then
 			retry_reason="LLM API connection"
-		elif is_llm_service_unavailable_error; then
+		elif is_llm_service_unavailable_error "$model"; then
 			retry_reason="LLM service unavailable"
 		elif is_midstream_fallback_error; then
 			retry_reason="midstream fallback"
@@ -3279,6 +3332,7 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
+	local model="${1-}"
 	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
@@ -3303,7 +3357,7 @@ has_detected_infrastructure_error() {
 		return 0
 	fi
 
-	if is_llm_service_unavailable_error; then
+	if is_llm_service_unavailable_error "$model"; then
 		return 0
 	fi
 
@@ -4200,7 +4254,7 @@ is_model_retryable_error() {
 		return 0
 	fi
 
-	if is_llm_service_unavailable_error; then
+	if is_llm_service_unavailable_error "$model"; then
 		return 0
 	fi
 
