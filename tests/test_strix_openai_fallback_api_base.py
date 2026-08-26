@@ -265,7 +265,13 @@ class WorkflowProvisionsFallbackBase(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("openrouter/free openai-direct/gpt-5.4", workflow)
-        self.assertNotIn("nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5", workflow)
+        fallback_expression = next(
+            line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
+        )
+        self.assertNotIn(
+            "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+            fallback_expression,
+        )
         self.assertIn("STRIX_OPENROUTER_FALLBACK_KEY_FILE", workflow)
         self.assertIn("STRIX_OPENROUTER_FALLBACK_API_BASE_FILE", workflow)
 

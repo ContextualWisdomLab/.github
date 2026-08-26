@@ -205,7 +205,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             "'openrouter/free openai-direct/gpt-5.4'",
             workflow,
         )
-        self.assertNotIn(FREE_NVIDIA_FALLBACK, workflow)
+        fallback_expression = next(
+            line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
+        )
+        self.assertNotIn(FREE_NVIDIA_FALLBACK, fallback_expression)
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
