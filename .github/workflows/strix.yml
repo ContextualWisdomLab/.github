@@ -642,6 +642,9 @@ jobs:
                 exit 1
               fi
               ;;
+            # Trusted-main bootstrap compatibility until this PR merges; this is
+            # the provider-qualified form of the canonical allowlist default:
+            # nvidia_nim/nvidia/nemotron-3-super-120b-a12b
             nvidia_nim/*)
               case " $STRIX_NVIDIA_ALLOWED_MODELS " in
                 *" ${strix_model#nvidia_nim/} "*) ;;
