@@ -133,9 +133,6 @@ APPROVAL_VERIFICATION_LABELS = (
     "security/privacy:",
 )
 
-APPROVAL_VERIFICATION_PATTERNS = {
-    label: re.compile(re.escape(label)) for label in APPROVAL_VERIFICATION_LABELS
-}
 # Match the longest label first so a future label cannot shadow a more specific
 # label that starts at the same position (for example, docstring coverage:).
 ANY_LABEL_PATTERN = re.compile(

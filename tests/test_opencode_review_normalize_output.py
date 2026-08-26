@@ -1442,8 +1442,9 @@ def test_label_section_scans_labels_once_and_prefers_longest_label():
     assert norm.label_section(text, "docstring coverage:") == " 100% "
     assert norm.label_section(text, "coverage:") == " 98% "
     assert norm.label_section(text, "performance:") == " measured"
-    assert norm.ANY_LABEL_PATTERN.pattern.index("docstring\\ coverage:") < (
-        norm.ANY_LABEL_PATTERN.pattern.index("coverage:")
+    alternatives = norm.ANY_LABEL_PATTERN.pattern.split("|")
+    assert alternatives.index(re.escape("docstring coverage:")) < alternatives.index(
+        re.escape("coverage:")
     )
 
 
