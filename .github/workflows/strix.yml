@@ -143,7 +143,8 @@ jobs:
                 sed 's/^/  /' /tmp/strix-close-gh-error >&2 || true
                 continue
               fi
-              jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
+              local run_ids
+              if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
                 --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" \
                 --arg dispatch "$DISPATCH_REPOSITORY" --arg run_repository "$run_repository" '
                 .workflow_runs[]
@@ -160,7 +161,11 @@ jobs:
                     )
                   )
                 | .id
-              ' <<<"$runs_json" | while IFS= read -r run_id; do
+              ' <<<"$runs_json")"; then
+                echo "::warning::Strix close cleanup received invalid run data for ${run_repository}; leaving runs unchanged."
+                continue
+              fi
+              while IFS= read -r run_id; do
                 [ -n "$run_id" ] || continue
                 if gh api --method POST "repos/${run_repository}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-close-cancel-error; then
                   echo "Cancelled Strix run ${run_id} in ${run_repository} for closed PR #${CLOSED_PR_NUMBER}."
@@ -168,7 +173,7 @@ jobs:
                   echo "::warning::Strix close cleanup could not cancel run ${run_id} in ${run_repository}; it may have finished or the credential lacks Actions write access."
                   sed 's/^/  /' /tmp/strix-close-cancel-error >&2 || true
                 fi
-              done
+              done <<<"$run_ids"
             done
           }
 
