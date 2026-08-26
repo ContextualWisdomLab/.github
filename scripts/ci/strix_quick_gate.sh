@@ -2551,6 +2551,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-high}"
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2574,6 +2575,12 @@ run_strix_once() {
 		return 2
 	fi
 	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	if is_explicit_openai_model "$model"; then
+		# GPT-5.4 chat-completions rejects reasoning_effort when Strix
+		# supplies function tools; apply the override to every direct-OpenAI
+		# fallback, regardless of the selected primary provider.
+		child_reasoning_effort="none"
+	fi
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
@@ -2597,6 +2604,7 @@ run_strix_once() {
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
+	STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort" \
 	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
@@ -2671,7 +2679,6 @@ for key in (
 	"GEMINI_LOCATION",
 	"LLM_TIMEOUT",
     "STRIX_MEMORY_COMPRESSOR_TIMEOUT",
-    "STRIX_REASONING_EFFORT",
     "STRIX_LLM_MAX_RETRIES",
     "GOOGLE_CLOUD_PROJECT",
     "GCP_PROJECT",
@@ -2682,6 +2689,12 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+parent_reasoning_effort = os.environ.get("STRIX_REASONING_EFFORT")
+if parent_reasoning_effort:
+    child_env["STRIX_REASONING_EFFORT"] = parent_reasoning_effort
+child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT")
+if child_reasoning_effort:
+    child_env["STRIX_REASONING_EFFORT"] = child_reasoning_effort
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")
 if llm_api_base:
     child_env["LLM_API_BASE"] = llm_api_base

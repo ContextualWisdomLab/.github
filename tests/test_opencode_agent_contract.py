@@ -2996,3 +2996,15 @@ def test_r_package_load_deferral_requires_current_head_r_cmd_check():
     assert (
         "if (!is.na(pkg) && !requireNamespace(pkg, quietly = TRUE))" not in workflow
     )
+
+
+def test_strix_direct_openai_fallback_overrides_child_reasoning_effort():
+    """Direct OpenAI fallbacks must not inherit an incompatible effort value."""
+    quick_gate = Path("scripts/ci/strix_quick_gate.sh").read_text(encoding="utf-8")
+
+    assert 'local child_reasoning_effort="${STRIX_REASONING_EFFORT:-high}"' in quick_gate
+    assert 'if is_explicit_openai_model "$model"; then' in quick_gate
+    assert 'child_reasoning_effort="none"' in quick_gate
+    assert 'STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort"' in quick_gate
+    assert 'child_reasoning_effort = os.environ.get("STRIX_CHILD_REASONING_EFFORT")' in quick_gate
+    assert 'child_env["STRIX_REASONING_EFFORT"] = child_reasoning_effort' in quick_gate
