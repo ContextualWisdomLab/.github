@@ -2551,6 +2551,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2574,20 +2575,19 @@ run_strix_once() {
 		return 2
 	fi
 	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	# Strix uses function tools. Direct OpenAI chat-completions rejects those
+	# tools when reasoning_effort is non-none, so scope the supported value to
+	# this provider attempt without weakening reasoning on other providers.
+	if is_explicit_openai_model "$model" &&
+		{ [ -z "$llm_api_base_value" ] || [ "${llm_api_base_value%/}" = "https://api.openai.com/v1" ]; }; then
+		child_reasoning_effort="none"
+	fi
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
-	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
-	case "$(normalize_model "$model")" in
-	openai-direct/gpt-5.4 | openai_direct/gpt-5.4)
-		# OpenAI rejects function tools plus reasoning_effort for GPT-5.4 on
-		# Chat Completions, the transport used by the pinned Strix scanner.
-		child_reasoning_effort="none"
-		;;
-	esac
 	if ! is_vertex_model "$(normalize_model "$model")"; then
 		child_llm_api_key="$LLM_API_KEY"
 		if is_github_models_model "$(normalize_model "$model")" && [ -n "$STRIX_GITHUB_MODELS_KEY" ]; then
