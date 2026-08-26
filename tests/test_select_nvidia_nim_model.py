@@ -185,12 +185,22 @@ def test_fetch_served_model_ids_fails_closed_on_transport_errors(
         resolver.fetch_served_model_ids(resolver.DEFAULT_BASE_URL, "secret-key")
 
 
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [
+        (401, RuntimeError),
+        (429, resolver.ModelResolutionUnavailable),
+        (503, resolver.ModelResolutionUnavailable),
+    ],
+)
 def test_fetch_served_model_ids_reports_http_status(
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    error_type: type[RuntimeError],
 ) -> None:
     """Provider HTTP failures identify the status without exposing credentials."""
     response = _FakeResponse(b"{}")
-    response.status = 401
+    response.status = status
 
     def fake_connection(
         _host: str, _port: int, *, timeout: float, context: ssl.SSLContext
@@ -207,7 +217,7 @@ def test_fetch_served_model_ids_reports_http_status(
 
     monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
 
-    with pytest.raises(RuntimeError, match="HTTP 401"):
+    with pytest.raises(error_type, match=f"HTTP {status}"):
         resolver.fetch_served_model_ids(resolver.DEFAULT_BASE_URL, "secret-key")
 
 
