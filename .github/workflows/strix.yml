@@ -173,6 +173,7 @@ jobs:
     # fail-closed and never turns an incomplete scan into an approval.
     timeout-minutes: 120
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       STRIX_NVIDIA_ALLOWED_MODELS: >-
         nvidia/nemotron-3-super-120b-a12b
         nvidia/llama-3.1-nemotron-ultra-253b-v1
@@ -186,8 +187,6 @@ jobs:
       id-token: write
       models: read
       statuses: write
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
