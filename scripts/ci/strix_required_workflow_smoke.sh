@@ -159,7 +159,7 @@ assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix
 assert_file_contains "$workflow_file" "nvidia_nim/*)" "Strix model preparation reuses the gate-validated NVIDIA provider namespace"
 assert_file_contains "$workflow_file" "steps.resolve_nvidia_models.outputs.fallback" "Strix resolves another live NVIDIA hosted model before falling back to direct OpenAI"
 assert_file_not_contains "$workflow_file" "nvidia/llama-3.3-nemotron-super-49b-v1.5" "Strix does not pin the retired NVIDIA hosted fallback"
-assert_file_not_contains "$workflow_file" "format('{0} openrouter/free openai-direct/gpt-5.4'" "Strix does not route NVIDIA exhaustion through the live-disproven OpenRouter free backend"
+assert_file_contains "$workflow_file" "openrouter/free openai-direct/gpt-5.4" "Strix crosses to OpenRouter's free router before direct OpenAI when NVIDIA is exhausted"
 assert_file_contains "$workflow_file" "openai-direct/gpt-5.4" "Strix retains the cross-provider direct-OpenAI fallback"
 assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "Strix workflow provisions a trusted OpenRouter fallback key file"
 assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE" "Strix workflow provisions a trusted OpenRouter fallback API base file"

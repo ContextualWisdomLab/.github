@@ -16,13 +16,12 @@ and fallback pools. The default pool prefers
 configuration. Private repositories retain the contracted provider because
 NVIDIA hosted trial inputs are restricted to public repositories.
 
-OpenRouter remains a supported explicitly selected transport and API-base
-capability. It is not in the NVIDIA exhaustion chain: the authenticated
-`openrouter/free` router selected a Stealth backend that returned HTTP 502 with
-an invalid target URL in required CI run `33012371359`, so retaining that route
-would repeat a disproven fallback. The workflow keeps explicit OpenRouter scans
-available while NVIDIA exhaustion proceeds from a second live NVIDIA model to
-direct OpenAI.
+OpenRouter remains a supported transport and API-base capability. Required CI
+run `33012371359` exposed a wrapped HTTP 502 from the authenticated
+`openrouter/free` dynamic router. The same-model retry classifier did not match
+because LiteLLM wrapped `APIError` and `OpenrouterException` onto separate
+terminal lines. The classifier now recognizes that bounded signature, so the
+NVIDIA exhaustion chain retains OpenRouter before direct OpenAI.
 
 ## Trust boundary
 
@@ -59,13 +58,12 @@ Regression evidence proves that:
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are present in the live NVIDIA catalog;
-7. direct OpenAI remains the cross-provider fallback after the distinct live
-   NVIDIA candidate;
+7. OpenRouter's authenticated dynamic free router and direct OpenAI remain the
+   later cross-provider fallbacks;
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
-10. executable NVIDIA fallback expressions exclude the live-disproven
-    OpenRouter free route while explicit OpenRouter selection remains supported; and
+10. wrapped OpenRouter 502 output enters a bounded same-model retry; and
 11. the required-workflow smoke contract pins these properties.
 
 ## Limitations
