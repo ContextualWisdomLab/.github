@@ -193,6 +193,8 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("scripts/ci/select_nvidia_nim_model.py", workflow)
         self.assertIn("steps.resolve_nvidia_models.outputs.primary", workflow)
         self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
+        self.assertNotIn("vars.STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
+        self.assertNotIn("vars.STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
         self.assertIn('--exclude "$primary"', workflow)
         self.assertIn('[ "$primary_rc" -eq 75 ]', workflow)
         self.assertIn('[ "$fallback_rc" -eq 75 ]', workflow)
@@ -205,7 +207,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn(default_expression, workflow)
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            "format('{0} openrouter/free openai-direct/gpt-5.4', "
+            "format('{0} openai-direct/gpt-5.4', "
             "steps.resolve_nvidia_models.outputs.fallback)",
             workflow,
         )

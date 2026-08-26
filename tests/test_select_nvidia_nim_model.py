@@ -226,6 +226,7 @@ def test_fetch_served_model_ids_reports_http_status(
     [
         (b"\x80", "non-UTF-8 body"),
         (b"<html>maintenance</html>", "non-JSON body"),
+        (b"\x80", "non-JSON body"),
         (b'{"object": "list"}', "no model list"),
         (b'{"data": []}', "no usable model id"),
     ],
