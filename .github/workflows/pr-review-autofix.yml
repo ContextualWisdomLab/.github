@@ -477,6 +477,8 @@ jobs:
           Edit only the checked-out repository files listed in the authoritative JSON array.
           If the array is empty, leave the repository unchanged.
           Do not delete, rename, or reformat unrelated files, even if they look stale or failing.
+          In customer-facing copy, describe the customer's next useful action; do not expose internal implementation boundaries.
+          Preserve the target repository's AGENTS.md product language and governance constraints.
           Return a concise summary of changes made, or state that no safe change was made.
           EOF
           ordinary_scope_snapshot="${RUNNER_TEMP}/opencode-autofix-workspace-before.json"

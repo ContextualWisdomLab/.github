@@ -35,6 +35,19 @@ def test_review_fix_caller_runs_once_each_hour() -> None:
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
+def test_autofix_prompt_keeps_customer_copy_actionable() -> None:
+    """Keep implementation boundaries out of customer-facing repair copy."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    assert (
+        "In customer-facing copy, describe the customer's next useful action; "
+        "do not expose internal implementation boundaries."
+    ) in workflow
+    assert (
+        "Preserve the target repository's AGENTS.md product language and "
+        "governance constraints."
+    ) in workflow
+
+
 def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
     """Require all write-capable OpenCode model traffic to cross the gateway."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
