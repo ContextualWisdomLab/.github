@@ -21,8 +21,9 @@ GitHub Models primary) inherits correct routing automatically.
 
 Strix invokes function tools through chat completions. Direct OpenAI rejects
 those tools when `reasoning_effort` is non-none, so the gate scopes
-`STRIX_REASONING_EFFORT=none` to the explicit direct-OpenAI child attempt.
-NVIDIA and other provider attempts retain the workflow's configured high
+`STRIX_REASONING_EFFORT=none` to an explicit direct-OpenAI child using the
+native OpenAI endpoint. NVIDIA, other providers, and standalone explicit-model
+runs targeting a custom OpenAI-compatible endpoint retain their configured
 effort.
 
 Contextual-orchestrator PR #881 run `32967361853` demonstrated this boundary:

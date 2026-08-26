@@ -3332,7 +3332,7 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
 case "${FAKE_STRIX_SCENARIO:?}" in
-success|runtime-env-forwarding|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
 		exit 0
 		;;
@@ -5660,7 +5660,7 @@ PY
 		STRIX_REPORTS_DIR="$repo_root_dir/strix_runs"
 		STRIX_TARGET_PATH="$effective_target_path"
 	)
-	if [ "$scenario" = "runtime-env-forwarding" ]; then
+	if [ "$scenario" = "runtime-env-forwarding" ] || [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
 		env_cmd+=(
 			LLM_TIMEOUT="90"
 			STRIX_MEMORY_COMPRESSOR_TIMEOUT="10"
@@ -5875,6 +5875,12 @@ PY
 			"$runtime_env_log" \
 			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;UNRELATED_SECRET=<unset>" \
 			"scenario=$scenario runtime env forwarding"
+	fi
+	if [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
+		assert_file_contains \
+			"$runtime_env_log" \
+			"STRIX_REASONING_EFFORT=minimal" \
+			"scenario=$scenario custom compatible endpoint effort"
 	fi
 
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
@@ -6158,6 +6164,18 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	custom-openai-compatible-preserves-effort)
+		run_gate_case "custom-openai-compatible-preserves-effort" \
+			"openai-direct/gpt-5.4" \
+			"" \
+			"0" \
+			"scan ok" \
+			"1" \
+			"openai/gpt-5.4" \
+			"https://compatible.example/v1" \
+			"openai" \
+			"https://compatible.example/v1"
 		;;
 	nvidia-rate-limit-openai-direct-fallback-clears-api-base)
 		run_gate_case_allow_provider_signal "nvidia-rate-limit-openai-direct-fallback-clears-api-base" \
@@ -12524,6 +12542,17 @@ run_gate_case "github-models-model-prefix-requires-api-base" \
 	"" \
 	"openai" \
 	""
+
+run_gate_case "custom-openai-compatible-preserves-effort" \
+	"openai-direct/gpt-5.4" \
+	"" \
+	"0" \
+	"scan ok" \
+	"1" \
+	"openai/gpt-5.4" \
+	"https://compatible.example/v1" \
+	"openai" \
+	"https://compatible.example/v1"
 
 run_gate_case "github-models-api-base-rejected-for-direct-openai" \
 	"openai/o4-mini" \
