@@ -819,6 +819,7 @@ jobs:
         env:
           GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
           OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENROUTER_FALLBACK_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           # Direct-OpenAI scans keep GitHub Models candidates as fallbacks, so
           # a provider quota outage degrades to a slower model instead of a
@@ -850,6 +851,16 @@ jobs:
             openai_fallback_api_base_file="$RUNNER_TEMP/openai_fallback_api_base.txt"
             printf '%s' 'https://api.openai.com/v1' > "$openai_fallback_api_base_file"
             echo "STRIX_OPENAI_FALLBACK_API_BASE_FILE=$openai_fallback_api_base_file" >> "$GITHUB_ENV"
+          fi
+          openrouter_sanitized="$(printf '%s' "$OPENROUTER_FALLBACK_KEY" | tr -d '\r\n')"
+          openrouter_trimmed="$(printf '%s' "$openrouter_sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$openrouter_trimmed" ]; then
+            openrouter_fallback_key_file="$RUNNER_TEMP/openrouter_fallback_key.txt"
+            printf '%s' "$openrouter_trimmed" > "$openrouter_fallback_key_file"
+            echo "STRIX_OPENROUTER_FALLBACK_KEY_FILE=$openrouter_fallback_key_file" >> "$GITHUB_ENV"
+            openrouter_fallback_api_base_file="$RUNNER_TEMP/openrouter_fallback_api_base.txt"
+            printf '%s' 'https://openrouter.ai/api/v1' > "$openrouter_fallback_api_base_file"
+            echo "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE=$openrouter_fallback_api_base_file" >> "$GITHUB_ENV"
           fi
 
       - name: Prepare Vertex AI credentials
@@ -979,11 +990,13 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openrouter/free openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}
+          STRIX_OPENROUTER_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENROUTER_FALLBACK_KEY_FILE }}
+          STRIX_OPENROUTER_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENROUTER_FALLBACK_API_BASE_FILE }}
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
@@ -1252,6 +1265,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      statuses: write # Required for downscoped OIDC status publication.
     steps:
       - name: Exchange OpenCode app token for target repository status
         id: target_app_token
