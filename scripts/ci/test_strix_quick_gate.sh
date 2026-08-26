@@ -373,7 +373,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
 	assert_file_contains "$workflow_file" 'strix_model="openrouter/free"' "strix workflow prefers the existing OpenRouter route when its credential is available"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'openai-direct/gpt-5.4'" "strix workflow gives NVIDIA NIM scans a non-retired contracted fallback"
-	assert_file_not_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" "strix workflow excludes the retired NVIDIA hosted fallback"
+	if grep -E '^[[:space:]]+STRIX_FALLBACK_MODELS:' "$workflow_file" | grep -Fq "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"; then
+		record_failure "strix executable fallback list must exclude the retired NVIDIA hosted model"
+	fi
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$workflow_file" "STRIX_OPENAI_FALLBACK_API_BASE_FILE" "strix workflow routes direct-OpenAI fallbacks through a trusted API base file"

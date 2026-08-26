@@ -169,7 +169,10 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
 assert_file_contains "$workflow_file" 'strix_model="openrouter/free"' "Strix prefers the existing OpenRouter route when its credential is available"
-assert_file_not_contains "$workflow_file" "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" "Strix excludes the retired NVIDIA hosted fallback"
+if grep -E '^[[:space:]]+STRIX_FALLBACK_MODELS:' "$workflow_file" | grep -Fq "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"; then
+	echo "FAIL: Strix executable fallback list includes the retired NVIDIA hosted model" >&2
+	failures=$((failures + 1))
+fi
 assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"

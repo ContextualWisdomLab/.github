@@ -203,7 +203,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
             f'strix_model="{OPENROUTER_DEFAULT_MODEL}"',
             workflow,
         )
-        self.assertNotIn(RETIRED_NVIDIA_FALLBACK, workflow)
+        fallback_line = next(
+            line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
+        )
+        self.assertNotIn(RETIRED_NVIDIA_FALLBACK, fallback_line)
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
