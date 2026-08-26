@@ -272,7 +272,7 @@ class WorkflowProvisionsFallbackBase(unittest.TestCase):
             "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
             fallback_expression,
         )
-        self.assertNotIn("openrouter/free", fallback_expression)
+        self.assertIn("openrouter/free openai-direct/gpt-5.4", fallback_expression)
         self.assertIn("openai-direct/gpt-5.4", fallback_expression)
 
     def test_manual_status_job_has_status_write_permission(self) -> None:
