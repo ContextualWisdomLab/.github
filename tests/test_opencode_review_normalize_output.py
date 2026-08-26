@@ -1386,6 +1386,7 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     assert not norm.mentions_full_coverage("", no_source_summary)
     assert norm.contradicts_changed_file_kinds("", no_source_summary)
 
+
     changed_files = tmp_path / "opencode-changed-files.txt"
     changed_files.write_text("README.md\n", encoding="utf-8")
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
@@ -1431,6 +1432,18 @@ def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     )
     assert not norm.mentions_full_coverage(
         "", FULL_SUMMARY.replace("proves 100%", "not proven")
+    )
+
+
+def test_label_section_scans_labels_once_and_prefers_longest_label():
+    """Parse adjacent labels without rescanning the input for every label."""
+    text = "docstring coverage: 100% coverage: 98% performance: measured"
+
+    assert norm.label_section(text, "docstring coverage:") == " 100% "
+    assert norm.label_section(text, "coverage:") == " 98% "
+    assert norm.label_section(text, "performance:") == " measured"
+    assert norm.ANY_LABEL_PATTERN.pattern.index("docstring\\ coverage:") < (
+        norm.ANY_LABEL_PATTERN.pattern.index("coverage:")
     )
 
 

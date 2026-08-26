@@ -136,6 +136,14 @@ APPROVAL_VERIFICATION_LABELS = (
 APPROVAL_VERIFICATION_PATTERNS = {
     label: re.compile(re.escape(label)) for label in APPROVAL_VERIFICATION_LABELS
 }
+# Match the longest label first so a future label cannot shadow a more specific
+# label that starts at the same position (for example, docstring coverage:).
+ANY_LABEL_PATTERN = re.compile(
+    "|".join(
+        re.escape(label)
+        for label in sorted(APPROVAL_VERIFICATION_LABELS, key=len, reverse=True)
+    )
+)
 
 SOURCE_LIKE_CHANGED_FILE_EXTENSIONS = frozenset(
     {
@@ -959,32 +967,18 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
 
-    def label_starts(candidate: str) -> list[int]:
-        """Return exact verification-label starts without suffix collisions."""
-        starts = []
-        pattern = APPROVAL_VERIFICATION_PATTERNS.get(candidate)
-        if pattern is None:
-            pattern = re.compile(re.escape(candidate))
-        for match in pattern.finditer(text):
-            index = match.start()
-            if (
-                candidate == "coverage:"
-                and text[max(0, index - 10) : index] == "docstring "
-            ):
-                continue
-            starts.append(index)
-        return starts
-
-    starts = label_starts(label)
+    actual_matches = [
+        (match.start(), match.group(0)) for match in ANY_LABEL_PATTERN.finditer(text)
+    ]
+    starts = [index for index, candidate in actual_matches if candidate == label]
     if not starts:
         return ""
+
     start = starts[-1] + len(label)
     next_starts = [
-        candidate_start
-        for candidate in APPROVAL_VERIFICATION_LABELS
-        if candidate != label
-        for candidate_start in label_starts(candidate)
-        if candidate_start >= start
+        index
+        for index, candidate in actual_matches
+        if candidate != label and index >= start
     ]
     end = min(next_starts) if next_starts else len(text)
     return text[start:end]
