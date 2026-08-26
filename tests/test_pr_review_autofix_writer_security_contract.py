@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
-_TARGET_MODEL = "nvidia-nim/mistralai/mistral-small-4-119b-2603"
+_TARGET_MODEL = "contextual-orchestrator/contextual-orchestrator"
 
 
 def _workflow_text() -> str:
@@ -30,15 +30,16 @@ def _step_header(workflow: str, step_name: str) -> str:
     return step[:run_start]
 
 
-def test_writer_uses_supported_nvidia_mistral_small_with_high_reasoning() -> None:
-    """Pin the write-capable model and its deliberate high-reasoning budget."""
+def test_writer_uses_contextual_orchestrator_with_high_reasoning() -> None:
+    """Pin the writer to the provider-neutral gateway and high reasoning."""
     workflow = _workflow_text()
 
     assert f'"model": "{_TARGET_MODEL}"' in workflow
-    assert '"mistralai/mistral-small-4-119b-2603": {' in workflow
+    assert '"contextual-orchestrator": {' in workflow
     assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
     assert '"reasoningEffort": "high"' in workflow
-    assert "nvidia-nim/mistralai/mistral-nemotron" not in workflow
+    assert '"enabled_providers": ["contextual-orchestrator"]' in workflow
+    assert "https://integrate.api.nvidia.com/v1" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
 
