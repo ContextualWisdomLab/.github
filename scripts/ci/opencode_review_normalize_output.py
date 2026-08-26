@@ -967,7 +967,11 @@ def label_section(text: str, label: str) -> str:
     actual_matches = [
         (match.start(), match.group(0)) for match in ANY_LABEL_PATTERN.finditer(text)
     ]
-    starts = [index for index, candidate in actual_matches if candidate == label]
+    if label in APPROVAL_VERIFICATION_LABELS:
+        starts = [index for index, candidate in actual_matches if candidate == label]
+    else:
+        # Preserve repository-specific labels without rescanning catalogue labels.
+        starts = [match.start() for match in re.finditer(re.escape(label), text)]
     if not starts:
         return ""
 

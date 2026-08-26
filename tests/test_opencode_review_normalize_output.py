@@ -1448,6 +1448,13 @@ def test_label_section_scans_labels_once_and_prefers_longest_label():
     )
 
 
+def test_label_section_preserves_custom_label_lookup():
+    """Repository-specific labels retain the helper's backwards-compatible path."""
+    text = "custom evidence: measured coverage: 98%"
+
+    assert norm.label_section(text, "custom evidence:") == " measured "
+
+
 def test_check_structural_approval_rejects_invalid_or_unsafe_approvals(
     tmp_path, monkeypatch
 ):
