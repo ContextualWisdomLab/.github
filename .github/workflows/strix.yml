@@ -1042,8 +1042,10 @@ jobs:
           strix_rc=0
           strix_gate_attempt=1
           strix_gate_deadline=$(( SECONDS + 6000 ))
-          strix_gate_attempt_budget_var="STRIX_TOTAL_${budget_suffix}_SECONDS"
-          strix_gate_attempt_budget_seconds="${!strix_gate_attempt_budget_var:-$process_budget_seconds}"
+          # Reserve the scanner process budget, not the gate's total wrapper
+          # budget.  The latter includes setup/cleanup overhead already spent
+          # by the current attempt and can make every retry impossible.
+          strix_gate_attempt_budget_seconds="$process_budget_seconds"
           set +e
           while : ; do
             strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_${strix_gate_attempt}.log"
