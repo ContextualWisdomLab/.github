@@ -4,15 +4,15 @@
 
 Strix treats an authenticated NVIDIA NIM model-catalog `404 Not Found` as
 provider availability evidence, not as a target-application vulnerability. The
-gate does not retry the same unavailable model. It proceeds to a distinct
-reviewed NVIDIA hosted model and only then to the existing GitHub Models
-candidates.
+gate does not retry the same unavailable model. When the existing organization
+OpenRouter credential is available, automatic scans use OpenRouter's reviewed
+free router before the rate-limited NVIDIA route. NVIDIA scans fall back only
+to direct OpenAI; the retired NVIDIA model is no longer executable configuration.
 
 Public-repository scans now default to
-`nvidia/nemotron-3-super-120b-a12b`. The first fallback is
-`nvidia/llama-3.3-nemotron-super-49b-v1.5`. Private repositories retain the
-contracted provider because NVIDIA hosted trial inputs are restricted to public
-repositories by the central workflow.
+`openrouter/free` when its credential is configured. Without it, public scans
+use `nvidia/nemotron-3-super-120b-a12b`, while private scans retain direct
+OpenAI because NVIDIA hosted trial inputs are restricted to public repositories.
 
 ## Trust boundary
 
@@ -48,8 +48,8 @@ Regression evidence proves that:
 4. a provider-like source literal on one line without LiteLLM `NotFoundError`
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
-6. the primary and first fallback are current NVIDIA hosted models;
-7. GitHub Models remain later cross-provider fallbacks;
+6. automatic scans prefer the existing OpenRouter route when configured;
+7. retired NVIDIA hosted models are absent from executable configuration;
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
@@ -77,9 +77,6 @@ focused `test_strix_quick_gate.sh` case; provider failures remain non-passing.
 
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC
 9110). Internet Engineering Task Force. https://doi.org/10.17487/RFC9110
-
-NVIDIA Corporation. (2025). *Llama-3.3-Nemotron-Super-49B-v1.5* [Model card].
-NVIDIA NIM. https://build.nvidia.com/nvidia/llama-3_3-nemotron-super-49b-v1_5/modelcard
 
 NVIDIA Corporation. (2026a). *NVIDIA-Nemotron-3-Super-120B-A12B* [Model
 card]. NVIDIA NIM.

@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Prefer the existing `openrouter/free` Strix route for automatic scans when
+  its organization credential is configured, and remove the retired NVIDIA
+  Llama 3.3 Nemotron Super 49B fallback that began returning HTTP 410.
 - Dependency updates now keep coverage evidence when the lock file passes
   validation. If validation reports a problem, refresh the lock file and run
   the review again before merging.
