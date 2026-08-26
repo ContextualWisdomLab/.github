@@ -171,6 +171,10 @@ jobs:
     # partial reports and publish a concrete failure reason. Hitting any cap is
     # fail-closed and never turns an incomplete scan into an approval.
     timeout-minutes: 120
+    env:
+      STRIX_NVIDIA_ALLOWED_MODELS: >-
+        nvidia/nemotron-3-super-120b-a12b
+        nvidia/llama-3.1-nemotron-ultra-253b-v1
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -551,12 +555,6 @@ jobs:
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          STRIX_NVIDIA_PRIMARY_CANDIDATES: >-
-            ${{ vars.STRIX_NVIDIA_PRIMARY_CANDIDATES ||
-            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
-          STRIX_NVIDIA_FALLBACK_CANDIDATES: >-
-            ${{ vars.STRIX_NVIDIA_FALLBACK_CANDIDATES ||
-            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
         run: |
           set -euo pipefail
           if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
@@ -565,7 +563,7 @@ jobs:
           fi
           resolver="$TRUSTED_STRIX_SOURCE/scripts/ci/select_nvidia_nim_model.py"
           primary_rc=0
-          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_PRIMARY_CANDIDATES")" || primary_rc=$?
+          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_ALLOWED_MODELS")" || primary_rc=$?
           if [ "$primary_rc" -eq 75 ]; then
             echo '::warning::NVIDIA NIM model catalog is unavailable; using the contracted OpenAI fallback.'
             printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
@@ -574,7 +572,7 @@ jobs:
           [ "$primary_rc" -eq 0 ] || exit "$primary_rc"
 
           fallback_rc=0
-          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_FALLBACK_CANDIDATES" --exclude "$primary")" || fallback_rc=$?
+          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "$primary")" || fallback_rc=$?
           if [ "$fallback_rc" -eq 75 ]; then
             echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
             fallback=""
@@ -644,8 +642,14 @@ jobs:
                 exit 1
               fi
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | \
-            nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1)
+            nvidia_nim/*)
+              case " $STRIX_NVIDIA_ALLOWED_MODELS " in
+                *" ${strix_model#nvidia_nim/} "*) ;;
+                *)
+                  echo '::error::STRIX_LLM selected an NVIDIA NIM model outside the reviewed allowlist.'
+                  exit 1
+                  ;;
+              esac
               if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ]; then
                 echo '::error::NVIDIA NIM hosted trial scans are limited to public repositories.'
                 exit 1

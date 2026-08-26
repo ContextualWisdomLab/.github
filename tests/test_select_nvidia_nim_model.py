@@ -224,6 +224,7 @@ def test_fetch_served_model_ids_reports_http_status(
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
+        (b"\x80", "non-UTF-8 body"),
         (b"<html>maintenance</html>", "non-JSON body"),
         (b'{"object": "list"}', "no model list"),
         (b'{"data": []}', "no usable model id"),
@@ -325,6 +326,17 @@ def test_main_annotates_a_resolution_failure(
 
     assert resolver.main(["--candidates", "retired/model"]) == resolver.EX_TEMPFAIL
     assert "::error::no configured primary NVIDIA NIM model candidate" in capsys.readouterr().err
+
+
+def test_main_treats_invalid_catalog_utf8_as_temporary(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Malformed provider bytes preserve the workflow's fallback exit code."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret-key")
+    _stub_catalog(monkeypatch, b"\x80")
+
+    assert resolver.main(["--candidates", "live/model"]) == resolver.EX_TEMPFAIL
+    assert "non-UTF-8 body" in capsys.readouterr().err
 
 
 def test_main_keeps_invalid_operator_configuration_nonrecoverable(

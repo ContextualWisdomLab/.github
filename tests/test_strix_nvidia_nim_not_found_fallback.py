@@ -211,6 +211,20 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertNotIn(RETIRED_NVIDIA_FALLBACK, workflow)
 
+    def test_workflow_uses_one_nvidia_model_allowlist(self) -> None:
+        """Resolver candidates and gate admission share one reviewed list."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("STRIX_NVIDIA_ALLOWED_MODELS: >-", workflow)
+        self.assertNotIn("STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
+        self.assertNotIn("STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
+        self.assertEqual(
+            workflow.count('--candidates "$STRIX_NVIDIA_ALLOWED_MODELS"'),
+            2,
+        )
+        self.assertIn('case " $STRIX_NVIDIA_ALLOWED_MODELS " in', workflow)
+        self.assertIn('*" ${strix_model#nvidia_nim/} "*)', workflow)
+
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
             "- name: Prepare LLM API key input file",

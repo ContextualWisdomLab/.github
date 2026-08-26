@@ -125,6 +125,10 @@ def fetch_served_model_ids(
         raise
     except (OSError, http.client.HTTPException) as error:
         raise ModelResolutionUnavailable("NVIDIA NIM model catalog is unreachable") from error
+    except UnicodeDecodeError as error:
+        raise ModelResolutionUnavailable(
+            "NVIDIA NIM model catalog returned a non-UTF-8 body"
+        ) from error
     except json.JSONDecodeError as error:
         raise ModelResolutionUnavailable("NVIDIA NIM model catalog returned a non-JSON body") from error
     entries = payload.get("data") if isinstance(payload, dict) else None
