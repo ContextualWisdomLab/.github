@@ -14,3 +14,8 @@ command exits with code `126` before starting any service.
 Readiness polling remains loopback-only and does not follow redirects. The
 network declaration is evidence metadata; callers that need stronger network
 policy must run this helper inside a network-restricted runner or container.
+
+## References
+
+MITRE. (2026). *CWE-918: Server-side request forgery (SSRF)*.
+https://cwe.mitre.org/data/definitions/918.html
