@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Dependency updates now keep coverage evidence when the lock file passes
+  validation. If validation reports a problem, refresh the lock file and run
+  the review again before merging.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions

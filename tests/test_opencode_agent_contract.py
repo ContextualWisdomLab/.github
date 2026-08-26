@@ -636,6 +636,30 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert 'hash-object --no-filters -- "$relative_lock"' not in measure_step
     assert "refusing --trust-lockfile for PR-controlled dependency resolution" in measure_step
+    # A PR-mutated pnpm lock is trusted only when the trusted materializer
+    # recorded the exact head blob from the validated HEAD revision; the
+    # sandbox must consult that manifest record instead of refusing every
+    # dependency-changing pull request.
+    pnpm_trust_block = measure_step.split(
+        "trusted_pnpm_lock_matches_base() {", 1
+    )[1].split("prepare_writable_pnpm_store()", 1)[0]
+    assert (
+        "differs from the validated base and was not materialized from "
+        "the validated HEAD"
+    ) in pnpm_trust_block
+    assert (
+        "does not match the validated HEAD; refusing --trust-lockfile "
+        "because the coverage source artifact was tampered with"
+    ) in pnpm_trust_block
+    assert "trusted_manifest_records_lock_revision" in pnpm_trust_block
+    assert '--arg manager "pnpm"' in measure_step
+    assert '.package_manager | startswith($manager + "@")' in measure_step
+    assert "/opt/javascript-package-locks/manifest.json" in measure_step
+    assert ".revision_sha == $revision and .lock_blob == $blob" in measure_step
+    # Manifest records normalize Git object identities to lowercase; pnpm trust
+    # must match the npm path even when an input SHA uses uppercase hex.
+    assert '--arg revision "${PR_HEAD_SHA,,}"' in measure_step
+    assert '--arg blob "${head_blob,,}"' in measure_step
     assert "prepare_writable_pnpm_store()" in measure_step
     assert (
         'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"'
