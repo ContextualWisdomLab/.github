@@ -556,7 +556,7 @@ jobs:
             'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
           STRIX_NVIDIA_FALLBACK_CANDIDATES: >-
             ${{ vars.STRIX_NVIDIA_FALLBACK_CANDIDATES ||
-            'nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
+            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
         run: |
           set -euo pipefail
           if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
@@ -574,7 +574,7 @@ jobs:
           [ "$primary_rc" -eq 0 ] || exit "$primary_rc"
 
           fallback_rc=0
-          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_FALLBACK_CANDIDATES")" || fallback_rc=$?
+          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_FALLBACK_CANDIDATES" --exclude "$primary")" || fallback_rc=$?
           if [ "$fallback_rc" -eq 75 ]; then
             echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
             fallback=""

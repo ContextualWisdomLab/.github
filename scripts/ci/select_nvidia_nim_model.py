@@ -157,6 +157,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the command line for the model resolver."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidates", required=True, help="whitespace-separated ordered model ids")
+    parser.add_argument(
+        "--exclude",
+        default="",
+        help="whitespace-separated model ids that cannot be selected",
+    )
     parser.add_argument("--role", default="primary", help="candidate pool role used in error messages")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="NVIDIA NIM OpenAI-compatible base URL")
     parser.add_argument(
@@ -180,7 +185,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         served = fetch_served_model_ids(args.base_url, api_key, timeout_seconds=args.timeout_seconds)
-        print(select_model(parse_candidates(args.candidates), served, role=args.role))
+        excluded = set(parse_candidates(args.exclude))
+        candidates = [candidate for candidate in parse_candidates(args.candidates) if candidate not in excluded]
+        print(select_model(candidates, served, role=args.role))
     except ValueError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
