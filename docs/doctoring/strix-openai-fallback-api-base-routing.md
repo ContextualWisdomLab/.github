@@ -71,7 +71,11 @@ Regression evidence proves that:
 8. the workflow provisions the override file and passes it into the gate env;
 9. the required-workflow smoke contract pins both sides of the wiring; and
 10. the stale `gpt-5.6-luna` expectations left behind by the model rename are
-   aligned with the valid `gpt-5.4` contract in queue-contract tests.
+   aligned with the valid `gpt-5.4` contract in queue-contract tests; and
+11. the direct GPT-5.4 fallback clears reasoning effort to `none` because the
+    pinned Strix scanner uses Chat Completions function tools, a combination
+    the provider rejects when `reasoning_effort` is present. Other models keep
+    the workflow's configured `high` effort.
 
 ## Limitations
 
