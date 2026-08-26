@@ -6,7 +6,7 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - Review summaries now report test and documentation coverage separately and
-  consistently. No action is required.
+  consistently. Open the summary to confirm both values before merging.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions
