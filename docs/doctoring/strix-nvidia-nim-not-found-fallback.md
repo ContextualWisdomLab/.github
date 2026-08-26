@@ -10,7 +10,7 @@ candidates.
 
 Public-repository scans now default to
 `nvidia/nemotron-3-super-120b-a12b`. The first fallback is
-`nvidia/llama-3.3-nemotron-super-49b-v1.5`. Private repositories retain the
+`nvidia/nemotron-4-340b-instruct`. Private repositories retain the
 contracted provider because NVIDIA hosted trial inputs are restricted to public
 repositories by the central workflow.
 
@@ -79,7 +79,7 @@ Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC
 9110). Internet Engineering Task Force. https://doi.org/10.17487/RFC9110
 
 NVIDIA Corporation. (2025). *Llama-3.3-Nemotron-Super-49B-v1.5* [Model card].
-NVIDIA NIM. https://build.nvidia.com/nvidia/llama-3_3-nemotron-super-49b-v1_5/modelcard
+NVIDIA NIM. https://build.nvidia.com/nvidia/nemotron-4-340b-instruct/modelcard
 
 NVIDIA Corporation. (2026a). *NVIDIA-Nemotron-3-Super-120B-A12B* [Model
 card]. NVIDIA NIM.

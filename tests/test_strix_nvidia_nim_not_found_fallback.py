@@ -20,7 +20,7 @@ STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 DEFAULT_NVIDIA_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 FREE_NVIDIA_FALLBACK = (
-    "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    "nvidia_nim/nvidia/nemotron-4-340b-instruct"
 )
 RETIRED_PRIMARY_MODEL = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
 

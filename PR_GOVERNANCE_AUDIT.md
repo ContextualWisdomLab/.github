@@ -165,7 +165,7 @@ just an outage of one model. Observed impact on LineageWeave PR #392: the
 NVIDIA NIM primary and its NVIDIA fallback both failed, cascaded through the
 dead GitHub Models fallback, and the run failed the required check entirely
 (`STRIX_FALLBACK_MODELS` exhausted) instead of degrading. Separately, the
-`nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5` fallback that did run
+`nvidia_nim/nvidia/nemotron-4-340b-instruct` fallback that did run
 before the GitHub Models cascade produced a fabricated CRITICAL finding
 (a hardcoded-secret report against a `frontend/src/config.ts` line that does
 not exist in that form on the target branch) — Strix's own in-run quality

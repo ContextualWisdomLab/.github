@@ -99,7 +99,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     assert candidates_match is not None
     conditional_public_candidate = (
         "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "&& 'nvidia-nim/nvidia/nemotron-4-340b-instruct "
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
@@ -122,7 +122,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     candidates_text = candidates_match.group(1)
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
-        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        "nvidia-nim/nvidia/nemotron-4-340b-instruct",
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
@@ -165,7 +165,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
     )
     assert candidate_pairs == [
-        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
+        ["nvidia-nim", "nvidia/nemotron-4-340b-instruct"],
         ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
         ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
         ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
@@ -1770,7 +1770,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert (
         "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
+        "'nvidia-nim/nvidia/nemotron-4-340b-instruct "
         "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
         "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
         "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "

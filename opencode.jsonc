@@ -3,7 +3,7 @@
   // NOT switched to "contextual-orchestrator/contextual-orchestrator" yet:
   // that requires CONTEXTUAL_ORCHESTRATOR_BASE_URL/_TOKEN to be provisioned
   // first (see the "contextual-orchestrator" provider block below).
-  "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "model": "nvidia-nim/nvidia/nemotron-4-340b-instruct",
   "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
   "enabled_providers": ["nvidia-nim", "github-models", "contextual-orchestrator"],
   "lsp": false,
@@ -293,7 +293,7 @@
         "apiKey": "{env:NVIDIA_API_KEY}"
       },
       "models": {
-        "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
+        "nvidia/nemotron-4-340b-instruct": {
           "name": "NVIDIA Llama 3.3 Nemotron Super 49B v1.5",
           "tool_call": true,
           "limit": {

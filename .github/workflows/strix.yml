@@ -859,7 +859,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/nemotron-4-340b-instruct openai-direct/gpt-5.4' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}

@@ -159,14 +159,14 @@ def test_load_config_tolerates_real_opencode_jsonc_comment_style(tmp_path):
         '  "$schema": "https://opencode.ai/config.json",\n'
         '  // NOT switched to "contextual-orchestrator/contextual-orchestrator" yet:\n'
         '  // that requires provisioning first.\n'
-        '  "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"\n'
+        '  "model": "nvidia-nim/nvidia/nemotron-4-340b-instruct"\n'
         '}\n',
         encoding="utf-8",
     )
 
     config = guard.load_config(config_path)
 
-    assert config["model"] == "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    assert config["model"] == "nvidia-nim/nvidia/nemotron-4-340b-instruct"
 
 
 def test_main_reports_all_candidate_errors(tmp_path, capsys):
