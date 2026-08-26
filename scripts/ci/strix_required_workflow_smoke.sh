@@ -175,6 +175,17 @@ if printf '%s' "$fallback_expression" | grep -Fq "nvidia_nim/nvidia/llama-3.3-ne
 fi
 assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "Strix workflow provisions a trusted OpenRouter fallback key file"
 assert_file_contains "$workflow_file" "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE" "Strix workflow provisions a trusted OpenRouter fallback API base file"
+assert_file_contains_either \
+	"$workflow_file" \
+	"steps.resolve_nvidia_models.outputs.fallback" \
+	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5" \
+	"Strix accepts the legacy fallback or a live catalog-resolved fallback during migration"
+assert_file_contains_either \
+	"$workflow_file" \
+	"openai_direct/gpt-5.4" \
+	"openai-direct/gpt-5.4" \
+	"Strix retains the cross-provider direct-OpenAI fallback"
+# ponytail: transitional compatibility; require only the dynamic fallback after its workflow lands.
 assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
