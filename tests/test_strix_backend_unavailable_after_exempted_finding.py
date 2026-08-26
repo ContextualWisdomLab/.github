@@ -276,18 +276,14 @@ exit 1
         self.assertEqual(returncode, 1)
         self.assertEqual(calls, 1)
 
-    def test_retry_contract_preserves_logs_and_full_attempt_budget(self) -> None:
-        """Retries retain every attempt and reserve the complete gate budget."""
+    def test_retry_contract_preserves_logs_and_process_attempt_budget(self) -> None:
+        """Retries retain every attempt and reserve the scanner process budget."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_', workflow)
         self.assertIn('cat "$strix_attempt_log" >> "$strix_run_log"', workflow)
         self.assertIn(
-            'strix_gate_attempt_budget_var="STRIX_TOTAL_${budget_suffix}_SECONDS"',
-            workflow,
-        )
-        self.assertIn(
-            'strix_gate_attempt_budget_seconds="${!strix_gate_attempt_budget_var:-$process_budget_seconds}"',
+            'strix_gate_attempt_budget_seconds="$process_budget_seconds"',
             workflow,
         )
         self.assertNotIn("STRIX_TOTAL_TIMEOUT_SECONDS:", workflow)
