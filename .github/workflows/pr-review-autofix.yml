@@ -426,7 +426,7 @@ jobs:
           contextual_gateway_pid=$!
           models_file="$(mktemp "${RUNNER_TEMP}/contextual-orchestrator-models.XXXXXX")"
           gateway_ready=false
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
+          for _ in {1..60}; do
             if curl -fsS --max-time 3 "${contextual_gateway_base_url%/v1}/healthz" >/dev/null &&
               curl -fsS --max-time 3 -H "Authorization: Bearer ${contextual_gateway_token}" \
                 -o "$models_file" "${contextual_gateway_base_url}/models" &&
@@ -694,7 +694,7 @@ jobs:
           contextual_gateway_pid=$!
           models_file="$(mktemp "${RUNNER_TEMP}/contextual-orchestrator-models.XXXXXX")"
           gateway_ready=false
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
+          for _ in {1..60}; do
             if curl -fsS --max-time 3 "${contextual_gateway_base_url%/v1}/healthz" >/dev/null &&
               curl -fsS --max-time 3 -H "Authorization: Bearer ${contextual_gateway_token}" \
                 -o "$models_file" "${contextual_gateway_base_url}/models" &&

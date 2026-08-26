@@ -123,6 +123,10 @@ before or after the child process. Provider keys are never passed to OpenCode
 or written to repository files, generated prompts, command arguments, or
 ordinary logs.
 
+Both ordinary and conflict-repair paths allow sixty bounded readiness polls so
+cold provider discovery can complete; an empty catalog still fails closed
+before OpenCode starts.
+
 ## OpenCode repair sandbox
 
 OpenCode permission rules use pattern matching and the last matching rule wins.

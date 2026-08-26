@@ -19,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "0df7a17cc72a79585cec169c8299e0646f93ab02"
+REVIEW_DISPATCH_BLOB_SHA = "9c7d781e2dde3255963d7b9bd606c5ba80ac3621"
 
 
 def _workflow_text(path: Path) -> str:
@@ -163,6 +163,13 @@ def test_unavailable_gateway_fails_closed_before_model_execution() -> None:
     assert workflow.count(guard) == 2
     assert guard in workflow[ordinary_start:ordinary_end]
     assert guard in workflow[conflict_start:]
+
+
+def test_gateway_readiness_allows_cold_provider_discovery() -> None:
+    """Give both gateway paths a bounded cold-start discovery window."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    assert workflow.count("for _ in {1..60}; do") == 2
+    assert "for _ in 1 2 3 4 5 6 7 8 9 10; do" not in workflow
 
 
 def test_gateway_is_loopback_pinned_and_receives_no_github_credentials() -> None:

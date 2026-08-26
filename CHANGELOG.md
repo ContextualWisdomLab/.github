@@ -12,6 +12,9 @@ Semantic Versioning where the repository publishes a release.
   merge credentials are unchanged. Document that LineageWeave's existing
   repository-local commercialization loop, not a duplicate central writer,
   owns the zero-open-PR product-gap continuation.
+- Dependency updates now keep coverage evidence when the lock file passes
+  validation. If validation reports a problem, refresh the lock file and run
+  the review again before merging.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions
