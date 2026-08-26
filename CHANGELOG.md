@@ -8,6 +8,9 @@ Semantic Versioning where the repository publishes a release.
 - Require Linux bubblewrap isolation for backend, frontend, and E2E commands
   in the web verification helper, mount only a writable workspace, and reject
   non-loopback readiness URLs or redirects so SSRF probes fail closed.
+- Fail closed when an isolated command resolves outside the mounted system
+  roots, return a coded readiness failure for invalid URLs, and cover required
+  isolation plus sandbox-environment path mapping in the 100% branch contract.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions

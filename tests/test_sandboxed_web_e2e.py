@@ -350,6 +350,92 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     assert payload["evidence_note"] == "needs browser auth"
 
 
+def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_path, capsys):
+    """Required isolation wraps every command and maps sandbox paths into /workspace."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    wrapped = []
+    started = []
+
+    class DoneProcess:
+        def poll(self):
+            return 0
+
+    def fake_isolated(command, **kwargs):
+        wrapped.append((command, kwargs))
+        return f"wrapped {command}"
+
+    def fake_start(label, command, cwd, env, logs_dir):
+        log_path = logs_dir / f"{label}.log"
+        log_path.write_text(f"{label} ready\n", encoding="utf-8")
+        started.append((label, command, cwd, env))
+        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxed_web_e2e, "isolated_command", fake_isolated)
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "run_shell",
+        lambda command, cwd, env, timeout: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert [item[0] for item in wrapped] == ["backend", "frontend", "e2e"]
+    assert [item[0] for item in started] == ["backend", "frontend"]
+    assert all(item[1].startswith("wrapped ") for item in started)
+    assert started[0][3]["HOME"].startswith("/workspace/")
+    assert "isolation_backend=unknown" not in captured.out
+
+
+def test_main_reports_unavailable_required_isolation(monkeypatch, tmp_path, capsys):
+    """Required isolation errors exit before starting services with code 126."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "isolation_backend",
+        lambda mode: (_ for _ in ()).throw(RuntimeError("bwrap unavailable")),
+    )
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert "bwrap unavailable" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 126
+    assert payload["isolation_backend"] == "unavailable"
+
+
 def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
     """Main exits distinctly when a stubbed service never becomes ready."""
     repo = tmp_path / "repo"
@@ -397,6 +483,55 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
     payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["backend_ready"] is False
     assert payload["frontend_ready"] is True
+    assert payload["exit_code"] == 125
+
+
+def test_main_reports_invalid_readiness_url(monkeypatch, tmp_path, capsys):
+    """Invalid readiness input exits with the same clean readiness failure code."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    class DoneProcess:
+        def poll(self):
+            return 0
+
+    def fake_start(label, command, cwd, env, logs_dir):
+        log_path = logs_dir / f"{label}.log"
+        log_path.write_text("ready\n", encoding="utf-8")
+        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "wait_for_url",
+        lambda url, timeout, service: (_ for _ in ()).throw(ValueError("bad host")),
+    )
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--backend-ready-url",
+            "http://external.example/health",
+            "--frontend-ready-url",
+            "http://127.0.0.1:3000/",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert "invalid readiness URL: bad host" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
@@ -527,6 +662,21 @@ def test_isolation_backend_fails_closed_outside_linux(monkeypatch):
     assert sandboxed_web_e2e.isolation_backend("disabled") is None
 
 
+def test_isolation_backend_fails_closed_without_bwrap(monkeypatch):
+    """Linux isolation refuses to continue when bubblewrap is not installed."""
+    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: None)
+    with pytest.raises(RuntimeError, match="needs bubblewrap"):
+        sandboxed_web_e2e.isolation_backend("required")
+
+
+def test_isolation_backend_returns_bwrap_path_on_linux(monkeypatch):
+    """Linux isolation returns the resolved bubblewrap executable."""
+    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
+    assert sandboxed_web_e2e.isolation_backend("required") == "/usr/bin/bwrap"
+
+
 def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
     """Bubblewrap commands expose the copied workspace and not the host root."""
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
@@ -569,6 +719,96 @@ def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
             backend="/usr/bin/bwrap",
             cwd=repo,
             sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tmp_path):
+    """Resolved tools outside read-only mounts fail before entering bubblewrap."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: "/snap/bin/tool")
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="outside the isolated bind roots"):
+        sandboxed_web_e2e.isolated_command(
+            "tool",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_allows_unresolved_executable_for_bwrap(monkeypatch, tmp_path):
+    """Commands with shell-resolved executables still receive the isolated wrapper."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    command = sandboxed_web_e2e.isolated_command(
+        "tool",
+        backend="/usr/bin/bwrap",
+        cwd=repo,
+        sandbox_root=sandbox,
+        env={"PATH": "/usr/bin"},
+    )
+    assert command.startswith("/usr/bin/bwrap")
+
+
+def test_isolated_command_skips_unavailable_optional_mount(monkeypatch, tmp_path):
+    """Optional runtime mounts are omitted when a host path is unavailable."""
+    original_exists = Path.exists
+
+    def fake_exists(path):
+        if str(path) == "/etc/ssl":
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(
+        sandboxed_web_e2e.shutil,
+        "which",
+        lambda name, path=None: "/usr/bin/python3",
+    )
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    command = sandboxed_web_e2e.isolated_command(
+        "python3",
+        backend="/usr/bin/bwrap",
+        cwd=repo,
+        sandbox_root=sandbox,
+        env={"PATH": "/usr/bin"},
+    )
+    assert "--ro-bind /etc/ssl /etc/ssl" not in command
+
+
+def test_sandbox_environment_maps_host_paths_to_workspace(tmp_path):
+    """Only configured sandbox paths are rewritten for the mounted workspace."""
+    sandbox = tmp_path / "sandbox"
+    env = {
+        "HOME": str(sandbox / "home"),
+        "TMPDIR": str(sandbox / "tmp"),
+        "PATH": "/usr/bin",
+    }
+
+    mapped = sandboxed_web_e2e._sandbox_environment(env, sandbox)
+
+    assert mapped is not env
+    assert mapped["HOME"] == "/workspace/home"
+    assert mapped["TMPDIR"] == "/workspace/tmp"
+    assert mapped["PATH"] == "/usr/bin"
+    assert "XDG_CACHE_HOME" not in mapped
+
+
+def test_isolated_command_rejects_empty_command(tmp_path):
+    """Empty commands fail before bubblewrap arguments are constructed."""
+    with pytest.raises(ValueError, match="command must not be empty"):
+        sandboxed_web_e2e.isolated_command(
+            "   ",
+            backend="/usr/bin/bwrap",
+            cwd=tmp_path,
+            sandbox_root=tmp_path,
             env={"PATH": "/usr/bin"},
         )
 

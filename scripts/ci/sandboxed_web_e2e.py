@@ -146,10 +146,20 @@ def isolated_command(
     argv = shlex.split(command)
     if not argv:
         raise ValueError("command must not be empty")
+    bind_roots = [
+        Path(path)
+        for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt")
+        if Path(path).exists()
+    ]
     executable = shutil.which(argv[0], path=env.get("PATH"))
-    if executable is not None and Path(executable).is_relative_to(Path.home()):
-        raise RuntimeError("commands from the host home directory are not allowed in isolation")
-    bind_roots = [Path(path) for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt") if Path(path).exists()]
+    if executable is not None:
+        executable_path = Path(executable)
+        if executable_path.is_relative_to(Path.home()):
+            raise RuntimeError("commands from the host home directory are not allowed in isolation")
+        if not any(executable_path.is_relative_to(root) for root in bind_roots):
+            raise RuntimeError(
+                f"executable is outside the isolated bind roots: {executable_path}"
+            )
     args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
@@ -354,8 +364,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
         services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
-        backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
-        frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
+        try:
+            backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
+            frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
+        except ValueError as exc:
+            print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
+            exit_code = 125
+            return exit_code
         if not backend_ready or not frontend_ready:
             print("sandboxed-web-e2e: service readiness failed", file=sys.stderr)
             exit_code = 125
