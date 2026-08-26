@@ -3780,6 +3780,41 @@ REPORT
 			;;
 		esac
 		;;
+	openrouter-502-fallback-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		openrouter/free)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "LLM CONNECTION FAILED"
+				echo "Could not establish connection to the language model."
+				echo "Error: litellm.APIError: APIError: OpenrouterException -"
+				echo '{"error":{"message":"Invalid URL:'
+				echo '","code":502,"metadata":{"provider_name":"Stealth"}}}'
+				exit 1
+			fi
+			echo "scan ok after OpenRouter 502 same-model retry"
+			exit 0
+			;;
+		vertex_ai/fallback-two)
+			echo "Error: second fallback should not be needed after transient OpenRouter 502" >&2
+			exit 38
+			;;
+		*)
+			echo "Error: OpenRouter 502 fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 38
+			;;
+		esac
+		;;
 	github-models-primary-unavailable-fallback-success|github-models-primary-denied-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
@@ -4018,6 +4053,7 @@ EOS
 		;;
 	service-unavailable-no-llm-marker-nonrecoverable)
 		echo 'ServiceUnavailableError: {"error":{"code":503,"status":"UNAVAILABLE"}}'
+		echo '{"error":{"code":502,"metadata":{"provider_name":"Stealth"}}}'
 		echo 'target application high demand response'
 		exit 1
 		;;
@@ -6172,6 +6208,34 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	openrouter-502-fallback-retry-same-model-success)
+		run_gate_case "openrouter-502-fallback-retry-same-model-success" \
+			"vertex_ai/missing-primary" \
+			"openrouter/free vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after OpenRouter 502 same-model retry" \
+			"3" \
+			"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
+			"<unset>|https://example.invalid|https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	service-unavailable-no-llm-marker-nonrecoverable)
+		run_gate_case "service-unavailable-no-llm-marker-nonrecoverable" \
+			"custom/service-unavailable-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"custom/service-unavailable-primary" \
+			"https://example.invalid" \
+			"custom" \
+			"__DEFAULT__" \
+			"" \
+			"1"
 		;;
 	custom-openai-compatible-preserves-effort)
 		run_gate_case "custom-openai-compatible-preserves-effort" \
@@ -9945,6 +10009,19 @@ run_gate_case_allow_provider_signal "github-models-internal-server-connection-re
 	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-502-fallback-retry-same-model-success" \
+	"vertex_ai/missing-primary" \
+	"openrouter/free vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after OpenRouter 502 same-model retry" \
+	"3" \
+	"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
+	"<unset>|https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
 	"" \
 	"1"
 

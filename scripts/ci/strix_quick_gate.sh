@@ -2922,6 +2922,16 @@ is_llm_service_unavailable_error() {
 		return 0
 	fi
 
+	# OpenRouter's dynamic free route can surface an upstream provider 502 as
+	# APIError rather than ServiceUnavailableError. Require both LiteLLM's
+	# OpenRouter exception and OpenRouter's provider metadata so target-app 502
+	# output cannot independently trigger a provider retry.
+	if grep -Eiq 'litellm(\.exceptions)?\.APIError:.*OpenrouterException' "$STRIX_LOG" &&
+		grep -Eq '"code"[[:space:]]*:[[:space:]]*502' "$STRIX_LOG" &&
+		grep -Eq '"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$STRIX_LOG"; then
+		return 0
+	fi
+
 	return 1
 }
 
