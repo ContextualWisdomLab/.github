@@ -19,9 +19,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 DEFAULT_NVIDIA_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
-FREE_NVIDIA_FALLBACK = (
-    "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
-)
+LIVE_NVIDIA_FALLBACK = "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1"
+RETIRED_NVIDIA_FALLBACK = "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
 RETIRED_PRIMARY_MODEL = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
 
 
@@ -186,25 +185,26 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Prefer a documented hosted NIM and another NIM before GitHub."""
+    def test_workflow_resolves_live_nvidia_models(self) -> None:
+        """Resolve reviewed hosted NIM candidates instead of pinning retired ids."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("Resolve live NVIDIA NIM Strix models", workflow)
+        self.assertIn("scripts/ci/select_nvidia_nim_model.py", workflow)
+        self.assertIn("steps.resolve_nvidia_models.outputs.primary", workflow)
+        self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
         default_expression = (
             "steps.target_visibility.outputs.is_private == 'false' && "
-            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.4'"
+            "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
         )
         self.assertIn(default_expression, workflow)
         self.assertIn(
-            f'[ "$strix_model" = "{DEFAULT_NVIDIA_MODEL}" ] '
-            '&& [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]',
-            workflow,
-        )
-        self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.4'",
+            "format('{0} openai-direct/gpt-5.4', "
+            "steps.resolve_nvidia_models.outputs.fallback)",
             workflow,
         )
+        self.assertNotIn(RETIRED_NVIDIA_FALLBACK, workflow)
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(

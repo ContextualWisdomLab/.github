@@ -503,38 +503,39 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
 def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     tmp_path: Path,
 ) -> None:
-    """Preserve configured fallback models while rejecting an unavailable NIM secret."""
+    """Leave NIM outputs empty so the workflow expression selects OpenAI."""
     strix_output = tmp_path / "strix-output"
     strix = subprocess.run(
         [
             "bash",
             "-c",
             textwrap.dedent(
-                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                workflow_step(
+                    workflow_text("strix.yml"),
+                    "Resolve live NVIDIA NIM Strix models",
+                )
                 .split("        run: |\n", 1)[1]
             ),
         ],
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
             "STRIX_MODEL_REQUESTED": "",
-            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
-            "STRIX_OPENROUTER_API_KEY": "",
-            "STRIX_NVIDIA_NIM_API_KEY": "",
-            "STRIX_VERTEX_CREDENTIALS": "",
-            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
+            "NVIDIA_API_KEY": "",
             "TARGET_REPOSITORY_PRIVATE": "false",
+            "STRIX_NVIDIA_PRIMARY_CANDIDATES": "nvidia/primary",
+            "STRIX_NVIDIA_FALLBACK_CANDIDATES": "nvidia/fallback",
         },
         capture_output=True,
         text=True,
         check=False,
     )
     assert strix.returncode == 0, strix.stderr
-    assert {
-        "provider_mode=openai_direct",
-        "strix_model=gpt-5.4",
-    } <= set(strix_output.read_text().splitlines())
+    assert {"primary=", "fallback="} <= set(strix_output.read_text().splitlines())
+    assert (
+        "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        in workflow_text("strix.yml")
+    )
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
         in workflow_text("strix.yml")

@@ -546,10 +546,36 @@ jobs:
             printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
           fi
 
+      - name: Resolve live NVIDIA NIM Strix models
+        id: resolve_nvidia_models
+        env:
+          STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
+          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          STRIX_NVIDIA_PRIMARY_CANDIDATES: >-
+            ${{ vars.STRIX_NVIDIA_PRIMARY_CANDIDATES ||
+            'nvidia/nemotron-3-super-120b-a12b nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
+          STRIX_NVIDIA_FALLBACK_CANDIDATES: >-
+            ${{ vars.STRIX_NVIDIA_FALLBACK_CANDIDATES ||
+            'nvidia/llama-3.1-nemotron-ultra-253b-v1' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
+            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          resolver="$TRUSTED_STRIX_SOURCE/scripts/ci/select_nvidia_nim_model.py"
+          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_PRIMARY_CANDIDATES")"
+          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_FALLBACK_CANDIDATES")"
+          {
+            printf 'primary=nvidia_nim/%s\n' "$primary"
+            printf 'fallback=nvidia_nim/%s\n' "$fallback"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4') }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4') }}
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -559,9 +585,6 @@ jobs:
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
-            strix_model="gpt-5.4"
-          fi
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           case "$strix_model" in
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
@@ -603,7 +626,8 @@ jobs:
                 exit 1
               fi
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | \
+            nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1)
               if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ]; then
                 echo '::error::NVIDIA NIM hosted trial scans are limited to public repositories.'
                 exit 1
@@ -892,7 +916,8 @@ jobs:
             openrouter/free | openrouter/openrouter/free)
               printf '%s' 'openrouter/free' > "$strix_llm_file"
               ;;
-            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b | \
+            nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1)
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
@@ -936,7 +961,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
