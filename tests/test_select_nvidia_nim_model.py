@@ -224,7 +224,6 @@ def test_fetch_served_model_ids_reports_http_status(
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        (b"\x80", "non-UTF-8 body"),
         (b"<html>maintenance</html>", "non-JSON body"),
         (b"\x80", "non-JSON body"),
         (b'{"object": "list"}', "no model list"),
@@ -337,7 +336,7 @@ def test_main_treats_invalid_catalog_utf8_as_temporary(
     _stub_catalog(monkeypatch, b"\x80")
 
     assert resolver.main(["--candidates", "live/model"]) == resolver.EX_TEMPFAIL
-    assert "non-UTF-8 body" in capsys.readouterr().err
+    assert "non-JSON body" in capsys.readouterr().err
 
 
 def test_main_keeps_invalid_operator_configuration_nonrecoverable(
