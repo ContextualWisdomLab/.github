@@ -358,7 +358,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans" "strix workflow fails closed when NVIDIA credentials are absent"
 	assert_file_contains "$workflow_file" 'PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}' "strix workflow passes provider mode through env"
 	assert_file_not_contains "$workflow_file" '[ "${{ steps.gate.outputs.provider_mode }}" = "openai_direct" ]' "strix workflow does not interpolate provider mode inside shell condition"
-	assert_file_contains "$workflow_file" "STRIX_REASONING_EFFORT: high" "strix workflow uses high reasoning effort when the selected provider/model supports it"
+	assert_file_contains "$workflow_file" "STRIX_REASONING_EFFORT: \${{ steps.gate.outputs.provider_mode == 'openai_direct' && 'none' || 'high' }}" "strix workflow disables unsupported OpenAI chat-completions reasoning effort while retaining high effort for other providers"
 	assert_file_contains "$workflow_file" 'trimmed_openai_key="$(printf '"'"'%s'"'"' "$sanitized_openai_key" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"' "strix workflow trims whitespace-only OpenAI keys before gate validation"
 	assert_file_contains "$workflow_file" 'printf '"'"'%s'"'"' "$trimmed" > "$llm_api_key_file"' "strix workflow writes trimmed provider API keys into the trusted input file"
 	assert_file_contains "$workflow_file" 'STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == '"'"'vertex_ai'"'"' && '"'"'vertex_ai'"'"' || steps.gate.outputs.provider_mode == '"'"'nvidia_nim'"'"' && '"'"'nvidia_nim'"'"' || '"'"'openai'"'"' }}' "strix workflow selects the correct default provider"
