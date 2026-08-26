@@ -160,8 +160,9 @@ jobs:
             done <<<"$run_ids"
           }
 
-          cancel_runs queued
-          cancel_runs in_progress
+          for active_status in queued in_progress requested waiting pending; do
+            cancel_runs "$active_status"
+          done
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'

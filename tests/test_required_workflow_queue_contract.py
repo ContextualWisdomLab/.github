@@ -373,6 +373,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert 'select(.event == "pull_request_target")' in workflow
             assert 'select(.event == "repository_dispatch")' not in workflow
             assert "leaving runs unchanged" in workflow
+            assert (
+                "for active_status in queued in_progress requested waiting pending"
+                in workflow
+            )
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
                 "  strix:", 1
             )[0]
