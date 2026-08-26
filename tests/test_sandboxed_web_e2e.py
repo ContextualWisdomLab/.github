@@ -231,7 +231,8 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
             return Response(500 if len(attempts) == 2 else 204)
 
     monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
-    monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
+    sleeps = []
+    monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     log_path = tmp_path / "service.log"
     log_path.write_text("\n".join(f"line-{index}" for index in range(90)), encoding="utf-8")
@@ -239,6 +240,7 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
 
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
     assert len(attempts) == 3
+    assert sleeps == [1, 1]
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
 

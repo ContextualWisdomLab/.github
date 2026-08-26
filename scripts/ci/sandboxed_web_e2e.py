@@ -242,6 +242,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
             with opener.open(url, timeout=2) as response:  # nosec B310
                 if 200 <= response.status < 500:
                     return True
+                time.sleep(1)
         except (urllib.error.URLError, TimeoutError):
             time.sleep(1)
     return False
