@@ -3795,9 +3795,8 @@ REPORT
 			attempt="$((attempt + 1))"
 			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
 			if [ "$attempt" -eq 1 ]; then
-				echo "LLM CONNECTION FAILED"
-				echo "Could not establish connection to the language model."
-				echo "Error: litellm.APIError: APIError: OpenrouterException -"
+				echo "Error: litellm.APIError: APIError:"
+				echo "OpenrouterException -"
 				echo '{"error":{"message":"Invalid URL:'
 				echo '","code":502,"metadata":{"provider_name":"Stealth"}}}'
 				exit 1
