@@ -16,6 +16,13 @@ and fallback pools. The default pool prefers
 configuration. Private repositories retain the contracted provider because
 NVIDIA hosted trial inputs are restricted to public repositories.
 
+OpenRouter remains a supported transport and API-base capability. It is not a
+static fallback-model registry: executable fallback expressions must not add a
+hard-coded OpenRouter model identifier. OpenRouter model selection belongs to
+the authenticated live-catalog resolver at the provider owner boundary. This
+keeps transport recovery separate from model discovery and prevents central
+workflow configuration from duplicating a provider catalog that can change.
+
 ## Trust boundary
 
 The NVIDIA classifier accepts only a single bounded log line that contains all
@@ -55,7 +62,8 @@ Regression evidence proves that:
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
-10. the required-workflow smoke contract pins these properties.
+10. executable fallback expressions do not hard-code an OpenRouter model; and
+11. the required-workflow smoke contract pins these properties.
 
 ## Limitations
 

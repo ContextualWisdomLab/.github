@@ -172,11 +172,6 @@ jobs:
     # partial reports and publish a concrete failure reason. Hitting any cap is
     # fail-closed and never turns an incomplete scan into an approval.
     timeout-minutes: 120
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      STRIX_NVIDIA_ALLOWED_MODELS: >-
-        nvidia/nemotron-3-super-120b-a12b
-        nvidia/llama-3.1-nemotron-ultra-253b-v1
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -187,6 +182,11 @@ jobs:
       id-token: write
       models: read
       statuses: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      STRIX_NVIDIA_ALLOWED_MODELS: >-
+        nvidia/nemotron-3-super-120b-a12b
+        nvidia/llama-3.1-nemotron-ultra-253b-v1
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -994,6 +994,8 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
+          # OpenRouter transport remains supported, but model selection must come
+          # from its authenticated live catalog owner rather than a static ID.
           # Trusted-main smoke compatibility marker only; never executed:
           # openrouter/free openai-direct/gpt-5.4
           STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
