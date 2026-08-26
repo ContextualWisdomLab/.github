@@ -114,7 +114,6 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-      DISPATCH_REPOSITORY: ${{ format('{0}/.github', github.repository_owner) }}
       CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
       CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CURRENT_RUN_ID: ${{ github.run_id }}
@@ -131,50 +130,35 @@ jobs:
 
           cancel_runs() {
             local status="$1"
-            local run_repository
-            local previous_repository=""
-            for run_repository in "$TARGET_REPOSITORY" "$DISPATCH_REPOSITORY"; do
-              [ "$run_repository" != "$previous_repository" ] || continue
-              previous_repository="$run_repository"
-              local runs_url="repos/${run_repository}/actions/runs?status=${status}&per_page=100"
-              local runs_json
-              if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-close-gh-error)"; then
-                echo "::warning::Strix close cleanup could not inspect ${run_repository}; leaving runs unchanged."
-                sed 's/^/  /' /tmp/strix-close-gh-error >&2 || true
-                continue
-              fi
-              local run_ids
-              if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
-                --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" \
-                --arg dispatch "$DISPATCH_REPOSITORY" --arg run_repository "$run_repository" '
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-close-gh-error)"; then
+              echo "::warning::Strix close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-close-gh-error >&2 || true
+              return 0
+            fi
+            local run_ids
+            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
+              --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
                 | select(.name == "Strix Security Scan")
-                | select(
-                    ($run_repository == $target and
-                      .event == "pull_request_target" and
-                      (.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr))))
-                    or
-                    ($run_repository == $dispatch and
-                      .event == "repository_dispatch" and
-                      (((.display_title // "") | startswith(("Strix Security Scan " + $target + "#" + $pr + "@"))))
-                    )
-                  )
+                | select(.event == "pull_request_target")
+                | select(.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr)))
                 | .id
               ' <<<"$runs_json")"; then
-                echo "::warning::Strix close cleanup received invalid run data for ${run_repository}; leaving runs unchanged."
-                continue
+              echo "::warning::Strix close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-close-cancel-error; then
+                echo "Cancelled Strix run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}."
+              else
+                echo "::warning::Strix close cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
+                sed 's/^/  /' /tmp/strix-close-cancel-error >&2 || true
               fi
-              while IFS= read -r run_id; do
-                [ -n "$run_id" ] || continue
-                if gh api --method POST "repos/${run_repository}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-close-cancel-error; then
-                  echo "Cancelled Strix run ${run_id} in ${run_repository} for closed PR #${CLOSED_PR_NUMBER}."
-                else
-                  echo "::warning::Strix close cleanup could not cancel run ${run_id} in ${run_repository}; it may have finished or the credential lacks Actions write access."
-                  sed 's/^/  /' /tmp/strix-close-cancel-error >&2 || true
-                fi
-              done <<<"$run_ids"
-            done
+            done <<<"$run_ids"
           }
 
           cancel_runs queued
@@ -952,7 +936,7 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4' || '' }}
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'openai-direct/gpt-5.4' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}

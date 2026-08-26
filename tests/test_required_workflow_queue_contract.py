@@ -361,10 +361,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         if filename == "strix.yml":
             assert "Cancel queued and running scans for the closed pull request" in workflow
             assert "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN" in workflow
-            assert "DISPATCH_REPOSITORY" in workflow
+            assert "DISPATCH_REPOSITORY" not in workflow
             assert "CLOSED_PR_HEAD_SHA" in workflow
-            assert '($run_repository == $target and' in workflow
-            assert '($run_repository == $dispatch and' in workflow
+            assert 'select(.event == "pull_request_target")' in workflow
+            assert 'select(.event == "repository_dispatch")' not in workflow
             assert "leaving runs unchanged" in workflow
             assert "actions: write" not in workflow.split("  strix:", 1)[0]
         else:
