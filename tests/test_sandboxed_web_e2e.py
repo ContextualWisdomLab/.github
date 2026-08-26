@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import runpy
 import socket
 import subprocess
@@ -116,15 +117,15 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
-    with pytest.raises(ValueError, match="URL must start with http:// or https://"):
+    with pytest.raises(ValueError, match=re.escape("URL must start with http:// or https://")):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: external.example.com"):
+    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: external.example.com")):
         sandboxed_web_e2e.wait_for_url("http://external.example.com/ready", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: app.localhost"):
+    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: app.localhost")):
         sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: 169.254.169.254"):
+    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: 169.254.169.254")):
         sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
-    with pytest.raises(ValueError, match="URL cannot target external hostname: 0.0.0.0"):
+    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: 0.0.0.0")):
         sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
@@ -211,7 +212,8 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
             return None
 
     class Response:
-        status = 204
+        def __init__(self, status):
+            self.status = status
 
         def __enter__(self):
             return self
@@ -226,7 +228,7 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
             attempts.append((url, timeout))
             if len(attempts) == 1:
                 raise sandboxed_web_e2e.urllib.error.URLError("not ready")
-            return Response()
+            return Response(500 if len(attempts) == 2 else 204)
 
     monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
@@ -236,7 +238,7 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), log_path)
 
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
-    assert len(attempts) == 2
+    assert len(attempts) == 3
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
 
@@ -401,7 +403,47 @@ def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_p
     assert [item[0] for item in started] == ["backend", "frontend"]
     assert all(item[1].startswith("wrapped ") for item in started)
     assert started[0][3]["HOME"].startswith("/workspace/")
-    assert "isolation_backend=unknown" not in captured.out
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["isolation"] == "required"
+    assert payload["isolation_backend"] == "/usr/bin/bwrap"
+
+
+def test_main_reports_rejected_isolated_command(monkeypatch, tmp_path, capsys):
+    """Rejected commands fail before services start and emit coded evidence."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "isolated_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(RuntimeError("host-only tool")),
+    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert not started
+    assert "isolation rejected command: host-only tool" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 126
+    assert payload["isolation_backend"] == "/usr/bin/bwrap"
 
 
 def test_main_reports_unavailable_required_isolation(monkeypatch, tmp_path, capsys):
@@ -580,6 +622,48 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 3s" in captured.err
 
+    def fake_run_shell_with_newlines(command, cwd, env, timeout):
+        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out\n", stderr=b"e2e-err\n")
+
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_with_newlines)
+    assert sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-timeout",
+            "3",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    ) == 124
+
+    def fake_run_shell_without_output(command, cwd, env, timeout):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_without_output)
+    assert sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-timeout",
+            "3",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    ) == 124
+
 
 @POSIX_PROCESS_GROUPS
 def test_sandboxed_web_e2e_reports_readiness_failure(tmp_path, capsys):
@@ -701,6 +785,10 @@ def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
     assert "--bind" in command
     assert "--chdir /workspace/repo" in command
     assert "--ro-bind / /" not in command
+    assert "--ro-bind /etc/passwd /etc/passwd" in command
+    assert "--ro-bind /etc/group /etc/group" in command
+    if Path("/etc/nsswitch.conf").exists():
+        assert "--ro-bind /etc/nsswitch.conf /etc/nsswitch.conf" in command
 
 
 def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
@@ -713,7 +801,7 @@ def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="host home directory"):
+    with pytest.raises(RuntimeError, match=re.escape("host home directory")):
         sandboxed_web_e2e.isolated_command(
             "tool",
             backend="/usr/bin/bwrap",
@@ -729,7 +817,7 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="outside the isolated bind roots"):
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
         sandboxed_web_e2e.isolated_command(
             "tool",
             backend="/usr/bin/bwrap",
@@ -803,7 +891,7 @@ def test_sandbox_environment_maps_host_paths_to_workspace(tmp_path):
 
 def test_isolated_command_rejects_empty_command(tmp_path):
     """Empty commands fail before bubblewrap arguments are constructed."""
-    with pytest.raises(ValueError, match="command must not be empty"):
+    with pytest.raises(ValueError, match=re.escape("command must not be empty")):
         sandboxed_web_e2e.isolated_command(
             "   ",
             backend="/usr/bin/bwrap",

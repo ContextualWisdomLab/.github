@@ -1,15 +1,17 @@
 # Sandboxed web command isolation
 
 `sandboxed_web_e2e.py` requires Linux `bubblewrap` (`bwrap`) by default. Each
-backend, frontend, and E2E command runs with a read-only runtime root and a
-single writable mount at `/workspace`; the copied repository and temporary
-homes are mapped there. The host filesystem is therefore not reachable through
-absolute paths or `..` traversal.
+backend, frontend, and E2E command runs with a fresh writable `tmpfs` root and
+`/tmp`, plus one writable copied-repository bind at `/workspace`; the copied
+repository and temporary homes are mapped there. Host runtime roots and the
+minimal `/etc` identity, DNS, and time files are mounted read-only, so the host
+filesystem is not reachable through absolute paths or `..` traversal.
 
 Before wrapping a command, the helper resolves its executable and rejects paths
 outside the read-only system roots mounted by bubblewrap. A tool installed in a
 host-only location must be installed into one of those roots or the run exits
-before any service starts.
+with code `126` before any service starts; the result marker records that code
+and the selected backend.
 
 Use `--isolation disabled` only for trusted local debugging. The result marker
 records the requested mode and resolved backend so CI evidence cannot be

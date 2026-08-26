@@ -163,7 +163,15 @@ def isolated_command(
     args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
-    for path in ("/etc/ssl", "/etc/hosts", "/etc/resolv.conf", "/etc/localtime"):
+    for path in (
+        "/etc/ssl",
+        "/etc/hosts",
+        "/etc/resolv.conf",
+        "/etc/localtime",
+        "/etc/passwd",
+        "/etc/group",
+        "/etc/nsswitch.conf",
+    ):
         if Path(path).exists():
             args.extend(("--ro-bind", path, path))
     args.extend(
@@ -329,39 +337,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.network != "default":
             print(f"sandboxed-web-e2e: network={args.network}")
         command_env = _sandbox_environment(env, sandbox) if backend else env
-        backend_cmd = (
-            isolated_command(
-                args.backend_cmd,
-                backend=backend,
-                cwd=copied_repo,
-                sandbox_root=sandbox,
-                env=env,
+        try:
+            backend_cmd = (
+                isolated_command(
+                    args.backend_cmd,
+                    backend=backend,
+                    cwd=copied_repo,
+                    sandbox_root=sandbox,
+                    env=env,
+                )
+                if backend
+                else args.backend_cmd
             )
-            if backend
-            else args.backend_cmd
-        )
-        frontend_cmd = (
-            isolated_command(
-                args.frontend_cmd,
-                backend=backend,
-                cwd=copied_repo,
-                sandbox_root=sandbox,
-                env=env,
+            frontend_cmd = (
+                isolated_command(
+                    args.frontend_cmd,
+                    backend=backend,
+                    cwd=copied_repo,
+                    sandbox_root=sandbox,
+                    env=env,
+                )
+                if backend
+                else args.frontend_cmd
             )
-            if backend
-            else args.frontend_cmd
-        )
-        e2e_cmd = (
-            isolated_command(
-                args.e2e_cmd,
-                backend=backend,
-                cwd=copied_repo,
-                sandbox_root=sandbox,
-                env=env,
+            e2e_cmd = (
+                isolated_command(
+                    args.e2e_cmd,
+                    backend=backend,
+                    cwd=copied_repo,
+                    sandbox_root=sandbox,
+                    env=env,
+                )
+                if backend
+                else args.e2e_cmd
             )
-            if backend
-            else args.e2e_cmd
-        )
+        except RuntimeError as exc:
+            print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
+            exit_code = 126
+            return exit_code
         services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
         services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
         try:
