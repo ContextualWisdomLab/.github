@@ -7,6 +7,11 @@ CALLER = Path(".github/workflows/wardnet-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/wardnet-hourly-review-caller.md")
 QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
+RESERVATION_MAPS = (
+    Path(".github/workflows/afipc-hourly-review-repair.yml"),
+    Path(".github/workflows/nonnest2-hourly-review-repair.yml"),
+    Path(".github/workflows/originweave-hourly-review-repair.yml"),
+)
 
 
 def _read(path: Path) -> str:
@@ -63,6 +68,14 @@ def test_wardnet_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert 'max_prs: "50"' in caller
     assert 'max_dispatches: "1"' in caller
     assert 'retry_hours: "2"' in caller
+
+
+def test_org_reservation_maps_assign_wardnet_minute_46() -> None:
+    """Duplicated sibling maps retain Wardnet's collision-free minute."""
+    for path in RESERVATION_MAPS:
+        reservation_map = _read(path)
+        assert "Wardnet (46)" in reservation_map
+        assert "Wardnet (7)" not in reservation_map
 
 
 def test_wardnet_caller_preserves_oidc_and_explicit_secret_scope() -> None:

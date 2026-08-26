@@ -3,12 +3,12 @@ name: nonnest2 Hourly Review Repair
 on:
   schedule:
     # Minute 16 avoids pg-llm-batch (1), aFIPC (2), kaefa (3), LineageWeave (4),
-    # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
+    # codec-carver (5), life-os (6), mightyETL (8),
     # psychometrics-commons (9), OriginWeave (10), naruon (11),
     # DiagramWeave (12), pg-erd-cloud (13), mhtml-etl-gateway (14),
     # html4tree (15), orchestrator (17), noema (19), Clearfolio (23),
     # Keyverse (29), Scopeweave (31), contextual-orchestrator (34), DiskSage (37), Appguardrail (41),
-    # newsdom-api (43), fast-mlsirm (49), BandScope (53), Inkspan (56),
+    # newsdom-api (43), Wardnet (46), fast-mlsirm (49), BandScope (53), Inkspan (56),
     # and semantic-data-portal (59).
     - cron: "16 * * * *"
 
