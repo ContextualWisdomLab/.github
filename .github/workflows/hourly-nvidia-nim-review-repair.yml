@@ -10,6 +10,7 @@ on:
       - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
+      - .github/workflows/inkspan-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
       - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
@@ -23,6 +24,7 @@ on:
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
+      - tests/test_inkspan_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
@@ -50,6 +52,7 @@ on:
       - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
+      - docs/doctoring/inkspan-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
@@ -69,6 +72,7 @@ on:
       - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
+      - .github/workflows/inkspan-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
       - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
@@ -82,6 +86,7 @@ on:
       - scripts/ci/pr_review_autofix_context.py
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
+      - tests/test_inkspan_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
@@ -109,6 +114,7 @@ on:
       - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
+      - docs/doctoring/inkspan-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
@@ -168,6 +174,7 @@ jobs:
             tests/test_pr_review_conflict_scope.py \
             tests/test_bandscope_hourly_review_caller.py \
             tests/test_disksage_hourly_review_caller.py \
+            tests/test_inkspan_hourly_review_caller.py \
             tests/test_fast_mlsirm_hourly_review_caller.py \
             tests/test_github_hourly_conflict_repair.py \
             tests/test_governance_risk_compliance_hourly_review_caller.py \
