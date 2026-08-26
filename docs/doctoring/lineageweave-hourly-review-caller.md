@@ -21,3 +21,10 @@ operational configuration action, not a reason to weaken the workflow.
 The repair worker reviews and proposes source changes only. Required checks,
 independent approval, unresolved-thread policy, protected merge, release, and
 rollback remain governed by the target repository and central merge scheduler.
+
+When the open-PR queue is empty, product-gap development is not duplicated in
+this caller. LineageWeave's active repository-local
+`.github/workflows/hourly-commercialization-loop.yml` owns that hourly writer
+boundary. The central organization commercial-readiness coordinator recognizes
+the dedicated schedule as a writer lease, so it cannot create a second
+concurrent gap-development writer for the same repository.

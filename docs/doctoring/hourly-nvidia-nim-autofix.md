@@ -1,11 +1,12 @@
-# Hourly NVIDIA NIM Review-Autofix Boundary
+# Hourly Contextual-Orchestrator Review-Autofix Boundary
 
 ## Decision
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
-The write-capable scheduled pull-request autofix agent uses OpenCode with the
-NVIDIA NIM API and the organization Actions secret `NVIDIA_NIM_API_KEY`. The
+The write-capable scheduled pull-request autofix agent uses OpenCode only
+through contextual-orchestrator. The gateway auto-discovers the organization
+provider credentials, including `NVIDIA_NIM_API_KEY`, while the
 independent read-only review agent remains unchanged and continues to use its
 existing credential and model-pool contract.
 
@@ -58,23 +59,22 @@ The client payload remains untrusted metadata. It identifies a target only after
 the worker re-reads live pull-request state and verifies the exact repository,
 open state, same-repository branch, base ref and SHA, and head ref and SHA.
 
-## Provider contract
+## Orchestration contract
 
-The pinned OpenCode runtime enables only `nvidia-nim` through the
-OpenAI-compatible adapter and NVIDIA hosted endpoint:
+The worker checks out contextual-orchestrator at commit
+`838b3de160c341a6f36bf588ae9fcc09989c040c`, verifies the reviewed MIT license
+blob `591bbf197b355e60604618c8a8a50bc5a839b204`, and starts its review gateway on
+loopback. OpenCode enables only this provider-neutral endpoint:
 
 ```text
-https://integrate.api.nvidia.com/v1
+http://127.0.0.1:18080/v1
 ```
 
-The primary repair model is `mistralai/mistral-small-4-119b-2603`. The
-`ci-autofix` agent and its model configuration both request high reasoning
-through OpenCode's provider-option contract (`reasoningEffort: "high"`). NVIDIA's
-Mistral Small 4 NIM API documents the corresponding request behavior as
-`reasoning_effort: "high"`, which enables the model's reasoning mode. The small
-model used for bounded helper work remains `nvidia/nemotron-3-nano-30b-a3b` and
-is not a fallback provider. GitHub Models configuration, identifiers, base URLs,
-and model-auth fallbacks are absent from the scheduled autofix execution path.
+The worker validates `/healthz` and the authenticated `/v1/models` catalog
+before model execution. An unavailable or empty catalog fails closed; OpenCode
+never falls back to a direct provider URL. The `ci-autofix` agent requests high
+reasoning through OpenCode's provider-option contract, while model discovery,
+provider selection, and cost lineage remain contextual-orchestrator concerns.
 
 The high-reasoning setting is deliberate for write-capable review repair. This
 workflow optimizes correctness, evidence quality, and controllability rather than
@@ -84,17 +84,20 @@ writer role and remains subject to exact-head regression evidence.
 
 ## Credential boundary
 
-The organization secret is bound as:
+The organization provider secrets are bound only to the gateway-owning steps:
 
 ```yaml
-NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-It is present only on the two steps that execute OpenCode: ordinary
-review-feedback repair and merge-conflict repair. Metadata collection,
-checkout, context preparation, validation, commit, and push do not receive the
-NVIDIA credential. A missing key is a fatal configuration error rather than a
-signal to choose another provider.
+They are passed to the sidecar through an isolated `env -i` launch and unset
+before OpenCode starts. OpenCode receives only the masked, process-local gateway
+bearer token and loopback base URL. Metadata collection, checkout, context
+preparation, validation, commit, and push do not receive provider credentials.
 
 The ordinary model execution step does not bind a GitHub write token. Its later
 commit-and-push step may mutate only with `PR_REVIEW_MERGE_TOKEN`,

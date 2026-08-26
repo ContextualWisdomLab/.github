@@ -19,3 +19,15 @@ ContextualWisdomLab/disksage#247, before any target-repository security
 analysis ran. The workflow, smoke contract, model-pool configuration, and
 regression tests now share `gpt-5.4`; the change does not weaken provider
 failure or vulnerability fail-closed behavior.
+
+## Amendment: autofix model ownership boundary (2026-08-26)
+
+The write-capable PR autofix worker enables only the OpenAI-compatible
+contextual-orchestrator gateway. The central workflow pins the gateway source,
+verifies its reviewed license identity, binds it to loopback, and fails closed
+unless authenticated model discovery returns a usable catalog. Provider keys
+are passed only to the isolated sidecar and are removed before OpenCode runs;
+the established review, OIDC, branch-write, independent-approval, and protected
+merge credential contracts are unchanged. Product-specific hourly callers do
+not duplicate a repository-local product-development writer when one already
+owns the zero-open-PR continuation.

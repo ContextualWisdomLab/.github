@@ -5,6 +5,13 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Route write-capable PR autofix model traffic through a SHA-pinned,
+  loopback-only contextual-orchestrator sidecar with auto-discovered providers.
+  Provider credentials remain scoped to the sidecar and are removed before
+  OpenCode executes; the existing review, OIDC, GitHub mutation, and protected
+  merge credentials are unchanged. Document that LineageWeave's existing
+  repository-local commercialization loop, not a duplicate central writer,
+  owns the zero-open-PR product-gap continuation.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions

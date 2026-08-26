@@ -11,12 +11,13 @@ engine**.
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
   repository and base branch.
-- `pr-review-autofix.yml` is the bounded write-capable worker. It uses OpenCode
-  with NVIDIA NIM and does not approve or merge pull requests.
+- `pr-review-autofix.yml` is the bounded write-capable worker. OpenCode reaches
+  every model through a pinned, loopback-only contextual-orchestrator gateway
+  and does not approve or merge pull requests.
 
-Orgmetra's caller remains provider-neutral. The intended model boundary is the
-contextual-orchestrator gateway: provider keys stay in its KV registry and
-automatic model discovery selects upstream models. A caller schedule is not
+All callers remain provider-neutral. Provider credentials are visible only to
+the isolated contextual-orchestrator sidecar; they are removed before OpenCode
+starts, and automatic model discovery selects upstream models. A caller schedule is not
 evidence that gateway credentials, discovery, or a live OpenCode tool loop are
 available; those facts require exact worker-run evidence.
 
@@ -44,8 +45,8 @@ not overlap its successor. At most one repair dispatch is created per run.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
-`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
-OpenCode execution steps in the separately reviewed autofix worker.
+provider credentials; those credentials are scoped exclusively to the two
+gateway-owning execution steps in the separately reviewed autofix worker.
 
 ## Orgmetra execution contract
 
@@ -199,7 +200,9 @@ organization-level queue inspection and bounded repair dispatch.
 When a scheduled run fails, classify the result before rerunning:
 
 - no actionable file-scoped feedback: expected no-op;
-- missing `NVIDIA_NIM_API_KEY`: central secret configuration failure;
+- unavailable pinned contextual-orchestrator source, invalid reviewed-license
+  identity, or an empty auto-discovered model catalog: fail-closed gateway
+  configuration failure;
 - head changed: safe optimistic-concurrency refusal; inspect the new head rather
   than retrying predecessor evidence;
 - out-of-scope or ignored-path change: treat as a security failure and preserve
@@ -225,7 +228,7 @@ Permanent tests prove:
 - the dispatch budget and same-head retry floor remain one;
 - caller and reusable-workflow secrets are explicit and never use
   `secrets: inherit`;
-- immutable source, NVIDIA-only model authentication, child-process credential
+- immutable source, contextual-orchestrator-only model authentication, child-process credential
   stripping, live-head guards, and independent reviewer identity remain intact;
 - ordinary and conflict repair share the complete ignored-inclusive snapshot and
   NUL-delimited allowlist boundary;

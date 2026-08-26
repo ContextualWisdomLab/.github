@@ -35,21 +35,21 @@ def test_review_fix_caller_runs_once_each_hour() -> None:
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
-def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
-    """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
+def test_scheduled_autofix_uses_only_contextual_orchestrator() -> None:
+    """Require all write-capable OpenCode model traffic to cross the gateway."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     required_fragments = (
-        '"model": "nvidia-nim/mistralai/mistral-small-4-119b-2603"',
-        '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
-        '"enabled_providers": ["nvidia-nim"]',
-        '"nvidia-nim": {',
-        '"mistralai/mistral-small-4-119b-2603": {',
+        '"model": "contextual-orchestrator/contextual-orchestrator"',
+        '"small_model": "contextual-orchestrator/contextual-orchestrator"',
+        '"enabled_providers": ["contextual-orchestrator"]',
+        '"contextual-orchestrator": {',
         '"reasoningEffort": "high"',
         '"npm": "@ai-sdk/openai-compatible"',
-        '"baseURL": "https://integrate.api.nvidia.com/v1"',
-        '"apiKey": "{env:NVIDIA_API_KEY}"',
-        'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603',
+        '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"',
+        '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
+        'MODEL: contextual-orchestrator/contextual-orchestrator',
+        "ContextualWisdomLab/contextual-orchestrator",
+        "838b3de160c341a6f36bf588ae9fcc09989c040c",
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
@@ -62,6 +62,9 @@ def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
         '"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"',
         '"baseURL": "https://models.github.ai/inference"',
         'COPILOT_GITHUB_TOKEN',
+        'https://integrate.api.nvidia.com/v1',
+        '"enabled_providers": ["nvidia-nim"]',
+        '"apiKey": "{env:NVIDIA_API_KEY}"',
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
@@ -98,20 +101,29 @@ def test_opencode_agent_denies_non_file_interactions() -> None:
         assert workflow.count(f'"{permission_name}": "deny"') == 2
 
 
-def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
-    """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
+def test_provider_secrets_are_scoped_to_gateway_execution_steps() -> None:
+    """Keep provider credentials inside the two gateway-owning shell steps."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
+    bindings = (
+        'BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}',
+        'NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
+        'NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}',
+        'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}',
+        'OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}',
+    )
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(binding) == 2
-    assert binding in workflow[ordinary_start:ordinary_end]
-    assert binding in workflow[conflict_start:]
-    assert binding not in workflow[:ordinary_start]
-    assert binding not in workflow[ordinary_end:conflict_start]
+    for binding in bindings:
+        assert workflow.count(binding) == 2
+        assert binding in workflow[ordinary_start:ordinary_end]
+        assert binding in workflow[conflict_start:]
+        assert binding not in workflow[:ordinary_start]
+        assert binding not in workflow[ordinary_end:conflict_start]
+    unset = "unset BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY"
+    assert workflow.count(unset) == 2
 
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
@@ -135,16 +147,10 @@ def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> Non
     assert workflow.count(sanitized_invocation) == 2
 
 
-def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None:
-    """Reject an empty model credential instead of falling back to another provider."""
+def test_unavailable_gateway_fails_closed_before_model_execution() -> None:
+    """Reject an empty auto-discovered catalog instead of calling a provider directly."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    guard = (
-        'if [ -z "${NVIDIA_API_KEY:-}" ]; then\n'
-        '            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled '
-        'OpenCode autofix."\n'
-        "            exit 1\n"
-        "          fi"
-    )
+    guard = 'if [ "$gateway_ready" != "true" ]; then'
     ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
     ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
     conflict_start = workflow.index(
@@ -153,6 +159,19 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     assert workflow.count(guard) == 2
     assert guard in workflow[ordinary_start:ordinary_end]
     assert guard in workflow[conflict_start:]
+
+
+def test_gateway_is_loopback_pinned_and_receives_no_github_credentials() -> None:
+    """Bind the reviewed gateway source to loopback and an isolated environment."""
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    assert workflow.count("--host 127.0.0.1 --port 18080") == 2
+    assert workflow.count("env -i \\") == 2
+    assert workflow.count("591bbf197b355e60604618c8a8a50bc5a839b204") == 2
+    for block in workflow.split("env -i \\")[1:]:
+        launch = block.split("python3 -m contextual_orchestrator.review_gateway", 1)[0]
+        assert "GITHUB_TOKEN" not in launch
+        assert "GH_TOKEN" not in launch
+        assert "ACTIONS_ID_TOKEN" not in launch
 
 
 def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:

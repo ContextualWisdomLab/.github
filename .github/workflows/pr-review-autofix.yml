@@ -222,6 +222,15 @@ jobs:
           install -m 0755 "${RUNNER_TEMP}/opencode" "${install_dir}/opencode"
           echo "$install_dir" >>"$GITHUB_PATH"
 
+      - name: Checkout pinned contextual-orchestrator gateway
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/contextual-orchestrator
+          ref: 838b3de160c341a6f36bf588ae9fcc09989c040c
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted-contextual-orchestrator
+
       - name: Collect review feedback context
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || github.token }}
@@ -279,9 +288,9 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
-            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
-            "enabled_providers": ["nvidia-nim"],
+            "model": "contextual-orchestrator/contextual-orchestrator",
+            "small_model": "contextual-orchestrator/contextual-orchestrator",
+            "enabled_providers": ["contextual-orchestrator"],
             "permission": {
               "edit": {
                 "*": "allow",
@@ -306,7 +315,7 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
-                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "model": "contextual-orchestrator/contextual-orchestrator",
                 "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
@@ -333,32 +342,23 @@ jobs:
               }
             },
             "provider": {
-              "nvidia-nim": {
+              "contextual-orchestrator": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM",
+                "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "https://integrate.api.nvidia.com/v1",
-                  "apiKey": "{env:NVIDIA_API_KEY}"
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "mistralai/mistral-small-4-119b-2603": {
-                    "name": "Mistral Small 4 119B 2603",
+                  "contextual-orchestrator": {
+                    "name": "Contextual Orchestrator (auto-discovered)",
                     "tool_call": true,
                     "reasoning": true,
                     "options": {
                       "reasoningEffort": "high"
                     },
                     "limit": {
-                      "context": 128000,
-                      "output": 4096
-                    }
-                  },
-                  "nvidia/nemotron-3-nano-30b-a3b": {
-                    "name": "Nemotron 3 Nano 30B A3B",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {
-                      "context": 128000,
+                      "context": 200000,
                       "output": 32768
                     }
                   }
@@ -370,18 +370,79 @@ jobs:
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MODEL: contextual-orchestrator/contextual-orchestrator
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          contextual_gateway_pid=""
+          cleanup_contextual_gateway() {
+            if [ -n "$contextual_gateway_pid" ]; then
+              kill "$contextual_gateway_pid" 2>/dev/null || true
+              for _ in 1 2 3 4 5; do
+                if ! kill -0 "$contextual_gateway_pid" 2>/dev/null; then
+                  wait "$contextual_gateway_pid" 2>/dev/null || true
+                  contextual_gateway_pid=""
+                  return
+                fi
+                sleep 1
+              done
+              kill -KILL "$contextual_gateway_pid" 2>/dev/null || true
+              wait "$contextual_gateway_pid" 2>/dev/null || true
+              contextual_gateway_pid=""
+            fi
+          }
+          trap cleanup_contextual_gateway EXIT
+          gateway_license="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"
+          if [ "$(sed -n '1p' "$gateway_license")" != "MIT License" ] ||
+            [ "$(git hash-object --no-filters "$gateway_license")" != "591bbf197b355e60604618c8a8a50bc5a839b204" ]; then
+            echo "::error::Pinned contextual-orchestrator license identity did not match the reviewed MIT source."
             exit 1
           fi
+          contextual_gateway_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          contextual_gateway_base_url="http://127.0.0.1:18080/v1"
+          echo "::add-mask::$contextual_gateway_token"
+          env -i \
+            PATH="$PATH" HOME="$HOME" \
+            PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator" \
+            BYTEZ_API_KEY="${BYTEZ_API_KEY:-}" \
+            NVIDIA_NIM_API_KEY="${NVIDIA_NIM_API_KEY:-}" \
+            NVIDIA_NIM_API_KEY_SUB="${NVIDIA_NIM_API_KEY_SUB:-}" \
+            OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+            OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+            CONTEXTUAL_ORCHESTRATOR_TOKEN="$contextual_gateway_token" \
+            GITHUB_ENV=/dev/null GITHUB_OUTPUT=/dev/null GITHUB_PATH=/dev/null \
+            GITHUB_STEP_SUMMARY=/dev/null GITHUB_STATE=/dev/null BASH_ENV=/dev/null \
+            python3 -m contextual_orchestrator.review_gateway \
+              --host 127.0.0.1 --port 18080 \
+              >"${RUNNER_TEMP}/contextual-orchestrator-autofix.log" 2>&1 &
+          contextual_gateway_pid=$!
+          models_file="$(mktemp "${RUNNER_TEMP}/contextual-orchestrator-models.XXXXXX")"
+          gateway_ready=false
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS --max-time 3 "${contextual_gateway_base_url%/v1}/healthz" >/dev/null &&
+              curl -fsS --max-time 3 -H "Authorization: Bearer ${contextual_gateway_token}" \
+                -o "$models_file" "${contextual_gateway_base_url}/models" &&
+              python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")).get("data", []); raise SystemExit(0 if any(str(item.get("id") or "").strip() for item in data if isinstance(item, dict)) else 1)' "$models_file"; then
+              gateway_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$gateway_ready" != "true" ]; then
+            echo "::error::Pinned contextual-orchestrator gateway did not expose a usable auto-discovered model catalog."
+            exit 1
+          fi
+          export CONTEXTUAL_ORCHESTRATOR_TOKEN="$contextual_gateway_token"
+          export CONTEXTUAL_ORCHESTRATOR_BASE_URL="$contextual_gateway_base_url"
+          unset BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
           allowed_paths_context="$(
@@ -447,6 +508,7 @@ jobs:
             else
               rm -f "$TARGET_WORKSPACE/autofix-prompt.md"
             fi
+            cleanup_contextual_gateway
           }
           trap restore_workspace_config EXIT
           cd "$TARGET_WORKSPACE"
@@ -569,11 +631,15 @@ jobs:
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/contextual-orchestrator
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -584,10 +650,67 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          contextual_gateway_pid=""
+          cleanup_contextual_gateway() {
+            if [ -n "$contextual_gateway_pid" ]; then
+              kill "$contextual_gateway_pid" 2>/dev/null || true
+              for _ in 1 2 3 4 5; do
+                if ! kill -0 "$contextual_gateway_pid" 2>/dev/null; then
+                  wait "$contextual_gateway_pid" 2>/dev/null || true
+                  contextual_gateway_pid=""
+                  return
+                fi
+                sleep 1
+              done
+              kill -KILL "$contextual_gateway_pid" 2>/dev/null || true
+              wait "$contextual_gateway_pid" 2>/dev/null || true
+              contextual_gateway_pid=""
+            fi
+          }
+          trap cleanup_contextual_gateway EXIT
+          gateway_license="$GITHUB_WORKSPACE/trusted-contextual-orchestrator/LICENSE"
+          if [ "$(sed -n '1p' "$gateway_license")" != "MIT License" ] ||
+            [ "$(git hash-object --no-filters "$gateway_license")" != "591bbf197b355e60604618c8a8a50bc5a839b204" ]; then
+            echo "::error::Pinned contextual-orchestrator license identity did not match the reviewed MIT source."
             exit 1
           fi
+          contextual_gateway_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          contextual_gateway_base_url="http://127.0.0.1:18080/v1"
+          echo "::add-mask::$contextual_gateway_token"
+          env -i \
+            PATH="$PATH" HOME="$HOME" \
+            PYTHONPATH="$GITHUB_WORKSPACE/trusted-contextual-orchestrator" \
+            BYTEZ_API_KEY="${BYTEZ_API_KEY:-}" \
+            NVIDIA_NIM_API_KEY="${NVIDIA_NIM_API_KEY:-}" \
+            NVIDIA_NIM_API_KEY_SUB="${NVIDIA_NIM_API_KEY_SUB:-}" \
+            OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+            OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+            CONTEXTUAL_ORCHESTRATOR_TOKEN="$contextual_gateway_token" \
+            GITHUB_ENV=/dev/null GITHUB_OUTPUT=/dev/null GITHUB_PATH=/dev/null \
+            GITHUB_STEP_SUMMARY=/dev/null GITHUB_STATE=/dev/null BASH_ENV=/dev/null \
+            python3 -m contextual_orchestrator.review_gateway \
+              --host 127.0.0.1 --port 18080 \
+              >"${RUNNER_TEMP}/contextual-orchestrator-autofix-conflict.log" 2>&1 &
+          contextual_gateway_pid=$!
+          models_file="$(mktemp "${RUNNER_TEMP}/contextual-orchestrator-models.XXXXXX")"
+          gateway_ready=false
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS --max-time 3 "${contextual_gateway_base_url%/v1}/healthz" >/dev/null &&
+              curl -fsS --max-time 3 -H "Authorization: Bearer ${contextual_gateway_token}" \
+                -o "$models_file" "${contextual_gateway_base_url}/models" &&
+              python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")).get("data", []); raise SystemExit(0 if any(str(item.get("id") or "").strip() for item in data if isinstance(item, dict)) else 1)' "$models_file"; then
+              gateway_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$gateway_ready" != "true" ]; then
+            echo "::error::Pinned contextual-orchestrator gateway did not expose a usable auto-discovered model catalog."
+            exit 1
+          fi
+          export CONTEXTUAL_ORCHESTRATOR_TOKEN="$contextual_gateway_token"
+          export CONTEXTUAL_ORCHESTRATOR_BASE_URL="$contextual_gateway_base_url"
+          unset BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays
@@ -651,6 +774,7 @@ jobs:
               else
                 rm -f "$TARGET_WORKSPACE/opencode.jsonc"
               fi
+              cleanup_contextual_gateway
             }
             trap restore_workspace_config EXIT
             env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
