@@ -65,6 +65,12 @@ prove capacity, so HTTP 429 exhaustion remains fail-closed if every fallback is
 unavailable. This change does not treat provider errors as success and does not
 weaken Strix severity, changed-file attribution, or approval requirements.
 
+Operationally, at least one configured provider must have usable request
+capacity or credit before a required scan can produce authoritative evidence.
+The live catalog resolver verifies model availability, not quota, rate-limit
+headroom, or account balance. Restoring those provider resources is a runtime
+prerequisite; adding another fixed model identifier is not a substitute.
+
 ## Current fallback contract (2026-08-25)
 
 The direct-OpenAI fallback is `gpt-5.4`. The retired `gpt-5.6-luna` identifier
