@@ -23,18 +23,12 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
-- Serialize Strix scans per repository and event class to stop shared-provider
-  key rate-limit storms. Concurrent per-PR scans each retried the shared NVIDIA
-  NIM key, producing guaranteed `litellm.RateLimitError` failures across open
-  PRs. GitHub retains one active and one pending run per repository/event group;
-  `cancel-in-progress: false` keeps the active scan running, while the merge
-  scheduler re-dispatches exact-head evidence after pending-run supersession.
-  Update the bash contract test to match the repository-scoped concurrency
-  group.
-- Keep closed-PR Strix cleanup read-only at the GitHub token boundary while
-  allowing the established scheduler credential to cancel target and central
-  dispatch runs when configured; scope each event filter to its hosting
-  repository and leave authorization or malformed-data failures auditable.
+- Review scans now run in a controlled order so each pull request receives a
+  complete result instead of a rate-limit interruption. Open the pull request
+  after the active scan finishes to review the latest result.
+- Closed pull-request cleanup now preserves the review record and reports any
+  authorization or malformed-data issue for follow-up. Reopen the pull request
+  or update its credentials when the cleanup message asks you to act.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
