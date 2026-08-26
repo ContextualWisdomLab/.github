@@ -1068,29 +1068,42 @@ jobs:
             # Compare live refs on every sweep instead of waiting for an age
             # threshold: previous-head checks are never useful merge evidence.
             queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
+            open_pr_heads_json="{}"
+            if open_pr_refs_tsv="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
                 "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
                 --paginate \
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\(.head.repo.full_name):\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
+                | jq -sr '
+                    add[]
+                    | select(.head.repo.full_name != null and .head.ref != null)
+                    | [.head.repo.full_name, .head.ref]
+                    | @tsv
                   '
             )"; then
+              while IFS=$'\t' read -r head_repo head_ref; do
+                [ -n "$head_repo" ] && [ -n "$head_ref" ] || continue
+                encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | @uri')"
+                if ! live_head_sha="$(
+                  gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    "/repos/${head_repo}/git/ref/heads/${encoded_head_ref}" \
+                    --jq '.object.sha // empty'
+                )" || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                  echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: live ref ${head_repo}:${head_ref} could not be resolved safely. No run will be cancelled from incomplete evidence."
+                  queue_hygiene_ready=false
+                  break
+                fi
+                open_pr_heads_json="$(
+                  jq \
+                    --arg key "${head_repo}:${head_ref}" \
+                    --arg value "$live_head_sha" \
+                    '. + {($key): $value}' \
+                    <<<"$open_pr_heads_json"
+                )"
+              done <<<"$open_pr_refs_tsv"
+            else
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
               queue_hygiene_ready=false
             fi
             if ! current_default_sha="$(

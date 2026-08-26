@@ -88,6 +88,7 @@ flowchart LR
 | G-12 | CSAP/SOC 2 통제 목표와 PII masking 대안은 doctoring에 흩어져 있으며 evidence-to-control mapping의 live completeness가 미확인이다 | PII를 마스킹하면 업무가 멈추고, 원문 접근을 허용하면 감사·유출 위험이 커진다 | consent/purpose/access lease, field-level encryption/tokenization, redaction-at-egress, audit/revocation와 CSAP/SOC 2 evidence map을 구현한다 |
 | G-13 | hourly scheduler는 존재하지만 no-op/credential unavailable/queued Checks의 customer next action을 모든 caller가 동일한 receipt로 내는지 미확인이다 | 자동화가 실패해도 운영자가 무엇을 고쳐야 하는지 알 수 없다 | `skipped_credential_unavailable` receipt와 다음 행동 문구를 exact-head Checks로 검증한 뒤 병합하고, bounded receipt schema, retry floor, single-flight, no secret fallback을 모든 caller contract test로 고정한다 |
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
+| G-15 | 조직 큐 정리기가 open-PR payload의 직전 head와 새 branch ref가 잠시 달랐던 LineageWeave #667의 current-head runs를 취소했다 | 정상 Checks가 코드 실패처럼 사라지고 모든 소비 저장소의 병합 루프가 반복 재실행에 갇힌다 | open PR의 repo/ref는 탐색에만 쓰고 취소 판정 SHA는 live Git reference에서 다시 읽는다. ref를 완전하게 읽지 못하면 해당 저장소에서는 아무 run도 취소하지 않는다 |
 
 ## 4. 열린 PR live inventory
 

@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Resolve each open PR head through its live Git reference before queue hygiene
+  cancels superseded runs, and fail closed when any ref cannot be read. This
+  prevents a briefly stale pull-request payload from cancelling current-head
+  Checks without adding an arbitrary grace period.
 - Route Strix cross-provider fallbacks to explicit direct-OpenAI models
   (`openai-direct/...`) through the OpenAI inference endpoint instead of
   inheriting a provider-specific primary base: the workflow now provisions
