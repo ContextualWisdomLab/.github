@@ -3415,6 +3415,10 @@ REPORT
 			exit 1
 			;;
 		openai/gpt-5.4)
+			if [ "${STRIX_REASONING_EFFORT:-}" != "none" ]; then
+				echo "direct OpenAI function-tools fallback requires reasoning effort none" >&2
+				exit 29
+			fi
 			if [ "${LLM_API_KEY:-}" != "openai-fallback-token" ]; then
 				echo "unexpected direct-OpenAI fallback key (${LLM_API_KEY:-<unset>})" >&2
 				exit 26

@@ -2551,6 +2551,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2574,6 +2575,12 @@ run_strix_once() {
 		return 2
 	fi
 	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	# Strix uses function tools. Direct OpenAI chat-completions rejects those
+	# tools when reasoning_effort is non-none, so scope the supported value to
+	# this provider attempt without weakening reasoning on other providers.
+	if is_explicit_openai_model "$model"; then
+		child_reasoning_effort="none"
+	fi
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
@@ -2604,6 +2611,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
+	STRIX_REASONING_EFFORT="$child_reasoning_effort" \
 python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
