@@ -16,12 +16,13 @@ and fallback pools. The default pool prefers
 configuration. Private repositories retain the contracted provider because
 NVIDIA hosted trial inputs are restricted to public repositories.
 
-OpenRouter remains a supported transport and API-base capability. It is not a
-static fallback-model registry: executable fallback expressions must not add a
-hard-coded OpenRouter model identifier. OpenRouter model selection belongs to
-the authenticated live-catalog resolver at the provider owner boundary. This
-keeps transport recovery separate from model discovery and prevents central
-workflow configuration from duplicating a provider catalog that can change.
+OpenRouter remains a supported explicitly selected transport and API-base
+capability. It is not in the NVIDIA exhaustion chain: the authenticated
+`openrouter/free` router selected a Stealth backend that returned HTTP 502 with
+an invalid target URL in required CI run `33012371359`, so retaining that route
+would repeat a disproven fallback. The workflow keeps explicit OpenRouter scans
+available while NVIDIA exhaustion proceeds from a second live NVIDIA model to
+direct OpenAI.
 
 ## Trust boundary
 
@@ -58,13 +59,13 @@ Regression evidence proves that:
    context is not recognized;
 5. model-catalog 404s enter cross-model fallback but never same-model retry;
 6. the primary and first fallback are present in the live NVIDIA catalog;
-7. OpenRouter's authenticated dynamic free router and direct OpenAI remain the
-   later cross-provider fallbacks;
+7. direct OpenAI remains the cross-provider fallback after the distinct live
+   NVIDIA candidate;
 8. provider exhaustion remains non-passing after unchanged baseline findings;
 9. changed, unmapped, and changed-manifest findings also block after provider
    exhaustion; and
-10. executable fallback expressions use OpenRouter's dynamic router rather than
-    hard-coding one of its underlying provider model ids; and
+10. executable NVIDIA fallback expressions exclude the live-disproven
+    OpenRouter free route while explicit OpenRouter selection remains supported; and
 11. the required-workflow smoke contract pins these properties.
 
 ## Limitations
