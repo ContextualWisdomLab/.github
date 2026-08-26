@@ -403,6 +403,18 @@ if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_
 	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
 	exit 2
 fi
+STRIX_OPENROUTER_FALLBACK_KEY_FILE="${STRIX_OPENROUTER_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ] && ! STRIX_OPENROUTER_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENROUTER_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENROUTER_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
 if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
 	exit 2
 fi
@@ -2439,7 +2451,10 @@ resolved_llm_api_base_for_model() {
 	fi
 	local api_base_file="${LLM_API_BASE_FILE:-}"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+	if [[ "$model" == openrouter/* ]] && [ -n "${STRIX_OPENROUTER_FALLBACK_API_BASE_FILE:-}" ]; then
+		api_base_file="$STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+	elif is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: openai-direct/* candidates must reach the
 		# direct OpenAI API even when the primary provider selected a
 		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
@@ -2600,6 +2615,9 @@ run_strix_once() {
 			# authenticate with the OpenAI key, not the primary provider's
 			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
 			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		fi
+		if [[ "$model" == openrouter/* ]] && [ -n "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
 		fi
 	fi
 	set -o pipefail
