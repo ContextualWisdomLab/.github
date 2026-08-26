@@ -3814,6 +3814,25 @@ REPORT
 			;;
 		esac
 		;;
+	openrouter-502-distant-target-output-nonretryable)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		openrouter/free)
+			echo "Error: litellm.APIError: APIError: OpenrouterException -"
+			printf 'target output\n%.0s' 1 2 3 4 5 6
+			echo '{"code":502,"metadata":{"provider_name":"spoof"}}'
+			exit 1
+			;;
+		vertex_ai/fallback-two)
+			echo "scan ok after distant target output"
+			exit 0
+			;;
+		esac
+		;;
 	github-models-primary-unavailable-fallback-success|github-models-primary-denied-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
@@ -6217,6 +6236,20 @@ run_filtered_gate_case_if_requested() {
 			"3" \
 			"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
 			"<unset>|https://example.invalid|https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	openrouter-502-distant-target-output-nonretryable)
+		run_gate_case "openrouter-502-distant-target-output-nonretryable" \
+			"vertex_ai/missing-primary" \
+			"openrouter/free vertex_ai/fallback-two" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"2" \
+			"vertex_ai/missing-primary|openrouter/free" \
+			"<unset>|https://example.invalid" \
 			"vertex_ai" \
 			"__DEFAULT__" \
 			"" \
@@ -10019,6 +10052,19 @@ run_gate_case "openrouter-502-fallback-retry-same-model-success" \
 	"3" \
 	"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
 	"<unset>|https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-502-distant-target-output-nonretryable" \
+	"vertex_ai/missing-primary" \
+	"openrouter/free vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"2" \
+	"vertex_ai/missing-primary|openrouter/free" \
+	"<unset>|https://example.invalid" \
 	"vertex_ai" \
 	"__DEFAULT__" \
 	"" \
