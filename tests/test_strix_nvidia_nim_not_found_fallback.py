@@ -193,6 +193,10 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("scripts/ci/select_nvidia_nim_model.py", workflow)
         self.assertIn("steps.resolve_nvidia_models.outputs.primary", workflow)
         self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
+        self.assertIn('[ "$primary_rc" -eq 75 ]', workflow)
+        self.assertIn('[ "$fallback_rc" -eq 75 ]', workflow)
+        self.assertIn('[ "$primary_rc" -eq 0 ] || exit "$primary_rc"', workflow)
+        self.assertIn('[ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"', workflow)
         default_expression = (
             "steps.target_visibility.outputs.is_private == 'false' && "
             "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"

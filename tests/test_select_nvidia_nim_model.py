@@ -291,5 +291,42 @@ def test_main_annotates_a_resolution_failure(
     monkeypatch.setenv("NVIDIA_API_KEY", "secret-key")
     _stub_catalog(monkeypatch, _catalog("live/model"))
 
-    assert resolver.main(["--candidates", "retired/model"]) == 1
+    assert resolver.main(["--candidates", "retired/model"]) == resolver.EX_TEMPFAIL
     assert "::error::no configured primary NVIDIA NIM model candidate" in capsys.readouterr().err
+
+
+def test_main_keeps_invalid_operator_configuration_nonrecoverable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty operator pool is invalid rather than provider unavailability."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret-key")
+    _stub_catalog(monkeypatch, _catalog("live/model"))
+
+    assert resolver.main(["--candidates", ""]) == 1
+    assert "no primary NVIDIA NIM model candidates" in capsys.readouterr().err
+
+
+def test_main_keeps_catalog_authentication_errors_nonrecoverable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An invalid provider credential must not silently switch providers."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "invalid-key")
+    response = _FakeResponse(b"{}")
+    response.status = 401
+
+    def fake_connection(
+        _host: str, _port: int, *, timeout: float, context: ssl.SSLContext
+    ) -> _FakeConnection:
+        return _FakeConnection(
+            "integrate.api.nvidia.com",
+            443,
+            timeout=timeout,
+            context=context,
+            response=response,
+            requests=[],
+        )
+
+    monkeypatch.setattr(resolver.http.client, "HTTPSConnection", fake_connection)
+
+    assert resolver.main(["--candidates", "live/model"]) == 1
+    assert "HTTP 401" in capsys.readouterr().err

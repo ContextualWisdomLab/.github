@@ -40,6 +40,11 @@ from urllib.parse import urlsplit
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 ALLOWED_CATALOG_HOSTS = frozenset({"integrate.api.nvidia.com"})
 DEFAULT_TIMEOUT_SECONDS = 30.0
+EX_TEMPFAIL = 75
+
+
+class ModelResolutionUnavailable(RuntimeError):
+    """The reviewed model pool cannot be resolved due to provider availability."""
 
 
 def parse_candidates(raw_candidates: str) -> list[str]:
@@ -107,28 +112,31 @@ def fetch_served_model_ids(
             )
             response = connection.getresponse()
             if response.status >= 400:
-                raise RuntimeError(
+                error = RuntimeError(
                     f"NVIDIA NIM model catalog request failed with HTTP {response.status}"
                 )
+                if response.status == 429 or response.status >= 500:
+                    raise ModelResolutionUnavailable(str(error))
+                raise error
             payload = json.loads(response.read().decode("utf-8"))
         finally:
             connection.close()
     except RuntimeError:
         raise
     except (OSError, http.client.HTTPException) as error:
-        raise RuntimeError("NVIDIA NIM model catalog is unreachable") from error
+        raise ModelResolutionUnavailable("NVIDIA NIM model catalog is unreachable") from error
     except json.JSONDecodeError as error:
-        raise RuntimeError("NVIDIA NIM model catalog returned a non-JSON body") from error
+        raise ModelResolutionUnavailable("NVIDIA NIM model catalog returned a non-JSON body") from error
     entries = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(entries, list):
-        raise RuntimeError("NVIDIA NIM model catalog payload has no model list")
+        raise ModelResolutionUnavailable("NVIDIA NIM model catalog payload has no model list")
     served = {
         str(entry["id"])
         for entry in entries
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
     }
     if not served:
-        raise RuntimeError("NVIDIA NIM model catalog listed no usable model id")
+        raise ModelResolutionUnavailable("NVIDIA NIM model catalog listed no usable model id")
     return served
 
 
@@ -139,7 +147,7 @@ def select_model(candidates: list[str], served_model_ids: set[str], *, role: str
     for candidate in candidates:
         if candidate in served_model_ids:
             return candidate
-    raise RuntimeError(
+    raise ModelResolutionUnavailable(
         f"no configured {role} NVIDIA NIM model candidate is currently served: {' '.join(candidates)}. "
         "Add a live model id to the candidate pool variable so the repair worker can run."
     )
@@ -173,7 +181,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         served = fetch_served_model_ids(args.base_url, api_key, timeout_seconds=args.timeout_seconds)
         print(select_model(parse_candidates(args.candidates), served, role=args.role))
-    except (RuntimeError, ValueError) as error:
+    except ValueError as error:
+        print(f"::error::{error}", file=sys.stderr)
+        return 1
+    except ModelResolutionUnavailable as error:
+        print(f"::error::{error}", file=sys.stderr)
+        return EX_TEMPFAIL
+    except RuntimeError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
     return 0
