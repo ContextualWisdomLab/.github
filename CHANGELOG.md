@@ -81,17 +81,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Restricted sandboxed web E2E readiness polling to standard-library-classified
-  loopback addresses and literal `localhost`, including IPv6 `::1` and the
-  complete IPv4 loopback block, resolving `localhost` so every answer must
-  remain loopback, while rejecting userinfo, missing hosts, IPv4-mapped
-  public addresses, unspecified bind addresses, and metadata destinations
-  before any request is opened.
-- Strip a cosmetic-only Strix `MODEL QUALITY WARNING` box before
-  infrastructure-signal matching; if that same box also carries
-  Fatal/Denied/Timeout or Provider WARNING, keep those lines. Keep a
-  preceding Fatal/Denied box, and classify a sanitized console copy so
-  `gate-last-attempt.log` stays raw.
+- Web verification now checks services through local readiness addresses only.
+  Start the backend and frontend on this computer and use their local health
+  URLs when running the check.
+- Review results now separate cosmetic notices from blocking failures. Open the
+  failure details and correct the requested issue before running the check
+  again.
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
   dispatches whose workflow token may not see the target repository.
