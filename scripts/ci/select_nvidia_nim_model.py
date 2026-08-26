@@ -186,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         served = fetch_served_model_ids(args.base_url, api_key, timeout_seconds=args.timeout_seconds)
         excluded = set(parse_candidates(args.exclude))
-        candidates = [candidate for candidate in parse_candidates(args.candidates) if candidate not in excluded]
+        configured_candidates = parse_candidates(args.candidates)
+        candidates = [candidate for candidate in configured_candidates if candidate not in excluded]
+        if configured_candidates and not candidates:
+            raise ModelResolutionUnavailable(
+                f"no distinct {args.role} NVIDIA NIM model candidate remains after exclusions"
+            )
         print(select_model(candidates, served, role=args.role))
     except ValueError as error:
         print(f"::error::{error}", file=sys.stderr)
