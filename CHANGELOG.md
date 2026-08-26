@@ -31,6 +31,10 @@ Semantic Versioning where the repository publishes a release.
   scheduler re-dispatches exact-head evidence after pending-run supersession.
   Update the bash contract test to match the repository-scoped concurrency
   group.
+- Keep closed-PR Strix cleanup read-only at the GitHub token boundary while
+  allowing the established scheduler credential to cancel target and central
+  dispatch runs when configured; scope each event filter to its hosting
+  repository and leave authorization or malformed-data failures auditable.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
