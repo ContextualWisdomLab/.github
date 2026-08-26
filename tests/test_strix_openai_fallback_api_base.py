@@ -260,11 +260,11 @@ class WorkflowProvisionsFallbackBase(unittest.TestCase):
             workflow,
         )
 
-    def test_workflow_routes_nvidia_exhaustion_through_openrouter_free(self) -> None:
-        """The NVIDIA chain avoids its retired model and preserves failover."""
+    def test_workflow_routes_nvidia_exhaustion_through_live_catalog(self) -> None:
+        """The NVIDIA chain resolves a live distinct model before failover."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("openrouter/free openai-direct/gpt-5.4", workflow)
+        self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
         fallback_expression = next(
             line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
         )
@@ -272,8 +272,8 @@ class WorkflowProvisionsFallbackBase(unittest.TestCase):
             "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
             fallback_expression,
         )
-        self.assertIn("STRIX_OPENROUTER_FALLBACK_KEY_FILE", workflow)
-        self.assertIn("STRIX_OPENROUTER_FALLBACK_API_BASE_FILE", workflow)
+        self.assertIn("openrouter/free", fallback_expression)
+        self.assertIn("openai-direct/gpt-5.4", fallback_expression)
 
     def test_manual_status_job_has_status_write_permission(self) -> None:
         """OIDC target-app exchange may request the target commit status scope."""

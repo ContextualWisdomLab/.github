@@ -26,6 +26,12 @@ Semantic Versioning where the repository publishes a release.
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Review scans now run in a controlled order so each pull request receives a
+  complete result instead of a rate-limit interruption. Open the pull request
+  after the active scan finishes to review the latest result.
+- Closed pull-request cleanup now preserves the review record and reports any
+  authorization or malformed-data issue for follow-up. Reopen the pull request
+  or update its credentials when the cleanup message asks you to act.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
