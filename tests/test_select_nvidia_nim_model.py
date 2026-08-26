@@ -271,6 +271,28 @@ def test_main_prints_the_resolved_model_id(
     assert capsys.readouterr().out == "live/model\n"
 
 
+def test_main_excludes_the_resolved_primary_from_fallback_selection(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Fallback resolution selects a distinct live model from an overlapping pool."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret-key")
+    _stub_catalog(monkeypatch, _catalog("primary/model", "fallback/model"))
+
+    exit_code = resolver.main(
+        [
+            "--role",
+            "fallback",
+            "--candidates",
+            "primary/model fallback/model",
+            "--exclude",
+            "primary/model",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "fallback/model\n"
+
+
 def test_main_accepts_the_workflow_secret_name(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
