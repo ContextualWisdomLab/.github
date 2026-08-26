@@ -82,10 +82,11 @@ Regression evidence proves that:
 7. a non-https override fails configuration (exit 2) instead of scanning;
 8. the workflow provisions the override file and passes it into the gate env;
 9. the required-workflow smoke contract pins both sides of the wiring; and
-10. explicit direct-OpenAI attempts receive reasoning effort `none`, while
-    the other provider attempts retain their configured effort; and
-11. the stale `gpt-5.6-luna` expectations left behind by the model rename are
-   aligned with the valid `gpt-5.4` contract in queue-contract tests.
+10. the stale `gpt-5.6-luna` expectations left behind by the model rename are
+    aligned with the valid `gpt-5.4` contract in queue-contract tests; and
+11. explicit direct-OpenAI attempts on the native endpoint receive reasoning
+    effort `none`, while custom compatible endpoints and other providers retain
+    their configured effort.
 
 ## Limitations
 

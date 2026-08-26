@@ -2605,6 +2605,7 @@ run_strix_once() {
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
+	STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort" \
 	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
@@ -2691,6 +2692,8 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+if os.environ.get("STRIX_CHILD_REASONING_EFFORT"):
+    child_env["STRIX_REASONING_EFFORT"] = os.environ["STRIX_CHILD_REASONING_EFFORT"]
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")
 if llm_api_base:
     child_env["LLM_API_BASE"] = llm_api_base

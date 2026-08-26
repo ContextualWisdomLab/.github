@@ -5705,6 +5705,7 @@ PY
 	if [ "$scenario" = "nvidia-rate-limit-openai-direct-fallback-clears-api-base" ]; then
 		printf '%s' 'openai-fallback-token' >"$tmp_dir/openai_fallback_key.txt"
 		env_cmd+=(STRIX_OPENAI_FALLBACK_KEY_FILE="$tmp_dir/openai_fallback_key.txt")
+		env_cmd+=(STRIX_REASONING_EFFORT="high")
 	fi
 	if [ "$scenario" = "openai-direct-quota-github-models-fallback-success" ]; then
 		printf '%s' 'https://models.github.ai/inference' >"$tmp_dir/github_models_api_base.txt"
