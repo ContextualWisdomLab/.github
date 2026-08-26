@@ -2922,6 +2922,18 @@ is_llm_service_unavailable_error() {
 		return 0
 	fi
 
+	# OpenRouter's dynamic free route can wrap one upstream 502 over several
+	# terminal lines. Join only the bounded LiteLLM error block so unrelated
+	# target-app output elsewhere in the log cannot assemble a retry signature.
+	if awk '
+		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
+		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG" |
+		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
+		return 0
+	fi
+
 	return 1
 }
 
