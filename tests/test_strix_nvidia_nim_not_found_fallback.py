@@ -186,8 +186,8 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Prefer a documented hosted NIM and another NIM before GitHub."""
+    def test_workflow_uses_cross_provider_free_fallback_plan(self) -> None:
+        """Use OpenRouter free routing after the hosted NIM is exhausted."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         default_expression = (
@@ -202,9 +202,13 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} openai-direct/gpt-5.4'",
+            "'openrouter/free openai-direct/gpt-5.4'",
             workflow,
         )
+        fallback_expression = next(
+            line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
+        )
+        self.assertNotIn(FREE_NVIDIA_FALLBACK, fallback_expression)
 
         default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
         default_gate = default_gate.split(
