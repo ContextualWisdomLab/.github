@@ -67,11 +67,29 @@ def check_workflow_name(check: Mapping[str, Any]) -> str:
     return ""
 
 
-def is_canonical_coverage_check(check: Mapping[str, Any], head_sha: str) -> bool:
+def check_run_id(check: Mapping[str, Any]) -> str:
+    """Return the Actions run id recorded by a check-run, if available."""
+    suite = check.get("check_suite") or check.get("checkSuite") or {}
+    if isinstance(suite, Mapping):
+        run = suite.get("workflow_run") or suite.get("workflowRun") or {}
+        if isinstance(run, Mapping):
+            value = str(run.get("id") or run.get("databaseId") or "").strip()
+            if value.isdigit():
+                return value
+    details_url = str(check.get("details_url") or check.get("detailsUrl") or "").strip()
+    match = re.search(r"/actions/runs/([0-9]+)(?:/|$)", details_url)
+    return match.group(1) if match else ""
+
+
+def is_canonical_coverage_check(
+    check: Mapping[str, Any], head_sha: str, run_id: str | None = None
+) -> bool:
     """Return whether a check-run is the exact-head canonical coverage-evidence check."""
     if str(check.get("name") or "").strip() != CANONICAL_CHECK_NAME:
         return False
     if check_head_sha(check).lower() != head_sha.lower():
+        return False
+    if run_id is not None and check_run_id(check) != str(run_id):
         return False
     status = str(check.get("status") or "").strip().casefold()
     if status and status != "completed":
@@ -81,15 +99,20 @@ def is_canonical_coverage_check(check: Mapping[str, Any], head_sha: str) -> bool
 
 
 def terminal_coverage_result(
-    check_runs: Sequence[Mapping[str, Any]], head_sha: str
+    check_runs: Sequence[Mapping[str, Any]],
+    head_sha: str,
+    run_id: str | None = None,
 ) -> str:
     """Return the terminal canonical coverage-evidence conclusion for ``head_sha``."""
     if not SHA_RE.fullmatch(head_sha):
         raise CoverageQuoteError("coverage identity requires a 40-character head SHA")
+    if run_id is not None and not str(run_id).isdigit():
+        raise CoverageQuoteError("coverage identity requires a numeric workflow run id")
     matches = [
         check
         for check in check_runs
-        if isinstance(check, Mapping) and is_canonical_coverage_check(check, head_sha)
+        if isinstance(check, Mapping)
+        and is_canonical_coverage_check(check, head_sha, run_id)
     ]
     if not matches:
         raise CoverageQuoteError(
@@ -110,10 +133,13 @@ def terminal_coverage_result(
 
 
 def assert_quoted_matches(
-    quoted_result: str, check_runs: Sequence[Mapping[str, Any]], head_sha: str
+    quoted_result: str,
+    check_runs: Sequence[Mapping[str, Any]],
+    head_sha: str,
+    run_id: str | None = None,
 ) -> str:
     """Return the canonical result or raise when the quoted conclusion differs."""
-    canonical = terminal_coverage_result(check_runs, head_sha)
+    canonical = terminal_coverage_result(check_runs, head_sha, run_id)
     quoted = normalize_result(quoted_result)
     if quoted != canonical:
         raise CoverageQuoteError(
@@ -178,6 +204,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="")
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--run-id")
     parser.add_argument("--quoted-result", required=True)
     parser.add_argument("--check-runs-file")
     return parser.parse_args(argv)
@@ -193,7 +220,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             checks = fetch_check_runs(args.repo, args.head_sha)
         else:
             raise CoverageQuoteError("coverage identity needs --repo or --check-runs-file")
-        canonical = assert_quoted_matches(args.quoted_result, checks, args.head_sha)
+        canonical = assert_quoted_matches(
+            args.quoted_result, checks, args.head_sha, args.run_id
+        )
     except (CoverageQuoteError, json.JSONDecodeError, OSError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")

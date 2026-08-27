@@ -21,7 +21,11 @@ FORMAL_AUTHORS = frozenset(
     {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
 )
 FORMAL_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
-STATUS_HEADINGS = ("## OpenCode Review Status", "## OpenCode 게이트 상태")
+STATUS_HEADINGS = (
+    "## OpenCode Review Status",
+    "## OpenCode Review Overview",
+    "## OpenCode 게이트 상태",
+)
 PRODUCT_MARKERS = (
     "## Pull request overview",
     "## Pull request 개요",
