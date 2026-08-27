@@ -9,7 +9,9 @@ CALLER = Path(
 DOCTORING = Path(
     "docs/doctoring/learning-interoperability-contracts-hourly-review-caller.md"
 )
-QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+QUALITY_WORKFLOW = Path(
+    ".github/workflows/learning-interoperability-contracts-hourly-review-repair-quality.yml"
+)
 
 
 def _read(path: Path) -> str:
@@ -107,3 +109,7 @@ def test_focused_quality_workflow_tracks_learning_contracts_contracts() -> None:
         )
         == 3
     )
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in quality
+    assert "persist-credentials: false" in quality
+    assert "--require-hashes" in quality
+    assert "git diff --check" in quality
