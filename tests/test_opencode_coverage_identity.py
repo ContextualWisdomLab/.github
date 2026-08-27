@@ -54,6 +54,14 @@ def test_identity_helpers_cover_malformed_and_noncanonical_checks() -> None:
     assert identity.check_workflow_name({"check_suite": "bad"}) == ""
     assert identity.check_workflow_name({"check_suite": {"workflow_run": "bad"}}) == ""
     assert identity.check_workflow_name({"app": "nope"}) == ""
+    assert identity.check_run_id({"checkSuite": {"workflowRun": {"databaseId": 123}}}) == "123"
+    assert identity.check_run_id({"check_suite": {"workflow_run": {"id": "bad"}}}) == ""
+    assert identity.check_run_id({"check_suite": {"workflow_run": "bad"}}) == ""
+    assert identity.check_run_id({"check_suite": "bad"}) == ""
+    assert identity.check_run_id(
+        {"detailsUrl": "https://github.com/acme/repo/actions/runs/456/job/789"}
+    ) == "456"
+    assert identity.check_run_id({"details_url": "https://github.com/acme/repo/checks/1"}) == ""
     head = identity.KAEFA_78_HEAD
     with pytest.raises(identity.CoverageQuoteError, match="40-character"):
         identity.terminal_coverage_result([], "deadbeef")
@@ -305,6 +313,37 @@ def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
     )
 
 
+def test_fetch_check_runs_exercises_delay_and_empty_retry_policy(monkeypatch) -> None:
+    """A configured delay is honored, while an empty retry policy fails closed."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(identity, "RETRY_DELAYS", (0.01,))
+    monkeypatch.setattr(identity.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        identity.subprocess,
+        "run",
+        lambda args, **kwargs: type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps({"check_runs": []}),
+                "stderr": "",
+            },
+        )(),
+    )
+
+    assert identity.fetch_check_runs(
+        "ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD
+    ) == []
+    assert sleeps == [0.01]
+
+    monkeypatch.setattr(identity, "RETRY_DELAYS", ())
+    with pytest.raises(identity.CoverageQuoteError, match="after retries"):
+        identity.fetch_check_runs(
+            "ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD
+        )
+
+
 def dispatch_run(
     *,
     run_id: str,
@@ -326,10 +365,19 @@ def dispatch_run(
 
 
 def coverage_job(
-    *, conclusion: str = "success", name: str = "coverage-evidence", status: str = "completed"
+    *,
+    conclusion: str = "success",
+    name: str = "coverage-evidence",
+    status: str = "completed",
+    run_id: str = "33112315024",
 ) -> dict[str, object]:
     """Build one Actions job from the current workflow run."""
-    return {"name": name, "status": status, "conclusion": conclusion}
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "run_id": int(run_id),
+    }
 
 
 def test_repository_dispatch_coverage_binds_to_current_central_run_job() -> None:
@@ -353,6 +401,101 @@ def test_repository_dispatch_coverage_binds_to_current_central_run_job() -> None
         head_sha=identity.KAEFA_78_HEAD,
         run_id=run_id,
     ) == "failure"
+
+
+def test_repository_dispatch_coverage_rejects_job_from_another_run() -> None:
+    """A same-named completed job from a different run is never authoritative."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+
+    with pytest.raises(identity.CoverageQuoteError, match="job run id"):
+        identity.terminal_dispatch_coverage_result(
+            run,
+            [coverage_job(run_id="33112315023")],
+            workflow_repo="ContextualWisdomLab/.github",
+            target_repo=target_repo,
+            pr_number="523",
+            head_sha=identity.KAEFA_78_HEAD,
+            run_id=run_id,
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "run_mutation", "match"),
+    (
+        ({"workflow_repo": "../bad"}, {}, "workflow repository"),
+        ({"target_repo": "../bad"}, {}, "target repository"),
+        ({"pr_number": "not-a-number"}, {}, "pull request number"),
+        ({"pr_number": "0"}, {}, "pull request number"),
+        ({"head_sha": "deadbeef"}, {}, "40-character"),
+        ({"run_id": "not-a-run"}, {}, "numeric workflow run id"),
+        ({}, {"id": 33112315023}, "run id"),
+        ({}, {"repository": "malformed"}, "repository"),
+    ),
+)
+def test_repository_dispatch_coverage_rejects_invalid_boundaries(
+    overrides: dict[str, str], run_mutation: dict[str, object], match: str
+) -> None:
+    """Every externally supplied dispatch identity component is fail-closed."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+    run.update(run_mutation)
+    arguments = {
+        "workflow_repo": "ContextualWisdomLab/.github",
+        "target_repo": target_repo,
+        "pr_number": "523",
+        "head_sha": identity.KAEFA_78_HEAD,
+        "run_id": run_id,
+    }
+    arguments.update(overrides)
+
+    with pytest.raises(identity.CoverageQuoteError, match=match):
+        identity.terminal_dispatch_coverage_result(run, [coverage_job()], **arguments)
+
+
+def test_repository_dispatch_coverage_rejects_nonterminal_conclusion() -> None:
+    """A completed job without a terminal conclusion remains non-passing."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+
+    with pytest.raises(identity.CoverageQuoteError, match="non-terminal"):
+        identity.terminal_dispatch_coverage_result(
+            run,
+            [coverage_job(conclusion="")],
+            workflow_repo="ContextualWisdomLab/.github",
+            target_repo=target_repo,
+            pr_number="523",
+            head_sha=identity.KAEFA_78_HEAD,
+            run_id=run_id,
+        )
+
+
+def test_terminal_coverage_rejects_malformed_run_id() -> None:
+    """Optional check-run binding accepts only a numeric Actions run id."""
+    with pytest.raises(identity.CoverageQuoteError, match="numeric workflow run id"):
+        identity.terminal_coverage_result(
+            [coverage_check(head=identity.KAEFA_78_HEAD)],
+            identity.KAEFA_78_HEAD,
+            run_id="bad",
+        )
 
 
 @pytest.mark.parametrize(
@@ -422,3 +565,153 @@ def test_repository_dispatch_coverage_requires_one_completed_exact_job(
             head_sha=identity.KAEFA_78_HEAD,
             run_id=run_id,
         )
+
+
+def test_run_gh_json_retries_transient_errors_and_honors_delay(monkeypatch) -> None:
+    """Central workflow reads retry only authenticated transient failures."""
+    responses = [
+        type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "HTTP 503 unavailable"},
+        )(),
+        type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps({"id": 123}), "stderr": ""},
+        )(),
+    ]
+    sleeps: list[float] = []
+    monkeypatch.setattr(identity, "RETRY_DELAYS", (0, 0.01))
+    monkeypatch.setattr(identity.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        identity.subprocess, "run", lambda args, **kwargs: responses.pop(0)
+    )
+
+    assert identity._run_gh_json(["gh", "api", "example"]) == {"id": 123}
+    assert sleeps == [0.01]
+
+
+def test_run_gh_json_fails_closed_on_terminal_and_exhausted_reads(monkeypatch) -> None:
+    """Non-transient failures and an unavailable retry policy never fabricate JSON."""
+    monkeypatch.setattr(identity, "RETRY_DELAYS", (0,))
+    monkeypatch.setattr(
+        identity.subprocess,
+        "run",
+        lambda args, **kwargs: type(
+            "Completed", (), {"returncode": 1, "stdout": "", "stderr": "denied"}
+        )(),
+    )
+    with pytest.raises(identity.CoverageQuoteError, match="workflow lookup failed"):
+        identity._run_gh_json(["gh", "api", "example"])
+
+    monkeypatch.setattr(identity, "RETRY_DELAYS", ())
+    with pytest.raises(identity.CoverageQuoteError, match="after retries"):
+        identity._run_gh_json(["gh", "api", "example"])
+
+
+def test_fetch_dispatch_workflow_run_validates_identity_and_shape(monkeypatch) -> None:
+    """The exact workflow-run reader validates inputs and the returned object."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        identity,
+        "_run_gh_json",
+        lambda args: calls.append(args) or {"id": 33112315024},
+    )
+    assert identity.fetch_dispatch_workflow_run(
+        "ContextualWisdomLab/.github", "33112315024"
+    )["id"] == 33112315024
+    assert calls == [
+        [
+            "gh",
+            "api",
+            "repos/ContextualWisdomLab/.github/actions/runs/33112315024",
+        ]
+    ]
+
+    with pytest.raises(identity.CoverageQuoteError, match="workflow repository"):
+        identity.fetch_dispatch_workflow_run("../bad", "33112315024")
+    with pytest.raises(identity.CoverageQuoteError, match="numeric workflow run id"):
+        identity.fetch_dispatch_workflow_run("ContextualWisdomLab/.github", "bad")
+    monkeypatch.setattr(identity, "_run_gh_json", lambda args: [])
+    with pytest.raises(identity.CoverageQuoteError, match="malformed JSON"):
+        identity.fetch_dispatch_workflow_run(
+            "ContextualWisdomLab/.github", "33112315024"
+        )
+
+
+def test_fetch_dispatch_workflow_jobs_validates_pages_and_filters(monkeypatch) -> None:
+    """Latest-attempt job pages are validated and non-object entries ignored."""
+    monkeypatch.setattr(
+        identity,
+        "_run_gh_json",
+        lambda args: [
+            {"jobs": [coverage_job(), "malformed"]},
+            {"jobs": [coverage_job(name="opencode-review")]},
+        ],
+    )
+    jobs = identity.fetch_dispatch_workflow_jobs(
+        "ContextualWisdomLab/.github", "33112315024"
+    )
+    assert [job["name"] for job in jobs] == ["coverage-evidence", "opencode-review"]
+
+    monkeypatch.setattr(identity, "_run_gh_json", lambda args: {"jobs": []})
+    assert identity.fetch_dispatch_workflow_jobs(
+        "ContextualWisdomLab/.github", "33112315024"
+    ) == []
+    with pytest.raises(identity.CoverageQuoteError, match="workflow repository"):
+        identity.fetch_dispatch_workflow_jobs("../bad", "33112315024")
+    with pytest.raises(identity.CoverageQuoteError, match="numeric workflow run id"):
+        identity.fetch_dispatch_workflow_jobs("ContextualWisdomLab/.github", "bad")
+    monkeypatch.setattr(identity, "_run_gh_json", lambda args: [{"jobs": "bad"}])
+    with pytest.raises(identity.CoverageQuoteError, match="malformed JSON"):
+        identity.fetch_dispatch_workflow_jobs(
+            "ContextualWisdomLab/.github", "33112315024"
+        )
+
+
+def test_dispatch_cli_quotes_only_the_exact_current_run(
+    monkeypatch, capsys
+) -> None:
+    """CLI dispatch mode succeeds only when current-run evidence matches its quote."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    monkeypatch.setattr(
+        identity,
+        "fetch_dispatch_workflow_run",
+        lambda workflow_repo, current_run_id: dispatch_run(
+            run_id=current_run_id,
+            target_repo=target_repo,
+            pr_number=523,
+            head_sha=identity.KAEFA_78_HEAD,
+        ),
+    )
+    monkeypatch.setattr(
+        identity,
+        "fetch_dispatch_workflow_jobs",
+        lambda workflow_repo, current_run_id: [coverage_job(run_id=current_run_id)],
+    )
+    args = [
+        "--workflow-repo",
+        "ContextualWisdomLab/.github",
+        "--repo",
+        target_repo,
+        "--pr-number",
+        "523",
+        "--head-sha",
+        identity.KAEFA_78_HEAD,
+        "--run-id",
+        run_id,
+        "--quoted-result",
+        "success",
+    ]
+
+    assert identity.main(args) == 0
+    assert capsys.readouterr().out.strip() == "success"
+    args[-1] = "failure"
+    assert identity.main(args) == 1
+    assert "does not match" in capsys.readouterr().err
+
+    missing = [item for item in args if item not in {"--repo", target_repo}]
+    assert identity.main(missing) == 1
+    assert "needs target repo" in capsys.readouterr().err

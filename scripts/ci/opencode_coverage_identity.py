@@ -158,7 +158,12 @@ def terminal_dispatch_coverage_result(
         raise CoverageQuoteError(
             f"expected one completed {CANONICAL_CHECK_NAME} job in current run"
         )
-    result = normalize_result(str(matches[0].get("conclusion") or ""))
+    job = matches[0]
+    if str(job.get("run_id") or "") != str(run_id):
+        raise CoverageQuoteError(
+            f"current-run {CANONICAL_CHECK_NAME} job run id does not match"
+        )
+    result = normalize_result(str(job.get("conclusion") or ""))
     if result == "unknown":
         raise CoverageQuoteError(
             f"current-run {CANONICAL_CHECK_NAME} conclusion is missing or non-terminal"
