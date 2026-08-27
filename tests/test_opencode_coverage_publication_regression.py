@@ -54,8 +54,18 @@ def test_initial_overview_resolves_current_run_coverage_identity() -> None:
         "${{ needs.coverage-evidence.result || 'skipped' }}" in step
     )
     assert '--run-id "$RUN_ID"' in step
+    assert '--workflow-repo "$GITHUB_REPOSITORY"' in step
+    assert '--pr-number "$PR_NUMBER"' in step
     assert "opencode_coverage_identity.py" in step
     assert step.index("opencode_coverage_identity.py") < step.index("build-status")
+
+
+def test_all_runtime_coverage_identity_calls_use_central_dispatch_authority() -> None:
+    """Every caller must bind the target head to the exact central workflow run."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert workflow.count('--workflow-repo "$GITHUB_REPOSITORY"') == 3
+    assert workflow.count('--pr-number "$PR_NUMBER"') == 3
 
 
 def test_duplicate_coverage_names_are_bound_to_the_current_dispatch_run() -> None:
