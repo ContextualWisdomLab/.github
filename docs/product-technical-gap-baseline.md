@@ -216,6 +216,28 @@ flowchart LR
   provider errors and vulnerability findings fail-closed and only aligns the
   executable model and its assertions.
 
+## 2026-08-27 contextual-orchestrator vendored sidecar (ZDR-first free pool)
+
+- **Gap G-ORCH-027 (closed by this increment):** central review pinned direct
+  provider endpoints and hard-coded model ids; no path used the org's five-key
+  auto model discovery, the `orchestrator/free` fail-closed zero-cost pool, or
+  ZDR-first selection. The 2026-08-18 org decision
+  (`ContextualWisdomLab/contextual-orchestrator` AGENTS.md) migrated
+  OpenCode/Noema/Strix to the gateway; this snapshot lands the org-repo half.
+- `pr-review-autofix.yml` now provisions
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (pinned SHA
+  `c60ec889…`, same-process KV registration of `BYTEZ_API_KEY`,
+  `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`, live auto model discovery, ZDR-prioritized free catalog),
+  and the writer runs `--model contextual-orchestrator/orchestrator/free`.
+  `opencode.jsonc` default route changes identically. Companions:
+  `zdr_policy.py`, `contextual_orchestrator_review_policy.py`,
+  `contextual_orchestrator_review_launcher.py`; records
+  `docs/adr/0003-…`, `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`.
+- Remaining (follow-up loops): read-only dispatch pool, `noema-review.yml`,
+  and `strix.yml` still use pinned direct-provider pools; ZDR feed integration
+  in the standard opencode pool and runner-side egress attestation per stage.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
