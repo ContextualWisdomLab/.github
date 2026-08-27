@@ -104,6 +104,15 @@ def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
     return ((pr.get("headRepository") or {}).get("nameWithOwner") or "") == repo
 
 
+def base_branch_matches(actual: object, configured: str) -> bool:
+    """Match an exact base branch or the explicit all-base wildcard."""
+    return (
+        isinstance(actual, str)
+        and bool(actual)
+        and (configured == "*" or actual == configured)
+    )
+
+
 def latest_current_head_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | None:
     """Return the newest OpenCode review for the current head, if present."""
     for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
@@ -293,7 +302,7 @@ def inspect_pr(
     number = int(pr["number"])
     if pr.get("isDraft"):
         return "skip", ("draft PR",)
-    if pr.get("baseRefName") != args.base_branch:
+    if not base_branch_matches(pr.get("baseRefName"), args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
         )
@@ -363,7 +372,7 @@ def process_queue(args: argparse.Namespace) -> int:
     for pr in prs:
         if pr.get("isDraft"):
             continue
-        if pr.get("baseRefName") != args.base_branch:
+        if not base_branch_matches(pr.get("baseRefName"), args.base_branch):
             continue
         if not same_repository_head(args.repo, pr):
             continue
@@ -458,6 +467,9 @@ def self_test() -> int:
     ]
     assert recent_fix_marker_exists(comments, head, 24 * 3600)
     assert not recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
+    assert base_branch_matches("main", "main")
+    assert base_branch_matches("feat/stack-parent", "*")
+    assert not base_branch_matches("develop", "main")
     pr = {
         "reviews": {
             "nodes": [
