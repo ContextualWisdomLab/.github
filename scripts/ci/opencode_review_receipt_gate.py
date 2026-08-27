@@ -20,7 +20,7 @@ HEAD_SHA_IN_BODY_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 FORMAL_AUTHORS = frozenset(
     {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
 )
-FORMAL_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
+FORMAL_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED"})
 STATUS_HEADINGS = (
     "## OpenCode Review Status",
     "## OpenCode Review Overview",
