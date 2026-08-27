@@ -43,7 +43,7 @@ def test_afipc_230_stale_changes_requested_are_not_current() -> None:
     found, reason = receipt.evaluate_receipts(stale, receipt.AFIPC_230_HEAD)
     assert found is None
     assert "stale" in reason
-    current = review(commit=receipt.AFIPC_230_HEAD, state="COMMENTED", review_id=99)
+    current = review(commit=receipt.AFIPC_230_HEAD, review_id=99)
     found, reason = receipt.evaluate_receipts([*stale, current], receipt.AFIPC_230_HEAD)
     assert found is current
     assert "formal review" in reason
@@ -57,7 +57,7 @@ def test_kaefa_79_stub_has_no_current_head_formal_receipt() -> None:
 
 
 def test_draft_never_accepts_bot_approve_as_receipt() -> None:
-    """Draft PRs may have a COMMENT product review, never a bot APPROVE receipt."""
+    """Draft PRs cannot use COMMENTED or bot APPROVED as formal verdicts."""
     approve = review(
         commit=receipt.AFIPC_230_HEAD,
         state="APPROVED",
@@ -73,10 +73,11 @@ def test_draft_never_accepts_bot_approve_as_receipt() -> None:
     assert found is None
     assert "never receive bot APPROVE" in reason
     comment = review(commit=receipt.AFIPC_230_HEAD, state="COMMENTED")
-    found, _ = receipt.evaluate_receipts(
+    found, reason = receipt.evaluate_receipts(
         [comment], receipt.AFIPC_230_HEAD, is_draft=True
     )
-    assert found is comment
+    assert found is None
+    assert "no current-head formal" in reason
 
 
 def test_status_comment_and_mention_payloads_are_not_receipts() -> None:
@@ -125,7 +126,7 @@ def test_receipt_helpers_cover_graphql_and_invalid_identity() -> None:
     assert receipt.review_matches_head(review(commit=receipt.AFIPC_230_HEAD), "") is False
     graphql = {
         "id": 7,
-        "state": "COMMENTED",
+        "state": "CHANGES_REQUESTED",
         "body": "## Pull request overview\nOpenCode reviewed the current-head product diff.\n",
         "author": {"login": "github-actions[bot]"},
         "commit": {"oid": receipt.AFIPC_230_HEAD},
@@ -201,7 +202,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     """CLI accepts a current-head receipt file and annotates a missing receipt."""
     path = tmp_path / "reviews.json"
     path.write_text(
-        json.dumps([review(commit=receipt.AFIPC_230_HEAD, state="COMMENTED")]),
+        json.dumps([review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]),
         encoding="utf-8",
     )
     assert (
@@ -242,7 +243,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
             {
                 "returncode": 0,
                 "stdout": json.dumps(
-                    [review(commit=receipt.AFIPC_230_HEAD, state="COMMENTED")]
+                    [review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]
                 ),
                 "stderr": "",
             },
