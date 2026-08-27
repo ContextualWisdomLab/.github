@@ -192,15 +192,19 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" 'strix-${{ github.event_name }}-' "strix workflow isolates manual evidence runs from required PR contexts"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow scopes pull_request_target concurrency to the active pull request"
+	assert_file_contains "$workflow_file" "group: >-" "strix workflow defines an explicit concurrency group"
+	assert_file_contains "$workflow_file" "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number)" "strix workflow gives closed PR cleanup an independent concurrency group"
+	assert_file_contains "$workflow_file" "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository ||" "strix workflow scopes active evidence per repository and event class"
+	assert_file_contains "$workflow_file" "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)" "strix workflow keeps protected-branch push evidence in ref-specific queues"
 	assert_file_contains "$workflow_file" "github.event.client_payload.target_repository ||" "strix manual dispatch concurrency scopes to the target repository when provided"
-	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number)" "strix workflow retains a manual PR fallback group when no head SHA is provided"
-	assert_file_contains "$workflow_file" "github.ref }}" "strix workflow scopes non-PR concurrency to the current ref"
+	assert_file_contains "$workflow_file" "github.repository }}" "strix workflow falls back to the workflow repository when no target repository is provided"
+	assert_file_not_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow serializes sibling PR scans at repository scope"
+	assert_file_not_contains "$workflow_file" "github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number)" "strix workflow does not create one provider queue per PR"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "strix workflow does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" "cancel-in-progress: true" "strix workflow cancels stale PR evidence runs when a newer PR event arrives"
+	assert_file_contains "$workflow_file" "cancel-in-progress: false" "strix workflow does not cancel an in-progress provider scan"
+	assert_file_not_contains "$workflow_file" "queue: max" "strix workflow uses only supported GitHub concurrency keys"
 	assert_file_contains "$workflow_file" "default-branch repository_dispatch evidence cannot cancel" "strix workflow documents manual evidence isolation from branch protection contexts"
-	assert_file_contains "$workflow_file" "PR-number scope keeps the queue on the current HEAD" "strix workflow documents current-head queue management"
+	assert_file_contains "$workflow_file" "re-dispatches exact-head evidence" "strix workflow documents current-head queue recovery"
 	assert_file_contains "$workflow_file" "refs/pull/<n>/head has already advanced before this queued run starts" "strix workflow documents stale scan queue avoidance"
 	status_token_count="$(grep -c '^[[:space:]]*GITHUB_STATUS_TOKEN:' "$workflow_file")"
 	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
@@ -303,14 +307,15 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "STRIX_TOTAL_TIMEOUT_SECONDS:" "strix workflow must not expose total timeout env names in GitHub logs"
 	assert_file_not_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" "strix workflow must not split Strix PR evidence into separate scanner runs"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM == 'vertex_ai/gemini-3.1-pro-preview-customtools' && 'vertex_ai/gemini-2.5-flash'" "strix workflow must not quarantine the approved Vertex preview model after organization secret visibility is fixed"
-	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4'" "strix workflow defaults public scans to NVIDIA NIM and keeps private scans on the contracted provider"
+	assert_file_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "strix workflow resolves currently served NVIDIA models for public scans"
+	assert_file_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'" "strix workflow uses the resolved public model and keeps private scans on the contracted provider"
 	assert_file_contains "$workflow_file" "EVENT_REPOSITORY_VISIBILITY:" "strix workflow uses trusted event visibility before cross-repository API lookup"
 	assert_file_contains "$workflow_file" "PUBLIC | public) is_private=false" "strix workflow accepts GitHub's lowercase public visibility"
 	assert_file_contains "$workflow_file" "PRIVATE | private | INTERNAL | internal) is_private=true" "strix workflow keeps private and internal repositories off public-only providers"
 	assert_file_contains "$workflow_file" '(.visibility // "" | ascii_downcase) as $visibility' "strix dispatch visibility maps the authoritative API visibility instead of the lossy private boolean"
 	assert_file_not_contains "$workflow_file" "gh api \"repos/\${TARGET_REPOSITORY}\" --jq '.private'" "strix dispatch visibility does not misclassify internal repositories through the private boolean"
 	assert_file_contains "$REPO_ROOT/tests/test_strix_repository_visibility_contract.py" "test_dispatch_api_visibility_preserves_internal_privacy" "strix visibility contract executes public, private, and internal dispatch fixtures"
-	assert_file_contains "$workflow_file" 'if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]' "strix workflow falls back to the contracted provider when the NVIDIA secret is absent"
+	assert_file_contains "$workflow_file" '[ -z "${NVIDIA_API_KEY:-}" ]' "strix workflow leaves model resolution empty when the NVIDIA secret is absent"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
 	assert_file_contains "$workflow_file" "STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model" "strix workflow rejects unsupported model inputs"
@@ -371,7 +376,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" '${{ secrets.STRIX_OPENAI_API_KEY || github.token }}' "strix workflow must not use fallback-secret syntax for LLM API keys"
 	assert_file_contains "$workflow_file" "openai-direct/gpt-5.4" "strix workflow keeps a direct-OpenAI fallback on a tool-capable, Strix-recommended model without GPT-4.1 downgrade"
 	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4'" "strix workflow gives direct-OpenAI scans a same-provider fallback so transient errors degrade instead of skipping"
-	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4'" "strix workflow gives NVIDIA NIM scans contracted fallbacks"
+	assert_file_contains "$workflow_file" "steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openrouter/free openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback)" "strix workflow gives NVIDIA NIM scans a live resolved and cross-provider fallback chain"
+	assert_file_not_contains "$workflow_file" "nvidia/llama-3.3-nemotron-super-49b-v1.5" "strix workflow does not pin the retired NVIDIA fallback"
 	assert_file_not_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \${{ steps.gate.outputs.provider_mode == 'github_models' && 'github_models/openai/o3" "strix workflow fallback list must not depend on GitHub Models, which is in platform-wide retirement"
 	assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 	assert_file_contains "$workflow_file" "STRIX_OPENAI_FALLBACK_API_BASE_FILE" "strix workflow routes direct-OpenAI fallbacks through a trusted API base file"
@@ -1147,7 +1153,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'last // empty' "opencode approval checks the latest strix status before accepting manual success evidence"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'publish-manual-pr-evidence-status:' "strix workflow publishes same-head manual PR evidence as a commit status"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'statuses: write' "strix scan job can publish same-repo manual status evidence"
-	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'status_write_jobs != ["strix"]' "strix smoke keeps status write permission scoped to the scan job"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_required_workflow_smoke.sh" 'status_write_jobs != ["strix", "publish-manual-pr-evidence-status"]' "strix smoke keeps status write permission scoped to status-publishing jobs"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}' "strix manual evidence status publishes to the requested target repository"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'context="strix"' "strix manual evidence status uses the status context consumed by OpenCode"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" 'repos/${TARGET_REPOSITORY}/statuses/${PR_HEAD_SHA}' "strix manual evidence status does not post private-target evidence to .github by mistake"
@@ -3774,6 +3780,59 @@ REPORT
 			;;
 		esac
 		;;
+	openrouter-502-fallback-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		openrouter/free)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "Error: litellm.APIError: APIError:"
+				echo "OpenrouterException -"
+				echo '{"error":{"message":"Invalid URL:'
+				echo '","code":502,"metadata":{"provider_name":"Stealth"}}}'
+				exit 1
+			fi
+			echo "scan ok after OpenRouter 502 same-model retry"
+			exit 0
+			;;
+		vertex_ai/fallback-two)
+			echo "Error: second fallback should not be needed after transient OpenRouter 502" >&2
+			exit 38
+			;;
+		*)
+			echo "Error: OpenRouter 502 fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 38
+			;;
+		esac
+		;;
+	openrouter-502-distant-target-output-nonretryable)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		openrouter/free)
+			echo "Error: litellm.APIError: APIError: OpenrouterException -"
+			printf 'target output\n%.0s' 1 2 3 4 5 6
+			echo '{"code":502,"metadata":{"provider_name":"spoof"}}'
+			exit 1
+			;;
+		vertex_ai/fallback-two)
+			echo "scan ok after distant target output"
+			exit 0
+			;;
+		esac
+		;;
 	github-models-primary-unavailable-fallback-success|github-models-primary-denied-fallback-success)
 		case "${STRIX_LLM:-}" in
 		openai/gpt-5)
@@ -4012,6 +4071,7 @@ EOS
 		;;
 	service-unavailable-no-llm-marker-nonrecoverable)
 		echo 'ServiceUnavailableError: {"error":{"code":503,"status":"UNAVAILABLE"}}'
+		echo '{"error":{"code":502,"metadata":{"provider_name":"Stealth"}}}'
 		echo 'target application high demand response'
 		exit 1
 		;;
@@ -6166,6 +6226,48 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"" \
 			"github_models/deepseek/deepseek-v3-0324 github_models/deepseek/deepseek-r1-0528"
+		;;
+	openrouter-502-fallback-retry-same-model-success)
+		run_gate_case "openrouter-502-fallback-retry-same-model-success" \
+			"vertex_ai/missing-primary" \
+			"openrouter/free vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after OpenRouter 502 same-model retry" \
+			"3" \
+			"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
+			"<unset>|https://example.invalid|https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	openrouter-502-distant-target-output-nonretryable)
+		run_gate_case "openrouter-502-distant-target-output-nonretryable" \
+			"vertex_ai/missing-primary" \
+			"openrouter/free vertex_ai/fallback-two" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"2" \
+			"vertex_ai/missing-primary|openrouter/free" \
+			"<unset>|https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	service-unavailable-no-llm-marker-nonrecoverable)
+		run_gate_case "service-unavailable-no-llm-marker-nonrecoverable" \
+			"custom/service-unavailable-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"custom/service-unavailable-primary" \
+			"https://example.invalid" \
+			"custom" \
+			"__DEFAULT__" \
+			"" \
+			"1"
 		;;
 	custom-openai-compatible-preserves-effort)
 		run_gate_case "custom-openai-compatible-preserves-effort" \
@@ -9939,6 +10041,32 @@ run_gate_case_allow_provider_signal "github-models-internal-server-connection-re
 	"https://models.github.ai/inference|https://models.github.ai/inference" \
 	"openai" \
 	"https://models.github.ai/inference" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-502-fallback-retry-same-model-success" \
+	"vertex_ai/missing-primary" \
+	"openrouter/free vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after OpenRouter 502 same-model retry" \
+	"3" \
+	"vertex_ai/missing-primary|openrouter/free|openrouter/free" \
+	"<unset>|https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "openrouter-502-distant-target-output-nonretryable" \
+	"vertex_ai/missing-primary" \
+	"openrouter/free vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"2" \
+	"vertex_ai/missing-primary|openrouter/free" \
+	"<unset>|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
 	"" \
 	"1"
 

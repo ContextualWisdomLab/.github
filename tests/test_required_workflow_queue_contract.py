@@ -279,8 +279,16 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
 
-def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
-    """Scope Strix concurrency to the target PR while preserving current-head evidence."""
+def test_strix_serializes_provider_evidence_per_repository() -> None:
+    """Serialize Strix per repository so shared provider keys are not rate-limited.
+
+    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
+    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
+    storms and fail-closed gate failures on every open PR. The concurrency group
+    now scopes one scan at a time per repository and event class. GitHub retains
+    one active and one pending run per group; the scheduler re-dispatches exact
+    current-head evidence when a pending run is superseded.
+    """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -291,17 +299,28 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository }}"
+        "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, "
+        "github.event.pull_request.number)"
     ) in concurrency_contract
-    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
-    assert "github.event.client_payload.pr_number != '' && format('pr-{0}'," in workflow
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert (
+        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository)"
+    ) in concurrency_contract
+    assert (
+        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
+        in concurrency_contract
+    )
+    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
+    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "cancel-in-progress: true" in workflow
+    # Running scans are not cancelled; GitHub's native group has one pending slot.
+    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "queue: max" not in workflow
+    assert "scheduler" in concurrency_contract
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in workflow
+    assert "RateLimitError" in concurrency_contract
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -343,10 +362,32 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
-        assert (
-            "PR closed; this run only cancels older runs through workflow concurrency."
-            in workflow
-        )
+        if filename == "strix.yml":
+            assert "Cancel queued and running scans for the closed pull request" in workflow
+            assert (
+                "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
+                "|| github.token"
+            ) in workflow
+            assert "DISPATCH_REPOSITORY" not in workflow
+            assert "CLOSED_PR_HEAD_SHA" in workflow
+            assert 'select(.event == "pull_request_target")' in workflow
+            assert 'select(.event == "repository_dispatch")' not in workflow
+            assert "leaving runs unchanged" in workflow
+            assert (
+                "for active_status in queued in_progress requested waiting pending"
+                in workflow
+            )
+            cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
+                "  strix:", 1
+            )[0]
+            assert "actions: write" in cleanup_job
+            assert "actions/checkout" not in cleanup_job
+            assert "cleanup skipped" not in cleanup_job
+        else:
+            assert (
+                "PR closed; this run only cancels older runs through workflow concurrency."
+                in workflow
+            )
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
@@ -357,8 +398,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    assert "cancel-in-progress: true" in strix_workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
+    # Strix serializes per repository (rate-limit root-cause fix): close-event
+    # runs still cancel superseded same-PR evidence through their own
+    # cancel-closed-pr-runs job, while scan jobs queue instead of cancelling.
+    assert "cancel-in-progress: false" in strix_workflow
+    assert "Serialize Strix scans per repository" in strix_workflow or "per REPOSITORY" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
@@ -475,38 +519,39 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
 def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     tmp_path: Path,
 ) -> None:
-    """Preserve configured fallback models while rejecting an unavailable NIM secret."""
+    """Leave NIM outputs empty so the workflow expression selects OpenAI."""
     strix_output = tmp_path / "strix-output"
     strix = subprocess.run(
         [
             "bash",
             "-c",
             textwrap.dedent(
-                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                workflow_step(
+                    workflow_text("strix.yml"),
+                    "Resolve live NVIDIA NIM Strix models",
+                )
                 .split("        run: |\n", 1)[1]
             ),
         ],
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
             "STRIX_MODEL_REQUESTED": "",
-            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
-            "STRIX_OPENROUTER_API_KEY": "",
-            "STRIX_NVIDIA_NIM_API_KEY": "",
-            "STRIX_VERTEX_CREDENTIALS": "",
-            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
+            "NVIDIA_API_KEY": "",
             "TARGET_REPOSITORY_PRIVATE": "false",
+            "STRIX_NVIDIA_PRIMARY_CANDIDATES": "nvidia/primary",
+            "STRIX_NVIDIA_FALLBACK_CANDIDATES": "nvidia/fallback",
         },
         capture_output=True,
         text=True,
         check=False,
     )
     assert strix.returncode == 0, strix.stderr
-    assert {
-        "provider_mode=openai_direct",
-        "strix_model=gpt-5.4",
-    } <= set(strix_output.read_text().splitlines())
+    assert {"primary=", "fallback="} <= set(strix_output.read_text().splitlines())
+    assert (
+        "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        in workflow_text("strix.yml")
+    )
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
         in workflow_text("strix.yml")

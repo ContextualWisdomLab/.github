@@ -403,6 +403,18 @@ if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_
 	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
 	exit 2
 fi
+STRIX_OPENROUTER_FALLBACK_KEY_FILE="${STRIX_OPENROUTER_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ] && ! STRIX_OPENROUTER_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENROUTER_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENROUTER_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
 if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
 	exit 2
 fi
@@ -2439,7 +2451,10 @@ resolved_llm_api_base_for_model() {
 	fi
 	local api_base_file="${LLM_API_BASE_FILE:-}"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+	if [[ "$model" == openrouter/* ]] && [ -n "${STRIX_OPENROUTER_FALLBACK_API_BASE_FILE:-}" ]; then
+		api_base_file="$STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+	elif is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: openai-direct/* candidates must reach the
 		# direct OpenAI API even when the primary provider selected a
 		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
@@ -2600,6 +2615,9 @@ run_strix_once() {
 			# authenticate with the OpenAI key, not the primary provider's
 			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
 			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		fi
+		if [[ "$model" == openrouter/* ]] && [ -n "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
 		fi
 	fi
 	set -o pipefail
@@ -2901,6 +2919,18 @@ is_llm_service_unavailable_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
 		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
 		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	# OpenRouter's dynamic free route can wrap one upstream 502 over several
+	# terminal lines. Join only the bounded LiteLLM error block so unrelated
+	# target-app output elsewhere in the log cannot assemble a retry signature.
+	if awk '
+		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
+		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG" |
+		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
 		return 0
 	fi
 
