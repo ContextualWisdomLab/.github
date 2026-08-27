@@ -154,3 +154,18 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+
+
+def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
+    """Repository visibility binds private review content to an attested ZDR-only pool."""
+    workflow = _read(NOEMA_WORKFLOW)
+    sidecar = _read(SIDECAR)
+    launcher = _read(LAUNCHER)
+
+    assert "Resolve Noema target repository visibility" in workflow
+    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
+    assert "--require-zdr" in sidecar
+    assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
+    assert "require_zdr=args.require_zdr" in launcher
