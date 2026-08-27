@@ -44,7 +44,7 @@ Coverage remains a fail-closed gate. It is no longer the review.
    the pull-request diff.
 4. Coverage-evidence failure is injected into `bounded-review-evidence.md` as
    a `## Coverage gate` section. The model pool still runs. The publisher
-   does not early-return before the model path. `format_request_changes_body`
+   does not early-return before the model path. `format_request_changes_review`
    keeps model walkthrough/diagrams and appends structured findings.
 
 ## Verification contract

@@ -346,10 +346,8 @@ def format_structured_findings(
         path = str(raw.get("path") or "unknown")
         line = raw.get("line") or 0
         location = f"{path}:{line}"
-        if (
-            path == CENTRAL_WORKFLOW_ANCHOR
-            and str(line) == "1"
-            and not coverage_anchor_allowed(CENTRAL_WORKFLOW_ANCHOR, allowed)
+        if path == CENTRAL_WORKFLOW_ANCHOR and not coverage_anchor_allowed(
+            CENTRAL_WORKFLOW_ANCHOR, allowed
         ):
             location = "Review process"
         title = str(raw.get("title") or "Finding")
@@ -370,10 +368,14 @@ def format_structured_findings(
 
 
 def _strip_forbidden_workflow_anchor(body: str, changed_files: Sequence[str]) -> str:
-    """Remove a synthesized central-workflow:1 citation unless that file changed."""
+    """Remove any synthesized central-workflow citation unless that file changed."""
     if coverage_anchor_allowed(CENTRAL_WORKFLOW_ANCHOR, changed_files):
         return body
-    return body.replace(f"{CENTRAL_WORKFLOW_ANCHOR}:1", "Review process")
+    return re.sub(
+        rf"{re.escape(CENTRAL_WORKFLOW_ANCHOR)}(?::[0-9]+)?",
+        "Review process",
+        body,
+    )
 
 
 def format_request_changes_review(

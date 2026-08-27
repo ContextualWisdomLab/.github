@@ -5806,6 +5806,19 @@ jobs:
               "- Workflow attempt: ${RUN_ATTEMPT}" >"$body_file"
           }
 
+          build_coverage_evidence_check_failure_body() {
+            local body_file="$1"
+
+            python3 scripts/ci/opencode_review_surfaces.py build-status \
+              --result "COVERAGE_BLOCKED" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" \
+              >"$body_file"
+          }
+
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
