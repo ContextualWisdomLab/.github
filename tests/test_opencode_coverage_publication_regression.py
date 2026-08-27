@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 from pathlib import Path
 
 from scripts.ci import opencode_coverage_identity as identity
@@ -108,3 +109,30 @@ def test_outcome_publisher_does_not_query_status_comment_for_control_sentinel() 
     assert "sentinel_comment_error_file" not in outcome
     assert "Review Overview sentinel comment" not in outcome
     assert 'load_selected_review_output "$selected_review_output_file"' in outcome
+
+
+def test_overview_callers_pass_only_the_published_result() -> None:
+    """Removed body parameters cannot imply that ignored text reaches the overview."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert not re.search(
+        r'^\s*update_review_overview\s+"[^"]+"\s+.+$',
+        workflow,
+        flags=re.MULTILINE,
+    )
+
+
+def test_coverage_blocked_approve_restores_overview_once() -> None:
+    """Fallback publication and its caller cannot duplicate the coverage overview write."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    approval = workflow.split("            APPROVE)", 1)[1].split(
+        "              if request_changes_for_merge_conflict_if_present", 1
+    )[0]
+
+    assert "coverage_overview_restored=0" in approval
+    assert approval.count("coverage_overview_restored=1") == 2
+    assert (
+        'if [ "$coverage_overview_restored" -ne 1 ]; then\n'
+        "                  request_changes_for_coverage_evidence_failure\n"
+        "                fi"
+    ) in approval
