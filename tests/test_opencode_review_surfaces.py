@@ -469,6 +469,30 @@ def test_format_request_changes_keeps_model_prose_and_strips_fake_anchor() -> No
     assert "Review process" in body
 
 
+def test_format_request_changes_strips_unchanged_workflow_at_any_line() -> None:
+    """An unchanged central workflow cannot be cited at an arbitrary line."""
+    body = surfaces.format_request_changes_review(
+        model_prose=(
+            "## Pull request overview\n\n"
+            "Inspected `.github/workflows/opencode-review.yml:42`.\n"
+        ),
+        findings=[
+            {
+                "severity": "HIGH",
+                "path": ".github/workflows/opencode-review.yml",
+                "line": 42,
+                "title": "Spoofed workflow anchor",
+            }
+        ],
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        changed_files=ORIGINWEAVE_47_FILES,
+    )
+    assert ".github/workflows/opencode-review.yml" not in body
+    assert "Review process" in body
+
+
 def test_format_request_changes_rebuilds_when_model_prose_missing() -> None:
     """Without model prose, structured findings still form a review body."""
     body = surfaces.format_request_changes_review(
