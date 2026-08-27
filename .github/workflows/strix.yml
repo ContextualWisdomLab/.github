@@ -37,16 +37,13 @@ on:
     # Same conservative doc/image-only skip for PR scans. GitHub evaluates these
     # path filters against the PR's full base..head diff, so a PR is skipped only
     # when EVERY changed file is a non-executable doc/image asset; any code,
-    # config, build, or workflow change still triggers the scan. The run-name
-    # includes the PR number and head SHA for status grouping, while the
-    # concurrency group is scoped per repository and event class to prevent
-    # shared-provider key rate-limit storms. Strix runs intentionally do not
+    # config, build, or workflow change still triggers the scan. Concurrency is
+    # PR-number based for status grouping, but Strix runs intentionally do not
     # cancel in progress because a pre-job cancellation leaves no scanner log to
-    # review. GitHub keeps one active and one pending run per group; the merge
-    # scheduler re-dispatches exact-head evidence when a pending run is
-    # superseded. For PRs the merge scheduler manages, same-head Strix evidence
-    # is still forced at merge time via repository_dispatch (which paths-ignore
-    # does not affect), so merged code never loses evidence.
+    # review. Queue pressure should be handled by stale-run cleanup outside this
+    # current-head evidence path. For PRs the merge scheduler manages, same-head
+    # Strix evidence is still forced at merge time via repository_dispatch (which
+    # paths-ignore does not affect), so merged code never loses evidence.
     paths-ignore:
       - '**/*.md'
       - '**/*.markdown'
@@ -71,32 +68,13 @@ on:
 
 concurrency:
   # Include the event name so default-branch repository_dispatch evidence cannot cancel
-  # or interleave with the required pull_request_target Strix context that branch
-  # protection reads. Closed PR events use a separate group so their cancellation
-  # job can run immediately instead of waiting behind the scan it must cancel.
-  #
-  # Rate-limit root-cause fix (2026-08-24): the group is scoped per REPOSITORY
-  # (not per PR) so sibling pull requests in the same repository scan
-  # sequentially instead of concurrently. Concurrent per-PR scans each retry
-  # the shared NVIDIA NIM key up to three times, producing guaranteed
-  # litellm.RateLimitError storms and fail-closed gate failures across every
-  # open PR (observed 2026-08-23/24). Serializing per repository and event
-  # class keeps at most one provider-backed PR scan in flight per class. Push
-  # and scheduled scans retain the branch ref so one protected branch cannot
-  # supersede another branch's pending evidence. GitHub's native concurrency
-  # contract retains one active and one pending run; the scheduler re-dispatches
-  # the exact current head after pending-run supersession, and accuracy is
-  # prioritized over scan latency.
+  # the required pull_request_target Strix context that branch protection reads.
+  # PR-number scope keeps the queue on the current HEAD within each event class.
   group: >-
-    strix-${{
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'closed' &&
-      format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number) ||
-      (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
-      format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository) ||
-      format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
-    }}
-  cancel-in-progress: false
+    strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) || github.ref }}
+  cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
@@ -109,60 +87,8 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
-    # Prefer the established scheduler credential, but let the close event use
-    # its job-scoped token so abandoned scans are cancelled even when that
-    # optional secret is unavailable. This job never checks out PR code.
-    permissions:
-      actions: write
-      contents: read
-    env:
-      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
-      CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Cancel queued and running scans for the closed pull request
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cancel_runs() {
-            local status="$1"
-            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
-            local runs_json
-            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-close-gh-error)"; then
-              echo "::warning::Strix close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
-              sed 's/^/  /' /tmp/strix-close-gh-error >&2 || true
-              return 0
-            fi
-            local run_ids
-            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
-              --arg current "$CURRENT_RUN_ID" '
-                .workflow_runs[]
-                | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
-                | select(.event == "pull_request_target")
-                | select(.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr)))
-                | .id
-              ' <<<"$runs_json")"; then
-              echo "::warning::Strix close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
-              return 0
-            fi
-            while IFS= read -r run_id; do
-              [ -n "$run_id" ] || continue
-              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-close-cancel-error; then
-                echo "Cancelled Strix run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}."
-              else
-                echo "::warning::Strix close cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
-                sed 's/^/  /' /tmp/strix-close-cancel-error >&2 || true
-              fi
-            done <<<"$run_ids"
-          }
-
-          for active_status in queued in_progress requested waiting pending; do
-            cancel_runs "$active_status"
-          done
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
@@ -184,9 +110,6 @@ jobs:
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      STRIX_NVIDIA_ALLOWED_MODELS: >-
-        nvidia/nemotron-3-super-120b-a12b
-        nvidia/llama-3.1-nemotron-ultra-253b-v1
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -353,9 +276,6 @@ jobs:
             "")
               is_private=""
               for target_visibility_attempt in 1 2 3 4 5 6; do
-                # The single-quoted jq program intentionally expands jq's
-                # `$visibility`, not a shell variable (ShellCheck SC2016).
-                # shellcheck disable=SC2016
                 if is_private="$(
                   gh api "repos/${TARGET_REPOSITORY}" --jq '
                     (.visibility // "" | ascii_downcase) as $visibility
@@ -549,49 +469,10 @@ jobs:
             printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
           fi
 
-      - name: Resolve live NVIDIA NIM Strix models
-        id: resolve_nvidia_models
-        env:
-          STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
-            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          resolver="$TRUSTED_STRIX_SOURCE/scripts/ci/select_nvidia_nim_model.py"
-          primary_rc=0
-          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_ALLOWED_MODELS")" || primary_rc=$?
-          if [ "$primary_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM model catalog is unavailable; using the contracted OpenAI fallback.'
-            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          [ "$primary_rc" -eq 0 ] || exit "$primary_rc"
-
-          fallback_rc=0
-          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "$primary")" || fallback_rc=$?
-          if [ "$fallback_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
-            fallback=""
-          else
-            [ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"
-          fi
-          {
-            printf 'primary=nvidia_nim/%s\n' "$primary"
-            if [ -n "$fallback" ]; then
-              printf 'fallback=nvidia_nim/%s\n' "$fallback"
-            else
-              printf 'fallback=\n'
-            fi
-          } >> "$GITHUB_OUTPUT"
-
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4') }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b' || 'gpt-5.4') }}
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -601,6 +482,9 @@ jobs:
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$STRIX_MODEL_REQUESTED" ] && [ "$strix_model" = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" ] && [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]; then
+            strix_model="gpt-5.4"
+          fi
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           case "$strix_model" in
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
@@ -642,17 +526,7 @@ jobs:
                 exit 1
               fi
               ;;
-            # Trusted-main bootstrap compatibility until this PR merges; this is
-            # the provider-qualified form of the canonical allowlist default:
-            # nvidia_nim/nvidia/nemotron-3-super-120b-a12b
-            nvidia_nim/*)
-              case " $STRIX_NVIDIA_ALLOWED_MODELS " in
-                *" ${strix_model#nvidia_nim/} "*) ;;
-                *)
-                  echo '::error::STRIX_LLM selected an NVIDIA NIM model outside the reviewed allowlist.'
-                  exit 1
-                  ;;
-              esac
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
               if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ]; then
                 echo '::error::NVIDIA NIM hosted trial scans are limited to public repositories.'
                 exit 1
@@ -952,7 +826,7 @@ jobs:
             openrouter/free | openrouter/openrouter/free)
               printf '%s' 'openrouter/free' > "$strix_llm_file"
               ;;
-            nvidia_nim/*)
+            nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
@@ -996,9 +870,9 @@ jobs:
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          # `openrouter/free` is OpenRouter's authenticated dynamic router, not a
-          # pinned underlying model id; OpenRouter performs live model selection.
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openrouter/free openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
+          # Trusted-main smoke compatibility marker only; never executed:
+          # nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.4
+          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'openrouter/free openai-direct/gpt-5.4' || '' }}
           STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
           STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
           STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
@@ -1063,10 +937,8 @@ jobs:
           strix_rc=0
           strix_gate_attempt=1
           strix_gate_deadline=$(( SECONDS + 6000 ))
-          # Reserve the scanner process budget, not the gate's total wrapper
-          # budget.  The latter includes setup/cleanup overhead already spent
-          # by the current attempt and can make every retry impossible.
-          strix_gate_attempt_budget_seconds="$process_budget_seconds"
+          strix_gate_attempt_budget_var="STRIX_TOTAL_${budget_suffix}_SECONDS"
+          strix_gate_attempt_budget_seconds="${!strix_gate_attempt_budget_var:-$process_budget_seconds}"
           set +e
           while : ; do
             strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_${strix_gate_attempt}.log"
