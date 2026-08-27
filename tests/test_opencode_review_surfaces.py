@@ -216,6 +216,30 @@ def test_conflict_state_marks_blocked_paths() -> None:
     assert "Docs: readme.md" in diagram
 
 
+def test_conflict_state_marks_rust_sequence_path_blocked() -> None:
+    """DIRTY merge state remains visible on a Rust sequence diagram."""
+    diagram = surfaces.emit_mermaid(
+        ["crates/demo/src/lib.rs"],
+        merge_state="DIRTY",
+    )
+    assert "sequenceDiagram" in diagram
+    assert "Merge conflict blocks this path" in diagram
+
+
+def test_conflict_state_marks_rust_class_api_blocked(tmp_path: Path) -> None:
+    """DIRTY merge state remains visible on a Rust API class diagram."""
+    source = tmp_path / "crates/demo/src/lib.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("pub struct Demo;\n", encoding="utf-8")
+    diagram = surfaces.emit_mermaid(
+        ["crates/demo/src/lib.rs"],
+        merge_state="DIRTY",
+        source_root=tmp_path,
+    )
+    assert "classDiagram" in diagram
+    assert "Merge conflict blocks this path" in diagram
+
+
 def test_cli_renders_originweave_surfaces(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
