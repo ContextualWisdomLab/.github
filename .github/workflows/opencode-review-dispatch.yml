@@ -2749,6 +2749,8 @@ jobs:
           quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
           COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
             --repo "$GH_REPOSITORY" \
+            --workflow-repo "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
             --head-sha "$PR_HEAD_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --quoted-result "$quoted_coverage")"
@@ -4703,6 +4705,8 @@ jobs:
           quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
           COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
             --repo "$GH_REPOSITORY" \
+            --workflow-repo "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
             --head-sha "$HEAD_SHA" \
             --run-id "$RUN_ID" \
             --quoted-result "$quoted_coverage")"
@@ -5212,6 +5216,8 @@ jobs:
           quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
           COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
             --repo "$GH_REPOSITORY" \
+            --workflow-repo "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
             --head-sha "$HEAD_SHA" \
             --run-id "$RUN_ID" \
             --quoted-result "$quoted_coverage")"
