@@ -142,6 +142,43 @@ def test_fetch_check_runs_rejects_unvalidated_repo_and_head_sha(monkeypatch) -> 
         identity.fetch_check_runs("ContextualWisdomLab/kaefa", "not-a-sha")
 
 
+
+def test_fetch_check_runs_retries_transient_github_read_failure(monkeypatch) -> None:
+    """A transient 429 is retried before exact-head identity fails closed."""
+    page = {
+        "check_runs": [
+            coverage_check(head=identity.KAEFA_78_HEAD, conclusion="success")
+        ]
+    }
+    responses = [
+        type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "HTTP 429 rate limit exceeded"},
+        )(),
+        type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps([page]), "stderr": ""},
+        )(),
+    ]
+    calls = 0
+
+    def fake_run(args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return responses.pop(0)
+
+    monkeypatch.setattr(identity, "RETRY_DELAYS", (0, 0, 0), raising=False)
+    monkeypatch.setattr(identity.subprocess, "run", fake_run)
+
+    loaded = identity.fetch_check_runs(
+        "ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD
+    )
+
+    assert calls == 2
+    assert loaded[0]["name"] == "coverage-evidence"
+
 def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
     """Paginated gh output and error paths stay fail-closed."""
     page = {
