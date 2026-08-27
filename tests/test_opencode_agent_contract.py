@@ -2696,9 +2696,9 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
     """A throttled gate READ is a GitHub side effect, not source evidence.
 
     The APPROVE write path already keeps the required check green when GitHub
-    rejects the pull review as a pure side effect; the gate's own reads (live
-    head, sentinel comment, peer check lookups) that share the same contended
-    installation token must degrade the same way on a detected throttle instead
+    rejects the pull review as a pure side effect; the gate's remaining reads
+    (live head and peer check lookups) that share the same contended installation
+    token must degrade the same way on a detected throttle instead
     of hard-failing the required check under ``set -euo pipefail``.
     """
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -2714,8 +2714,10 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
         "side effect, not source evidence, while branch protection remains "
         "authoritative" in workflow
     )
-    assert 'if ! comment_json="$(' in workflow
-    assert "falling back to the selected OpenCode model output" in workflow
+    # The status-only overview is not queried for a control sentinel; the
+    # selected exact-run model output is the sole formal-verdict source.
+    assert "sentinel_comment_error_file" not in workflow
+    assert 'load_selected_review_output "$selected_review_output_file" "$tmp_body"' in workflow
 
     # The checks-lookup helper records a detected throttle and callers degrade
     # on it, mirroring the existing app-token bypass.
