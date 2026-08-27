@@ -5,6 +5,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Required Noema review now routes through the same vendored
+  `contextual-orchestrator` sidecar as the autofix writer: `noema-review.yml`
+  provisions the gateway with the five provider secrets, points the LLM step
+  at the loopback `orchestrator/free` pool (ZDR-first auto-discovery), and
+  deletes the public-repo NVIDIA NIM hardcode. `call_llm` keeps SSRF closed
+  for arbitrary private and `localhost` targets and allows only the
+  orchestrator sidecar loopback (`127.0.0.1` / `::1`) when it matches the
+  sidecar base URL or an explicit via-orchestrator flag. Reviewer identity
+  is unchanged (`NOEMA_REVIEW_TOKEN` / GitHub App / OIDC; never
+  `github.token`). Strix and the hourly-review-repair roster are untouched.
 - Central review now routes through the vendored `contextual-orchestrator`
   gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
   default use the fail-closed zero-cost pool `orchestrator/free`, with
