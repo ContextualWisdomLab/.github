@@ -1,0 +1,263 @@
+name: One-shot read-only review gateway migration
+
+on:
+  push:
+    branches:
+      - feat/read-only-review-gateway
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout migration branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: feat/read-only-review-gateway
+          fetch-depth: 0
+
+      - name: Add failing gateway contract test
+        run: |
+          set -euo pipefail
+          cat > tests/test_opencode_read_only_gateway_contract.py <<'PY'
+          #!/usr/bin/env python3
+          """Contract tests for the read-only OpenCode gateway migration."""
+
+          from pathlib import Path
+          import unittest
+
+
+          ROOT = Path(__file__).resolve().parents[1]
+          WORKFLOW = ROOT / ".github/workflows/opencode-review-dispatch.yml"
+
+
+          class ReadOnlyGatewayContractTests(unittest.TestCase):
+              """Keep the read-only reviewer behind the central gateway only."""
+
+              @classmethod
+              def setUpClass(cls) -> None:
+                  """Load the immutable workflow text once for focused assertions."""
+                  cls.text = WORKFLOW.read_text(encoding="utf-8")
+                  cls.pool_start = cls.text.index(
+                      "      - name: Run OpenCode PR Review model pool"
+                  )
+                  cls.pool_end = cls.text.index(
+                      "      - name: Exchange OpenCode app token for review writes",
+                      cls.pool_start,
+                  )
+                  cls.pool = cls.text[cls.pool_start : cls.pool_end]
+
+              def test_sidecar_precedes_read_only_pool(self) -> None:
+                  """Provision the trusted gateway before the read-only model process."""
+                  sidecar = self.text.index(
+                      "      - name: Provision contextual-orchestrator read-only review gateway"
+                  )
+                  self.assertLess(sidecar, self.pool_start)
+                  sidecar_text = self.text[sidecar : self.pool_start]
+                  for secret in (
+                      "BYTEZ_API_KEY",
+                      "NVIDIA_NIM_API_KEY",
+                      "NVIDIA_NIM_API_KEY_SUB",
+                      "OPENROUTER_API_KEY",
+                      "OPENAI_API_KEY",
+                  ):
+                      self.assertIn(f"          {secret}:", sidecar_text)
+                  self.assertIn(
+                      "contextual_orchestrator_review_sidecar.sh", sidecar_text
+                  )
+
+              def test_pool_consumes_only_gateway_credentials_and_model(self) -> None:
+                  """Do not expose provider credentials or pinned models to OpenCode."""
+                  self.assertIn(
+                      'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"',
+                      self.pool,
+                  )
+                  self.assertIn("CONTEXTUAL_ORCHESTRATOR_BASE_URL:", self.pool)
+                  self.assertIn("CONTEXTUAL_ORCHESTRATOR_TOKEN:", self.pool)
+                  for forbidden in (
+                      "STRIX_GITHUB_MODELS_TOKEN:",
+                      "OPENCODE_API_KEY:",
+                      "OPENAI_API_KEY:",
+                      "NVIDIA_API_KEY:",
+                      "NVIDIA_NIM_API_KEY:",
+                      "OPENROUTER_API_KEY:",
+                      "nvidia-nim/",
+                      "github-models/",
+                      "openrouter/",
+                      "openai/gpt-",
+                      "opencode/gpt-",
+                  ):
+                      self.assertNotIn(forbidden, self.pool)
+
+              def test_isolated_config_is_reduced_to_gateway_provider(self) -> None:
+                  """Remove direct provider routes from the isolated OpenCode config."""
+                  self.assertIn(
+                      'config["enabled_providers"] = ["contextual-orchestrator"]',
+                      self.text,
+                  )
+                  self.assertIn(
+                      'config["provider"] = {"contextual-orchestrator": gateway_provider}',
+                      self.text,
+                  )
+                  self.assertIn(
+                      '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"',
+                      self.text,
+                  )
+                  self.assertIn(
+                      '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
+                      self.text,
+                  )
+                  self.assertIn(
+                      '"orchestrator/free": {',
+                      self.text,
+                  )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+          if python3 tests/test_opencode_read_only_gateway_contract.py; then
+            echo "::error::Gateway contract unexpectedly passed before the implementation patch."
+            exit 1
+          fi
+          echo "Observed expected RED contract failure against the direct-provider pool."
+
+      - name: Migrate read-only pool to contextual-orchestrator
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(".github/workflows/opencode-review-dispatch.yml")
+          text = path.read_text(encoding="utf-8")
+
+          pool_marker = "      - name: Run OpenCode PR Review model pool\n"
+          if text.count(pool_marker) != 1:
+              raise SystemExit("expected exactly one read-only model pool step")
+
+          sidecar_step = """      - name: Provision contextual-orchestrator read-only review gateway
+                if: needs.coverage-evidence.result == 'success'
+                env:
+                  BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+                  NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+                  NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+                  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+                  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                run: |
+                  set -euo pipefail
+                  bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
+          """
+          text = text.replace(pool_marker, sidecar_step + pool_marker, 1)
+
+          config_pattern = re.compile(
+              r"          if ! grep -Fq 'nvidia-nim' \"\$\{OPENCODE_REVIEW_WORKDIR\}/opencode\.jsonc\".*?"
+              r"          printf 'Prepared isolated OpenCode review workspace: %s\\n' \"\$OPENCODE_REVIEW_WORKDIR\"\n",
+              re.DOTALL,
+          )
+          config_replacement = """          python3 - "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          config_path = Path(sys.argv[1])
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          gateway_provider = {
+              "npm": "@ai-sdk/openai-compatible",
+              "name": "Contextual Orchestrator",
+              "options": {
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}",
+              },
+              "models": {
+                  "orchestrator/free": {
+                      "name": "Orchestrator Free (ZDR-first zero-cost pool)",
+                      "tool_call": True,
+                      "reasoning": True,
+                      "limit": {"context": 200000, "output": 32768},
+                  }
+              },
+          }
+          config["model"] = "contextual-orchestrator/orchestrator/free"
+          config["small_model"] = "contextual-orchestrator/orchestrator/free"
+          config["enabled_providers"] = ["contextual-orchestrator"]
+          config["provider"] = {"contextual-orchestrator": gateway_provider}
+          config_path.write_text(
+              json.dumps(config, indent=2, sort_keys=True) + "\\n",
+              encoding="utf-8",
+          )
+          PY
+          if grep -Eq 'integrate\\.api\\.nvidia\\.com|models\\.github\\.ai|api\\.openai\\.com|openrouter\\.ai|opencode\\.ai/zen' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Generated isolated opencode.jsonc still contains a direct-provider route.'
+            exit 1
+          fi
+          if ! grep -Fq 'contextual-orchestrator' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
+            || ! grep -Fq 'orchestrator/free' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Generated isolated opencode.jsonc is missing the contextual-orchestrator gateway.'
+            exit 1
+          fi
+          printf 'Prepared isolated OpenCode review workspace: %s\\n' "$OPENCODE_REVIEW_WORKDIR"
+"""
+          text, count = config_pattern.subn(config_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit("could not replace the direct-provider config assertion")
+
+          pool_start = text.index(pool_marker)
+          env_start = text.index("        env:\n", pool_start)
+          attempts = '          OPENCODE_MODEL_ATTEMPTS: "1"\n'
+          attempts_pos = text.index(attempts, env_start)
+          after_attempts = attempts_pos + len(attempts)
+          gateway_env = """        env:
+                  CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+                  CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ env.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
+                  CONTEXTUAL_ORCHESTRATOR_EVIDENCE: ${{ env.CONTEXTUAL_ORCHESTRATOR_EVIDENCE }}
+                  SHARE: "false"
+                  NPM_CONFIG_IGNORE_SCRIPTS: "true"
+                  NO_COLOR: "1"
+                  # Provider discovery, ZDR prioritization, and fallback now live inside
+                  # contextual-orchestrator. The read-only OpenCode process receives only
+                  # the loopback gateway token and the virtual zero-cost model.
+                  OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"
+                  OPENCODE_MODEL_ATTEMPTS: "1"
+"""
+          text = text[:env_start] + gateway_env + text[after_attempts:]
+
+          provider_timeout_pattern = re.compile(
+              r'(          OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"\n).*?'
+              r'(          OPENCODE_DYNAMIC_MAX_CYCLES: "1"\n)',
+              re.DOTALL,
+          )
+          text, count = provider_timeout_pattern.subn(
+              r'\1          # Provider-specific retry and fallback budgets are owned by the gateway.\n\2',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("could not remove direct-provider timeout policy")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify focused gateway contract
+        run: |
+          set -euo pipefail
+          python3 tests/test_opencode_read_only_gateway_contract.py
+          python3 -m py_compile tests/test_opencode_read_only_gateway_contract.py
+          git diff --check
+
+      - name: Commit verified migration and remove one-shot workflow
+        env:
+          BRANCH_NAME: feat/read-only-review-gateway
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/one-shot-read-only-review-gateway.yml
+          git add .github/workflows/opencode-review-dispatch.yml tests/test_opencode_read_only_gateway_contract.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(ci): route read-only review pool through gateway"
+          git push origin "HEAD:${BRANCH_NAME}"
