@@ -107,7 +107,7 @@ def test_focused_quality_workflow_tracks_learning_contracts_contracts() -> None:
         quality.count(
             "tests/test_learning_interoperability_contracts_hourly_review_caller.py"
         )
-        == 3
+        == 5
     )
     assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in quality
     assert "persist-credentials: false" in quality
