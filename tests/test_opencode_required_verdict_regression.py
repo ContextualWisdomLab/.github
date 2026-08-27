@@ -69,6 +69,16 @@ def test_runtime_required_verdict_rejects_nonpassing_evidence(
     assert runtime_verdict(reviews) == ""
 
 
+@pytest.mark.parametrize("state", ("APPROVED", "CHANGES_REQUESTED"))
+def test_runtime_required_verdict_ignores_later_nonformal_current_head_comment(
+    state: str,
+) -> None:
+    """A later COMMENTED receipt cannot mask the current-head formal verdict."""
+    assert runtime_verdict(
+        [review(state=state), review(state="COMMENTED", body="status-only follow-up")]
+    ) == state
+
+
 def test_runtime_required_verdict_rejects_other_actor() -> None:
     """A non-OpenCode formal review cannot satisfy the runtime filter."""
     human = review(state="APPROVED")
