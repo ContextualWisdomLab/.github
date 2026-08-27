@@ -179,6 +179,36 @@ def test_fetch_check_runs_retries_transient_github_read_failure(monkeypatch) -> 
     assert calls == 2
     assert loaded[0]["name"] == "coverage-evidence"
 
+
+def test_fetch_check_runs_retries_bare_http_502(monkeypatch) -> None:
+    """A bare HTTP 502 status exercises the numeric transient matcher."""
+    page = {
+        "check_runs": [
+            coverage_check(head=identity.KAEFA_78_HEAD, conclusion="success")
+        ]
+    }
+    responses = [
+        type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "HTTP 502 Bad Gateway"},
+        )(),
+        type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps([page]), "stderr": ""},
+        )(),
+    ]
+
+    monkeypatch.setattr(identity, "RETRY_DELAYS", (0, 0, 0))
+    monkeypatch.setattr(
+        identity.subprocess, "run", lambda args, **kwargs: responses.pop(0)
+    )
+
+    assert identity.fetch_check_runs(
+        "ContextualWisdomLab/kaefa", identity.KAEFA_78_HEAD
+    )
+
 def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
     """Paginated gh output and error paths stay fail-closed."""
     page = {
