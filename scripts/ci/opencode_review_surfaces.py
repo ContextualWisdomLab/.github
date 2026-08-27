@@ -18,6 +18,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 CENTRAL_WORKFLOW_ANCHOR = ".github/workflows/opencode-review.yml"
+CENTRAL_WORKFLOW_ANCHOR_RE = re.compile(
+    r"\\.github[\\\\/]+workflows(?:[\\\\/]+\\.)*[\\\\/]+"
+    r"opencode-review\\.yml(?::[0-9]+)?"
+)
 PUB_ITEM_RE = re.compile(
     r"^\s*pub(?:\s*\([^)]*\))?\s+"
     r"(?:async\s+)?(?:unsafe\s+)?"
@@ -343,7 +347,7 @@ def format_structured_findings(
     for index, raw in enumerate(findings, start=1):
         if not isinstance(raw, Mapping):
             continue
-        path = str(raw.get("path") or "unknown")
+        path = posix_path(str(raw.get("path") or "unknown"))
         line = raw.get("line") or 0
         location = f"{path}:{line}"
         if path == CENTRAL_WORKFLOW_ANCHOR and not coverage_anchor_allowed(
@@ -371,11 +375,7 @@ def _strip_forbidden_workflow_anchor(body: str, changed_files: Sequence[str]) ->
     """Remove any synthesized central-workflow citation unless that file changed."""
     if coverage_anchor_allowed(CENTRAL_WORKFLOW_ANCHOR, changed_files):
         return body
-    return re.sub(
-        rf"{re.escape(CENTRAL_WORKFLOW_ANCHOR)}(?::[0-9]+)?",
-        "Review process",
-        body,
-    )
+    return CENTRAL_WORKFLOW_ANCHOR_RE.sub("Review process", body)
 
 
 def format_request_changes_review(
