@@ -28,7 +28,9 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     )
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
-    assert "Resolve Noema target repository visibility" not in workflow
+    assert "Resolve Noema target repository visibility" in workflow
+    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert (
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
         not in workflow
