@@ -256,24 +256,6 @@ def blocking_checks(pr: dict[str, Any]) -> list[str]:
         conclusion = str(node.get("conclusion") or "").upper()
         if conclusion in FAILED_CONCLUSIONS:
             blockers.append(f"{label}: {conclusion}")
-        elif status in RUNNING_STATES and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+        elif status in RUNNING_STATES and conclusion not in {"SUCCESS", "NEUTRAL", "rest SKIPPED"}:
             blockers.append(f"{label}: {status}")
     return blockers
-
-
-def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
-    """Return whether Noema already reviewed the current head."""
-    head_sha = str(pr.get("headRefOid") or "")
-    marker = "poll-noema-review-gate"
-    for review in (((pr.get("reviews") or {}).get("nodes")) or []):
-        if review_commit(review) != head_sha:
-            continue
-        if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
-            continue
-        if (
-            actor
-            and review_author(review) == actor
-            and marker in str(review.get("body") or "")
-        ):
-            return True
-    return False
