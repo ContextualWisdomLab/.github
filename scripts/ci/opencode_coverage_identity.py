@@ -24,7 +24,7 @@ TERMINAL_RESULTS = frozenset(
 )
 RETRY_DELAYS = (0.0, 1.0, 3.0)
 TRANSIENT_GH_READ_ERROR_RE = re.compile(
-    r"(?i)(?:http\\s*(?:429|500|502|503|504)\\b|rate.?limit|"
+    r"(?i)(?:http\s*(?:429|500|502|503|504)\b|rate.?limit|"
     r"secondary rate limit|timeout|timed out|temporar(?:y|ily) unavailable|"
     r"connection (?:reset|refused|closed)|tls handshake timeout)"
 )
