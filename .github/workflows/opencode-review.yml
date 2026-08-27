@@ -84,6 +84,7 @@ jobs:
                     | $user == "opencode-agent" or $user == "opencode-agent[bot]"
                   )
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
               ]
             | (last // {}) as $review
             | ($review.body // "" | ascii_downcase) as $body
