@@ -64,8 +64,13 @@ def test_all_runtime_coverage_identity_calls_use_central_dispatch_authority() ->
     """Every caller must bind the target head to the exact central workflow run."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert workflow.count('--workflow-repo "$GITHUB_REPOSITORY"') == 3
-    assert workflow.count('--pr-number "$PR_NUMBER"') == 3
+    call_marker = "python3 scripts/ci/opencode_coverage_identity.py"
+    calls = workflow.split(call_marker)[1:]
+    assert len(calls) == 3
+    for call in calls:
+        invocation = call.split(')"', 1)[0]
+        assert '--workflow-repo "$GITHUB_REPOSITORY"' in invocation
+        assert '--pr-number "$PR_NUMBER"' in invocation
 
 
 def test_duplicate_coverage_names_are_bound_to_the_current_dispatch_run() -> None:
