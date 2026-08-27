@@ -54,9 +54,9 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
 def test_strix_nim_defaults_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:
     """Keep the Strix NIM empty-output contract; Noema now fails closed without the sidecar."""
     strix_output = tmp_path / "strix-output"
-    strix = subprocess.run(
+    strix = subprocess.run(  # noqa: S603
         [
-            "bash",
+            "/usr/bin/bash",
             "-c",
             textwrap.dedent(
                 workflow_step(
@@ -108,8 +108,8 @@ def test_strix_nim_defaults_and_noema_sidecar_fail_closed(tmp_path: Path) -> Non
         "NOEMA_LLM_API_KEY",
     ):
         noema_env.pop(key, None)
-    noema = subprocess.run(
-        ["bash", "-c", noema_script],
+    noema = subprocess.run(  # noqa: S603
+        ["/usr/bin/bash", "-c", noema_script],
         env=noema_env,
         capture_output=True,
         text=True,

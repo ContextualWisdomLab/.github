@@ -9,12 +9,6 @@ import pytest
 from scripts.ci import materialize_base_python_requirements as materializer
 
 
-_SUPERSEDED_NOEMA_NIM_TESTS = {
-    "test_noema_review_credentials_and_llm_configuration_fail_closed",
-    "test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret",
-}
-
-
 @pytest.fixture(autouse=True)
 def clear_trusted_uv_process_caches() -> Iterator[None]:
     """Isolate process-global trusted uv caches even when a test fails early."""
@@ -23,18 +17,6 @@ def clear_trusted_uv_process_caches() -> Iterator[None]:
     yield
     materializer._install_trusted_uv.cache_clear()
     materializer._install_trusted_uv_url_opener.cache_clear()
-
-
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Skip retired Noema NIM hardcode assertions superseded by orchestrator/free."""
-    skip = pytest.mark.skip(
-        reason="superseded by Noema orchestrator/free sidecar contract"
-    )
-    for item in items:
-        if item.name in _SUPERSEDED_NOEMA_NIM_TESTS:
-            item.add_marker(skip)
-
-
 class FakeHttpResponse:
     """Expose bounded context-managed reads from one deterministic final URL."""
 
