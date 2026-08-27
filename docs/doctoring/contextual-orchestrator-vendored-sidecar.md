@@ -18,6 +18,13 @@ ZDR-prioritized free catalog at loopback. Both the ordinary autofix and the
 conflict-repair agent run `--model contextual-orchestrator/orchestrator/free`.
 The shared `opencode.jsonc` default route changes identically.
 
+`noema-review.yml` provisions the same sidecar with the same five secrets and
+points the required Noema LLM step at the loopback `orchestrator/free` pool.
+The public-repo NVIDIA NIM hardcode is deleted. `call_llm` keeps SSRF closed
+for arbitrary private IPs and `localhost`, and allows only the sidecar
+loopback (`127.0.0.1` / `::1`) when it matches the sidecar base URL or an
+explicit via-orchestrator flag.
+
 `NVIDIA_NIM_API_KEY_SUB` and `BYTEZ_API_KEY` have no other workflow reference in
 this repository; the gateway KV is their only consumer, matching the
 orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
@@ -33,6 +40,8 @@ orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
 - The gateway binds to loopback only; it never leaves the runner. Secrets are
   bootstrap transport into the KV and are never read back from environment at
   request time.
+- Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
+  OIDC. Review mutation is still not `github.token`.
 
 ## ZDR definition and evidence
 
@@ -61,4 +70,6 @@ training (OpenRouter's own stance). Evidence sources:
   `tests/test_contextual_orchestrator_review_policy.py`,
   `tests/test_contextual_orchestrator_review_sidecar_contract.py`,
   `tests/test_pr_review_autofix_nvidia_nim_contract.py`,
-  `tests/test_pr_review_autofix_writer_security_contract.py`.
+  `tests/test_pr_review_autofix_writer_security_contract.py`,
+  `tests/test_noema_review_gate.py`,
+  `docs/doctoring/noema-orchestrator-free-zdr.md`.
