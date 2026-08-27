@@ -5528,7 +5528,7 @@ jobs:
                 printf '::notice::OpenCode review publication stopped because PR head advanced beyond %s; current-head run remains authoritative.\n' "$HEAD_SHA"
                 return 0
               fi
-              update_review_overview "$event" "$body" || true
+              update_review_overview "$event" || true
               if [ "$event" = "APPROVE" ]; then
                 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                   {
@@ -5875,9 +5875,9 @@ jobs:
                 return 1
               fi
               if [ -s "$fallback_body_file" ]; then
-                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$(cat "$fallback_body_file")"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED"
               else
-                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED" "$body"
+                update_review_overview "INLINE_COMMENT_PUBLISH_FAILED"
               fi
               return 1
             fi
@@ -7768,6 +7768,7 @@ jobs:
           case "$gate_result" in
             APPROVE)
               if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                coverage_overview_restored=0
                 if [ -s "$tmp_body" ]; then
                   model_prose_file="$(mktemp)"
                   python3 scripts/ci/opencode_review_surfaces.py extract-prose \
@@ -7776,12 +7777,16 @@ jobs:
                     create_pull_review "COMMENT" "$(cat "$model_prose_file")"
                   else
                     publish_fallback_diff_review
+                    coverage_overview_restored=1
                   fi
                   rm -f "$model_prose_file"
                 else
                   publish_fallback_diff_review
+                  coverage_overview_restored=1
                 fi
-                request_changes_for_coverage_evidence_failure
+                if [ "$coverage_overview_restored" -ne 1 ]; then
+                  request_changes_for_coverage_evidence_failure
+                fi
                 echo "::endgroup::"
                 exit 1
               fi
