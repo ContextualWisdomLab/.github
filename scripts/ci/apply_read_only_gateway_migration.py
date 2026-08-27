@@ -105,18 +105,28 @@ text, count = env_pattern.subn(gateway_env, text, count=1)
 if count != 1:
     raise SystemExit("could not replace the direct-provider model-pool environment")
 
-provider_budget_pattern = re.compile(
-    r'          OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"\n'
-    r".*?"
-    r'          OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"\n',
-    re.DOTALL,
+provider_specific_lines = (
+    '          OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"\n',
+    '          OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"\n',
+    '          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"\n',
+    '          OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"\n',
 )
-text, count = provider_budget_pattern.subn(
+for line in provider_specific_lines:
+    if text.count(line) != 1:
+        raise SystemExit(f"could not find provider-specific timeout line: {line.strip()}")
+    text = text.replace(line, "", 1)
+
+obsolete_comment = """          # This installation currently reports a 4k request-body limit for
+          # GitHub Models GPT-5 endpoints even though the public catalog is
+          # larger. Keep the exact runtime failure visible without spending a
+          # full medium/large cadence slot after the long-context candidate.
+"""
+if text.count(obsolete_comment) != 1:
+    raise SystemExit("could not find the obsolete GitHub Models timeout comment")
+text = text.replace(
+    obsolete_comment,
     "          # Provider-specific fallback and timeout policy is owned by the gateway.\n",
-    text,
-    count=1,
+    1,
 )
-if count != 1:
-    raise SystemExit("could not remove direct-provider timeout policy")
 
 path.write_text(text, encoding="utf-8")
