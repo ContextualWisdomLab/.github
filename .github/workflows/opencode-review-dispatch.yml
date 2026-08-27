@@ -5426,6 +5426,7 @@ jobs:
               rm -f "$gh_error_file" "$overview_body_file" "$overview_response_file"
               return 1
             fi
+            # build-status heading: ## OpenCode Review Overview
             {
               python3 scripts/ci/opencode_review_surfaces.py build-status \
                 --result "$result" \

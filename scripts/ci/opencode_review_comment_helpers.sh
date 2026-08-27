@@ -3,6 +3,24 @@
 # Shared rendering helpers for the trusted central OpenCode review publisher.
 # This file is sourced by workflow run blocks after the trusted .github
 # repository has been checked out.
+#
+# Honesty-surface mermaid contract. Runtime graphs come from
+# opencode_review_surfaces.py emit_mermaid (no invented edges, no generic
+# "Changed file (N files)"). Quoted labels are required; unquoted breaks mermaid.
+# The python emitter keeps these phrases:
+#   OpenCode bounded evidence
+#   GitHub Actions review job
+#   Merge conflict blocks this path
+
+opencode_mermaid_quoted_surface_node() {
+  # Quoted mermaid surface node, e.g. S1["Workflow: ci.yml"]
+  printf 'S%s["%s"]' "$1" "$2"
+}
+
+opencode_mermaid_quoted_risk_node() {
+  # Quoted mermaid risk node, e.g. R1["Review risk: Workflow: ci.yml"]
+  printf 'R%s["Review risk: %s"]' "$1" "$2"
+}
 
 opencode_review_surfaces_py() {
   local helper_dir

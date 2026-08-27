@@ -440,7 +440,7 @@ def build_status_comment(
 ) -> str:
     """Build the issue-comment gate/status surface without review findings."""
     korean = _language(language) == "korean"
-    heading = "OpenCode 게이트 상태" if korean else "OpenCode Review Status"
+    heading = "OpenCode 게이트 상태" if korean else "OpenCode Review Overview"
     coverage_label = "커버리지 게이트" if korean else "Coverage gate"
     lines = [
         "<!-- opencode-review-overview -->",
