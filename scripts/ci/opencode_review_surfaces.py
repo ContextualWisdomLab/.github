@@ -259,6 +259,8 @@ def emit_mermaid(
         lines = ["```mermaid", "classDiagram"]
         for symbol in symbols[:8]:
             lines.append(f"  class {_quote_label(symbol)}")
+        if merge_state in {"DIRTY", "CONFLICTING"}:
+            lines.append('  class MergeConflict["Merge conflict blocks this path"]')
         lines.append("```")
         return "\n".join(lines) + "\n"
     if rust_paths:
@@ -268,12 +270,18 @@ def emit_mermaid(
             if len(parts) > 1 and parts[0] == "crates":
                 crate = parts[1]
                 break
+        conflict_participant = (
+            "  participant Conflict as Merge conflict blocks this path\n"
+            if merge_state in {"DIRTY", "CONFLICTING"}
+            else ""
+        )
         return (
             "```mermaid\n"
             "sequenceDiagram\n"
             f"  participant Caller as Caller\n"
             f"  participant Crate as {_quote_label(crate)}\n"
             "  participant Tests as Crate tests\n"
+            f"{conflict_participant}"
             "  Caller->>Crate: changed public API\n"
             "  Tests->>Crate: regression coverage\n"
             "```\n"
