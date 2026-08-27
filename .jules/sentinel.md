@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-27 - Explicit shell=False in subprocess.Popen
+**Vulnerability:** Command Injection Risk
+**Learning:** `subprocess.Popen` in `sandboxed_web_e2e.py` was missing an explicit `shell=False`. Although `False` is the default, relying on the default masks intent and fails strict security linters (Bandit). When refactoring away from `shell=True`, explicit `shell=False` is necessary for security validation.
+**Prevention:** Always explicitly define `shell=False` in `subprocess.Popen` and `subprocess.run` to satisfy linters and secure execution boundaries.
