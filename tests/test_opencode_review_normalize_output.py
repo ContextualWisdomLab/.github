@@ -2878,3 +2878,10 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     """Malformed, unsafe, or unverifiable model evidence remains unchanged."""
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
+
+
+def test_label_starts_literal_match_fallback():
+    from scripts.ci.opencode_review_normalize_output import label_section
+    text = 'some text fallback_label: value another label:'
+    # Ensure the fallback label is successfully extracted
+    assert label_section(text, 'fallback_label:') == ' value another label:'
