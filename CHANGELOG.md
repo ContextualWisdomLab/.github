@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Central review now routes through the vendored `contextual-orchestrator`
+  gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
+  default use the fail-closed zero-cost pool `orchestrator/free`, with
+  ZDR-compliant (zero-data-retention) routes prioritized inside it. The five
+  provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) are
+  registered into the gateway's process-local KV as bootstrap transport, model
+  selection is delegated to the orchestrator's auto model discovery, and the
+  previous direct NVIDIA NIM pin is gone from the autofix writer. Adds
+  `scripts/ci/zdr_policy.py`,
+  `scripts/ci/contextual_orchestrator_review_policy.py`,
+  `scripts/ci/contextual_orchestrator_review_launcher.py`, and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` with contract-test and
+  ZDR/audit evidence (`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`,
+  `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`). Mutation
+  authority is unchanged: app-token-only, never `github.token`.
 - Dependency updates now keep coverage evidence when the lock file passes
   validation. If validation reports a problem, refresh the lock file and run
   the review again before merging.
