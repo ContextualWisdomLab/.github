@@ -191,6 +191,23 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert "executable" not in run_calls[0][1]
 
 
+def test_wait_for_url_rejects_external_hostnames():
+    """Readiness URLs must be local (SSRF prevention)."""
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    service = sandboxed_web_e2e.Service(
+        "label", "cmd", RunningProcess(), Path("/dev/null")
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostnames"):
+        sandboxed_web_e2e.wait_for_url("http://example.com/health", 1, service)
+    with pytest.raises(ValueError, match="URL cannot target external hostnames"):
+        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data", 1, service)
+    with pytest.raises(ValueError, match="URL cannot target external hostnames"):
+        sandboxed_web_e2e.wait_for_url("https://[2001:db8::1]/", 1, service)
+
+
 def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     """Readiness polling accepts HTTP responses after transient URL errors."""
 
