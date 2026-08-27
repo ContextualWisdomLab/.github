@@ -71,6 +71,19 @@ else
   zdr_args=()
 fi
 
+case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
+  true)
+    privacy_args=(--require-zdr)
+    log "private/internal target: requiring attested ZDR routes"
+    ;;
+  false|"")
+    privacy_args=()
+    ;;
+  *)
+    fail "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR must be true or false"
+    ;;
+esac
+
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
@@ -84,6 +97,7 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --catalog-out "$catalog_file" \
     --report-out "$policy_report" \
     "${zdr_args[@]}" \
+    "${privacy_args[@]}" \
 > "$ORCHESTRATOR_WORK/sidecar.stdout" 2> "$ORCHESTRATOR_WORK/sidecar.stderr" &
 sidecar_pid=$!
 cleanup_sidecar_on_error() {

@@ -56,3 +56,10 @@ https://openrouter.ai/docs/guides/features/zdr
 ContextualWisdomLab/.github. (2026, August 27).
 *ADR-0003: Vendored contextual-orchestrator review sidecar with the ZDR-first
 orchestrator/free pool*.
+
+## Private/internal repository routing
+
+Noema resolves target visibility with its repository-scoped reviewer token.
+Private/internal targets require an attested ZDR-only `orchestrator/free`
+catalog. Missing visibility, malformed policy input, or an empty ZDR pool fails
+the required review; it never falls back to a non-ZDR provider.

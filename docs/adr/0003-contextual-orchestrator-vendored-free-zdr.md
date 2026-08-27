@@ -85,3 +85,8 @@ all five, and auto-optimize routing by cost.
 - OpenRouter. (2026, August). *Provider logging: Data retention & logging* [Documentation]. https://openrouter.ai/docs/guides/privacy/provider-logging
 - OpenRouter. (n.d.). *List all models and their properties* API reference; the per-model data-retention metadata (`data_retention: crichton | none`) and the ZDR endpoint feed `https://openrouter.ai/api/v1/endpoints/zdr` are consumed at runtime.
 - ContextualWisdomLab/contextual-orchestrator. (2026, August 18). *AGENTS.md*, section “Policy change” — org migration of OpenCode/Noema/Strix to the gateway with the five KV credentials and auto-discovery.
+
+- **Private-target boundary (2026-08-27):** Noema resolves target visibility with
+  the selected repository-scoped reviewer token. Private/internal repositories
+  set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
+  every non-ZDR route and fails closed when no attested free ZDR route exists.

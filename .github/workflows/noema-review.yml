@@ -250,6 +250,32 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
+      - name: Resolve Noema target repository visibility
+        if: env.PR_NUMBER != ''
+        id: target_visibility
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema target visibility cannot be resolved without the selected repository-scoped reviewer token."
+            exit 1
+          fi
+          visibility="$(gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)')"
+          case "$visibility" in
+            private|internal)
+              echo "require_zdr=true" >>"$GITHUB_OUTPUT"
+              echo "::notice::Private/internal target requires an attested ZDR-only review pool."
+              ;;
+            public)
+              echo "require_zdr=false" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Noema target repository visibility is missing or unsupported: ${visibility:-<empty>}."
+              exit 1
+              ;;
+          esac
+
       - name: Provision contextual-orchestrator review sidecar
         if: env.PR_NUMBER != ''
         env:
@@ -258,6 +284,7 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
