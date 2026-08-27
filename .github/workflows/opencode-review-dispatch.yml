@@ -4759,15 +4759,14 @@ jobs:
           fi
 
           {
-            printf '<!-- opencode-review-overview -->\n'
-            printf '## OpenCode Review Overview\n\n'
-            printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
-            printf -- '- Workflow run: %s\n' "$RUN_ID"
-            printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-            printf -- "- Gate result: \`%s\` (exit %s)\n\n" "${gate_result:-UNKNOWN}" "$gate_status"
-            cat "$comment_body_file"
-            append_mermaid_review_graph
-            append_merge_conflict_guidance
+            python3 scripts/ci/opencode_review_surfaces.py build-status \
+              --result "${gate_result:-UNKNOWN}" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              --model-pool-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}" \
+              --verdict "${gate_result:-UNKNOWN}"
           } >"$overview_body_file"
 
           live_head="$(gh api -X GET "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>"$gh_error_file" || true)"
@@ -5393,7 +5392,7 @@ jobs:
           . scripts/ci/opencode_review_comment_helpers.sh
 
           update_review_overview() {
-            local result="$1" body="$2"
+            local result="$1"
             local gh_error_file
             local overview_body_file
             local overview_comment_id
@@ -5415,17 +5414,15 @@ jobs:
               return 1
             fi
             {
-              printf '<!-- opencode-review-overview -->\n'
-              printf '## OpenCode Review Overview\n\n'
-              printf -- "- Head SHA: \`%s\`\n" "$HEAD_SHA"
-              printf -- '- Workflow run: %s\n' "$RUN_ID"
-              printf -- '- Workflow attempt: %s\n' "$RUN_ATTEMPT"
-              printf -- "- Gate result: \`%s\` (approval step)\n\n" "$result"
-              printf '%s\n' "$body"
-              if ! grep -Fq "## Changed-File Evidence Map" <<<"$body"; then
-                append_mermaid_review_graph
-              fi
-              append_merge_conflict_guidance
+              python3 scripts/ci/opencode_review_surfaces.py build-status \
+                --result "$result" \
+                --head-sha "$HEAD_SHA" \
+                --run-id "$RUN_ID" \
+                --run-attempt "$RUN_ATTEMPT" \
+                --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+                --model-pool-outcome "${OPENCODE_MODEL_POOL_OUTCOME:-unknown}" \
+                --verdict "$result" \
+                --formal-review-url "${FORMAL_REVIEW_URL:-}"
             } >"$overview_body_file"
 
             if ! overview_comment_id="$(
@@ -5523,12 +5520,19 @@ jobs:
               esac
               exit 1
             fi
+            FORMAL_REVIEW_URL="$(jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
+              if (.id // 0) > 0 then
+                "https://github.com/\($repo)/pull/\($pr)#pullrequestreview-\(.id)"
+              else
+                empty
+              end
+            ' "$review_response_file")"
             rm -f "$gh_error_file" "$review_payload_file" "$review_response_file"
             if [ "$event" = "APPROVE" ]; then
               printf '::notice::OpenCode approve review was published for head %s; skipping non-authoritative overview comment mutation so the required approval check can finish promptly.\n' "$HEAD_SHA"
               return 0
             fi
-            update_review_overview "$event" "$body"
+            update_review_overview "$event"
           }
 
           emit_review_body_to_action_log() {
@@ -5735,7 +5739,7 @@ jobs:
                 "" \
                 "## Findings" \
                 "" \
-                "### 1. HIGH .github/workflows/opencode-review.yml:1 - Unresolved reviewer thread blocks automated approval" \
+                "### 1. HIGH Review process - Unresolved reviewer thread blocks automated approval" \
                 "- Problem: OpenCode reached an APPROVE control result, but the approval step found unresolved, non-outdated human or review-agent thread evidence on the current pull request." \
                 "- Root cause: Reviewer and review-agent feedback can arrive after bounded model evidence is prepared, so the approval step must re-query GitHub immediately before publishing an approval." \
                 "- Fix: Address or resolve the listed reviewer thread(s), then re-run OpenCode on the current head." \
@@ -5764,7 +5768,7 @@ jobs:
               "" \
               "## Findings" \
               "" \
-              "### 1. HIGH .github/workflows/opencode-review.yml:1 - Review thread lookup could not be read before approval" \
+              "### 1. HIGH Review process - Review thread lookup could not be read before approval" \
               "- Problem: GitHub reviewThreads could not be read for the current pull request immediately before approval." \
               "- Root cause: OpenCode cannot safely approve without verifying whether newer unresolved reviewer or review-agent feedback exists." \
               "- Fix: Re-run OpenCode after GitHub reviewThreads are readable." \
@@ -5780,40 +5784,45 @@ jobs:
           build_coverage_evidence_check_failure_body() {
             local body_file="$1"
 
-            {
-              printf '%s\n' \
-                "## Pull request overview" \
-                "" \
-                "OpenCode cannot approve yet because required coverage evidence did not pass." \
-                "" \
-                "## Review outcome" \
-                "" \
-                "### 1. HIGH .github/workflows/opencode-review.yml:1 - Coverage evidence did not prove required test/docstring evidence" \
-                "- Problem: The required coverage-evidence job result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`, so OpenCode cannot establish approval sufficiency for this head." \
-                "- Root cause: Automated approval is only valid when the same-head coverage-evidence job proves supported repository test suites passed and configured docstring gates passed or were advisory, or reports not applicable because no supported source files or package manifests exist. Missing, failed, skipped, unavailable, or unsupported-tooling test evidence is a blocker." \
-                "- Fix: Install or configure the repository test/docstring evidence tooling when source files or package manifests exist, rerun the current-head coverage-evidence job, and approve only after it reports \`success\` with required evidence or explicit no-source not-applicable evidence." \
-                "- Regression test: Keep the approval branch checking \`needs.coverage-evidence.result == success\` before posting APPROVE, and publish REQUEST_CHANGES when coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence are present." \
-                "" \
-                "- Result: REQUEST_CHANGES" \
-                "- Reason: coverage-evidence result was \`${COVERAGE_EVIDENCE_RESULT:-unknown}\`, so required test/docstring evidence was not proven for current head \`${HEAD_SHA}\`." \
-                "- Head SHA: \`${HEAD_SHA}\`" \
-                "- Workflow run: ${RUN_ID}" \
-                "- Workflow attempt: ${RUN_ATTEMPT}" \
-                "" \
-                "## Coverage evidence" \
-                ""
-              printf '%s\n' "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" | sed -n '1,240p'
-            } >"$body_file"
+            python3 scripts/ci/opencode_review_surfaces.py build-status \
+              --result "COVERAGE_BLOCKED" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              --coverage-summary "${COVERAGE_EVIDENCE_SUMMARY:-Coverage evidence summary was unavailable.}" \
+              >"$body_file"
+          }
+
+          publish_fallback_diff_review() {
+            local body_file event
+            body_file="$(mktemp)"
+            event="COMMENT"
+            python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
+              --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
+              --source-root "${OPENCODE_SOURCE_WORKDIR}" \
+              --head-sha "$HEAD_SHA" \
+              --run-id "$RUN_ID" \
+              --run-attempt "$RUN_ATTEMPT" \
+              --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
+              >"$body_file"
+            printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
+            create_pull_review "$event" "$(cat "$body_file")"
+            # create_pull_review COMMENT rewrites the status comment to Gate
+            # result: COMMENT. Restore the coverage gate so a miss never looks
+            # finished; next action stays "fix coverage evidence, then rerun".
+            request_changes_for_coverage_evidence_failure
+            rm -f "$body_file"
           }
 
           request_changes_for_coverage_evidence_failure() {
             local body_file
             body_file="$(mktemp)"
             build_coverage_evidence_check_failure_body "$body_file"
-            create_pull_review "REQUEST_CHANGES" "$(cat "$body_file")"
+            printf '::notice::Coverage evidence did not pass (%s); approval is blocked. A source-backed review of changed product files is still published. record coverage-evidence blocker states such as cancelled, skipped, failed, unsupported-tooling, or below-100 evidence in the status comment and refuse APPROVE while still publishing a source-backed review of changed product files.\n' \
+              "${COVERAGE_EVIDENCE_RESULT:-unknown}"
+            update_review_overview "COVERAGE_BLOCKED"
             rm -f "$body_file"
-            echo "::endgroup::"
-            exit 0
           }
 
           create_pull_review_with_payload() {
@@ -5845,8 +5854,15 @@ jobs:
               fi
               return 1
             fi
+            FORMAL_REVIEW_URL="$(jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
+              if (.id // 0) > 0 then
+                "https://github.com/\($repo)/pull/\($pr)#pullrequestreview-\(.id)"
+              else
+                empty
+              end
+            ' "$review_response_file")"
             rm -f "$gh_error_file" "$review_response_file"
-            update_review_overview "$event" "$body"
+            update_review_overview "$event"
           }
 
           request_changes_for_gate_failure() {
@@ -5859,7 +5875,7 @@ jobs:
               "" \
               "## Findings" \
               "" \
-              "### 1. HIGH .github/workflows/opencode-review.yml:1 - OpenCode review evidence was missing or invalid" \
+              "### 1. HIGH Review process - OpenCode review evidence was missing or invalid" \
               "- Problem: OpenCode review evidence was missing or invalid." \
               "- Root cause: ${reason}" \
               "- Fix: Re-run the OpenCode review after the current-head evidence and control block are available." \
@@ -7635,10 +7651,6 @@ jobs:
             exit 0
           fi
 
-          if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
-            request_changes_for_coverage_evidence_failure
-          fi
-
           opencode_review_outcome="${OPENCODE_MODEL_POOL_OUTCOME:-unknown}"
           printf 'OpenCode model-pool outcome=%s model=%s; publish stage performs no duplicate model-catalog pass.\n' \
             "$opencode_review_outcome" "${OPENCODE_MODEL_POOL_MODEL:-none}"
@@ -7650,6 +7662,11 @@ jobs:
             if publish_blockers_after_model_unavailable; then
               echo "::endgroup::"
               exit 0
+            fi
+            if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+              publish_fallback_diff_review
+              echo "::endgroup::"
+              exit 1
             fi
             stop_without_review_after_model_unavailable
           fi
@@ -7738,7 +7755,22 @@ jobs:
           case "$gate_result" in
             APPROVE)
               if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                if [ -s "$tmp_body" ]; then
+                  model_prose_file="$(mktemp)"
+                  python3 scripts/ci/opencode_review_surfaces.py extract-prose \
+                    --model-body-file "$tmp_body" >"$model_prose_file"
+                  if [ -s "$model_prose_file" ]; then
+                    create_pull_review "COMMENT" "$(cat "$model_prose_file")"
+                  else
+                    publish_fallback_diff_review
+                  fi
+                  rm -f "$model_prose_file"
+                else
+                  publish_fallback_diff_review
+                fi
                 request_changes_for_coverage_evidence_failure
+                echo "::endgroup::"
+                exit 1
               fi
               if request_changes_for_merge_conflict_if_present; then
                 echo "::endgroup::"
@@ -8011,11 +8043,20 @@ jobs:
                 fi
               elif request_changes_for_merge_conflict_if_present; then
                 :
+              elif [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+                publish_fallback_diff_review
+                echo "::endgroup::"
+                exit 1
               else
                 stop_without_review_after_model_unavailable
               fi
               ;;
           esac
+          if [ "${COVERAGE_EVIDENCE_RESULT:-skipped}" != "success" ]; then
+            request_changes_for_coverage_evidence_failure
+            echo "::endgroup::"
+            exit 1
+          fi
           echo "::endgroup::"
 
       - name: Publish repository_dispatch OpenCode status

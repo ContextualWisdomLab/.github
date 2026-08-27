@@ -4,101 +4,35 @@
 # This file is sourced by workflow run blocks after the trusted .github
 # repository has been checked out.
 
+opencode_review_surfaces_py() {
+  local helper_dir
+  helper_dir="$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  printf '%s' "${helper_dir}/opencode_review_surfaces.py"
+}
+
 emit_change_flow_mermaid_graph() {
   local merge_state="${1:-UNKNOWN}"
-  local changed_files_file surfaces_file idx next_node
+  local changed_files_file
 
   changed_files_file="$(mktemp)"
-  surfaces_file="$(mktemp)"
   if ! timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
     gh pr diff "$PR_NUMBER" --repo "$GH_REPOSITORY" --name-only >"$changed_files_file" 2>/dev/null ||
     [ ! -s "$changed_files_file" ]; then
-    printf '```mermaid\n'
-    printf 'flowchart LR\n'
-    printf '  Evidence["OpenCode evidence"] --> Review["Current PR review path"]\n'
-    printf '  Review --> Verify["Required checks"]\n'
-    printf '```\n'
-    rm -f "$changed_files_file" "$surfaces_file"
-    return 0
-  fi
-
-  awk '
-    function basename(path) {
-      sub(/^.*\//, "", path)
-      return path
-    }
-    function clean(value) {
-      gsub(/"/, "", value)
-      gsub(/[\r\n\t]/, " ", value)
-      return value
-    }
-    function add(key, surface, impact, verify, path) {
-      if (!(key in count)) {
-        keys[++n] = key
-        label[key] = surface ": " basename(path)
-        impacts[key] = impact
-        verifies[key] = verify
-      }
-      count[key]++
-    }
-    /^\.github\/workflows\// {
-      add("workflow", "Workflow", "GitHub Actions review job", "actionlint plus required checks", $0)
-      next
-    }
-    /^scripts\/ci\// {
-      add("ci", "CI script", "review and security gate shell path", "bash -n plus Strix self-test", $0)
-      next
-    }
-    /^backend\// {
-      add("backend", "Backend", "API and service runtime", "backend tests", $0)
-      next
-    }
-    /^frontend\// {
-      add("frontend", "Frontend", "browser runtime and bundle", "frontend tests", $0)
-      next
-    }
-    /^tests?\// || /(^|\/)test_/ {
-      add("tests", "Test", "regression suite", "targeted test run", $0)
-      next
-    }
-    /^docs\// {
-      add("docs", "Docs", "operator or user guidance", "docs review", $0)
-      next
-    }
-    {
-      add("other", "Changed file", "repository behavior", "required checks", $0)
-    }
-    END {
-      for (i = 1; i <= n; i++) {
-        key = keys[i]
-        if (count[key] > 1) {
-          sub(/: .*/, " (" count[key] " files)", label[key])
-        }
-        print clean(label[key]) "\t" clean(impacts[key]) "\t" clean(verifies[key])
-      }
-    }
-  ' "$changed_files_file" >"$surfaces_file"
-
-  printf '```mermaid\n'
-  printf 'flowchart LR\n'
-  printf '  PR["PR changed files"] --> Evidence["OpenCode bounded evidence"]\n'
-  idx=1
-  while IFS="$(printf '\t')" read -r surface impact verify; do
-    [ -n "$surface" ] || continue
-    printf '  Evidence --> S%s["%s"]\n' "$idx" "$surface"
-    printf '  S%s --> I%s["%s"]\n' "$idx" "$idx" "$impact"
-    if [ "$merge_state" = "DIRTY" ] || [ "$merge_state" = "CONFLICTING" ]; then
-      printf '  I%s --> Conflict["Merge conflict blocks this path"]\n' "$idx"
-      next_node="Conflict"
-    else
-      printf '  I%s --> R%s["Review risk: %s"]\n' "$idx" "$idx" "$surface"
-      next_node="R${idx}"
+    if [ -n "${OPENCODE_CHANGED_FILES_FILE:-}" ] && [ -s "${OPENCODE_CHANGED_FILES_FILE}" ]; then
+      cp "${OPENCODE_CHANGED_FILES_FILE}" "$changed_files_file"
     fi
-    printf '  %s --> V%s["%s"]\n' "$next_node" "$idx" "$verify"
-    idx=$((idx + 1))
-  done <"$surfaces_file"
-  printf '```\n'
-  rm -f "$changed_files_file" "$surfaces_file"
+  fi
+  if [ -n "${OPENCODE_SOURCE_WORKDIR:-}" ]; then
+    python3 "$(opencode_review_surfaces_py)" emit-mermaid \
+      --changed-files-file "$changed_files_file" \
+      --source-root "$OPENCODE_SOURCE_WORKDIR" \
+      --merge-state "$merge_state"
+  else
+    python3 "$(opencode_review_surfaces_py)" emit-mermaid \
+      --changed-files-file "$changed_files_file" \
+      --merge-state "$merge_state"
+  fi
+  rm -f "$changed_files_file"
 }
 
 append_mermaid_review_graph() {
