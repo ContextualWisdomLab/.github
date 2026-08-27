@@ -184,6 +184,19 @@ def test_receipt_helpers_cover_graphql_and_invalid_identity() -> None:
     assert "missing pullrequestreview id" in reason
 
 
+
+def test_commented_review_is_not_a_formal_verdict() -> None:
+    """COMMENTED is status-only evidence and cannot satisfy the required receipt."""
+    commented = review(commit=receipt.AFIPC_230_HEAD, state="COMMENTED")
+    ok, reason = receipt.is_formal_receipt(
+        commented, receipt.AFIPC_230_HEAD, is_draft=False
+    )
+    assert ok is False
+    assert "not a formal review verdict" in reason
+    found, reason = receipt.evaluate_receipts([commented], receipt.AFIPC_230_HEAD)
+    assert found is None
+    assert "no current-head formal" in reason
+
 def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     """CLI accepts a current-head receipt file and annotates a missing receipt."""
     path = tmp_path / "reviews.json"
