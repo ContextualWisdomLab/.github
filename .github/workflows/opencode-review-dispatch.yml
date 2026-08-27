@@ -7720,23 +7720,9 @@ jobs:
             rm -f "$normalized_source"
           }
 
-          sentinel="<!-- opencode-review-gate head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT} -->"
-          sentinel_comment_error_file="$(mktemp)"
-          if ! comment_json="$(
-            timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" \
-              gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
-              --jq "[.[] | select((.user.login == \"github-actions[bot]\" or .user.login == \"opencode-agent[bot]\") and (.body | contains(\"${sentinel}\")))] | sort_by(.created_at) | last // {}" 2>"$sentinel_comment_error_file"
-          )"; then
-            if gh_error_is_retryable_publication_failure "$sentinel_comment_error_file"; then
-              printf '::warning::OpenCode could not read the Review Overview sentinel comment for %s because GitHub throttled the shared installation token; falling back to the selected OpenCode model output.\n' "$HEAD_SHA"
-            else
-              printf '::warning::OpenCode could not read the Review Overview sentinel comment for %s; falling back to the selected OpenCode model output.\n' "$HEAD_SHA"
-            fi
-            sed 's/^/gh: /' "$sentinel_comment_error_file" >&2 || true
-            comment_json=""
-          fi
-          rm -f "$sentinel_comment_error_file"
-          comment_body="$(jq -r '.body // ""' <<<"${comment_json:-}")"
+          # The overview is deliberately status-only. Formal verdict control is
+          # always re-normalized from the selected exact-run model output below.
+          comment_body=""
 
           tmp_body="$(mktemp)"
           control_json="$(mktemp)"
