@@ -83,9 +83,10 @@ def test_receipt_gate_recognizes_the_emitted_overview_heading() -> None:
     """The receipt heuristic must recognize the English status-only surface."""
     assert "## OpenCode Review Overview" in receipt_gate.STATUS_HEADINGS
 
+
 def test_outcome_publisher_does_not_query_status_comment_for_control_sentinel() -> None:
     """The status-only overview cannot be a source for the formal review control."""
-    workflow = workflow_text()
+    workflow = WORKFLOW.read_text(encoding="utf-8")
     outcome = workflow.split("- name: Publish OpenCode review outcome", 1)[1]
     outcome = outcome.split("- name: Enforce current-head formal OpenCode review receipt", 1)[0]
 
