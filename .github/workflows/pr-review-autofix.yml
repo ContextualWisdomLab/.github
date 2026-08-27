@@ -247,6 +247,17 @@ jobs:
           python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
             "${context_args[@]}"
 
+      - name: Provision contextual-orchestrator review sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
       - name: Prepare isolated OpenCode autofix workspace
         env:
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
@@ -279,9 +290,9 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
-            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
-            "enabled_providers": ["nvidia-nim"],
+            "model": "contextual-orchestrator/orchestrator/free",
+            "small_model": "contextual-orchestrator/orchestrator/free",
+            "enabled_providers": ["contextual-orchestrator"],
             "permission": {
               "edit": {
                 "*": "allow",
@@ -306,7 +317,7 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
-                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "model": "contextual-orchestrator/orchestrator/free",
                 "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
@@ -333,32 +344,20 @@ jobs:
               }
             },
             "provider": {
-              "nvidia-nim": {
+              "contextual-orchestrator": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM",
+                "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "https://integrate.api.nvidia.com/v1",
-                  "apiKey": "{env:NVIDIA_API_KEY}"
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "mistralai/mistral-small-4-119b-2603": {
-                    "name": "Mistral Small 4 119B 2603",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "limit": {
-                      "context": 128000,
-                      "output": 4096
-                    }
-                  },
-                  "nvidia/nemotron-3-nano-30b-a3b": {
-                    "name": "Nemotron 3 Nano 30B A3B",
+                  "orchestrator/free": {
+                    "name": "Orchestrator Free (ZDR-first zero-cost pool)",
                     "tool_call": true,
                     "reasoning": true,
                     "limit": {
-                      "context": 128000,
+                      "context": 200000,
                       "output": 32768
                     }
                   }
@@ -370,16 +369,15 @@ jobs:
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/orchestrator/free
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "::error::contextual-orchestrator review sidecar must be provisioned before scheduled OpenCode autofix."
             exit 1
           fi
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
@@ -569,11 +567,10 @@ jobs:
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/orchestrator/free
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -584,8 +581,8 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "::error::contextual-orchestrator review sidecar must be provisioned before scheduled OpenCode conflict resolution."
             exit 1
           fi
           cd "$TARGET_WORKSPACE"
