@@ -303,3 +303,122 @@ def test_fetch_check_runs_parses_pages(monkeypatch) -> None:
         )
         == 0
     )
+
+
+def dispatch_run(
+    *,
+    run_id: str,
+    target_repo: str,
+    pr_number: int,
+    head_sha: str,
+    workflow_repo: str = "ContextualWisdomLab/.github",
+) -> dict[str, object]:
+    """Build the trusted central repository_dispatch run identity."""
+    return {
+        "id": int(run_id),
+        "event": "repository_dispatch",
+        "name": "OpenCode Review Dispatch",
+        "display_title": (
+            f"OpenCode Review Dispatch {target_repo}#{pr_number}@{head_sha}"
+        ),
+        "repository": {"full_name": workflow_repo},
+    }
+
+
+def coverage_job(
+    *, conclusion: str = "success", name: str = "coverage-evidence", status: str = "completed"
+) -> dict[str, object]:
+    """Build one Actions job from the current workflow run."""
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+def test_repository_dispatch_coverage_binds_to_current_central_run_job() -> None:
+    """Coverage authority is the completed job in the exact central dispatch run."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+    jobs = [coverage_job(conclusion="failure")]
+
+    assert identity.terminal_dispatch_coverage_result(
+        run,
+        jobs,
+        workflow_repo="ContextualWisdomLab/.github",
+        target_repo=target_repo,
+        pr_number="523",
+        head_sha=identity.KAEFA_78_HEAD,
+        run_id=run_id,
+    ) == "failure"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    (
+        ({"event": "pull_request"}, "repository_dispatch"),
+        ({"name": "Other Workflow"}, "workflow"),
+        ({"display_title": "OpenCode Review Dispatch spoof"}, "target"),
+        ({"repository": {"full_name": "ContextualWisdomLab/scopeweave"}}, "repository"),
+    ),
+)
+def test_repository_dispatch_coverage_rejects_wrong_run_identity(
+    mutation: dict[str, object], match: str
+) -> None:
+    """A same-named job from another event/workflow/target/repository is non-passing."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+    run.update(mutation)
+
+    with pytest.raises(identity.CoverageQuoteError, match=match):
+        identity.terminal_dispatch_coverage_result(
+            run,
+            [coverage_job()],
+            workflow_repo="ContextualWisdomLab/.github",
+            target_repo=target_repo,
+            pr_number="523",
+            head_sha=identity.KAEFA_78_HEAD,
+            run_id=run_id,
+        )
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    (
+        [],
+        [coverage_job(status="in_progress", conclusion="")],
+        [coverage_job(), coverage_job()],
+        [coverage_job(name="coverage-source-tree")],
+    ),
+)
+def test_repository_dispatch_coverage_requires_one_completed_exact_job(
+    jobs: list[dict[str, object]],
+) -> None:
+    """Absent, pending, ambiguous, or differently named jobs fail closed."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+
+    with pytest.raises(identity.CoverageQuoteError, match="coverage-evidence"):
+        identity.terminal_dispatch_coverage_result(
+            run,
+            jobs,
+            workflow_repo="ContextualWisdomLab/.github",
+            target_repo=target_repo,
+            pr_number="523",
+            head_sha=identity.KAEFA_78_HEAD,
+            run_id=run_id,
+        )
