@@ -10,14 +10,72 @@ from typing import Any, Sequence
 
 try:
     from opencode_existing_approval_gate import (
+        FALLBACK_MARKERS,
         OPENCODE_APP_APPROVAL_AUTHORS,
         review_rejection_reason,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from scripts.ci.opencode_existing_approval_gate import (
+        FALLBACK_MARKERS,
         OPENCODE_APP_APPROVAL_AUTHORS,
         review_rejection_reason,
     )
+
+
+OPENCODE_VERDICT_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED"})
+MISSING_VERDICT_MESSAGE = (
+    "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. "
+    "This required check is not a review and must not succeed until the "
+    "authenticated dispatch posts a current-head verdict."
+)
+
+
+def current_head_opencode_verdict(
+    reviews: Sequence[dict[str, Any]], head_sha: str
+) -> str | None:
+    """Return the latest substantive current-head OpenCode verdict, if any."""
+    expected = (head_sha or "").lower()
+    if not expected:
+        return None
+    for review in reversed(reviews):
+        author = str((review.get("user") or {}).get("login") or "").casefold()
+        if author not in OPENCODE_APP_APPROVAL_AUTHORS:
+            continue
+        if str(review.get("commit_id") or "").lower() != expected:
+            continue
+        state = str(review.get("state") or "").upper()
+        if state not in OPENCODE_VERDICT_STATES:
+            return None
+        body = str(review.get("body") or "").casefold()
+        if state == "APPROVED" and any(marker in body for marker in FALLBACK_MARKERS):
+            return None
+        return state
+    return None
+
+
+def decide_required_verdict_check(
+    *,
+    expected_head: str,
+    pull_request: dict[str, Any],
+    reviews: Sequence[dict[str, Any]],
+) -> dict[str, str]:
+    """Fail closed unless OpenCode already published a current-head verdict."""
+    live_head = str((pull_request.get("head") or {}).get("sha") or "")
+    if not expected_head or live_head.lower() != expected_head.lower():
+        return {
+            "state": "failure",
+            "description": (
+                "OpenCode required-check target is stale or the live PR head "
+                "is unavailable."
+            ),
+        }
+    verdict = current_head_opencode_verdict(reviews, expected_head)
+    if verdict is None:
+        return {"state": "failure", "description": MISSING_VERDICT_MESSAGE}
+    return {
+        "state": "success",
+        "description": f"Current-head OpenCode verdict: {verdict}.",
+    }
 
 
 def _has_current_approval(reviews: Sequence[dict[str, Any]], head_sha: str) -> bool:
@@ -99,5 +157,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
     raise SystemExit(main())
