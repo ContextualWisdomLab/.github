@@ -157,23 +157,47 @@ def known_provider_names() -> tuple[str, ...]:
     return tuple(sorted(PROVIDER_ZDR_SCOPE))
 
 
-def is_zdr_model(provider_name: str, *, zdr_endpoints: frozenset[str] = frozenset()) -> bool:
+def route_key(provider_name: str, model: str) -> str:
+    """Return the ``provider/model`` key used for exact ZDR membership.
+
+    Args:
+        provider_name: Orchestrator or feed provider identifier.
+        model: Discovered or feed model identifier.
+
+    Returns:
+        A ``provider/model`` route key with a leading slash stripped from
+        ``model``.
+    """
+    return f"{provider_name}/{model.strip().lstrip('/')}"
+
+
+def is_zdr_model(
+    provider_name: str,
+    *,
+    model: str | None = None,
+    zdr_endpoints: frozenset[str] = frozenset(),
+) -> bool:
     """Decide whether one discovered model route is ZDR-compliant.
 
     Args:
         provider_name: Orchestrator provider identifier of the model route.
-        zdr_endpoints: Frozen set of ``"provider/model"`` route keys from the
-            OpenRouter ``/api/v1/endpoints/zdr`` feed (documented source).
-            When provided non-empty for the ``openrouter`` scope it is the
-            authoritative membership source; the static table is the fallback.
+        model: Specific model or route identifier. Required for an exact
+            OpenRouter feed match; omitted or empty never grants ZDR from
+            the feed.
+        zdr_endpoints: Frozen set of exact ``\"provider/model\"`` route keys
+            from the OpenRouter ``/api/v1/endpoints/zdr`` feed. When the
+            provider uses the feed, an empty set is not a fallback to
+            \"all OpenRouter is ZDR\".
 
     Returns:
-        True only for an attested zero-retention scope.
+        True only for an attested zero-retention scope or an exact feed
+        membership match.
     """
     scope = provider_zdr_scope(provider_name)
-    if scope.openrouter_endpoints_feed and zdr_endpoints:
-        key_prefix = f"{provider_name}/"
-        return any(key.startswith(key_prefix) for key in zdr_endpoints)
+    if scope.openrouter_endpoints_feed:
+        if not zdr_endpoints or not model:
+            return False
+        return route_key(provider_name, model) in zdr_endpoints
     return scope.zero_data_retention
 
 
@@ -182,7 +206,7 @@ def is_free_route(is_free: object) -> bool:
 
     Args:
         is_free: Discovery value (bool, int, or string); only truthy boolean
-            and numeric values count; string ``"false"`` must not be truthy.
+            and numeric values count; string ``\"false\"`` must not be truthy.
 
     Returns:
         True only for an explicitly truthy free marker.

@@ -39,7 +39,7 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
 @pytest.mark.parametrize(
     ("provider_name", "expected_zdr"),
     [
-        ("openrouter", True),
+        ("openrouter", False),
         ("nvidia_nim", False),
         ("nvidia_nim_sub", False),
         ("openai", False),
@@ -47,19 +47,45 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
     ],
 )
 def test_is_zdr_model_static_table(provider_name: str, expected_zdr: bool) -> None:
-    """Without a live endpoint feed the dated static table is authoritative."""
+    """An empty OpenRouter feed is not a grant; static non-ZDR stays non-ZDR."""
     assert zdr_policy.is_zdr_model(provider_name) is expected_zdr
+    assert zdr_policy.is_zdr_model(provider_name, model="any/model") is expected_zdr
 
 
 def test_is_zdr_model_openrouter_feed_is_authoritative_when_present() -> None:
-    """A non-empty ZDR endpoint feed decides membership for openrouter routes."""
+    """A non-empty feed decides OpenRouter membership by exact route only."""
     feed = frozenset({"openrouter/deepseek/deepseek-r1:free", "openrouter/nvidia/foo"})
-    assert zdr_policy.is_zdr_model("openrouter", zdr_endpoints=feed) is True
     assert (
         zdr_policy.is_zdr_model(
-            "openrouter", zdr_endpoints=frozenset({"openai/gpt-4o-mini"})
+            "openrouter",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=feed,
+        )
+        is True
+    )
+    assert zdr_policy.is_zdr_model("openrouter", zdr_endpoints=feed) is False
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="openai/gpt-4o-mini",
+            zdr_endpoints=feed,
         )
         is False
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=frozenset({"openai/gpt-4o-mini"}),
+        )
+        is False
+    )
+
+
+def test_route_key_strips_a_leading_slash() -> None:
+    """Feed membership keys never keep a leading slash on the model slug."""
+    assert zdr_policy.route_key("openrouter", "/deepseek/deepseek-r1:free") == (
+        "openrouter/deepseek/deepseek-r1:free"
     )
 
 

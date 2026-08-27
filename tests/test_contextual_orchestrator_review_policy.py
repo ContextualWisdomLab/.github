@@ -101,7 +101,12 @@ def test_load_zdr_endpoints_skips_rows_without_provider_or_model(tmp_path) -> No
         encoding="utf-8",
     )
     keys = policy._load_zdr_endpoints(str(feed))
-    assert keys == frozenset({"DeepSeek/deepseek/deepseek-r1:free"})
+    assert keys == frozenset(
+        {
+            "DeepSeek/deepseek/deepseek-r1:free",
+            "openrouter/deepseek/deepseek-r1:free",
+        }
+    )
 
 
 def test_load_zdr_endpoints_respects_none_feed_path(tmp_path) -> None:
@@ -175,6 +180,21 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["credential_key"]
 
 
+def test_build_catalog_assigns_unique_priorities() -> None:
+    """Each selected agent gets a distinct priority so TaskOrchestrator cannot tie on id."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()),
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+    )
+    priorities = [agent["priority"] for agent in result["agents"]]
+    assert priorities == sorted(priorities, reverse=True)
+    assert len(priorities) == len(set(priorities))
+    assert result["agents"][0]["priority"] == 0
+    assert result["report"]["total_free_routes"] == 5
+
+
 def test_build_catalog_applies_family_cap() -> None:
     """A family cap keeps one outage domain from absorbing the pool."""
     report = {
@@ -235,12 +255,14 @@ def test_build_catalog_fails_closed_without_free_models() -> None:
 
 
 def test_build_catalog_uses_static_table_without_feed() -> None:
-    """Without a feed, openrouter routes stay ZDR via the dated attestation."""
+    """Without a feed, OpenRouter is not granted ZDR for every free route."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()), limit=12, family_cap=4
     )
     assert result["report"]["zdr_endpoints_feed_used"] is False
-    assert result["agents"][0]["model"] == "deepseek/deepseek-r1:free"
+    assert result["report"]["zdr_selected_count"] == 0
+    assert "zdr" not in result["agents"][0]["tags"]
+    assert "non-zdr" in result["agents"][0]["tags"]
 
 
 def test_load_zdr_endpoints_none_yields_empty() -> None:
@@ -265,7 +287,12 @@ def test_load_zdr_endpoints_parses_feed(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    assert policy._load_zdr_endpoints(str(feed)) == frozenset({"DeepSeek/deepseek/deepseek-r1:free"})
+    assert policy._load_zdr_endpoints(str(feed)) == frozenset(
+        {
+            "DeepSeek/deepseek/deepseek-r1:free",
+            "openrouter/deepseek/deepseek-r1:free",
+        }
+    )
 
 
 def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:

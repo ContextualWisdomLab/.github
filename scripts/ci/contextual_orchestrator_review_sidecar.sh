@@ -49,8 +49,12 @@ rm -rf "$ORCHESTRATOR_SOURCE"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
 git clone --quiet --filter=blob:none --no-checkout "$ORCHESTRATOR_GIT_URL" "$ORCHESTRATOR_SOURCE"
 git -C "$ORCHESTRATOR_SOURCE" -c advice.detachedHead=false checkout --quiet "$ORCHESTRATOR_PIN_SHA"
-log "installing vendored orchestrator"
-python3 -m pip install --quiet --disable-pip-version-check "$ORCHESTRATOR_SOURCE"
+checked_out="$(git -C "$ORCHESTRATOR_SOURCE" rev-parse HEAD)"
+if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then
+  fail "vendored HEAD ${checked_out} != pin ${ORCHESTRATOR_PIN_SHA}"
+fi
+log "installing vendored orchestrator at ${checked_out}"
+python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir "$ORCHESTRATOR_SOURCE"
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
@@ -82,7 +86,15 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     "${zdr_args[@]}" \
 > "$ORCHESTRATOR_WORK/sidecar.stdout" 2> "$ORCHESTRATOR_WORK/sidecar.stderr" &
 sidecar_pid=$!
-trap 'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid" 2>/dev/null || true; wait "$sidecar_pid" 2>/dev/null || true' EXIT
+cleanup_sidecar_on_error() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    log "stopping failed sidecar (pid $sidecar_pid)"
+    kill "$sidecar_pid" 2>/dev/null || true
+    wait "$sidecar_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup_sidecar_on_error EXIT
 
 i=0
 until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do

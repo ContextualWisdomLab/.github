@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import re
 from collections import Counter
 from pathlib import Path
@@ -35,6 +36,7 @@ from scripts.ci.zdr_policy import (
     is_free_route,
     is_zdr_model,
     provider_zdr_scope,
+    route_key,
 )
 
 # NVIDIA primary and secondary keys share one outage domain for provider-family
@@ -80,8 +82,7 @@ def _normalize_agent_id(candidate: str, provider_name: str) -> str:
 
 def _route_key(provider_name: str, model: str) -> str:
     """Return the ``provider/model`` key used by the ZDR endpoints feed."""
-    slug = model.strip().lstrip("/")
-    return f"{provider_name}/{slug}"
+    return route_key(provider_name, model)
 
 
 def _is_valid_is_free(value: object) -> bool:
@@ -191,11 +192,15 @@ def build_zdr_prioritized_catalog(
     free_rows = [row for row in rows if row["is_free"]]
     free_rows.sort(
         key=lambda row: (
-            0 if is_zdr_model(row["provider"], zdr_endpoints=zdr_endpoints) else 1,
+            0
+            if is_zdr_model(
+                row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+            )
+            else 1,
         )
     )
     picked: list[dict[str, Any]] = []
-    for order, row in enumerate(free_rows):
+    for _order, row in enumerate(free_rows):
         family = provider_family(row["provider"])
         if not family_is_open(family):
             continue
@@ -210,8 +215,10 @@ def build_zdr_prioritized_catalog(
             "orchestrator/free would fail closed"
         )
 
-    for row in picked:
-        zdr = is_zdr_model(row["provider"], zdr_endpoints=zdr_endpoints)
+    for rank, row in enumerate(picked):
+        zdr = is_zdr_model(
+            row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+        )
         if zdr:
             zdr_count += 1
         catalog_rows.append(
@@ -222,7 +229,7 @@ def build_zdr_prioritized_catalog(
                 "api_key_env": "",
                 "credential_key": row["credential_key"],
                 "tags": ["review", "cost:free", "zdr" if zdr else "non-zdr"],
-                "priority": -order,
+                "priority": -rank,
                 "disabled": False,
                 "provider_name": row["provider"],
                 "provider_exclusions": [],
@@ -238,12 +245,12 @@ def build_zdr_prioritized_catalog(
         "agents": catalog_rows,
         "report": {
             "pool": "orchestrator/free",
-            "total_free_routes": sum(bool(row["is_free"]) for row in rows),
+            "total_free_routes": len(free_rows),
             "selected_count": len(catalog_rows),
             "free_selected_count": len(picked),
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
-                {provider_zdr_scope(row["provider"]).source for row in picked if is_zdr_model(row["provider"], zdr_endpoints=zdr_endpoints)}
+                {provider_zdr_scope(row["provider"]).source for row in picked if is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints)}
             ),
             "zdr_endpoints_feed_used": bool(zdr_endpoints),
             "selected": [
@@ -251,7 +258,7 @@ def build_zdr_prioritized_catalog(
                     "provider": row["provider"],
                     "model": row["model"],
                     "agent_id": entry["id"],
-                    "zdr": is_zdr_model(row["provider"], zdr_endpoints=zdr_endpoints),
+                    "zdr": is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints),
                 }
                 for row, entry in zip(picked, catalog_rows)
             ],
@@ -263,12 +270,12 @@ def _load_zdr_endpoints(path: str | None) -> frozenset[str]:
     """Load ``provider/model`` ZDR route keys from the OpenRouter ZDR feed.
 
     Args:
-        path: Path to the feed JSON (shape ``{"data": [{"name", "model_name",
-            "provider_name", "supports_implicit_caching"}]}``); None yields no
+        path: Path to the feed JSON (shape ``{\"data\": [{\"name\", \"model_name\",
+            \"provider_name\", \"supports_implicit_caching\"}]}``); None yields no
             feed evidence.
 
     Returns:
-        A frozen set of ``f"{provider_name}/{model_name}"`` keys.
+        A frozen set of ``f\"{provider_name}/{model_name}\"`` keys.
     """
     if not path:
         return frozenset()
@@ -279,6 +286,7 @@ def _load_zdr_endpoints(path: str | None) -> frozenset[str]:
         model = endpoint.get("model_name")
         if provider and model:
             keys.add(_route_key(str(provider), str(model)))
+            keys.add(_route_key("openrouter", str(model)))
     return frozenset(keys)
 
 
@@ -352,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
             zdr_endpoints_path=args.zdr_endpoints,
         )
     except (PolicyError, OSError, json.JSONDecodeError) as exc:
-        print(f"contextual-orchestrator review policy: {exc}", file=os.sys.stderr)
+        print(f"contextual-orchestrator review policy: {exc}", file=sys.stderr)
         return 1
     return 0
 

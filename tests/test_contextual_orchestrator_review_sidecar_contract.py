@@ -43,7 +43,10 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert f"ORCHESTRATOR_PIN_SHA=\"${{ORCHESTRATOR_PIN_SHA:-{ORCH_PIN_SHA}}}\"" in text
     assert "git clone" in text
     assert "checkout --quiet \"$ORCHESTRATOR_PIN_SHA\"" in text
+    assert 'checked_out="$(git -C "$ORCHESTRATOR_SOURCE" rev-parse HEAD)"' in text
+    assert 'if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then' in text
     assert "--filter=blob:none" in text or "--depth" in text
+    assert "--no-cache-dir" in text
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
@@ -125,3 +128,11 @@ def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
     assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in config
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
     assert '"orchestrator/free": {' in config
+
+def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
+    """Provisioning is a separate GHA step; EXIT must not kill a healthy sidecar."""
+    text = _read(SIDECAR)
+    assert "cleanup_sidecar_on_error" in text
+    assert "trap cleanup_sidecar_on_error EXIT" in text
+    assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
+
