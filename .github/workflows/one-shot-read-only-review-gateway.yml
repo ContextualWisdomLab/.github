@@ -122,5 +122,12 @@ jobs:
                   "parents": [parent_sha],
               },
           )
+          tag_name = f"staging-read-only-gateway-{os.environ['GITHUB_RUN_ID']}"
+          request(
+              "POST",
+              "/git/refs",
+              {"ref": f"refs/tags/{tag_name}", "sha": commit["sha"]},
+          )
           print(f"VERIFIED_COMMIT_SHA={commit['sha']}")
+          print(f"VERIFIED_TAG={tag_name}")
           PY
