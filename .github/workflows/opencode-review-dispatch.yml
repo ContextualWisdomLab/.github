@@ -2733,6 +2733,7 @@ jobs:
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
+          COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result || 'skipped' }}
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"
           FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"
@@ -2745,6 +2746,12 @@ jobs:
             --env-file "$context_env_file"
           # shellcheck source=/dev/null
           . "$context_env_file"
+          quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
+          COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
+            --repo "$GH_REPOSITORY" \
+            --head-sha "$PR_HEAD_SHA" \
+            --quoted-result "$quoted_coverage")"
+          export COVERAGE_EVIDENCE_RESULT
           printf 'Resolved bounded OpenCode review context for %s#%s at %s.\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA"
 
@@ -5192,6 +5199,12 @@ jobs:
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
+          quoted_coverage="${COVERAGE_EVIDENCE_RESULT:-}"
+          COVERAGE_EVIDENCE_RESULT="$(python3 scripts/ci/opencode_coverage_identity.py \
+            --repo "$GH_REPOSITORY" \
+            --head-sha "$HEAD_SHA" \
+            --quoted-result "$quoted_coverage")"
+          export COVERAGE_EVIDENCE_RESULT
           echo "::group::OpenCode Review Approval Gate"
           echo "PR=#${PR_NUMBER} head_sha=${HEAD_SHA} run_id=${RUN_ID} run_attempt=${RUN_ATTEMPT}"
           configured_review_write_token="${GH_TOKEN:-}"
@@ -8058,6 +8071,30 @@ jobs:
             exit 1
           fi
           echo "::endgroup::"
+
+      - name: Enforce current-head formal OpenCode review receipt
+        if: >-
+          always()
+          && needs.validate-pr-metadata.result == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.pr_number != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+        env:
+          GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          draft_args=()
+          if [ "$(gh api "repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.draft')" = "true" ]; then
+            draft_args=(--draft)
+          fi
+          python3 scripts/ci/opencode_review_receipt_gate.py \
+            --repo "$GH_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$PR_HEAD_SHA" \
+            "${draft_args[@]}"
 
       - name: Publish repository_dispatch OpenCode status
         if: >-
