@@ -1720,7 +1720,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "implementation_completeness_scan.py" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
-    assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
+    assert 'update_review_overview "COVERAGE_BLOCKED"' in workflow
+    assert "record coverage-evidence blocker states" in workflow
     assert re.search(
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
@@ -2827,7 +2828,10 @@ def test_opencode_model_pool_failure_uses_only_existing_real_model_approval():
         r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
         r"if publish_blockers_after_model_unavailable; then[\s\S]{0,180}"
-        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
+        r"exit 0\s+fi\s+"
+        r'(?:if \[ "\$\{COVERAGE_EVIDENCE_RESULT:-skipped\}" != "success" \]; then[\s\S]{0,280}'
+        r"publish_fallback_diff_review[\s\S]{0,160}fi\s+)?"
+        r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
