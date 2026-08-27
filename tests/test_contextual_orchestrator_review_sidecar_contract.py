@@ -18,6 +18,7 @@ _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
 SIDECAR = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
 LAUNCHER = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 AUTOFIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/pr-review-autofix.yml"
+NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
 OPENCODE_CONFIG = _ORG_REPO_ROOT / "opencode.jsonc"
 
 FIVE_SECRETS = (
@@ -129,6 +130,7 @@ def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
     assert '"orchestrator/free": {' in config
 
+
 def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     """Provisioning is a separate GHA step; EXIT must not kill a healthy sidecar."""
     text = _read(SIDECAR)
@@ -136,3 +138,19 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert "trap cleanup_sidecar_on_error EXIT" in text
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
 
+
+def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
+    """Required Noema review uses the gateway; the public NIM hardcode is gone."""
+    workflow = _read(NOEMA_WORKFLOW)
+    assert "contextual_orchestrator_review_sidecar.sh" in workflow
+    for secret in FIVE_SECRETS:
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
+    assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
+    assert "${CONTEXTUAL_ORCHESTRATOR_TOKEN}" in workflow
+    assert "https://integrate.api.nvidia.com" not in workflow
+    assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "secrets: inherit" not in workflow
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
