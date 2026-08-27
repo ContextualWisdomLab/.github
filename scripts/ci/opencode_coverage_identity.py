@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,12 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 TERMINAL_RESULTS = frozenset(
     {"success", "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required"}
+)
+RETRY_DELAYS = (0.0, 1.0, 3.0)
+TRANSIENT_GH_READ_ERROR_RE = re.compile(
+    r"(?i)(?:http\\s*(?:429|500|502|503|504)\\b|rate.?limit|"
+    r"secondary rate limit|timeout|timed out|temporar(?:y|ily) unavailable|"
+    r"connection (?:reset|refused|closed)|tls handshake timeout)"
 )
 
 KAEFA_78_HEAD = "5092a70c9737221d6367e74643d06980609fe0b1"
@@ -166,23 +173,38 @@ def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
         raise CoverageQuoteError(f"coverage identity requires an owner/repo value, got {repo!r}")
     if not SHA_RE.fullmatch(head_sha):
         raise CoverageQuoteError("coverage identity requires a 40-character head SHA")
-    completed = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100",
-            "--paginate",
-            "--slurp",
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        shell=False,
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "gh check-runs lookup failed").strip()
-        raise CoverageQuoteError(f"canonical coverage check lookup failed: {detail}")
+    completed = None
+    for attempt, delay in enumerate(RETRY_DELAYS):
+        if delay:
+            time.sleep(delay)
+        completed = subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/commits/{head_sha}/check-runs?per_page=100",
+                "--paginate",
+                "--slurp",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            shell=False,
+        )
+        if completed.returncode == 0:
+            break
+        detail = (
+            completed.stderr or completed.stdout or "gh check-runs lookup failed"
+        ).strip()
+        if (
+            not TRANSIENT_GH_READ_ERROR_RE.search(detail)
+            or attempt + 1 >= len(RETRY_DELAYS)
+        ):
+            raise CoverageQuoteError(
+                f"canonical coverage check lookup failed: {detail}"
+            )
+    if completed is None or completed.returncode != 0:
+        raise CoverageQuoteError("canonical coverage check lookup failed after retries")
     loaded = json.loads(completed.stdout or "{}")
     if isinstance(loaded, list):
         runs: list[Mapping[str, Any]] = []
