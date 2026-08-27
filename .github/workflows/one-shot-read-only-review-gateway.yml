@@ -1,13 +1,126 @@
 name: One-shot read-only review gateway migration
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - feat/read-only-review-gateway
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  paused:
+  migrate:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Migration staging is paused while verified inputs are materialized."
+      - name: Checkout migration branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: feat/read-only-review-gateway
+          fetch-depth: 0
+
+      - name: Verify RED contract then apply migration
+        run: |
+          set -euo pipefail
+          if python3 tests/test_opencode_read_only_gateway_contract.py; then
+            echo "::error::Gateway contract unexpectedly passed before the implementation patch."
+            exit 1
+          fi
+          echo "Observed expected RED contract failure against the direct-provider pool."
+          python3 scripts/ci/apply_read_only_gateway_migration.py
+
+      - name: Verify focused gateway contract
+        run: |
+          set -euo pipefail
+          python3 tests/test_opencode_read_only_gateway_contract.py
+          python3 -m py_compile tests/test_opencode_read_only_gateway_contract.py
+          git diff --check
+
+      - name: Publish verified commit object
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          parent_sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GH_TOKEN"]
+          api_root = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+
+          def request(method: str, path: str, payload: dict | None = None) -> dict:
+              data = None
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(
+                  f"{api_root}/repos/{repository}{path}",
+                  data=data,
+                  headers=headers,
+                  method=method,
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+
+          def blob_for(path: str) -> str:
+              content = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+              return request(
+                  "POST",
+                  "/git/blobs",
+                  {"content": content, "encoding": "base64"},
+              )["sha"]
+
+          parent = request("GET", f"/git/commits/{parent_sha}")
+          tree = request(
+              "POST",
+              "/git/trees",
+              {
+                  "base_tree": parent["tree"]["sha"],
+                  "tree": [
+                      {
+                          "path": ".github/workflows/opencode-review-dispatch.yml",
+                          "mode": "100644",
+                          "type": "blob",
+                          "sha": blob_for(".github/workflows/opencode-review-dispatch.yml"),
+                      },
+                      {
+                          "path": "tests/test_opencode_read_only_gateway_contract.py",
+                          "mode": "100644",
+                          "type": "blob",
+                          "sha": blob_for("tests/test_opencode_read_only_gateway_contract.py"),
+                      },
+                      {
+                          "path": ".github/workflows/one-shot-read-only-review-gateway.yml",
+                          "mode": "100644",
+                          "type": "blob",
+                          "sha": None,
+                      },
+                      {
+                          "path": "scripts/ci/apply_read_only_gateway_migration.py",
+                          "mode": "100644",
+                          "type": "blob",
+                          "sha": None,
+                      },
+                  ],
+              },
+          )
+          commit = request(
+              "POST",
+              "/git/commits",
+              {
+                  "message": "feat(ci): route read-only review pool through gateway",
+                  "tree": tree["sha"],
+                  "parents": [parent_sha],
+              },
+          )
+          print(f"VERIFIED_COMMIT_SHA={commit['sha']}")
+          PY
