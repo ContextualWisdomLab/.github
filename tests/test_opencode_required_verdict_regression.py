@@ -31,7 +31,7 @@ def runtime_verdict(reviews: list[dict[str, object]], head_sha: str = HEAD) -> s
     if jq is None:
         pytest.skip("jq is required to execute the production verdict filter")
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    marker = "jq -r -s --arg sha \\"$HEAD_SHA\\" '"
+    marker = """jq -r -s --arg sha "$HEAD_SHA" '"""
     start = workflow.index(marker) + len(marker)
     end = workflow.index("\n          ')", start)
     result = subprocess.run(
