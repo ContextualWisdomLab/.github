@@ -93,4 +93,3 @@ def test_outcome_publisher_does_not_query_status_comment_for_control_sentinel() 
     assert "sentinel_comment_error_file" not in outcome
     assert "Review Overview sentinel comment" not in outcome
     assert 'load_selected_review_output "$selected_review_output_file"' in outcome
-
