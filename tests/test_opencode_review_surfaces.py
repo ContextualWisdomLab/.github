@@ -118,6 +118,36 @@ def test_workflow_anchor_forbidden_unless_file_is_in_diff() -> None:
     )
 
 
+
+def test_workflow_anchor_variants_cannot_spoof_unrelated_findings() -> None:
+    """Backslash and dot-segment aliases are the same forbidden central anchor."""
+    rendered = surfaces.format_structured_findings(
+        [
+            {
+                "path": r".github\workflows\opencode-review.yml",
+                "line": 42,
+                "title": "spoof",
+            }
+        ],
+        ORIGINWEAVE_47_FILES,
+    )
+    assert r".github\workflows\opencode-review.yml" not in rendered
+    assert "Review process" in rendered
+
+    review = surfaces.format_request_changes_review(
+        model_prose=(
+            r"Finding: .github\workflows\opencode-review.yml:42 "
+            "and .github/workflows/./opencode-review.yml:7"
+        ),
+        head_sha=HEAD,
+        run_id="1",
+        run_attempt="1",
+        changed_files=ORIGINWEAVE_47_FILES,
+    )
+    assert r".github\workflows\opencode-review.yml" not in review
+    assert ".github/workflows/./opencode-review.yml" not in review
+    assert review.count("Review process") >= 2
+
 def test_korean_status_and_review_keep_identifiers() -> None:
     """Korean PRs stay Korean while crate paths remain unchanged."""
     review = surfaces.build_fallback_review(
