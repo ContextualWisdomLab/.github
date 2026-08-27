@@ -976,12 +976,6 @@ def label_section(text: str, label: str) -> str:
             # ⚡ Bolt: Fast path for exact literal matching bypassing regex overhead
             index = text.find(candidate)
             while index != -1:
-                if (
-                    candidate == "coverage:"
-                    and text[max(0, index - 10) : index] == "docstring "
-                ):
-                    index = text.find(candidate, index + 1)
-                    continue
                 starts.append(index)
                 index = text.find(candidate, index + 1)
         return starts
