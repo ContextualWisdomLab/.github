@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'ci(strix): bootstrap orchestrator gateway patch'
+    if: "github.event.head_commit.message == 'ci(strix): bootstrap orchestrator gateway patch'"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -154,83 +154,83 @@ jobs:
           replace_once(
               workflow,
               """      - name: Resolve live NVIDIA NIM Strix models
-        id: resolve_nvidia_models
-""",
+                  id: resolve_nvidia_models
+          """,
               """      - name: Provision contextual-orchestrator Strix sidecar
-        if: github.event_name != 'repository_dispatch' || github.event.client_payload.strix_llm == ''
-        env:
-          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+                  if: github.event_name != 'repository_dispatch' || github.event.client_payload.strix_llm == ''
+                  env:
+                    BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+                    NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+                    NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+                    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+                    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                  run: |
+                    set -euo pipefail
+                    bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
-      - name: Resolve live NVIDIA NIM Strix models
-        id: resolve_nvidia_models
-""",
+                - name: Resolve live NVIDIA NIM Strix models
+                  id: resolve_nvidia_models
+          """,
           )
           replace_once(
               workflow,
               """          if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
-""",
+          """,
               """          if [ -z "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
-""",
+          """,
           )
           replace_once(
               workflow,
               """          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4') }}
-""",
+          """,
               """          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'contextual-orchestrator/orchestrator/free' }}
-""",
+          """,
           )
           replace_once(
               workflow,
               """          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
-""",
+                    TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
+          """,
               """          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
-          CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ env.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
-""",
+                    CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+                    CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ env.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
+                    TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
+          """,
           )
           replace_once(
               workflow,
               """          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
-          case "$strix_model" in
-""",
+                    case "$strix_model" in
+          """,
               """          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
-          case "$strix_model" in
-            contextual-orchestrator/orchestrator/free)
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
-              if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\\.0\\.0\\.1:[0-9]{1,5}$ ]]; then
-                echo '::error::The contextual-orchestrator Strix sidecar must use an exact IPv4 loopback URL and explicit port.'
-                exit 1
-              fi
-              sidecar_port="${CONTEXTUAL_ORCHESTRATOR_BASE_URL##*:}"
-              if [ "$sidecar_port" -lt 1 ] || [ "$sidecar_port" -gt 65535 ]; then
-                echo '::error::The contextual-orchestrator Strix sidecar port must be between 1 and 65535.'
-                exit 1
-              fi
-              sanitized_orchestrator_token="$(printf '%s' "$CONTEXTUAL_ORCHESTRATOR_TOKEN" | tr -d '\\r\\n')"
-              trimmed_orchestrator_token="$(printf '%s' "$sanitized_orchestrator_token" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_orchestrator_token" ] || [ "$trimmed_orchestrator_token" != "$CONTEXTUAL_ORCHESTRATOR_TOKEN" ]; then
-                echo '::error::The contextual-orchestrator Strix sidecar requires one non-empty, line-safe bearer token.'
-                exit 1
-              fi
-              ;;
-""",
+                    case "$strix_model" in
+                      contextual-orchestrator/orchestrator/free)
+                        echo 'enabled=true' >> "$GITHUB_OUTPUT"
+                        echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
+                        if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\\.0\\.0\\.1:[0-9]{1,5}$ ]]; then
+                          echo '::error::The contextual-orchestrator Strix sidecar must use an exact IPv4 loopback URL and explicit port.'
+                          exit 1
+                        fi
+                        sidecar_port="${CONTEXTUAL_ORCHESTRATOR_BASE_URL##*:}"
+                        if [ "$sidecar_port" -lt 1 ] || [ "$sidecar_port" -gt 65535 ]; then
+                          echo '::error::The contextual-orchestrator Strix sidecar port must be between 1 and 65535.'
+                          exit 1
+                        fi
+                        sanitized_orchestrator_token="$(printf '%s' "$CONTEXTUAL_ORCHESTRATOR_TOKEN" | tr -d '\\r\\n')"
+                        trimmed_orchestrator_token="$(printf '%s' "$sanitized_orchestrator_token" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                        if [ -z "$trimmed_orchestrator_token" ] || [ "$trimmed_orchestrator_token" != "$CONTEXTUAL_ORCHESTRATOR_TOKEN" ]; then
+                          echo '::error::The contextual-orchestrator Strix sidecar requires one non-empty, line-safe bearer token.'
+                          exit 1
+                        fi
+                        ;;
+          """,
           )
           replace_once(
               workflow,
               """              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
-""",
+          """,
               """              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free, NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
-""",
+          """,
           )
           regex_once(
               workflow,
@@ -245,290 +245,290 @@ jobs:
           replace_once(
               workflow,
               """          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
-""",
+          """,
               """          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "contextual_orchestrator" ]; then
-            echo '::error::CONTEXTUAL_ORCHESTRATOR_TOKEN is required for gateway-backed Strix scans.'
-            exit 1
-          fi
-          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
-""",
+                      echo '::error::CONTEXTUAL_ORCHESTRATOR_TOKEN is required for gateway-backed Strix scans.'
+                      exit 1
+                    fi
+                    if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
+          """,
           )
           replace_once(
               workflow,
               """      - name: Prepare OpenRouter API base
-""",
+          """,
               """      - name: Prepare contextual-orchestrator API base
-        if: steps.gate.outputs.provider_mode == 'contextual_orchestrator'
-        env:
-          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\\.0\\.0\\.1:[0-9]{1,5}$ ]]; then
-            echo '::error::The contextual-orchestrator API base must remain on exact IPv4 loopback.'
-            exit 1
-          fi
-          umask 077
-          llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
-          printf '%s' "${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1" > "$llm_api_base_file"
-          echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
+                  if: steps.gate.outputs.provider_mode == 'contextual_orchestrator'
+                  env:
+                    CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+                  run: |
+                    set -euo pipefail
+                    if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\\.0\\.0\\.1:[0-9]{1,5}$ ]]; then
+                      echo '::error::The contextual-orchestrator API base must remain on exact IPv4 loopback.'
+                      exit 1
+                    fi
+                    umask 077
+                    llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
+                    printf '%s' "${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1" > "$llm_api_base_file"
+                    echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
-      - name: Prepare OpenRouter API base
-""",
+                - name: Prepare OpenRouter API base
+          """,
           )
           replace_once(
               workflow,
               """          strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
-          strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          case "$strix_model" in
-""",
+                    strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    case "$strix_model" in
+          """,
               """          strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
-          strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          case "$strix_model" in
-            contextual-orchestrator/orchestrator/free)
-              printf '%s' 'openai/orchestrator/free' > "$strix_llm_file"
-              ;;
-""",
+                    strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    case "$strix_model" in
+                      contextual-orchestrator/orchestrator/free)
+                        printf '%s' 'openai/orchestrator/free' > "$strix_llm_file"
+                        ;;
+          """,
           )
 
           replace_once(
               sidecar,
               """ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
-""",
+          """,
               """ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
-ORCHESTRATOR_SITE_PACKAGES="$ORCHESTRATOR_WORK/site-packages"
-""",
+          ORCHESTRATOR_SITE_PACKAGES="$ORCHESTRATOR_WORK/site-packages"
+          """,
           )
           replace_once(
               sidecar,
               """ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 
-mkdir -p "$ORCHESTRATOR_WORK"
-rm -rf "$ORCHESTRATOR_SOURCE"
-""",
+          mkdir -p "$ORCHESTRATOR_WORK"
+          rm -rf "$ORCHESTRATOR_SOURCE"
+          """,
               """ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
-case "$ORCHESTRATOR_TOKEN" in
-  *$'\\r'*|*$'\\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" ;;
-esac
+          case "$ORCHESTRATOR_TOKEN" in
+            *$'\\r'*|*$'\\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" ;;
+          esac
 
-mkdir -p "$ORCHESTRATOR_WORK"
-rm -rf "$ORCHESTRATOR_SOURCE" "$ORCHESTRATOR_SITE_PACKAGES"
-mkdir -p "$ORCHESTRATOR_SITE_PACKAGES"
-""",
+          mkdir -p "$ORCHESTRATOR_WORK"
+          rm -rf "$ORCHESTRATOR_SOURCE" "$ORCHESTRATOR_SITE_PACKAGES"
+          mkdir -p "$ORCHESTRATOR_SITE_PACKAGES"
+          """,
           )
           replace_once(
               sidecar,
               """python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir "$ORCHESTRATOR_SOURCE"
-""",
+          """,
               """python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir --target "$ORCHESTRATOR_SITE_PACKAGES" "$ORCHESTRATOR_SOURCE"
-""",
+          """,
           )
           replace_once(
               sidecar,
               """PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \\
-""",
+          """,
               """PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \\
-""",
+          """,
           )
           replace_once(
               sidecar,
               """if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
-  {
-""",
+            {
+          """,
               """printf '::add-mask::%s\\n' "$ORCHESTRATOR_TOKEN"
-if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
-  {
-""",
+          if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
+            {
+          """,
           )
 
           replace_once(
               smoke,
               """full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
-""",
+          """,
               """full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
-sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
-""",
+          sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+          """,
           )
           replace_once(
               smoke,
               """if ! bash -n "$gate_script" "$full_gate_test"; then
-""",
+          """,
               """if ! bash -n "$gate_script" "$full_gate_test" "$sidecar_script"; then
-""",
+          """,
           )
           replace_once(
               smoke,
               """assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
-""",
+          """,
               """assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix defaults normal scans to the contextual-orchestrator Strix sidecar"
-assert_file_contains "$workflow_file" "contextual-orchestrator/orchestrator/free" "Strix selects the fail-closed orchestrator/free gateway pool by default"
-assert_file_contains "$workflow_file" "openai/orchestrator/free" "Strix addresses the gateway through its OpenAI-compatible model namespace"
-assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "Strix consumes the loopback gateway base URL"
-assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "Strix consumes the generated gateway bearer token"
-assert_file_contains "$sidecar_script" '--target "$ORCHESTRATOR_SITE_PACKAGES"' "Strix sidecar dependencies are isolated from the hash-locked scanner runtime"
-assert_file_contains "$sidecar_script" "::add-mask::%s" "Strix sidecar masks its generated bearer token"
-assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix retains direct-provider models only as explicit diagnostics"
-""",
+          assert_file_contains "$workflow_file" "contextual-orchestrator/orchestrator/free" "Strix selects the fail-closed orchestrator/free gateway pool by default"
+          assert_file_contains "$workflow_file" "openai/orchestrator/free" "Strix addresses the gateway through its OpenAI-compatible model namespace"
+          assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "Strix consumes the loopback gateway base URL"
+          assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "Strix consumes the generated gateway bearer token"
+          assert_file_contains "$sidecar_script" '--target "$ORCHESTRATOR_SITE_PACKAGES"' "Strix sidecar dependencies are isolated from the hash-locked scanner runtime"
+          assert_file_contains "$sidecar_script" "::add-mask::%s" "Strix sidecar masks its generated bearer token"
+          assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix retains direct-provider models only as explicit diagnostics"
+          """,
           )
 
           replace_once(
               changelog,
               """## [Unreleased]
-""",
+          """,
               """## [Unreleased]
-- Required Strix security evidence now uses the existing vendored
-  `contextual-orchestrator` sidecar and its fail-closed `orchestrator/free`
-  ZDR-first zero-cost pool for normal scans. Direct NVIDIA NIM, OpenRouter,
-  GitHub Models, OpenAI, and Vertex paths remain available only when an
-  authorized `repository_dispatch` explicitly supplies `strix_llm` for
-  diagnosis. Gateway startup, loopback binding, bearer-token masking, and an
-  isolated `--target` dependency tree fail closed; Strix receives only the
-  loopback OpenAI-compatible token/base while provider credentials stay inside
-  the sidecar process. The gateway route owns provider/model failover, so the
-  scanner does not append a second direct-provider fallback chain.
-""",
+          - Required Strix security evidence now uses the existing vendored
+            `contextual-orchestrator` sidecar and its fail-closed `orchestrator/free`
+            ZDR-first zero-cost pool for normal scans. Direct NVIDIA NIM, OpenRouter,
+            GitHub Models, OpenAI, and Vertex paths remain available only when an
+            authorized `repository_dispatch` explicitly supplies `strix_llm` for
+            diagnosis. Gateway startup, loopback binding, bearer-token masking, and an
+            isolated `--target` dependency tree fail closed; Strix receives only the
+            loopback OpenAI-compatible token/base while provider credentials stay inside
+            the sidecar process. The gateway route owns provider/model failover, so the
+            scanner does not append a second direct-provider fallback chain.
+          """,
           )
           replace_once(
               baseline,
               """## 1. 근거와 범위
-""",
+          """,
               """## 2026-08-28 live delta — Strix provider authority
 
-- DiskSage #264의 exact-head 제품·Release·SAST·Security 검증은 성공했지만,
-  중앙 Strix는 NVIDIA 429, NVIDIA fallback 404, OpenRouter 502, OpenAI
-  `insufficient_quota`가 연속 발생해 권위 있는 취약점 보고서를 만들지 못하고
-  `STRIX_PROVIDER_UNAVAILABLE`로 fail-closed 종료했다. 이 결과를 제품 결함이나
-  성공 증거로 오인하지 않는다.
-- 정상 Strix 실행의 provider/model 선택 권한은 vendored
-  `contextual-orchestrator`의 `orchestrator/free` ZDR-first pool로 이동한다.
-  명시적 `repository_dispatch.strix_llm`만 기존 direct-provider 진단 경로를
-  선택할 수 있다. Gateway 실패는 direct fallback으로 위장하지 않고 required
-  Check를 실패시킨다.
-- 소비 저장소 PR은 중앙 provider outage를 고치기 위한 no-op commit이나 반복
-  rerun을 만들지 않는다. 중앙 수정이 병합된 뒤 unchanged exact head에 새 Strix
-  evidence를 dispatch하고, 독립 승인과 모든 required Check를 다시 요구한다.
+          - DiskSage #264의 exact-head 제품·Release·SAST·Security 검증은 성공했지만,
+            중앙 Strix는 NVIDIA 429, NVIDIA fallback 404, OpenRouter 502, OpenAI
+            `insufficient_quota`가 연속 발생해 권위 있는 취약점 보고서를 만들지 못하고
+            `STRIX_PROVIDER_UNAVAILABLE`로 fail-closed 종료했다. 이 결과를 제품 결함이나
+            성공 증거로 오인하지 않는다.
+          - 정상 Strix 실행의 provider/model 선택 권한은 vendored
+            `contextual-orchestrator`의 `orchestrator/free` ZDR-first pool로 이동한다.
+            명시적 `repository_dispatch.strix_llm`만 기존 direct-provider 진단 경로를
+            선택할 수 있다. Gateway 실패는 direct fallback으로 위장하지 않고 required
+            Check를 실패시킨다.
+          - 소비 저장소 PR은 중앙 provider outage를 고치기 위한 no-op commit이나 반복
+            rerun을 만들지 않는다. 중앙 수정이 병합된 뒤 unchanged exact head에 새 Strix
+            evidence를 dispatch하고, 독립 승인과 모든 required Check를 다시 요구한다.
 
-## 1. 근거와 범위
-""",
+          ## 1. 근거와 범위
+          """,
           )
 
           (ROOT / "docs/adr/0004-strix-contextual-orchestrator-authority.md").write_text(
               """# ADR-0004: contextual-orchestrator owns normal Strix provider routing
 
-- Status: Proposed
-- Date: 2026-08-28
-- Owners: ContextualWisdomLab central CI maintainers
-- Figma File ID: N/A (workflow/control-plane change; no customer UI)
+          - Status: Proposed
+          - Date: 2026-08-28
+          - Owners: ContextualWisdomLab central CI maintainers
+          - Figma File ID: N/A (workflow/control-plane change; no customer UI)
 
-## Context
+          ## Context
 
-Required Strix scans were serialized per repository, but each scan still owned a
-hard-coded direct provider chain. A live DiskSage exact-head scan exhausted four
-independent paths in one run: NVIDIA rate limiting, an unavailable NVIDIA model,
-an OpenRouter upstream error, and exhausted direct OpenAI credit. No authoritative
-vulnerability report existed, so the required check correctly failed closed, but
-consumer product PRs could not repair the shared authority boundary.
+          Required Strix scans were serialized per repository, but each scan still owned a
+          hard-coded direct provider chain. A live DiskSage exact-head scan exhausted four
+          independent paths in one run: NVIDIA rate limiting, an unavailable NVIDIA model,
+          an OpenRouter upstream error, and exhausted direct OpenAI credit. No authoritative
+          vulnerability report existed, so the required check correctly failed closed, but
+          consumer product PRs could not repair the shared authority boundary.
 
-The central repository already vendors a pinned contextual-orchestrator sidecar.
-It registers the five organization provider credentials in a process-local KV,
-performs live discovery, applies the reviewed zero-cost/ZDR policy, and exposes
-`orchestrator/free` through an authenticated OpenAI-compatible loopback API.
+          The central repository already vendors a pinned contextual-orchestrator sidecar.
+          It registers the five organization provider credentials in a process-local KV,
+          performs live discovery, applies the reviewed zero-cost/ZDR policy, and exposes
+          `orchestrator/free` through an authenticated OpenAI-compatible loopback API.
 
-## Decision
+          ## Decision
 
-Normal Strix scans SHALL provision that sidecar and call
-`openai/orchestrator/free` through exact IPv4 loopback. The sidecar owns
-provider/model discovery and fallback. Strix SHALL NOT add a second direct
-fallback chain for the gateway-backed route.
+          Normal Strix scans SHALL provision that sidecar and call
+          `openai/orchestrator/free` through exact IPv4 loopback. The sidecar owns
+          provider/model discovery and fallback. Strix SHALL NOT add a second direct
+          fallback chain for the gateway-backed route.
 
-A caller MAY use `repository_dispatch.strix_llm` to select an existing direct
-provider model for bounded diagnosis. That override is explicit, auditable, and
-does not change the normal default.
+          A caller MAY use `repository_dispatch.strix_llm` to select an existing direct
+          provider model for bounded diagnosis. That override is explicit, auditable, and
+          does not change the normal default.
 
-The sidecar dependency tree SHALL be installed into an isolated `--target`
-directory so it cannot rewrite the hash-locked Strix runtime. Its generated
-bearer token SHALL be line-safe, masked before export, and passed to Strix only
-through a mode-specific file. Missing credentials, unhealthy startup, non-loopback
-base URLs, invalid ports, and missing tokens fail closed.
+          The sidecar dependency tree SHALL be installed into an isolated `--target`
+          directory so it cannot rewrite the hash-locked Strix runtime. Its generated
+          bearer token SHALL be line-safe, masked before export, and passed to Strix only
+          through a mode-specific file. Missing credentials, unhealthy startup, non-loopback
+          base URLs, invalid ports, and missing tokens fail closed.
 
-## Consequences
+          ## Consequences
 
-- Shared provider outages are handled by one routing authority instead of nested
-  retry/fallback loops.
-- Provider credentials remain inside the gateway process; the scanner sees only
-  a short-lived loopback credential.
-- A gateway outage remains non-passing security evidence.
-- Existing direct-provider diagnostic contracts and their tests remain supported.
-- After merge, consumer PRs require a fresh exact-head Strix run; predecessor
-  outage evidence is not transferred.
+          - Shared provider outages are handled by one routing authority instead of nested
+            retry/fallback loops.
+          - Provider credentials remain inside the gateway process; the scanner sees only
+            a short-lived loopback credential.
+          - A gateway outage remains non-passing security evidence.
+          - Existing direct-provider diagnostic contracts and their tests remain supported.
+          - After merge, consumer PRs require a fresh exact-head Strix run; predecessor
+            outage evidence is not transferred.
 
-## Verification
+          ## Verification
 
-- RED/GREEN static contract for the workflow, model namespace, loopback and token.
-- Bounded required-workflow smoke contract.
-- Bash syntax and YAML parse.
-- Existing full organization Checks, independent review, and protected merge.
+          - RED/GREEN static contract for the workflow, model namespace, loopback and token.
+          - Bounded required-workflow smoke contract.
+          - Bash syntax and YAML parse.
+          - Existing full organization Checks, independent review, and protected merge.
 
-## Rollback
+          ## Rollback
 
-Revert this ADR and its workflow commit. Do not partially restore a direct default
-while leaving gateway key/base files active. Re-run the complete required Strix
-contract and affected consumer exact heads after rollback.
-""",
+          Revert this ADR and its workflow commit. Do not partially restore a direct default
+          while leaving gateway key/base files active. Re-run the complete required Strix
+          contract and affected consumer exact heads after rollback.
+          """,
               encoding="utf-8",
           )
           (ROOT / "docs/doctoring/strix-contextual-orchestrator-gateway.md").write_text(
               """# Strix contextual-orchestrator gateway doctoring
 
-## Failure evidence
+          ## Failure evidence
 
-The triggering consumer scan produced no vulnerability artifact. Its terminal
-log recorded provider infrastructure failures across NVIDIA NIM, OpenRouter, and
-direct OpenAI, followed by the existing fail-closed
-`STRIX_PROVIDER_UNAVAILABLE` classification. Repository Test, Release, SAST, and
-Security workflows were independently successful on the same consumer head.
+          The triggering consumer scan produced no vulnerability artifact. Its terminal
+          log recorded provider infrastructure failures across NVIDIA NIM, OpenRouter, and
+          direct OpenAI, followed by the existing fail-closed
+          `STRIX_PROVIDER_UNAVAILABLE` classification. Repository Test, Release, SAST, and
+          Security workflows were independently successful on the same consumer head.
 
-## Causal boundary
+          ## Causal boundary
 
-The defect is not in the consumer product tree. It is the duplicated routing
-authority in central Strix: the scanner selected and retried direct providers even
-though the organization already had a pinned contextual-orchestrator gateway with
-model discovery, ZDR policy, and provider-family diversity.
+          The defect is not in the consumer product tree. It is the duplicated routing
+          authority in central Strix: the scanner selected and retried direct providers even
+          though the organization already had a pinned contextual-orchestrator gateway with
+          model discovery, ZDR policy, and provider-family diversity.
 
-## Corrective control
+          ## Corrective control
 
-```text
-five provider credentials
-→ process-local contextual-orchestrator KV
-→ live discovery + ZDR-first zero-cost catalog
-→ authenticated 127.0.0.1 OpenAI-compatible API
-→ Strix openai/orchestrator/free
-→ authoritative report or fail-closed required check
-```
+          ```text
+          five provider credentials
+          → process-local contextual-orchestrator KV
+          → live discovery + ZDR-first zero-cost catalog
+          → authenticated 127.0.0.1 OpenAI-compatible API
+          → Strix openai/orchestrator/free
+          → authoritative report or fail-closed required check
+          ```
 
-Direct providers are retained only for an explicit diagnostic override. The
-normal gateway route has no scanner-owned fallback list.
+          Direct providers are retained only for an explicit diagnostic override. The
+          normal gateway route has no scanner-owned fallback list.
 
-## Security and operability
+          ## Security and operability
 
-- The sidecar is pinned by commit SHA.
-- Provider credentials never become Strix key files in gateway mode.
-- The bearer token is generated per job, rejects line breaks, and is masked.
-- The base URL must be exact IPv4 loopback with a valid port.
-- Sidecar packages use an isolated target directory rather than the scanner's
-  hash-locked environment.
-- Health failure, empty discovery, missing credentials, and provider exhaustion
-  remain non-passing.
-- Consumer PRs are rechecked on unchanged exact heads after the central fix.
+          - The sidecar is pinned by commit SHA.
+          - Provider credentials never become Strix key files in gateway mode.
+          - The bearer token is generated per job, rejects line breaks, and is masked.
+          - The base URL must be exact IPv4 loopback with a valid port.
+          - Sidecar packages use an isolated target directory rather than the scanner's
+            hash-locked environment.
+          - Health failure, empty discovery, missing credentials, and provider exhaustion
+            remain non-passing.
+          - Consumer PRs are rechecked on unchanged exact heads after the central fix.
 
-## Traceability
+          ## Traceability
 
-- ADR: `docs/adr/0004-strix-contextual-orchestrator-authority.md`
-- Workflow: `.github/workflows/strix.yml`
-- Sidecar: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
-- Required smoke: `scripts/ci/strix_required_workflow_smoke.sh`
-- Contract: `tests/test_strix_contextual_orchestrator_contract.py`
-- Predecessor gateway ADR: `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
-""",
+          - ADR: `docs/adr/0004-strix-contextual-orchestrator-authority.md`
+          - Workflow: `.github/workflows/strix.yml`
+          - Sidecar: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
+          - Required smoke: `scripts/ci/strix_required_workflow_smoke.sh`
+          - Contract: `tests/test_strix_contextual_orchestrator_contract.py`
+          - Predecessor gateway ADR: `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+          """,
               encoding="utf-8",
           )
           PY
