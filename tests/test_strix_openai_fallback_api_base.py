@@ -27,6 +27,7 @@ STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_MODEL_UTILS = REPOSITORY_ROOT / "scripts" / "ci" / "strix_model_utils.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 OPENAI_FALLBACK_BASE = "https://api.openai.com/v1"
+OPENROUTER_FALLBACK_BASE = "https://openrouter.ai/api/v1"
 
 
 def _function_block(source: str, function_name: str) -> str:
@@ -48,11 +49,14 @@ def _resolver_helpers() -> list[str]:
     utils_source = STRIX_MODEL_UTILS.read_text(encoding="utf-8")
     helper_names = (
         ("is_vertex_model", gate_source),
+        ("is_contextual_orchestrator_model", gate_source),
+        ("is_contextual_orchestrator_api_base", gate_source),
         ("is_github_models_model", gate_source),
         ("is_github_models_api_base", gate_source),
         ("is_known_foreign_provider_api_base", gate_source),
         ("is_github_models_api_compatible_model", gate_source),
         ("is_explicit_openai_model", gate_source),
+        ("normalize_model", utils_source),
         ("resolve_trusted_input_file", gate_source),
         ("trim_whitespace", utils_source),
     )
@@ -86,6 +90,15 @@ def _resolve_api_base(env: dict[str, str], model: str) -> tuple[int, str]:
                 **env,
                 "STRIX_OPENAI_FALLBACK_API_BASE_FILE": str(fallback_path),
             }
+        openrouter_path = Path(temp_dir) / "openrouter_fallback_api_base.txt"
+        if "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE" in env:
+            openrouter_path.write_text(
+                env["STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"], encoding="utf-8"
+            )
+            env = {
+                **env,
+                "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE": str(openrouter_path),
+            }
         github_models_path = Path(temp_dir) / "github_models_api_base.txt"
         if "STRIX_GITHUB_MODELS_API_BASE_FILE" in env:
             github_models_path.write_text(
@@ -109,6 +122,7 @@ def _resolve_api_base(env: dict[str, str], model: str) -> tuple[int, str]:
                 "LLM_API_BASE_FILE",
                 "STRIX_GITHUB_MODELS_API_BASE_FILE",
                 "STRIX_OPENAI_FALLBACK_API_BASE_FILE",
+                "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE",
             }
         }
         completed = subprocess.run(
@@ -194,6 +208,19 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(api_base, "https://integrate.api.nvidia.com/v1")
 
+    def test_nvidia_primary_routes_openrouter_fallback_to_openrouter(self) -> None:
+        """OpenRouter fallback never inherits the NVIDIA NIM endpoint."""
+
+        rc, api_base = _resolve_api_base(
+            {
+                "LLM_API_BASE_FILE": "https://integrate.api.nvidia.com/v1",
+                "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE": OPENROUTER_FALLBACK_BASE,
+            },
+            "openrouter/free",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, OPENROUTER_FALLBACK_BASE)
+
     def test_github_models_fallback_keeps_github_models_base(self) -> None:
         """github_models/* fallbacks keep their dedicated inference endpoint."""
 
@@ -220,20 +247,49 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-class WorkflowProvisionsFallbackBase(unittest.TestCase):
-    """The workflow must publish and pass the explicit OpenAI fallback base."""
+class WorkflowUsesContextualOrchestrator(unittest.TestCase):
+    """The required workflow must expose only the local gateway route."""
 
-    def test_workflow_writes_openai_fallback_api_base_file(self) -> None:
+    def test_workflow_does_not_provision_direct_provider_fallbacks(self) -> None:
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("STRIX_OPENAI_FALLBACK_API_BASE_FILE=", workflow)
-        self.assertIn(OPENAI_FALLBACK_BASE, workflow)
+        self.assertEqual(workflow.count("secrets.OPENAI_API_KEY"), 1)
+        self.assertEqual(workflow.count("secrets.OPENROUTER_API_KEY"), 1)
+        self.assertNotIn("secrets.GCP_SA_KEY", workflow)
+        self.assertNotIn("STRIX_OPENAI_FALLBACK_API_BASE_FILE", workflow)
+        self.assertNotIn("STRIX_GITHUB_MODELS_KEY_FILE", workflow)
 
-    def test_workflow_passes_override_into_gate_environment(self) -> None:
+    def test_workflow_does_not_configure_an_external_fallback(self) -> None:
+        """The gateway owns model discovery and provider failover."""
+
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            "STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}",
-            workflow,
+        fallback_expression = next(
+            line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
         )
+        self.assertEqual(fallback_expression.strip(), 'STRIX_FALLBACK_MODELS: ""')
+        self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
+
+    def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
+        """The local sidecar is accepted without allowing arbitrary HTTP bases."""
+
+        rc, api_base = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 2)
+
+    def test_manual_status_job_has_status_write_permission(self) -> None:
+        """OIDC target-app exchange may request the target commit status scope."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  publish-manual-pr-evidence-status:", 1)[1]
+        self.assertIn("      statuses: write", job.split("    steps:", 1)[0])
 
 
 if __name__ == "__main__":

@@ -126,6 +126,12 @@ repeatable compile command.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
+- **Central review routes through the vendored contextual-orchestrator gateway.**
+  `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
+  (the five provider secrets flow into its KV; the writer runs
+  `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
+  exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
