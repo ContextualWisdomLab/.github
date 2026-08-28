@@ -225,8 +225,8 @@ flowchart LR
   (`ContextualWisdomLab/contextual-orchestrator` AGENTS.md) migrated
   OpenCode/Noema/Strix to the gateway; this snapshot lands the org-repo half.
 - `pr-review-autofix.yml` now provisions
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (current pinned SHA
-  `b2164511…`, same-process KV registration of `BYTEZ_API_KEY`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (snapshot pinned SHA
+  `8d5924f8…`, same-process KV registration of `BYTEZ_API_KEY`,
   `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
   `OPENAI_API_KEY`, live auto model discovery, ZDR-prioritized free catalog),
   and the writer runs `--model contextual-orchestrator/orchestrator/free`.
