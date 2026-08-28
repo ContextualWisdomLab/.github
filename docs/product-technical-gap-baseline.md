@@ -287,6 +287,22 @@ flowchart LR
   Strix completion and an independently authorized Noema verdict remain
   separate evidence items.
 
+## 2026-08-28 post-#1373 request-envelope recheck
+
+- #1373 was merged by `seonghobae` at `8f84b661e468de451ba5c076dc938f342bf52d70`
+  to exercise the post-merge runtime path. Main Strix run `33143805461`
+  reached the contextual-orchestrator sidecar and sent the qualified
+  `openai/orchestrator/free` request, then failed closed with HTTP 413
+  `request_too_large` from the pinned gateway. This proves the earlier model
+  qualification defect was repaired, but the review request envelope was
+  still smaller than the Strix/Noema tool-and-source context.
+- The fix is scoped to the review launcher: use an explicit bounded 8 MiB
+  `SecurityConfig.max_body_bytes` for the sidecar while preserving the
+  contextual-orchestrator library's generic 64 KiB default. Noema run
+  `33143860315` was a successful `workflow_run` event handler but skipped
+  because the push event had no associated pull request; it is not an LLM
+  verdict.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
