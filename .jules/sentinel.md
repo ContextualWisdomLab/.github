@@ -35,3 +35,7 @@
 **Vulnerability:** Command Injection
 **Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
+## 2026-08-28 - Prevent SSRF via URL parsing and Command Injection via explicit shell=False
+**Vulnerability:** Server-Side Request Forgery (SSRF) and Implicit Shell Usage in Subprocess
+**Learning:** URL prefixes starting with http/https alone do not prevent SSRF; unvalidated hostnames allow arbitrary network scanning. Also, missing explicit `shell=False` in `subprocess.Popen` or `run` fails to satisfy strict security linting and obscures safe execution intentions.
+**Prevention:** Use `urllib.parse.urlparse` to validate the URL's hostname is explicitly restricted to loopback addresses (`localhost` or `127.0.0.1`). Always explicitly define `shell=False` in subprocess calls.
