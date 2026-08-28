@@ -110,9 +110,8 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-' in text
     assert '[ ! -f "$token_file" ]' in text
     assert '[ -L "$token_file" ]' in text
-    assert 'stat --version >/dev/null 2>&1' in text
-    assert 'stat -c "$format" -- "$path"' in text
-    assert 'stat -f "$bsd_format" -- "$path"' in text
+    assert 'value="$(stat -c "$format" -- "$path" 2>/dev/null)"' in text
+    assert 'value="$(stat -f "$bsd_format" -- "$path" 2>/dev/null)"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -178,6 +177,49 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     multiline = run(token_file)
     assert multiline.returncode != 0
     assert "must not contain CR or LF" in multiline.stderr
+
+
+def test_token_loader_probes_busybox_style_stat_without_version_flag(tmp_path: Path) -> None:
+    """A stat implementation without --version still uses its working -c form."""
+    token_file = tmp_path / "bearer.token"
+    token_file.write_text("synthetic-test-bearer", encoding="utf-8")
+    token_file.chmod(0o600)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_stat = fake_bin / "stat"
+    fake_stat.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${1:-}\" in\n"
+        "  --version) exit 1 ;;\n"
+        "  -c)\n"
+        "    case \"${2:-}\" in\n"
+        "      %u) id -u ;;\n"
+        "      %a) printf '600\\n' ;;\n"
+        "      *) exit 1 ;;\n"
+        "    esac\n"
+        "    ;;\n"
+        "  -f) exit 1 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_stat.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail; source "$TOKEN_LOADER"; printf "loaded=%s\\n" "$CONTEXTUAL_ORCHESTRATOR_TOKEN"'],
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "false",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_file),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "loaded=synthetic-test-bearer" in result.stdout
 
 
 def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path) -> None:
