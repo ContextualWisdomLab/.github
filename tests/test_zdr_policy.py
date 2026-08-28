@@ -36,9 +36,16 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
         zdr_policy.provider_zdr_scope("made_up_provider")
 
 
-def test_feed_model_matches_rejects_non_string_model() -> None:
-    """Defensive matching must fail closed for malformed model values."""
-    assert zdr_policy._feed_model_matches(None, frozenset()) is False
+def test_is_zdr_model_rejects_non_string_model() -> None:
+    """Defensive route evaluation must fail closed for malformed model values."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model=object(),  # type: ignore[arg-type]
+            zdr_endpoints=frozenset({"openrouter/provider/model"}),
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

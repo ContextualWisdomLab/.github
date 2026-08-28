@@ -196,7 +196,7 @@ def is_zdr_model(
     """
     scope = provider_zdr_scope(provider_name)
     if scope.openrouter_endpoints_feed:
-        if not zdr_endpoints or not model:
+        if not zdr_endpoints or not isinstance(model, str) or not model:
             return False
         return route_key(provider_name, model) in zdr_endpoints
     return scope.zero_data_retention
