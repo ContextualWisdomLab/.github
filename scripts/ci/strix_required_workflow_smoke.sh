@@ -19,6 +19,7 @@ workflow_file="$workflow_root/.github/workflows/strix.yml"
 gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
 sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+token_loader_script="$repo_root/scripts/ci/load_contextual_orchestrator_token.sh"
 
 failures=0
 
@@ -118,7 +119,7 @@ PY
 	fi
 }
 
-for shell_script in "$gate_script" "$full_gate_test" "$sidecar_script"; do
+for shell_script in "$gate_script" "$full_gate_test" "$sidecar_script" "$token_loader_script"; do
 	if ! bash -n -- "$shell_script"; then
 		record_failure "Strix gate script must pass bash syntax checks: $shell_script"
 	fi

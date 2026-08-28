@@ -41,6 +41,10 @@ orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
 - The gateway binds to loopback only; it never leaves the runner. Secrets are
   bootstrap transport into the KV and are never read back from environment at
   request time.
+- The generated bearer is stored in a runner-owned mode-0600 regular file.
+  `GITHUB_ENV` carries only that path; every Noema, Strix, OpenCode review, and
+  autofix consumer validates ownership, mode, symlink status, size, and line
+  structure before reading and masking the bearer inside its own step.
 - Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
   OIDC. Review mutation is still not `github.token`.
 
@@ -66,7 +70,9 @@ training (OpenRouter's own stance). Evidence sources:
 - `scripts/ci/contextual_orchestrator_review_launcher.py` — same-process KV
   registration + discovery + serve (runs in the vendored runtime only).
 - `scripts/ci/contextual_orchestrator_review_sidecar.sh` — pinned-SHA vendoring +
-  health gate + GITHUB_ENV export.
+  health gate + private token-file creation and path export.
+- `scripts/ci/load_contextual_orchestrator_token.sh` — per-step file validation,
+  bearer masking, and process-local export for the consuming model command.
 - `tests/test_zdr_policy.py`,
   `tests/test_contextual_orchestrator_review_policy.py`,
   `tests/test_contextual_orchestrator_review_sidecar_contract.py`,
@@ -90,3 +96,10 @@ The earlier PR-target Noema failure remains bootstrap evidence because it ran
 the pre-fix trusted base copy. Operational acceptance now requires a fresh
 protected-main run that starts the corrected sidecar, passes authenticated
 health, and reaches the scanner; queued or cancelled jobs are non-passing.
+
+The first corrected-catalog Noema canary reached authenticated health and the
+review gate, but its retained job log showed that exporting the raw bearer via
+`GITHUB_ENV` exposed it in the next step's rendered environment header before
+that step could mask it. The causal repair therefore exports only a private
+token-file path and rehydrates the bearer after each consumer step starts. No
+credential value is retained in this record.

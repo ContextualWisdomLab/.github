@@ -11,11 +11,14 @@ fail-closed zero-cost pool (prioritized by the ZDR policy in
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 
 _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 SIDECAR = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
+TOKEN_LOADER = _ORG_REPO_ROOT / "scripts/ci/load_contextual_orchestrator_token.sh"
 LAUNCHER = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 AUTOFIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/pr-review-autofix.yml"
 NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
@@ -80,12 +83,91 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 
 
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
-    """The gateway address and bearer token land in GITHUB_ENV for later steps."""
+    """Only a private token-file path crosses the GitHub step boundary."""
     text = _read(SIDECAR)
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\\n' \"$ORCHESTRATOR_TOKEN\"" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE=%s\\n' \"$token_file\"" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\\n" not in text
+    assert 'token_file="$ORCHESTRATOR_WORK/bearer.token"' in text
+    assert 'chmod 600 -- "$token_file"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_EVIDENCE=%s\\n' \"$policy_report\"" in text
     assert '>> "$ORCHESTRATOR_GITHUB_ENV"' in text
+
+
+def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() -> None:
+    """Consumer steps read a private regular file instead of logging raw step env."""
+    text = _read(TOKEN_LOADER)
+    assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-' in text
+    assert '[ ! -f "$token_file" ]' in text
+    assert '[ -L "$token_file" ]' in text
+    assert 'stat -c %a -- "$token_file"' in text
+    assert 'stat -c %u -- "$token_file"' in text
+    assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
+    assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
+    assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
+
+
+def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Path) -> None:
+    """Exercise the loader's real file boundary, including mode and symlinks."""
+    token_file = tmp_path / "bearer.token"
+    token_file.write_text("synthetic-test-bearer", encoding="utf-8")
+    token_file.chmod(0o600)
+    command = (
+        'set -euo pipefail; source "$TOKEN_LOADER"; '
+        'printf "loaded=%s\\n" "$CONTEXTUAL_ORCHESTRATOR_TOKEN"'
+    )
+
+    def run(candidate: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-c", command],
+            env={
+                **os.environ,
+                "TOKEN_LOADER": str(TOKEN_LOADER),
+                "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(candidate),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    accepted = run(token_file)
+    assert accepted.returncode == 0, accepted.stderr
+    assert "::add-mask::synthetic-test-bearer" in accepted.stdout
+    assert "loaded=synthetic-test-bearer" in accepted.stdout
+
+    token_file.chmod(0o644)
+    wrong_mode = run(token_file)
+    assert wrong_mode.returncode != 0
+    assert "must have mode 600" in wrong_mode.stderr
+
+    token_file.chmod(0o600)
+    symlink = tmp_path / "bearer.link"
+    symlink.symlink_to(token_file)
+    linked = run(symlink)
+    assert linked.returncode != 0
+    assert "regular, non-symlink" in linked.stderr
+
+    token_file.write_bytes(b"synthetic\nsecond-line")
+    multiline = run(token_file)
+    assert multiline.returncode != 0
+    assert "must not contain CR or LF" in multiline.stderr
+
+
+def test_every_model_consumer_loads_the_bearer_inside_its_own_step() -> None:
+    """No workflow relies on a raw bearer persisted through GITHUB_ENV."""
+    noema = _read(NOEMA_WORKFLOW)
+    strix = _read(STRIX_WORKFLOW)
+    dispatch = _read(OPENCODE_DISPATCH_WORKFLOW)
+    autofix = _read(AUTOFIX_WORKFLOW)
+
+    assert 'source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"' in noema
+    assert 'source "$TRUSTED_STRIX_SOURCE/scripts/ci/load_contextual_orchestrator_token.sh"' in strix
+    assert dispatch.count(
+        'source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"'
+    ) >= 2
+    assert autofix.count(
+        'source "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/load_contextual_orchestrator_token.sh"'
+    ) == 2
 
 
 def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
