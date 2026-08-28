@@ -25,7 +25,8 @@ failures rather than reasons to measure a different toolchain.
 
 Rust dependency materialization follows the same boundary. The trusted
 `coverage-source-tree` job runs `cargo fetch --locked` from a runner-owned,
-neutral `HOME`/`CARGO_HOME`, with GitHub credentials removed, and copies only
+neutral `HOME`/`CARGO_HOME`, with GitHub credentials removed and Git prompts
+disabled, and copies only
 Cargo's content-addressed `registry/` and `git/` directories into the
 tree-local sandbox home. Prefetch and runtime force Cargo's `git` registry
 protocol so runner and container Cargo versions consume the same cache layout.

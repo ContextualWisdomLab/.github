@@ -118,6 +118,7 @@ def test_rust_coverage_prefetches_locked_crates_before_networkless_sandbox() -> 
     assert 'HOME="$prefetch_home"' in source_tree
     assert 'CARGO_HOME="$prefetch_home/.cargo"' in source_tree
     assert 'CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git' in source_tree
+    assert 'GIT_TERMINAL_PROMPT=0' in source_tree
     assert "env -u GH_TOKEN -u GITHUB_TOKEN" in source_tree
     assert ".opencode-sandbox-home" in source_tree
     assert "refusing to mix it with trusted Cargo caches" in source_tree

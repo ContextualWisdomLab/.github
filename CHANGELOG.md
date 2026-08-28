@@ -11,8 +11,8 @@ Semantic Versioning where the repository publishes a release.
   Both prefetch and runtime force Cargo's git registry protocol so their cache
   layouts remain compatible; the reserved sandbox path is rejected even when
   Cargo is unavailable, GitHub credentials and PR-controlled Cargo
-  configuration do not cross the boundary, and missing caches remain
-  fail-closed.
+  configuration do not cross the boundary, Git credential prompts are disabled,
+  and missing caches remain fail-closed.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator
