@@ -330,9 +330,6 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
 	assert_file_contains "$GATE_SCRIPT" "sanitize_known_strix_report_warnings" "strix gate sanitizes only known internal Strix report warnings"
-	assert_file_contains "$GATE_SCRIPT" "known_internal_warning = re.compile" "strix gate sanitizes known internal console warnings"
-	assert_file_contains "$GATE_SCRIPT" "dest.write_bytes(src.read_bytes())" "strix gate preserves byte-level console evidence after decode errors"
-	assert_file_contains "$GATE_SCRIPT" "A missing source must not leave a prior attempt's classified copy active" "strix gate removes stale classified console copies"
 	assert_file_contains "$GATE_SCRIPT" 'MODEL QUALITY WARNING' "strix gate accepts the scanner's informational fallback-model banner"
 	assert_file_contains "$GATE_SCRIPT" 'unauthenticated requests to the HF Hub' "strix gate accepts the scanner dependency's non-fatal download warning"
 	assert_file_not_contains "$GATE_SCRIPT" 'known_scanner_warning = re.compile(r".*Warn' "strix gate does not broadly suppress warning-class evidence"
@@ -4592,14 +4589,6 @@ EOS
 		echo "Warning: provider response included incomplete scan state"
 		exit 0
 		;;
-	console-known-internal-warning-sanitized)
-		cat <<'EOS'
-2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.core.execution: agent a9fb4033 produced non-lifecycle final output in non-interactive mode; forcing tool continuation (1/500): internal console coordination note
-2026-08-22 09:53:26.193 WARNING strix-pr-scope-example - strix.core.execution: agent 673f770f ended a turn without a lifecycle tool call (interactive=False); forcing tool continuation (1/500): <empty>
-scan completed with 0 vulnerability report(s)
-EOS
-		exit 0
-		;;
 	provider-denied-success-signal)
 		echo "Denied: provider credentials were rejected"
 		exit 0
@@ -4662,119 +4651,6 @@ EOS
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.provider: provider returned incomplete scan state
 EOS
 		echo "scan ok but unknown report warning remains"
-		exit 0
-		;;
-	console-model-quality-warning-banner-sanitized)
-		# Cosmetic startup banner on a non-frontier model. Classification
-		# must ignore only that box so a clean 0-finding scan succeeds.
-		cat <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  MODEL QUALITY WARNING                                                       │
-│                                                                              │
-│  'vertex_ai/console-model-quality-warning-banner-sanitized' is not a         │
-│  recommended frontier model for Strix.                                       │
-│                                                                              │
-│  You can continue, but weaker models may miss vulnerabilities or produce     │
-│  lower-quality findings.                                                     │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  Penetration test completed                                                  │
-│                                                                              │
-│  Vulnerabilities 0                                                           │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-EOS
-		exit 0
-		;;
-	console-model-quality-warning-preserves-prior-fatal-box)
-		# A genuine Fatal box must survive when it precedes the cosmetic
-		# banner. A cross-box regex would delete both and fail open.
-		cat <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  Fatal: LLM CONNECTION FAILED after 3 retries                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  MODEL QUALITY WARNING                                                       │
-│                                                                              │
-│  'vertex_ai/console-model-quality-warning-preserves-prior-fatal-box' is not  │
-│  a recommended frontier model for Strix.                                     │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-Penetration test completed
-Vulnerabilities 0 (No exploitable vulnerabilities detected)
-EOS
-		exit 0
-		;;
-	report-model-quality-warning-banner-sanitized)
-		mkdir -p "$STRIX_REPORTS_DIR/fake-model-quality-banner"
-		cat >"$STRIX_REPORTS_DIR/fake-model-quality-banner/strix.log" <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  MODEL QUALITY WARNING                                                       │
-│  'vertex_ai/report-model-quality-warning-banner-sanitized' is not a          │
-│  recommended frontier model for Strix.                                       │
-╰──────────────────────────────────────────────────────────────────────────────╯
-2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
-EOS
-		echo "scan ok with sanitized model-quality report banner"
-		exit 0
-		;;
-	report-model-quality-warning-preserves-prior-fatal-box)
-		mkdir -p "$STRIX_REPORTS_DIR/fake-model-quality-fatal"
-		cat >"$STRIX_REPORTS_DIR/fake-model-quality-fatal/strix.log" <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  Fatal: LLM CONNECTION FAILED after 3 retries                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  MODEL QUALITY WARNING                                                       │
-│  'vertex_ai/report-model-quality-warning-preserves-prior-fatal-box' is not   │
-│  a recommended frontier model for Strix.                                     │
-╰──────────────────────────────────────────────────────────────────────────────╯
-2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
-EOS
-		echo "scan ok but prior fatal report box must remain"
-		exit 0
-		;;
-	console-model-quality-warning-preserves-same-box-failure)
-		# A whole-box delete would drop this Fatal with the heading
-		# and fail open. Strip only the cosmetic heading line.
-		cat <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  MODEL QUALITY WARNING                                                       │
-│  Fatal: LLM CONNECTION FAILED after 3 retries                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-Penetration test completed
-Vulnerabilities 0 (No exploitable vulnerabilities detected)
-EOS
-		exit 0
-		;;
-	report-model-quality-warning-preserves-same-box-failure)
-		mkdir -p "$STRIX_REPORTS_DIR/fake-model-quality-same-box-failure"
-		cat >"$STRIX_REPORTS_DIR/fake-model-quality-same-box-failure/strix.log" <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  MODEL QUALITY WARNING                                                       │
-│  Provider WARNING: report evidence is incomplete                            │
-╰──────────────────────────────────────────────────────────────────────────────╯
-EOS
-		echo "scan returned zero findings with incomplete evidence in the banner box"
-		exit 0
-		;;
-	console-model-quality-warning-preserves-same-box-ratelimit)
-		# RateLimitError is retryable. Keeping it in the classified copy
-		# therefore tries the two default Vertex fallbacks. Deleting the
-		# whole box would hide the token, inspect would pass, and the
-		# gate would stop after one successful call.
-		cat <<'EOS'
-╭─ STRIX ──────────────────────────────────────────────────────────────────────╮
-│  MODEL QUALITY WARNING                                                       │
-│  RateLimitError: Too Many Requests                                          │
-╰──────────────────────────────────────────────────────────────────────────────╯
-Penetration test completed
-Vulnerabilities 0 (No exploitable vulnerabilities detected)
-EOS
 		exit 0
 		;;
 	bare-timeout-with-provider-marker)
@@ -6083,88 +5959,6 @@ PY
 			"scenario=$scenario does not rewrite logs through symlinked report directories"
 	fi
 
-	if [ "$scenario" = "console-model-quality-warning-banner-sanitized" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"MODEL QUALITY WARNING" \
-			"scenario=$scenario publishes the raw console including the cosmetic banner"
-		local attempt_log=""
-		attempt_log="$(find "$repo_root_dir/strix_runs/gate-attempts" -type f -name '*.log' -print -quit 2>/dev/null || true)"
-		if [ -z "$attempt_log" ]; then
-			record_failure "scenario=$scenario should preserve a raw per-attempt log"
-		else
-			assert_file_contains \
-				"$attempt_log" \
-				"MODEL QUALITY WARNING" \
-				"scenario=$scenario keeps raw per-attempt logs"
-		fi
-	fi
-
-	if [ "$scenario" = "console-known-internal-warning-sanitized" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"produced non-lifecycle final output" \
-			"scenario=$scenario preserves the raw non-lifecycle console warning"
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"ended a turn without a lifecycle tool call" \
-			"scenario=$scenario preserves the raw lifecycle console warning"
-	fi
-
-	if [ "$scenario" = "console-model-quality-warning-preserves-prior-fatal-box" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"Fatal: LLM CONNECTION FAILED after 3 retries" \
-			"scenario=$scenario keeps the raw Fatal box in the published last-attempt log"
-	fi
-
-	if [ "$scenario" = "report-model-quality-warning-banner-sanitized" ]; then
-		assert_file_not_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-banner/strix.log" \
-			"MODEL QUALITY WARNING" \
-			"scenario=$scenario strips only the cosmetic report banner"
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-banner/strix.log" \
-			"finish_scan: completed scan with 0 vulnerability report(s)" \
-			"scenario=$scenario keeps non-banner report evidence"
-	fi
-
-	if [ "$scenario" = "report-model-quality-warning-preserves-prior-fatal-box" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-fatal/strix.log" \
-			"Fatal: LLM CONNECTION FAILED after 3 retries" \
-			"scenario=$scenario keeps a preceding Fatal report box"
-		assert_file_not_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-fatal/strix.log" \
-			"MODEL QUALITY WARNING" \
-			"scenario=$scenario still strips the cosmetic report banner"
-	fi
-
-	if [ "$scenario" = "console-model-quality-warning-preserves-same-box-failure" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"Fatal: LLM CONNECTION FAILED after 3 retries" \
-			"scenario=$scenario keeps the raw same-box Fatal line in last-attempt"
-	fi
-
-	if [ "$scenario" = "report-model-quality-warning-preserves-same-box-failure" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-same-box-failure/strix.log" \
-			"Provider WARNING: report evidence is incomplete" \
-			"scenario=$scenario keeps same-box provider warning evidence"
-		assert_file_not_contains \
-			"$repo_root_dir/strix_runs/fake-model-quality-same-box-failure/strix.log" \
-			"MODEL QUALITY WARNING" \
-			"scenario=$scenario still strips only the cosmetic heading"
-	fi
-
-	if [ "$scenario" = "console-model-quality-warning-preserves-same-box-ratelimit" ]; then
-		assert_file_contains \
-			"$repo_root_dir/strix_runs/gate-last-attempt.log" \
-			"RateLimitError: Too Many Requests" \
-			"scenario=$scenario keeps the raw same-box rate-limit line in last-attempt"
-	fi
-
 	if [ "$scenario" = "report-known-internal-warning-variant-sanitized" ]; then
 		assert_file_not_contains \
 			"$repo_root_dir/strix_runs/fake-known-internal-warning-variant/strix.log" \
@@ -6793,16 +6587,6 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/excluded-dir-primary" \
 			"<unset>"
 		;;
-	console-known-internal-warning-sanitized)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-			"vertex_ai/console-known-internal-warning-sanitized" \
-			"" \
-			"0" \
-			"Strix run succeeded for model 'vertex_ai/console-known-internal-warning-sanitized'" \
-			"1" \
-			"vertex_ai/console-known-internal-warning-sanitized" \
-			"<unset>"
-		;;
 	pull-request-target-changed-backend-context)
 		run_pull_request_target_changed_backend_context_scope_case
 		;;
@@ -6815,76 +6599,6 @@ run_filtered_gate_case_if_requested() {
 		"1" \
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
-		;;
-	console-model-quality-warning-banner-sanitized)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/console-model-quality-warning-banner-sanitized" \
-		"" \
-		"0" \
-		"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
-		"1" \
-		"vertex_ai/console-model-quality-warning-banner-sanitized" \
-		"<unset>"
-		;;
-	console-model-quality-warning-preserves-prior-fatal-box)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/console-model-quality-warning-preserves-prior-fatal-box" \
-		"" \
-		"1" \
-		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-		"1" \
-		"vertex_ai/console-model-quality-warning-preserves-prior-fatal-box" \
-		"<unset>"
-		;;
-	report-model-quality-warning-banner-sanitized)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/report-model-quality-warning-banner-sanitized" \
-		"" \
-		"0" \
-		"Strix run succeeded for model 'vertex_ai/report-model-quality-warning-banner-sanitized'" \
-		"1" \
-		"vertex_ai/report-model-quality-warning-banner-sanitized" \
-		"<unset>"
-		;;
-	report-model-quality-warning-preserves-prior-fatal-box)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
-		"" \
-		"1" \
-		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
-		"1" \
-		"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
-		"<unset>"
-		;;
-	console-model-quality-warning-preserves-same-box-failure)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
-		"" \
-		"1" \
-		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-		"1" \
-		"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
-		"<unset>"
-		;;
-	report-model-quality-warning-preserves-same-box-failure)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
-		"" \
-		"1" \
-		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
-		"1" \
-		"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
-		"<unset>"
-		;;
-	console-model-quality-warning-preserves-same-box-ratelimit)
-		run_gate_case "$STRIX_TEST_CASE_FILTER" \
-		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-		"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
-		"1" \
-		"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-		"3" \
-		"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
-		"<unset>|<unset>|<unset>"
 		;;
 	provider-fatal-success-signal | provider-warning-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
@@ -11049,15 +10763,6 @@ run_gate_case "provider-warning-success-signal" \
 	"" \
 	"1"
 
-run_gate_case "console-known-internal-warning-sanitized" \
-	"vertex_ai/console-known-internal-warning-sanitized" \
-	"" \
-	"0" \
-	"Strix run succeeded for model 'vertex_ai/console-known-internal-warning-sanitized'" \
-	"1" \
-	"vertex_ai/console-known-internal-warning-sanitized" \
-	"<unset>"
-
 run_gate_case "provider-report-rate-limit-fallback-success" \
 	"vertex_ai/report-rate-limit-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
@@ -11096,69 +10801,6 @@ run_gate_case "report-known-internal-warning-sanitized" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
-
-run_gate_case "console-model-quality-warning-banner-sanitized" \
-	"vertex_ai/console-model-quality-warning-banner-sanitized" \
-	"" \
-	"0" \
-	"Strix run succeeded for model 'vertex_ai/console-model-quality-warning-banner-sanitized'" \
-	"1" \
-	"vertex_ai/console-model-quality-warning-banner-sanitized" \
-	"<unset>"
-
-run_gate_case "console-model-quality-warning-preserves-prior-fatal-box" \
-	"vertex_ai/console-model-quality-warning-preserves-prior-fatal-box" \
-	"" \
-	"1" \
-	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-	"1" \
-	"vertex_ai/console-model-quality-warning-preserves-prior-fatal-box" \
-	"<unset>"
-
-run_gate_case "report-model-quality-warning-banner-sanitized" \
-	"vertex_ai/report-model-quality-warning-banner-sanitized" \
-	"" \
-	"0" \
-	"Strix run succeeded for model 'vertex_ai/report-model-quality-warning-banner-sanitized'" \
-	"1" \
-	"vertex_ai/report-model-quality-warning-banner-sanitized" \
-	"<unset>"
-
-run_gate_case "report-model-quality-warning-preserves-prior-fatal-box" \
-	"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
-	"" \
-	"1" \
-	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
-	"1" \
-	"vertex_ai/report-model-quality-warning-preserves-prior-fatal-box" \
-	"<unset>"
-
-run_gate_case "console-model-quality-warning-preserves-same-box-failure" \
-	"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
-	"" \
-	"1" \
-	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-	"1" \
-	"vertex_ai/console-model-quality-warning-preserves-same-box-failure" \
-	"<unset>"
-
-run_gate_case "report-model-quality-warning-preserves-same-box-failure" \
-	"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
-	"" \
-	"1" \
-	"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
-	"1" \
-	"vertex_ai/report-model-quality-warning-preserves-same-box-failure" \
-	"<unset>"
-
-run_gate_case "console-model-quality-warning-preserves-same-box-ratelimit" \
-	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit" \
-	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
-	"1" \
-	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
-	"3" \
-	"vertex_ai/console-model-quality-warning-preserves-same-box-ratelimit|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
-	"<unset>|<unset>|<unset>"
 
 run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"vertex_ai/report-known-internal-warning-variant-sanitized" \

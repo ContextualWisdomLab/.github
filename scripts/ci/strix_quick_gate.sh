@@ -151,118 +151,6 @@ preserve_attempt_log() {
 	fi
 }
 
-# Write a classification copy of the raw console transcript. Never mutate
-# $STRIX_LOG: publish_artifact_reports copies it to gate-last-attempt.log.
-# Delete a cosmetic-only MODEL QUALITY WARNING box. If that same box also
-# contains Fatal/Denied/Timeout or Provider WARNING, strip only the heading
-# so the failure stays visible. A cross-box wildcard from the first ╭ to a
-# later ╰ would erase a preceding Fatal/Denied box (fail-open).
-sanitize_strix_console_log() {
-	local src="$1"
-	local dest="$2"
-	if [ -z "$src" ] || [ -z "$dest" ]; then
-		return 0
-	fi
-	if [ ! -f "$src" ] || [ -L "$src" ]; then
-		# A missing source must not leave a prior attempt's classified copy active.
-		if [ -f "$dest" ] && [ ! -L "$dest" ]; then
-			rm -f -- "$dest"
-		fi
-		return 0
-	fi
-	if [ -L "$dest" ]; then
-		return 0
-	fi
-	python3 - "$src" "$dest" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-src = Path(sys.argv[1])
-dest = Path(sys.argv[2])
-model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
-ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-known_scanner_warning = re.compile(
-    r"^(?:│  MODEL QUALITY WARNING\s+│|"
-    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
-)
-known_internal_warning = re.compile(
-    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
-    r"(?:"
-    r"produced non-lifecycle final output in non-interactive mode"
-    r"|ended a turn without a lifecycle tool call \(interactive=False\)"
-    r"); forcing tool continuation \(\d+/\d+\): "
-)
-other_failure = re.compile(
-    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)"
-    r"|Provider WARNING"
-    r"|RateLimitError|Nvidia_nimException|LLM CONNECTION FAILED"
-    r"|APIConnectionError|Too Many Requests",
-    re.I,
-)
-
-
-def strip_heading_lines(text: str) -> str:
-    kept: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if model_quality_heading.search(ansi_csi.sub("", line)):
-            continue
-        kept.append(line)
-    return "".join(kept)
-
-
-def strip_model_quality_warning_boxes(text: str) -> str:
-    pieces: list[str] = []
-    index = 0
-    length = len(text)
-    while index < length:
-        start = text.find("╭", index)
-        if start < 0:
-            pieces.append(text[index:])
-            break
-        pieces.append(text[index:start])
-        close = text.find("╰", start)
-        if close < 0:
-            pieces.append(text[start:])
-            break
-        line_end = text.find("\n", close)
-        if line_end < 0:
-            box = text[start:]
-            index = length
-        else:
-            box = text[start : line_end + 1]
-            index = line_end + 1
-        if "MODEL QUALITY WARNING" in box:
-            if other_failure.search(box):
-                pieces.append(strip_heading_lines(box))
-            continue
-        pieces.append(box)
-    return "".join(pieces)
-
-
-try:
-    text = src.read_text(encoding="utf-8")
-except UnicodeDecodeError:
-    # Preserve byte-level evidence so ASCII failure markers in an otherwise
-    # malformed transcript still reach the fail-closed grep classifiers. This
-    # also replaces any previous attempt's classified copy without mutating
-    # the raw source.
-    dest.write_bytes(src.read_bytes())
-    raise SystemExit(0)
-text = strip_model_quality_warning_boxes(text)
-text = "".join(
-    line
-    for line in text.splitlines(keepends=True)
-    if not (
-        known_scanner_warning.match(ansi_csi.sub("", line))
-        or known_internal_warning.match(ansi_csi.sub("", line))
-    )
-)
-dest.write_text(text, encoding="utf-8")
-PY
-}
-
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
@@ -290,55 +178,6 @@ known_scanner_warning = re.compile(
 )
 
 
-model_quality_heading = re.compile(r"│[ \t]*MODEL QUALITY WARNING[ \t]*│")
-ansi_csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-other_failure = re.compile(
-    r"(?:^|[^A-Za-z])(?:Fatal|Denied|Timeout)(?:[^A-Za-z]|$)"
-    r"|Provider WARNING"
-    r"|RateLimitError|Nvidia_nimException|LLM CONNECTION FAILED"
-    r"|APIConnectionError|Too Many Requests",
-    re.I,
-)
-
-
-def strip_heading_lines(text: str) -> str:
-    kept = []
-    for line in text.splitlines(keepends=True):
-        if model_quality_heading.search(ansi_csi.sub("", line)):
-            continue
-        kept.append(line)
-    return "".join(kept)
-
-
-def strip_model_quality_warning_boxes(text: str) -> str:
-    pieces = []
-    index = 0
-    length = len(text)
-    while index < length:
-        start = text.find("╭", index)
-        if start < 0:
-            pieces.append(text[index:])
-            break
-        pieces.append(text[index:start])
-        close = text.find("╰", start)
-        if close < 0:
-            pieces.append(text[start:])
-            break
-        line_end = text.find("\n", close)
-        if line_end < 0:
-            box = text[start:]
-            index = length
-        else:
-            box = text[start : line_end + 1]
-            index = line_end + 1
-        if "MODEL QUALITY WARNING" in box:
-            if other_failure.search(box):
-                pieces.append(strip_heading_lines(box))
-            continue
-        pieces.append(box)
-    return "".join(pieces)
-
-
 def iter_report_logs(root: Path):
     if root.is_file() and root.suffix == ".log":
         yield root
@@ -359,20 +198,17 @@ def iter_report_logs(root: Path):
 
 for log_path in iter_report_logs(root):
     try:
-        original = log_path.read_text(encoding="utf-8")
+        lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    text = strip_model_quality_warning_boxes(original)
-    lines = text.splitlines(keepends=True)
     filtered = [
         line
         for line in lines
         if not known_internal_warning.match(line)
         and not known_scanner_warning.match(line)
     ]
-    text = "".join(filtered)
-    if text != original:
-        log_path.write_text(text, encoding="utf-8")
+    if filtered != lines:
+        log_path.write_text("".join(filtered), encoding="utf-8")
 PY
 	done
 }
@@ -3074,21 +2910,15 @@ PY
 		fi
 	fi
 	preserve_attempt_log "$model" "$rc"
-	local classified_log="${STRIX_LOG}.classified"
-	sanitize_strix_console_log "$STRIX_LOG" "$classified_log"
-	local inspect_log="$STRIX_LOG"
-	if [ -f "$classified_log" ] && [ ! -L "$classified_log" ]; then
-		inspect_log="$classified_log"
-	fi
 
-	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
 		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
 	fi
 
-	if [ "$report_failure_signal" -eq 1 ] || STRIX_LOG="$inspect_log" has_detected_infrastructure_error; then
+	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error; then
 		INFRA_ERROR_DETECTED=1
 		if [ "$rc" -eq 0 ] && provider_signal_fail_closed_enabled; then
 			echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
