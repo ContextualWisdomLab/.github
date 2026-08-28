@@ -316,10 +316,11 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
           fi
-          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
             echo "::error::contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
             exit 1
           fi
+          source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
           export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
