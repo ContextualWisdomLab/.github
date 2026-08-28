@@ -49,6 +49,20 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert "--no-cache-dir" in text
 
 
+def test_sidecar_installs_only_hash_locked_vendored_dependencies() -> None:
+    """The pinned source lock, not unconstrained project metadata, owns installs."""
+    text = _read(SIDECAR)
+    assert "--require-hashes" in text
+    assert "--only-binary=:all:" in text
+    assert "--no-deps" in text
+    assert '-r "$ORCHESTRATOR_SOURCE/requirements.lock"' in text
+    assert (
+        'python3 -m pip install --quiet --disable-pip-version-check '
+        '--no-cache-dir --target "$ORCHESTRATOR_SITE_PACKAGES" '
+        '"$ORCHESTRATOR_SOURCE"'
+    ) not in text
+
+
 def test_sidecar_requires_the_five_provider_secrets() -> None:
     """At least one of the five secrets must be present as bootstrap transport."""
     text = _read(SIDECAR)
@@ -135,4 +149,3 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert "cleanup_sidecar_on_error" in text
     assert "trap cleanup_sidecar_on_error EXIT" in text
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
-

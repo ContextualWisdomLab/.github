@@ -30,8 +30,9 @@ A caller MAY use `repository_dispatch.strix_llm` to select an existing direct
 provider model for bounded diagnosis. That override is explicit, auditable, and
 does not change the normal default.
 
-The sidecar dependency tree SHALL be installed into an isolated `--target`
-directory so it cannot rewrite the hash-locked Strix runtime. Its generated
+The sidecar dependency tree SHALL be installed from the exact vendored commit's
+hash lock, with binary-only distributions, into an isolated `--target` directory
+so it cannot rewrite the hash-locked Strix runtime. Its generated
 bearer token SHALL be line-safe, masked before export, and passed to Strix only
 through a mode-specific file. Missing credentials, unhealthy startup, non-loopback
 base URLs, invalid ports, and missing tokens fail closed.

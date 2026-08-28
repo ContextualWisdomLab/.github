@@ -11,7 +11,7 @@ Semantic Versioning where the repository publishes a release.
   GitHub Models, OpenAI, and Vertex paths remain available only when an
   authorized `repository_dispatch` explicitly supplies `strix_llm` for
   diagnosis. Gateway startup, loopback binding, bearer-token masking, and an
-  isolated `--target` dependency tree fail closed; Strix receives only the
+  isolated `--target`, `--require-hashes`, binary-only dependency tree fail closed; Strix receives only the
   loopback OpenAI-compatible token/base while provider credentials stay inside
   the sidecar process. The gateway route owns provider/model failover, so the
   scanner does not append a second direct-provider fallback chain.

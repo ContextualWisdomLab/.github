@@ -59,7 +59,10 @@ if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then
   fail "vendored HEAD ${checked_out} != pin ${ORCHESTRATOR_PIN_SHA}"
 fi
 log "installing vendored orchestrator at ${checked_out}"
-python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir --target "$ORCHESTRATOR_SITE_PACKAGES" "$ORCHESTRATOR_SOURCE"
+python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
+  --require-hashes --only-binary=:all: --no-deps \
+  --target "$ORCHESTRATOR_SITE_PACKAGES" \
+  -r "$ORCHESTRATOR_SOURCE/requirements.lock"
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"

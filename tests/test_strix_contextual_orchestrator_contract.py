@@ -51,6 +51,9 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_gateway_install_is_isolated_and_token_is_masked(self) -> None:
         """The sidecar cannot overwrite Strix's hash-locked Python runtime."""
         self.assertIn('--target "$ORCHESTRATOR_SITE_PACKAGES"', self.sidecar)
+        self.assertIn("--require-hashes", self.sidecar)
+        self.assertIn("--only-binary=:all:", self.sidecar)
+        self.assertIn('-r "$ORCHESTRATOR_SOURCE/requirements.lock"', self.sidecar)
         self.assertIn(
             'PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT"',
             self.sidecar,

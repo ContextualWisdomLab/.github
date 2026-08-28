@@ -35,8 +35,9 @@ normal gateway route has no scanner-owned fallback list.
 - Provider credentials never become Strix key files in gateway mode.
 - The bearer token is generated per job, rejects line breaks, and is masked.
 - The base URL must be exact IPv4 loopback with a valid port.
-- Sidecar packages use an isolated target directory rather than the scanner's
-  hash-locked environment.
+- Sidecar packages use the exact vendored commit's `requirements.lock` with
+  `--require-hashes`, binary-only distributions, and an isolated target directory
+  rather than the scanner's hash-locked environment.
 - Health failure, empty discovery, missing credentials, and provider exhaustion
   remain non-passing.
 - Consumer PRs are rechecked on unchanged exact heads after the central fix.

@@ -162,6 +162,8 @@ assert_file_contains "$workflow_file" "openai/orchestrator/free" "Strix addresse
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "Strix consumes the loopback gateway base URL"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "Strix consumes the generated gateway bearer token"
 assert_file_contains "$sidecar_script" '--target "$ORCHESTRATOR_SITE_PACKAGES"' "Strix sidecar dependencies are isolated from the hash-locked scanner runtime"
+assert_file_contains "$sidecar_script" "--require-hashes" "Strix sidecar installs only the pinned orchestrator dependency lock"
+assert_file_contains "$sidecar_script" '-r "$ORCHESTRATOR_SOURCE/requirements.lock"' "Strix sidecar consumes the lock from the exact vendored commit"
 assert_file_contains "$sidecar_script" "::add-mask::%s" "Strix sidecar masks its generated bearer token"
 assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix retains direct-provider models only as explicit diagnostics"
 assert_file_contains "$workflow_file" "nvidia_nim/*)" "Strix model preparation reuses the gate-validated NVIDIA provider namespace"
