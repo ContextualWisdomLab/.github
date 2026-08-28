@@ -240,8 +240,9 @@ flowchart LR
 
 ## 2026-08-28 current-main routing and runtime recheck
 
-- Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
-  the merge commit for #1370. #1364 is merged at
+- Current protected main is `8f84b661e468de451ba5c076dc938f342bf52d70`,
+  the merge commit for #1373 (following #1370 at
+  `24ee38b097dbfc1a895e1199ade48cff36431d05`). #1364 is merged at
   `f8823a544c3c4c046977f8511f683e85f83eb496`; #1360 is merged at
   `17052a7ca3c16db90932a4d6036b43165ddee418`.
 - The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
@@ -286,6 +287,41 @@ flowchart LR
   sidecar/bootstrap step is not counted as a model-review result; post-fix
   Strix completion and an independently authorized Noema verdict remain
   separate evidence items.
+
+## 2026-08-28 post-#1373 request-envelope recheck
+
+- #1373 was merged by `seonghobae` at `8f84b661e468de451ba5c076dc938f342bf52d70`
+  to exercise the post-merge runtime path. Main Strix run `33143805461`
+  reached the contextual-orchestrator sidecar and sent the qualified
+  `openai/orchestrator/free` request, then failed closed with HTTP 413
+  `request_too_large` from the pinned gateway. This proves the earlier model
+  qualification defect was repaired, but the review request envelope was
+  still smaller than the Strix/Noema tool-and-source context.
+- The fix is scoped to the review launcher: use an explicit bounded 8 MiB
+  `SecurityConfig.max_body_bytes` for the sidecar while preserving the
+  contextual-orchestrator library's generic 64 KiB default. Noema run
+  `33143860315` was a successful `workflow_run` event handler but skipped
+  because the push event had no associated pull request; it is not an LLM
+  verdict.
+
+## 2026-08-28 #1374 trusted-base runtime boundary
+
+- Follow-up PR #1374 is open at head
+  `d3e7cee4b01219cb0a93f1a4249049de3bf05b4b`, based on current main
+  `8f84b661e468de451ba5c076dc938f342bf52d70`. Its launcher sets the bounded
+  8 MiB review envelope, and its sidecar boot check validates that keyword
+  against the exact pinned orchestrator SHA before discovery.
+- PR-target Strix run `33145070402` used trusted workflow source SHA
+  `8f84b661e468de451ba5c076dc938f342bf52d70`, not the PR launcher. It reached
+  the pinned sidecar and then failed three bounded attempts with HTTP 413
+  `request_too_large`; this is evidence of the pre-merge trusted-base path,
+  not evidence that #1374's launcher setting failed.
+- PR-target Noema run `33145070347` also reached the pinned sidecar and set
+  `orchestrator/free`, then skipped before the LLM call because the current
+  head had no primary OpenCode approval. Required OpenCode run `33145070315`
+  failed closed for the same missing current-head verdict. Therefore the
+  envelope fix still needs a normal governed merge followed by a post-merge
+  Strix runtime result; no protected completion is claimed here.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
