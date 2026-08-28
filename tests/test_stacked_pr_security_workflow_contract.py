@@ -16,6 +16,8 @@ def test_security_workflows_run_for_stacked_pull_requests() -> None:
         pull_request_index = lines.index("  pull_request:")
         pull_request_block = []
         for line in lines[pull_request_index + 1 :]:
+            if line and not line.startswith(" "):
+                break
             if line.startswith("  ") and not line.startswith("    ") and line.strip():
                 break
             pull_request_block.append(line)
