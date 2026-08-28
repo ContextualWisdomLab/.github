@@ -106,7 +106,10 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                     check=False,
                 )
 
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Strix gate script must pass bash syntax checks", output)
+        self.assertIn("contextual_orchestrator_review_sidecar.sh", output)
 
 
 if __name__ == "__main__":
