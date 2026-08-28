@@ -453,18 +453,6 @@ jobs:
           git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
 
-      - name: Provision contextual-orchestrator Strix sidecar
-        env:
-          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
-        run: |
-          set -euo pipefail
-          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
-
       - name: Fetch pull request head for trusted scan
         if: github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != ''
         env:
@@ -576,6 +564,19 @@ jobs:
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           echo 'enabled=true' >> "$GITHUB_OUTPUT"
           echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
+
+      - name: Provision contextual-orchestrator Strix sidecar
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Set up Python
         if: steps.gate.outputs.enabled == 'true'

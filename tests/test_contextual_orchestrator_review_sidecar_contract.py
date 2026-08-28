@@ -209,4 +209,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     assert workflow.index("Validate repository dispatch against live pull request metadata") < workflow.index(
         "Provision contextual-orchestrator Strix sidecar"
     )
+    assert workflow.index("Gate Strix secrets") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
     assert "STRIX_FALLBACK_MODELS: \"\"" in workflow
