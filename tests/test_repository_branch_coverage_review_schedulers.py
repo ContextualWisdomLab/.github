@@ -122,6 +122,16 @@ def test_autofix_context_renders_legacy_status_context() -> None:
     ) == ["- security: SUCCESS"]
 
 
+@pytest.mark.parametrize("module", [autofix_context, fix_scheduler, auto_rebase])
+def test_review_schedulers_reject_path_like_repository_names(module: Any) -> None:
+    """All sibling scheduler entrypoints reject dot path segments consistently."""
+
+    assert module.REPO_RE.fullmatch("ContextualWisdomLab/.github")
+    assert not module.REPO_RE.fullmatch("owner/.")
+    assert not module.REPO_RE.fullmatch("owner/..")
+    assert not module.REPO_RE.fullmatch("owner/-repo")
+
+
 def test_fix_scheduler_queue_includes_eligible_pr_without_fix_need(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
