@@ -85,6 +85,11 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     """Only a private token-file path crosses the GitHub step boundary."""
     text = _read(SIDECAR)
+    assert "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"" in text
+    assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
+    assert text.index("printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"") < text.index(
+        'if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then'
+    )
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE=%s\\n' \"$token_file\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\\n" not in text

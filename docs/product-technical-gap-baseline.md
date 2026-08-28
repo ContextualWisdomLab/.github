@@ -240,9 +240,9 @@ flowchart LR
 
 ## 2026-08-28 current-main routing and runtime recheck
 
-- Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
-  the merge commit for #1370. #1364 is merged at
-  `f8823a544c3c4c046977f8511f683e85f83eb496` and #1360 at
+- Current protected main is `8f84b661e468de451ba5c076dc938f342bf52d70`,
+  the merge commit for #1373. #1370 merged as `24ee38b097dbfc1a895e1199ade48cff36431d05`,
+  #1364 is merged at `f8823a544c3c4c046977f8511f683e85f83eb496`, and #1360 at
   `17052a7ca3c16db90932a4d6036b43165ddee418`.
 - The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
   and write-capable `pr-review-autofix.yml` all provision the pinned
@@ -275,6 +275,11 @@ flowchart LR
 - #1370 merged with no `APPROVED` review; all recorded Reviews API verdicts are
   `COMMENTED`. That governance contradiction is tracked in #1340 and is not
   retrospective approval evidence for this runtime correction.
+- #1373 merged the model qualification as `8f84b661…` but retained the raw
+  bearer in `GITHUB_ENV`, so its log-exposure claim is contradicted by source.
+  #1369 preserves the merged model behavior while moving cross-step credential
+  transport to a validated mode-0600 file. Fresh protected-main Strix and Noema
+  evidence is still required after that stronger boundary integrates.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

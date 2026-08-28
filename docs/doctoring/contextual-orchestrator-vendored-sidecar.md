@@ -112,3 +112,8 @@ the scanner child to `openai/orchestrator/free` when its API base is exactly
 `http://127.0.0.1:18080/v1`. Missing, empty, or other contextual-orchestrator
 API bases fail closed. A fresh protected-main run is still required for
 operational acceptance.
+
+PR #1373 merged the model qualification into
+`main@8f84b661e468de451ba5c076dc938f342bf52d70`, but retained the raw bearer in
+`GITHUB_ENV`. PR #1369 supersedes that credential boundary with file-only
+cross-step transport; source integration alone remains insufficient acceptance.
