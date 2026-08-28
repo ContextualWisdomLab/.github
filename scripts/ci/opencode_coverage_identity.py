@@ -19,7 +19,9 @@ CANONICAL_CHECK_NAME = "coverage-evidence"
 CANONICAL_WORKFLOW_NAMES = frozenset({"Required OpenCode Review"})
 DISPATCH_WORKFLOW_NAME = "OpenCode Review Dispatch"
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+$")
+REPO_RE = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$"
+)
 TERMINAL_RESULTS = frozenset(
     {"success", "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required"}
 )
