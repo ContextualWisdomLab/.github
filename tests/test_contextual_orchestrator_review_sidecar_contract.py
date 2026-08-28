@@ -132,6 +132,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
             ["bash", "-c", command],
             env={
                 **os.environ,
+                "GITHUB_ACTIONS": "false",
                 "TOKEN_LOADER": str(TOKEN_LOADER),
                 "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(candidate),
             },
