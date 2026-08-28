@@ -74,3 +74,17 @@ training (OpenRouter's own stance). Evidence sources:
   `tests/test_pr_review_autofix_writer_security_contract.py`,
   `tests/test_noema_review_gate.py`,
   `docs/doctoring/noema-orchestrator-free-zdr.md`.
+
+## 2026-08-28 runtime correction
+
+The first post-merge Strix execution (`33139957477`) failed before serving: the
+pinned orchestrator's `load_agents()` indexes the top-level `agents` field, but
+the launcher persisted only the list value. Follow-up PR [#1370](https://github.com/ContextualWisdomLab/.github/pull/1370)
+wraps both the launcher output and the standalone policy builder output in the
+loader-compatible `{"agents": [...]}` envelope. The regression is covered by
+`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract;
+the full local suite passed with `1689 passed, 1 skipped, 16 subtests passed`.
+
+The PR-target Noema check still runs the trusted base copy until this trusted
+workflow change is merged, so its reproduction of the old error is retained as
+bootstrap evidence rather than treated as a current-head runtime result.

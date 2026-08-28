@@ -234,9 +234,37 @@ flowchart LR
   `zdr_policy.py`, `contextual_orchestrator_review_policy.py`,
   `contextual_orchestrator_review_launcher.py`; records
   `docs/adr/0003-…`, `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`.
-- Remaining (follow-up loops): read-only dispatch pool, `noema-review.yml`,
-  and `strix.yml` still use pinned direct-provider pools; ZDR feed integration
-  in the standard opencode pool and runner-side egress attestation per stage.
+- At the time of this 2026-08-27 snapshot, the remaining follow-up was the
+  read-only dispatch pool, `noema-review.yml`, and `strix.yml` migration. This
+  historical observation is superseded by the current-main evidence below.
+
+## 2026-08-28 current-main routing and runtime recheck
+
+- Current protected-main candidate is `f8823a544c3c4c046977f8511f683e85f83eb496`,
+  the merge commit for #1364. #1360 is merged at
+  `17052a7ca3c16db90932a4d6036b43165ddee418`.
+- The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
+  and write-capable `pr-review-autofix.yml` all provision the pinned
+  `contextual-orchestrator` sidecar. Their model route is the
+  `contextual-orchestrator/orchestrator/free` gateway, with the five provider
+  secrets entering the sidecar KV and model discovery performed there. No
+  `COPILOT_GITHUB_TOKEN` route is present.
+- #1364 was merged by `seonghobae` while its terminal review decision remained
+  `CHANGES_REQUESTED`; this is an observed merge event, not protected-main
+  governance evidence. The required branch checks still include
+  `noema-review` and `opencode-review`.
+- Post-merge Strix run `33139957477` exposed a real sidecar runtime defect:
+  `contextual_orchestrator.orchestrator.load_agents()` requires an
+  `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
+  Follow-up #1370 fixes the launcher and the standalone policy catalog writer
+  in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
+  `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
+  suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
+- #1370 remains open and blocked against main `f8823a5`. Its PR-target Noema
+  run `33140830199` executes the trusted base launcher and reproduces the
+  pre-fix bare-list error; its `opencode-review` check fails closed because no
+  current-head OpenCode verdict exists. These are bootstrap evidence gaps,
+  not proof that the #1370 catalog-envelope patch fails.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

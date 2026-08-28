@@ -319,7 +319,7 @@ def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:
     )
     assert catalog.exists()
     assert report.exists()
-    assert result["agents"] == json.loads(catalog.read_text(encoding="utf-8"))
+    assert {"agents": result["agents"]} == json.loads(catalog.read_text(encoding="utf-8"))
     assert result["report"] == json.loads(report.read_text(encoding="utf-8"))
 
 
