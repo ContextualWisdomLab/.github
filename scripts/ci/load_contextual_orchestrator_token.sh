@@ -9,7 +9,7 @@ _contextual_orchestrator_token_fail() {
 }
 
 _contextual_orchestrator_load_token() {
-  local token_file token_size
+  local token_file token_size token_owner token_mode
 
   token_file="${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}"
   if [ -z "$token_file" ]; then
@@ -18,10 +18,17 @@ _contextual_orchestrator_load_token() {
   if [ ! -f "$token_file" ] || [ -L "$token_file" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must name a regular, non-symlink file." || return 1
   fi
-  if [ "$(stat -c %u -- "$token_file")" != "$(id -u)" ]; then
+  if [ "$(uname -s)" = "Darwin" ]; then
+    token_owner="$(stat -f '%u' "$token_file")"
+    token_mode="$(stat -f '%Lp' "$token_file")"
+  else
+    token_owner="$(stat -c '%u' -- "$token_file")"
+    token_mode="$(stat -c '%a' -- "$token_file")"
+  fi
+  if [ "$token_owner" != "$(id -u)" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must be owned by the current runner user." || return 1
   fi
-  if [ "$(stat -c %a -- "$token_file")" != "600" ]; then
+  if [ "$token_mode" != "600" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must have mode 600." || return 1
   fi
   token_size="$(wc -c < "$token_file")"

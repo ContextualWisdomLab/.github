@@ -149,6 +149,10 @@ Semantic Versioning where the repository publishes a release.
   `pyproject.toml` location, with an integration test executing the exact
   embedded workflow command.
 
+- Keep contextual-orchestrator token-file ownership and mode validation
+  portable across GNU and BSD `stat` implementations without weakening the
+  private `0600` boundary.
+
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
   dispatches whose workflow token may not see the target repository.
