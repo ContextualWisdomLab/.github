@@ -13,9 +13,9 @@ stance and assume that the endpoint both retains and trains on data".
 Two authoritative, machine-readable sources feed the policy at runtime:
 
 1. OpenRouter ZDR endpoint feed (``https://openrouter.ai/api/v1/endpoints/zdr``)
-   — the exact list of OpenRouter endpoints served under a zero-data-retention
-   policy. It is evidence for OpenRouter routes only; a matching model name
-   does not attest a direct endpoint from another provider.
+   — the machine-readable model evidence used to match discovered model
+   identities across the caller's candidate providers. It is not a routing
+   target; direct OpenRouter routes still require exact feed membership.
 2. OpenRouter provider data-policy catalog
    (``https://openrouter.ai/api/frontend/v1/all-providers``) — per-provider
    ``dataPolicy`` (``retainsPrompts`` / ``retentionDays`` / ``training``),
@@ -50,7 +50,8 @@ class ProviderZdrScope:
         as_of: ISO date the attestation was last verified.
         note: One-sentence scope note; never fabricated policy language.
         openrouter_endpoints_feed: When True, the provider requires exact
-            membership in the OpenRouter endpoint feed.
+            membership in the OpenRouter endpoint feed; other providers may
+            use the feed as model-level evidence for matching candidates.
     """
 
     provider_name: str
@@ -185,21 +186,64 @@ def is_zdr_model(
     Args:
         provider_name: Orchestrator provider identifier of the model route.
         model: Specific model or route identifier. OpenRouter rows require
-            exact route membership; the feed does not attest other providers.
+            exact route membership; other provider rows may match the same
+            model identity in the feed.
         zdr_endpoints: Frozen set of ``\"provider/model\"`` keys from the
             OpenRouter ``/api/v1/endpoints/zdr`` feed. An empty set never
             grants feed-based ZDR.
 
     Returns:
-        True only for an attested zero-retention scope or an exact feed route
-        membership match.
+        True only for an attested zero-retention scope, an exact OpenRouter
+        feed route, or an unambiguous matching model identity from that feed.
     """
+    return zdr_evidence_source(
+        provider_name, model=model, zdr_endpoints=zdr_endpoints
+    ) is not None
+
+
+def zdr_evidence_source(
+    provider_name: str,
+    *,
+    model: str | None = None,
+    zdr_endpoints: frozenset[str] = frozenset(),
+) -> str | None:
+    """Return the source that attests one model, or ``None`` when unattested."""
     scope = provider_zdr_scope(provider_name)
+    if not isinstance(model, str) or not model.strip():
+        return (
+            scope.source
+            if scope.zero_data_retention and not scope.openrouter_endpoints_feed
+            else None
+        )
+    candidate = model.strip().lstrip("/").casefold()
+    feed = {str(endpoint).strip().casefold() for endpoint in zdr_endpoints if str(endpoint).strip()}
     if scope.openrouter_endpoints_feed:
-        if not zdr_endpoints or not isinstance(model, str) or not model:
-            return False
-        return route_key(provider_name, model) in zdr_endpoints
-    return scope.zero_data_retention
+        return (
+            OPENROUTER_ZDR_ENDPOINTS_SOURCE
+            if feed and route_key(provider_name, model).casefold() in feed
+            else None
+        )
+    elif feed:
+        matched = route_key(provider_name, model).casefold() in feed
+        feed_models = {
+            endpoint.split("/", 1)[1] if "/" in endpoint else endpoint
+            for endpoint in feed
+        }
+        if not matched and candidate in feed_models:
+            matched = True
+        if not matched:
+            suffix = candidate.rsplit("/", 1)[-1]
+            suffix_matches = [
+                feed_model
+                for feed_model in feed_models
+                if feed_model.rsplit("/", 1)[-1] == suffix
+            ]
+            matched = bool(suffix) and len(suffix_matches) == 1
+    else:
+        matched = False
+    if matched:
+        return OPENROUTER_ZDR_ENDPOINTS_SOURCE
+    return scope.source if scope.zero_data_retention else None
 
 
 def is_free_route(is_free: object) -> bool:

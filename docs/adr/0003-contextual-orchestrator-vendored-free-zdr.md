@@ -43,11 +43,11 @@ all five, and auto-optimize routing by cost.
    attested from a machine-readable, dated source is treated as non-ZDR,
    mirroring OpenRouter's stance on unascertained policies. The
    OpenRouter `/api/v1/endpoints/zdr` feed (documented, auto-updated) is
-   fetched when egress allows it and is authoritative for the `openrouter`
-   scope. It never attests a matching model served directly by another
-   provider; those routes require their own dated provider-specific
-   attestation. Otherwise the dated static attestation table is used, never a
-   fabricated policy.
+   fetched when egress allows it. OpenRouter routes require exact feed
+   membership; for every other discovered provider, the feed's model identity
+   is used as selection evidence for a matching candidate row. Nonmatching or
+   ambiguous candidates remain non-ZDR. Otherwise the dated static attestation
+   table is used, never a fabricated policy.
    `scripts/ci/contextual_orchestrator_review_policy.py` turns the free-tier
    discovery report into a ZDR-prioritized, provider-family-diverse agents
    catalog (primary/secondary NVIDIA keys share one outage-domain family),

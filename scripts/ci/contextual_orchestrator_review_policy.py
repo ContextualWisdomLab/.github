@@ -8,6 +8,7 @@ enabled agent is an explicitly zero-priced (``cost:free``) model
 1. reads the same ``discover-models`` report the orchestrator prints,
 2. keeps only free (zero-cost), known-provider chat routes,
 3. treats OpenRouter as a ZDR evidence source rather than a routed upstream,
+   applies matching model evidence to every caller-supplied provider row,
    orders the remaining routes ZDR-compliant first, then non-ZDR free, with a
    provider-family cap so a single outage domain cannot monopolize the pool,
 4. writes an ``agents`` JSON catalog in the orchestrator's own
@@ -35,7 +36,7 @@ from scripts.ci.zdr_policy import (
     PROVIDER_CREDENTIAL_NAMES,
     is_free_route,
     is_zdr_model,
-    provider_zdr_scope,
+    zdr_evidence_source,
     route_key,
 )
 
@@ -175,7 +176,8 @@ def build_zdr_prioritized_catalog(
         limit: Maximum number of catalog agents (orchestrator default 12).
         family_cap: Maximum agents per provider outage-domain family.
         zdr_endpoints: ``provider/model`` route keys from the OpenRouter ZDR
-            feed; authoritative only for OpenRouter routes.
+            feed; used as model-level evidence for matching caller-supplied
+            provider rows, while OpenRouter rows require exact membership.
         require_zdr: Admit only routes with attested ZDR evidence. Intended for
             private/internal target repositories; an empty ZDR pool fails closed.
 
@@ -274,7 +276,9 @@ def build_zdr_prioritized_catalog(
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
                 {
-                    provider_zdr_scope(row["provider"]).source
+                    zdr_evidence_source(
+                        row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+                    )
                     for row in picked
                     if is_zdr_model(
                         row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
