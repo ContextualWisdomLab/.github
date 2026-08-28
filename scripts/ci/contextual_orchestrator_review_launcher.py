@@ -136,11 +136,16 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps({"models": rows}, indent=2) + "\n", encoding="utf-8"
     )
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
+    require_zdr_raw = os.environ.get("ORCHESTRATOR_REQUIRE_ZDR", "false").strip().lower()
+    if require_zdr_raw not in {"true", "false"}:
+        raise SystemExit("ORCHESTRATOR_REQUIRE_ZDR must be exactly true or false")
+    require_zdr = require_zdr_raw == "true"
     result = build_zdr_prioritized_catalog(
         parse_discovery_report({"models": rows}),
         limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
+        require_zdr=require_zdr,
     )
     Path(args.catalog_out).write_text(
         json.dumps(result["agents"], indent=2) + "\n", encoding="utf-8"

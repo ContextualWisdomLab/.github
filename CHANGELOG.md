@@ -14,7 +14,10 @@ Semantic Versioning where the repository publishes a release.
   isolated `--target`, `--require-hashes`, binary-only dependency tree fail closed; Strix receives only the
   loopback OpenAI-compatible token/base while provider credentials stay inside
   the sidecar process. The gateway route owns provider/model failover, so the
-  scanner does not append a second direct-provider fallback chain.
+  scanner does not append a second direct-provider fallback chain. Explicit
+  gateway dispatches now provision the sidecar, unrelated diagnostic models do
+  not invoke NVIDIA discovery, and private-repository source is admitted only
+  to exact ZDR-attested routes.
 - Central review now routes through the vendored `contextual-orchestrator`
   gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
   default use the fail-closed zero-cost pool `orchestrator/free`, with

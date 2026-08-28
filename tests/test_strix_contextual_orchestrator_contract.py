@@ -48,6 +48,26 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.assertIn("openrouter/free", self.workflow)
         self.assertIn("openai-direct/gpt-5.4", self.workflow)
 
+    def test_explicit_gateway_dispatch_provisions_the_sidecar(self) -> None:
+        """An explicit gateway request must start the same sidecar as the default."""
+        self.assertIn(
+            "github.event.client_payload.strix_llm == 'contextual-orchestrator/orchestrator/free'",
+            self.workflow,
+        )
+
+    def test_nvidia_resolution_is_scoped_to_nvidia_diagnostics(self) -> None:
+        """Unrelated explicit diagnostics cannot be failed by NVIDIA discovery."""
+        self.assertIn('case "$STRIX_MODEL_REQUESTED" in', self.workflow)
+        self.assertIn('nvidia_nim/*) ;;', self.workflow)
+        self.assertIn("Skipping NVIDIA model resolution for non-NVIDIA Strix request", self.workflow)
+
+    def test_private_gateway_scans_require_zdr_only_routing(self) -> None:
+        """Private source never enters the gateway's non-ZDR fallback tier."""
+        self.assertIn(
+            "ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}",
+            self.workflow,
+        )
+
     def test_gateway_install_is_isolated_and_token_is_masked(self) -> None:
         """The sidecar cannot overwrite Strix's hash-locked Python runtime."""
         self.assertIn('--target "$ORCHESTRATOR_SITE_PACKAGES"', self.sidecar)

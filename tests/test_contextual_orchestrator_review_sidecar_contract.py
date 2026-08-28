@@ -122,6 +122,13 @@ def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
     assert "requires at least one provider credential in the KV" in text
 
 
+def test_launcher_forwards_private_source_zdr_requirement() -> None:
+    """Private-repository scans fail closed unless every catalog route is ZDR."""
+    text = _read(LAUNCHER)
+    assert 'os.environ.get("ORCHESTRATOR_REQUIRE_ZDR", "false")' in text
+    assert "require_zdr=require_zdr" in text
+
+
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     """The write-capable autofix path bootstraps the gateway with the five keys."""
     workflow = _read(AUTOFIX_WORKFLOW)

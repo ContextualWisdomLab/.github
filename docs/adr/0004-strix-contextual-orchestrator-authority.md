@@ -26,6 +26,11 @@ Normal Strix scans SHALL provision that sidecar and call
 provider/model discovery and fallback. Strix SHALL NOT add a second direct
 fallback chain for the gateway-backed route.
 
+Private-repository source SHALL be routed only through exact ZDR-attested free
+routes. If the live endpoint evidence is absent or no eligible route remains,
+the sidecar fails closed before any source is sent. Public-repository scans may
+use the documented non-ZDR free fallback tier after ZDR routes are exhausted.
+
 A caller MAY use `repository_dispatch.strix_llm` to select an existing direct
 provider model for bounded diagnosis. That override is explicit, auditable, and
 does not change the normal default.

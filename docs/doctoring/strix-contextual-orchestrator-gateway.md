@@ -38,6 +38,8 @@ normal gateway route has no scanner-owned fallback list.
 - Sidecar packages use the exact vendored commit's `requirements.lock` with
   `--require-hashes`, binary-only distributions, and an isolated target directory
   rather than the scanner's hash-locked environment.
+- Private repositories admit only exact ZDR-attested gateway routes and fail
+  closed before source transmission when that evidence is absent.
 - Health failure, empty discovery, missing credentials, and provider exhaustion
   remain non-passing.
 - Consumer PRs are rechecked on unchanged exact heads after the central fix.

@@ -550,13 +550,17 @@ jobs:
           fi
 
       - name: Provision contextual-orchestrator Strix sidecar
-        if: github.event_name != 'repository_dispatch' || github.event.client_payload.strix_llm == ''
+        if: >-
+          github.event_name != 'repository_dispatch'
+          || github.event.client_payload.strix_llm == ''
+          || github.event.client_payload.strix_llm == 'contextual-orchestrator/orchestrator/free'
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           set -euo pipefail
           bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -569,7 +573,15 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
+          case "$STRIX_MODEL_REQUESTED" in
+            nvidia_nim/*) ;;
+            *)
+              echo 'Skipping NVIDIA model resolution for non-NVIDIA Strix request.'
+              printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
             printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi

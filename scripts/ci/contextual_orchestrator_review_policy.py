@@ -154,6 +154,7 @@ def build_zdr_prioritized_catalog(
     limit: int = DEFAULT_CATALOG_LIMIT,
     family_cap: int = DEFAULT_FAMILY_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
+    require_zdr: bool = False,
 ) -> dict[str, Any]:
     """Select and rank free routes into a ZDR-first, family-diverse catalog.
 
@@ -171,6 +172,8 @@ def build_zdr_prioritized_catalog(
         family_cap: Maximum agents per provider outage-domain family.
         zdr_endpoints: ``provider/model`` route keys from the OpenRouter ZDR
             feed; authoritative when non-empty for the openrouter scope.
+        require_zdr: Keep only routes with exact, current ZDR evidence. This is
+            mandatory for private-repository source.
 
     Returns:
         A dict with ``agents`` (orchestrator ``ModelAgent.to_config()`` rows,
@@ -189,7 +192,15 @@ def build_zdr_prioritized_catalog(
         """Return whether a provider family still has catalog capacity."""
         return per_family[family] < family_cap
 
-    free_rows = [row for row in rows if row["is_free"]]
+    all_free_rows = [row for row in rows if row["is_free"]]
+    free_rows = [
+        row
+        for row in all_free_rows
+        if not require_zdr
+        or is_zdr_model(
+            row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+        )
+    ]
     free_rows.sort(
         key=lambda row: (
             0
@@ -210,6 +221,11 @@ def build_zdr_prioritized_catalog(
             break
 
     if not picked:
+        if require_zdr:
+            raise PolicyError(
+                "no free ZDR-attested model route is available; private-source "
+                "orchestrator/free routing fails closed"
+            )
         raise PolicyError(
             "no free (zero-cost) model route is available with the ZDR policy; "
             "orchestrator/free would fail closed"
@@ -245,7 +261,9 @@ def build_zdr_prioritized_catalog(
         "agents": catalog_rows,
         "report": {
             "pool": "orchestrator/free",
-            "total_free_routes": len(free_rows),
+            "total_free_routes": len(all_free_rows),
+            "eligible_free_routes": len(free_rows),
+            "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": len(picked),
             "zdr_selected_count": zdr_count,
@@ -298,6 +316,7 @@ def build_catalog_from_paths(
     limit: int = DEFAULT_CATALOG_LIMIT,
     family_cap: int = DEFAULT_FAMILY_CAP,
     zdr_endpoints_path: str | None = None,
+    require_zdr: bool = False,
 ) -> dict[str, Any]:
     """Build and persist the ZDR-prioritized ``orchestrator/free`` catalog.
 
@@ -308,6 +327,7 @@ def build_catalog_from_paths(
         limit: Maximum number of catalog agents.
         family_cap: Maximum agents per provider outage-domain family.
         zdr_endpoints_path: Optional OpenRouter ZDR feed JSON path.
+        require_zdr: Keep only exact ZDR-attested routes.
 
     Returns:
         The return value of ``build_zdr_prioritized_catalog`` (both files were
@@ -320,6 +340,7 @@ def build_catalog_from_paths(
         limit=limit,
         family_cap=family_cap,
         zdr_endpoints=zdr_endpoints,
+        require_zdr=require_zdr,
     )
     Path(out_path).write_text(json.dumps(result["agents"], indent=2) + "\n", encoding="utf-8")
     Path(report_path).write_text(json.dumps(result["report"], indent=2) + "\n", encoding="utf-8")
@@ -337,6 +358,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
     parser.add_argument("--family-cap", type=int, default=DEFAULT_FAMILY_CAP)
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
+    parser.add_argument("--require-zdr", action="store_true", help="Fail closed unless an exact ZDR-attested free route exists")
     return parser
 
 
@@ -358,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             family_cap=args.family_cap,
             zdr_endpoints_path=args.zdr_endpoints,
+            require_zdr=args.require_zdr,
         )
     except (PolicyError, OSError, json.JSONDecodeError) as exc:
         print(f"contextual-orchestrator review policy: {exc}", file=sys.stderr)
