@@ -152,6 +152,21 @@ def test_python_failure_log_is_materialized_under_runner_temp() -> None:
     ) in function
 
 
+def test_python_metadata_snapshot_comes_from_exact_head_git_object() -> None:
+    """Later untrusted project tests cannot rewrite trusted PyO3 metadata."""
+
+    function = _workflow_function("run_python_test_and_capture")
+    assert 'pyproject_repository_path="pyproject.toml"' in function
+    assert (
+        'pyproject_repository_path="${project_dir#./}/pyproject.toml"' in function
+    )
+    assert (
+        '"${PR_HEAD_SHA:-HEAD}:${pyproject_repository_path}"'
+        in function
+    )
+    assert 'if [ -f "$project_dir/pyproject.toml" ]' not in function
+
+
 def test_renamed_native_input_preserves_old_and_new_paths(tmp_path: Path) -> None:
     """A rename out of a native boundary must still expose the old path."""
 

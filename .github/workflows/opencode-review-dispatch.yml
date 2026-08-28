@@ -1001,6 +1001,7 @@ jobs:
             local python_native_pytest_log
             local python_native_changed_files
             local python_native_pyproject_snapshot
+            local pyproject_repository_path
             local rc
 
             python_native_pytest_log="$(mktemp "$RUNNER_TEMP/python-native-pytest.XXXXXX")"
@@ -1008,12 +1009,25 @@ jobs:
             python_native_pyproject_snapshot="$(mktemp)"
             changed_files_for_coverage >"$python_native_changed_files"
             chmod 0444 "$python_native_changed_files"
-            if [ -f "$project_dir/pyproject.toml" ] \
-              && [ ! -L "$project_dir/pyproject.toml" ]; then
-              install -m 0444 -- \
-                "$project_dir/pyproject.toml" \
-                "$python_native_pyproject_snapshot"
+            if [ "$project_dir" = "." ]; then
+              pyproject_repository_path="pyproject.toml"
+            else
+              pyproject_repository_path="${project_dir#./}/pyproject.toml"
             fi
+            if ! trusted_git show \
+              "${PR_HEAD_SHA:-HEAD}:${pyproject_repository_path}" \
+              >"$python_native_pyproject_snapshot"; then
+              append "- Result: FAIL"
+              append "- Reason: the exact-head pyproject.toml blob could not be snapshotted before classification."
+              append ""
+              failures=$((failures + 1))
+              rm -f \
+                "$python_native_pytest_log" \
+                "$python_native_changed_files" \
+                "$python_native_pyproject_snapshot"
+              return
+            fi
+            chmod 0444 "$python_native_pyproject_snapshot"
 
             append "### ${label}"
             append ""

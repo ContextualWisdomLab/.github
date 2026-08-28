@@ -57,10 +57,10 @@ installed package.
 failure only when every condition below is true:
 
 1. `pyproject.toml` is a bounded, regular, non-symlink UTF-8 file.
-   The workflow reads those bytes from a sealed pre-test snapshot and passes
-   the separately validated repository-relative `pyproject.toml` location as
-   logical path data; a temporary snapshot path never becomes repository
-   identity.
+   The workflow reads those bytes from the exact pull-request head's immutable
+   Git blob and passes the separately validated repository-relative
+   `pyproject.toml` location as logical path data; a temporary snapshot path
+   never becomes repository identity.
 2. The build backend is exactly `maturin` and bindings are exactly `pyo3`.
 3. `module-name`, `manifest-path`, and `python-source` are safe relative values.
 4. The pytest log is bounded, complete, and contains only collection errors.
