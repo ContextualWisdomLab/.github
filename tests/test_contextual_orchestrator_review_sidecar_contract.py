@@ -85,6 +85,11 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     """Only a private token-file path crosses the GitHub step boundary."""
     text = _read(SIDECAR)
+    assert 'echo "::add-mask::$ORCHESTRATOR_TOKEN"' in text
+    assert "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" in text
+    assert text.index('echo "::add-mask::$ORCHESTRATOR_TOKEN"') < text.index(
+        'if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then'
+    )
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE=%s\\n' \"$token_file\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\\n" not in text
@@ -102,6 +107,8 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert '[ -L "$token_file" ]' in text
     assert 'stat -c %a -- "$token_file"' in text
     assert 'stat -c %u -- "$token_file"' in text
+    assert 'stat -f %Lp "$token_file"' in text
+    assert 'stat -f %u "$token_file"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -174,7 +181,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     """The bearer is masked before clone, install, launch, or health output."""
     text = _read(SIDECAR)
     mask = "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\""
-    assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
+    assert "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines (CR or LF)" in text
     assert mask in text
     mask_index = text.index(mask)
     for later_operation in (

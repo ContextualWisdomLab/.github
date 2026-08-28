@@ -242,7 +242,7 @@ flowchart LR
 
 - Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
   the merge commit for #1370. #1364 is merged at
-  `f8823a544c3c4c046977f8511f683e85f83eb496` and #1360 at
+  `f8823a544c3c4c046977f8511f683e85f83eb496`; #1360 is merged at
   `17052a7ca3c16db90932a4d6036b43165ddee418`.
 - The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
   and write-capable `pr-review-autofix.yml` all provision the pinned
@@ -257,24 +257,35 @@ flowchart LR
 - Post-merge Strix run `33139957477` exposed a real sidecar runtime defect:
   `contextual_orchestrator.orchestrator.load_agents()` requires an
   `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
-  Follow-up #1370 fixes the launcher and the standalone policy catalog writer.
-  Its exact head `0f40d415b112ca0055f5db5b2f434788b08f01f1` merged as
-  `24ee38b097dbfc1a895e1199ade48cff36431d05`.
-- #1370's earlier PR-target Noema run `33140830199` executed the pre-fix trusted
-  base launcher and is retained only as bootstrap reproduction evidence. A
-  fresh protected-main canary must start the corrected sidecar and reach the
-  scanner before the runtime gap is closed; queued or cancelled jobs do not
-  satisfy that acceptance boundary.
-- Protected-main Strix run `33141468804` crossed the corrected catalog and
-  sidecar boundary, then LiteLLM rejected the unqualified scanner child model
-  `orchestrator/free` because the provider was not explicit. The follow-up maps
-  only that child to `openai/orchestrator/free` when the API base is the pinned
-  loopback gateway; the public gateway model remains
-  `contextual-orchestrator/orchestrator/free`, and absent, empty, or non-pinned
-  bases fail closed. This is reproduction evidence, not operational acceptance.
-- #1370 merged with no `APPROVED` review; all recorded Reviews API verdicts are
-  `COMMENTED`. That governance contradiction is tracked in #1340 and is not
-  retrospective approval evidence for this runtime correction.
+  Follow-up #1370 fixes the launcher and the standalone policy catalog writer
+  in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
+  `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
+  suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
+- #1370 merged on `24ee38b…`; its pre-merge PR-target Noema run
+  `33140830199` executed the trusted base launcher and reproduced the
+  pre-fix bare-list error. The post-merge push run below shows that the
+  catalog-envelope fix reached the Strix sidecar successfully.
+
+## 2026-08-28 post-#1370 Strix runtime recheck
+
+- Main push run `33141468804` reached `Provision contextual-orchestrator Strix
+  sidecar` successfully, then failed in `Run Strix (quick)`. LiteLLM rejected
+  the unqualified child model `orchestrator/free` with `LLM Provider NOT
+  provided`; this is a request-shape defect, not evidence that the sidecar
+  catalog failed.
+- Follow-up commits `9f58d74` and `5aa0a20` qualify only the LiteLLM child
+  request as `openai/orchestrator/free` when the API base is the pinned
+  loopback gateway; the gateway still receives `orchestrator/free` and owns
+  discovery/failover. They also fail closed when that base is absent or not
+  the pinned loopback, register the dynamic bearer token with `::add-mask::`
+  before exporting `GITHUB_ENV`, and reject token newlines. Focused contracts
+  pass (`32 passed`); the full local suite passes (`1689 passed, 1 skipped`).
+- A real current-main Noema run on #1369 (`33141494393`) also booted the
+  sidecar and executed the Noema gate, but correctly skipped the LLM verdict
+  because the exact head had no primary OpenCode approval. A successful
+  sidecar/bootstrap step is not counted as a model-review result; post-fix
+  Strix completion and an independently authorized Noema verdict remain
+  separate evidence items.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

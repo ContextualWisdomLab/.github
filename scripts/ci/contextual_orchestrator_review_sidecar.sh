@@ -48,11 +48,16 @@ log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in
-  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
+  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines (CR or LF)" ;;
 esac
-# Mask the bearer before clone, dependency installation, launcher startup, or
-# health diagnostics can emit it.  Later masking is too late for earlier logs.
-printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  # Register the process-local bearer token before exporting it through
+  # GITHUB_ENV; later step environment blocks otherwise echo it verbatim.
+  echo "::add-mask::$ORCHESTRATOR_TOKEN"
+else
+  # Keep local contract tests and non-Actions diagnostics on the same masking path.
+  printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
+fi
 
 mkdir -p "$ORCHESTRATOR_WORK"
 chmod 700 -- "$ORCHESTRATOR_WORK"
