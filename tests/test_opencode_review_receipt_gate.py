@@ -264,6 +264,9 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         == 0
     )
     assert receipt.fetch_reviews("ContextualWisdomLab/.github", 789)
+    for invalid_repo in ("ContextualWisdomLab/..", "ContextualWisdomLab/-repo"):
+        with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
+            receipt.fetch_reviews(invalid_repo, 789)
 
     def fake_fail(args, **kwargs):
         return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "nope"})()
