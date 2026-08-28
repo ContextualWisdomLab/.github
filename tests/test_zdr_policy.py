@@ -122,6 +122,14 @@ def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
     assert (
         zdr_policy.is_zdr_model(
             "nvidia_nim",
+            model="deepseek-r1:free",
+            zdr_endpoints=feed,
+        )
+        is True
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
             model="nvidia/deepseek-r1:free",
             zdr_endpoints=frozenset(
                 {

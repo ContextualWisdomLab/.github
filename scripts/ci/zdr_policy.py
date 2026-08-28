@@ -172,7 +172,7 @@ def route_key(provider_name: str, model: str) -> str:
 
 
 def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
-    """Extract model identities from canonical OpenRouter evidence keys."""
+    """Extract normalized model identities from canonical OpenRouter evidence keys."""
     return frozenset(
         key.split("/", 1)[1].strip().casefold()
         for key in zdr_endpoints
@@ -182,6 +182,22 @@ def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
             and key.split("/", 1)[1].strip()
         )
     )
+
+
+def _feed_model_matches(model: str, feed_model_ids: frozenset[str]) -> bool:
+    """Match exact ids or one unambiguous final model component."""
+    if not isinstance(model, str):
+        return False
+    normalized = model.strip().lstrip("/").casefold()
+    if normalized in feed_model_ids:
+        return True
+    suffix = normalized.rsplit("/", 1)[-1]
+    suffix_matches = {
+        candidate
+        for candidate in feed_model_ids
+        if candidate.rsplit("/", 1)[-1] == suffix
+    }
+    return bool(suffix) and len(suffix_matches) == 1
 
 
 def is_zdr_model(
@@ -195,25 +211,24 @@ def is_zdr_model(
     Args:
         provider_name: Orchestrator provider identifier of the model route.
         model: Specific model or route identifier. OpenRouter rows require
-            exact route membership; matching model identity can provide
-            evidence for other configured providers.
+            exact route membership; matching model identity, including one
+            unambiguous final-component match, can provide evidence for other
+            configured providers.
         zdr_endpoints: Frozen set of ``\"provider/model\"`` keys from the
             OpenRouter ``/api/v1/endpoints/zdr`` feed. An empty set never
             grants feed-based ZDR.
 
     Returns:
-        True only for an attested zero-retention scope or an exact feed
-        membership match.
+        True only for an attested zero-retention scope or an exact/unambiguous
+        feed model-identity match.
     """
     scope = provider_zdr_scope(provider_name)
     if scope.openrouter_endpoints_feed:
         if not zdr_endpoints or not model:
             return False
         return route_key(provider_name, model) in zdr_endpoints
-    if model and zdr_endpoints:
-        normalized = model.strip().lstrip("/").casefold()
-        if normalized in _feed_model_ids(zdr_endpoints):
-            return True
+    if model and zdr_endpoints and _feed_model_matches(model, _feed_model_ids(zdr_endpoints)):
+        return True
     return scope.zero_data_retention
 
 
