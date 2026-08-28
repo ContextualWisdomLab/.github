@@ -297,6 +297,7 @@ def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:
     assert "from contextual_orchestrator.server import RequestError, _request_body_size" in text
     assert "accepted_size = 64 * 1024 + 1" in text
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
+    assert "exc.status == 413" in text
     assert 'exc.message == "request body exceeds configured limit"' in text
 
 

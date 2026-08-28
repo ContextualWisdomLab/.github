@@ -96,7 +96,7 @@ assert _request_body_size({"content-length": str(accepted_size)}, REVIEW_MAX_BOD
 try:
     _request_body_size({"content-length": str(REVIEW_MAX_BODY_BYTES + 1)}, REVIEW_MAX_BODY_BYTES)
 except RequestError as exc:
-    assert exc.code == 413 and exc.message == "request body exceeds configured limit"
+    assert exc.status == 413 and exc.message == "request body exceeds configured limit"
 else:
     raise AssertionError("pinned server did not enforce the configured review body limit")
 PY
