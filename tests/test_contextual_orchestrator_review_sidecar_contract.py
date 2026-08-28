@@ -129,6 +129,19 @@ def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
     assert "requires at least one provider credential in the KV" in text
 
 
+def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
+    """Large review envelopes fit without changing the library's generic default."""
+    text = _read(LAUNCHER)
+    assert "REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024" in text
+    assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
+
+
+def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:
+    """The exact vendored SHA must accept the review envelope keyword at boot."""
+    text = _read(SIDECAR)
+    assert 'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)' in text
+
+
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     """The write-capable autofix path bootstraps the gateway with the five keys."""
     workflow = _read(AUTOFIX_WORKFLOW)
