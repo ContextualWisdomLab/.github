@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Restore OpenCode coverage honesty and mermaid surfaces stacked on main after #1360 squash `17052a7c`: `publish_fallback_diff_review` posts a COMMENT product-file review then `request_changes_for_coverage_evidence_failure` sets the status comment to `COVERAGE_BLOCKED` so a coverage miss never looks finished as `Gate result: COMMENT`; mermaid labels crates/packages instead of generic `Changed file (N files)` and does not invent class edges; findings say `Review process` instead of `.github/workflows/opencode-review.yml:1` unless that file is in the diff. Does not change `noema-review.yml` (PM owns `feat/noema-orchestrator-free-zdr`) and is not NIM-2h or GitHub Models.
 - Required OpenCode dispatch and Strix now use the vendored
   `contextual-orchestrator/orchestrator/free` gateway for model execution and
   failed-check diagnosis. The generated OpenCode config contains only the

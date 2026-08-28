@@ -1725,7 +1725,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "implementation_completeness_scan.py" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
-    assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
+    assert 'update_review_overview "COVERAGE_BLOCKED"' in workflow
+    assert "record coverage-evidence blocker states" in workflow
     assert re.search(
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
@@ -2652,9 +2653,9 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
     """A throttled gate READ is a GitHub side effect, not source evidence.
 
     The APPROVE write path already keeps the required check green when GitHub
-    rejects the pull review as a pure side effect; the gate's own reads (live
-    head, sentinel comment, peer check lookups) that share the same contended
-    installation token must degrade the same way on a detected throttle instead
+    rejects the pull review as a pure side effect; the gate's remaining reads
+    (live head and peer check lookups) that share the same contended installation
+    token must degrade the same way on a detected throttle instead
     of hard-failing the required check under ``set -euo pipefail``.
     """
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -2670,8 +2671,10 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
         "side effect, not source evidence, while branch protection remains "
         "authoritative" in workflow
     )
-    assert 'if ! comment_json="$(' in workflow
-    assert "falling back to the selected OpenCode model output" in workflow
+    # The status-only overview is not queried for a control sentinel; the
+    # selected exact-run model output is the sole formal-verdict source.
+    assert "sentinel_comment_error_file" not in workflow
+    assert 'load_selected_review_output "$selected_review_output_file" "$tmp_body"' in workflow
 
     # The checks-lookup helper records a detected throttle and callers degrade
     # on it, mirroring the existing app-token bypass.
@@ -2784,7 +2787,10 @@ def test_opencode_model_pool_failure_uses_only_existing_real_model_approval():
         r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
         r"if publish_blockers_after_model_unavailable; then[\s\S]{0,180}"
-        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
+        r"exit 0\s+fi\s+"
+        r'(?:if \[ "\$\{COVERAGE_EVIDENCE_RESULT:-skipped\}" != "success" \]; then[\s\S]{0,280}'
+        r"publish_fallback_diff_review[\s\S]{0,160}fi\s+)?"
+        r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
