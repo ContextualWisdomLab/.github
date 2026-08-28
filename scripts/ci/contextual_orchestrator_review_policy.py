@@ -7,8 +7,9 @@ enabled agent is an explicitly zero-priced (``cost:free``) model
 
 1. reads the same ``discover-models`` report the orchestrator prints,
 2. keeps only free (zero-cost), known-provider chat routes,
-3. orders them ZDR-compliant first, then non-ZDR free, with a provider-family
-   cap so a single outage domain cannot monopolize the pool, and
+3. treats OpenRouter as a ZDR evidence source rather than a routed upstream,
+   orders the remaining routes ZDR-compliant first, then non-ZDR free, with a
+   provider-family cap so a single outage domain cannot monopolize the pool,
 4. writes an ``agents`` JSON catalog in the orchestrator's own
    ``ModelAgent.to_config()`` schema so the vendored sidecar can
    ``load_agents()`` it unchanged.
@@ -45,6 +46,10 @@ PROVIDER_FAMILIES: Mapping[str, str] = {
     "nvidia_nim": "nvidia_nim",
     "nvidia_nim_sub": "nvidia_nim",
 }
+
+# OpenRouter's public catalog informs ZDR eligibility for other providers; it
+# is not itself an upstream in this review sidecar's model group.
+EVIDENCE_ONLY_PROVIDERS = frozenset({"openrouter"})
 
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_FAMILY_CAP = 4
@@ -193,7 +198,12 @@ def build_zdr_prioritized_catalog(
         """Return whether a provider family still has catalog capacity."""
         return per_family[family] < family_cap
 
-    all_free_rows = [row for row in rows if row["is_free"]]
+    discovered_free_rows = [row for row in rows if row["is_free"]]
+    all_free_rows = [
+        row
+        for row in discovered_free_rows
+        if row["provider"] not in EVIDENCE_ONLY_PROVIDERS
+    ]
     free_rows = [
         row
         for row in all_free_rows
@@ -259,6 +269,7 @@ def build_zdr_prioritized_catalog(
         "report": {
             "pool": "orchestrator/free",
             "total_free_routes": len(all_free_rows),
+            "evidence_only_free_routes": len(discovered_free_rows) - len(all_free_rows),
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": len(picked),

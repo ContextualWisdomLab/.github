@@ -23,8 +23,8 @@ def _report() -> dict[str, object]:
             },
             {
                 "provider": "nvidia_nim",
-                "model": "nvidia/nemotron-3-nano-30b-a3b",
-                "agent_id": "nim_nano_free",
+                "model": "deepseek/deepseek-r1:free",
+                "agent_id": "nim_deepseek_r1",
                 "is_free": True,
             },
             {
@@ -167,7 +167,9 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
     )
     agents = result["agents"]
     assert agents[0]["model"] == "deepseek/deepseek-r1:free"
+    assert agents[0]["provider_name"] == "nvidia_nim"
     assert "zdr" in agents[0]["tags"]
+    assert all(agent["provider_name"] != "openrouter" for agent in agents)
     models = [agent["model"] for agent in agents]
     assert "gpt-4.1" not in models
     assert result["report"]["pool"] == "orchestrator/free"
@@ -217,7 +219,8 @@ def test_build_catalog_assigns_unique_priorities() -> None:
     assert priorities == sorted(priorities, reverse=True)
     assert len(priorities) == len(set(priorities))
     assert result["agents"][0]["priority"] == 0
-    assert result["report"]["total_free_routes"] == 5
+    assert result["report"]["total_free_routes"] == 4
+    assert result["report"]["evidence_only_free_routes"] == 1
 
 
 def test_build_catalog_applies_family_cap() -> None:
@@ -277,6 +280,24 @@ def test_build_catalog_fails_closed_without_free_models() -> None:
         policy.build_zdr_prioritized_catalog(
             policy.parse_discovery_report(report), limit=12, family_cap=4
         )
+
+
+def test_build_catalog_fails_closed_when_only_openrouter_is_free() -> None:
+    """OpenRouter evidence alone cannot become a routed upstream."""
+    rows = policy.parse_discovery_report(
+        {
+            "models": [
+                {
+                    "provider": "openrouter",
+                    "model": "deepseek/deepseek-r1:free",
+                    "agent_id": "or_ds_r1",
+                    "is_free": True,
+                }
+            ]
+        }
+    )
+    with pytest.raises(policy.PolicyError, match="no free"):
+        policy.build_zdr_prioritized_catalog(rows, zdr_endpoints=ZDR_FEED)
 
 
 def test_build_catalog_uses_static_table_without_feed() -> None:
