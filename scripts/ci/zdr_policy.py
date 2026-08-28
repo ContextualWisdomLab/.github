@@ -216,7 +216,11 @@ def zdr_evidence_source(
             else None
         )
     candidate = model.strip().lstrip("/").casefold()
-    feed = {str(endpoint).strip().casefold() for endpoint in zdr_endpoints if str(endpoint).strip()}
+    feed = {
+        endpoint
+        for endpoint in (str(value).strip().casefold() for value in zdr_endpoints)
+        if endpoint.startswith("openrouter/") and endpoint.removeprefix("openrouter/")
+    }
     if scope.openrouter_endpoints_feed:
         return (
             OPENROUTER_ZDR_ENDPOINTS_SOURCE

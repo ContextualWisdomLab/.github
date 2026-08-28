@@ -151,6 +151,18 @@ def test_is_zdr_model_feed_evidence_matches_other_provider_model_ids() -> None:
     )
 
 
+def test_is_zdr_model_rejects_noncanonical_feed_provider_keys() -> None:
+    """Only canonical OpenRouter feed routes may provide cross-provider evidence."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=frozenset({"nvidia_nim/deepseek/deepseek-r1:free"}),
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
