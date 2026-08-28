@@ -279,8 +279,47 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
 
-def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
-    """Scope Strix concurrency to the target PR while preserving current-head evidence."""
+def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
+    """Reject GitHub's synthetic merge as SAST source or SARIF identity."""
+    workflow = workflow_text("sast-semgrep.yml")
+    checkout = workflow_step(workflow, "Checkout exact submitted revision")
+    verify = workflow_step(workflow, "Verify exact submitted revision")
+    upload = workflow_step(workflow, "Upload Semgrep SARIF to code scanning")
+
+    assert (
+        "repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}"
+        in checkout
+    )
+    assert (
+        "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in checkout
+    )
+    assert "persist-credentials: false" in checkout
+    assert (
+        "EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}"
+        in verify
+    )
+    assert 'actual_sha="$(git rev-parse HEAD)"' in verify
+    assert 'if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then' in verify
+    assert "exit 1" in verify
+    assert (
+        "ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}"
+        in upload
+    )
+    assert (
+        "sha: ${{ github.event.pull_request.head.sha || github.sha }}" in upload
+    )
+
+
+def test_strix_serializes_provider_evidence_per_repository() -> None:
+    """Serialize Strix per repository so shared provider keys are not rate-limited.
+
+    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
+    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
+    storms and fail-closed gate failures on every open PR. The concurrency group
+    now scopes one scan at a time per repository and event class. GitHub retains
+    one active and one pending run per group; the scheduler re-dispatches exact
+    current-head evidence when a pending run is superseded.
+    """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -291,17 +330,28 @@ def test_strix_cancels_superseded_pr_head_security_evidence() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "strix-${{ github.event_name }}-${{ github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository }}"
+        "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, "
+        "github.event.pull_request.number)"
     ) in concurrency_contract
-    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency_contract
-    assert "github.event.client_payload.pr_number != '' && format('pr-{0}'," in workflow
-    assert "format('pr-{0}-{1}'" not in concurrency_contract
+    assert (
+        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository)"
+    ) in concurrency_contract
+    assert (
+        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
+        in concurrency_contract
+    )
+    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
+    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "cancel-in-progress: true" in workflow
+    # Running scans are not cancelled; GitHub's native group has one pending slot.
+    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "queue: max" not in workflow
+    assert "scheduler" in concurrency_contract
     assert "default-branch repository_dispatch evidence cannot cancel" in workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in workflow
+    assert "RateLimitError" in concurrency_contract
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -343,10 +393,32 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
-        assert (
-            "PR closed; this run only cancels older runs through workflow concurrency."
-            in workflow
-        )
+        if filename == "strix.yml":
+            assert "Cancel queued and running scans for the closed pull request" in workflow
+            assert (
+                "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
+                "|| github.token"
+            ) in workflow
+            assert "DISPATCH_REPOSITORY" not in workflow
+            assert "CLOSED_PR_HEAD_SHA" in workflow
+            assert 'select(.event == "pull_request_target")' in workflow
+            assert 'select(.event == "repository_dispatch")' not in workflow
+            assert "leaving runs unchanged" in workflow
+            assert (
+                "for active_status in queued in_progress requested waiting pending"
+                in workflow
+            )
+            cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
+                "  strix:", 1
+            )[0]
+            assert "actions: write" in cleanup_job
+            assert "actions/checkout" not in cleanup_job
+            assert "cleanup skipped" not in cleanup_job
+        else:
+            assert (
+                "PR closed; this run only cancels older runs through workflow concurrency."
+                in workflow
+            )
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
@@ -357,8 +429,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    assert "cancel-in-progress: true" in strix_workflow
-    assert "PR-number scope keeps the queue on the current HEAD" in strix_workflow
+    # Strix serializes per repository (rate-limit root-cause fix): close-event
+    # runs still cancel superseded same-PR evidence through their own
+    # cancel-closed-pr-runs job, while scan jobs queue instead of cancelling.
+    assert "cancel-in-progress: false" in strix_workflow
+    assert "Serialize Strix scans per repository" in strix_workflow or "per REPOSITORY" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
@@ -418,8 +493,8 @@ def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() ->
     assert "github.event_name == 'pull_request_target'" in concurrency_contract
 
 
-def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
-    """Require explicit reviewer credentials and LLM configuration."""
+def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
+    """Require explicit reviewer credentials and the trusted orchestrator sidecar."""
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
@@ -454,49 +529,52 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
         "Noema reviewer credential selection succeeded but no token was minted"
         in workflow
     )
+    assert "Resolve Noema target repository visibility" in workflow
+    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
+    assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
+    assert "contextual_orchestrator_review_sidecar.sh" in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     assert (
-        "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
+        "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
     )
-    assert "Resolve Noema target repository visibility" in workflow
-    assert (
-        'if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && '
-        '[ -n "${NVIDIA_NIM_API_KEY:-}" ]'
-    ) in workflow
-    assert "https://integrate.api.nvidia.com/v1/chat/completions" in workflow
-    assert 'export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"' in workflow
+    assert "BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}" in workflow
     assert "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
-    assert "Noema LLM is unconfigured:" in workflow
+    assert "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}" in workflow
+    assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
+    assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "secrets: inherit" not in workflow
     assert "mark_unconfigured()" not in workflow
     assert "review skipped until Noema is deployed" not in workflow
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
-def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
+def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     tmp_path: Path,
 ) -> None:
-    """Preserve configured fallback models while rejecting an unavailable NIM secret."""
+    """Keep Strix on the gateway and fail Noema closed without its sidecar."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
     strix_output = tmp_path / "strix-output"
-    strix = subprocess.run(
+    strix = subprocess.run(  # noqa: S603, S607
         [
-            "bash",
+            bash_executable,
             "-c",
             textwrap.dedent(
-                workflow_step(workflow_text("strix.yml"), "Gate Strix secrets")
+                workflow_step(
+                    workflow_text("strix.yml"),
+                    "Gate Strix secrets",
+                )
                 .split("        run: |\n", 1)[1]
             ),
         ],
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
             "STRIX_MODEL_REQUESTED": "",
-            "STRIX_OPENAI_API_KEY": "synthetic-openai-key",
-            "STRIX_OPENROUTER_API_KEY": "",
-            "STRIX_NVIDIA_NIM_API_KEY": "",
-            "STRIX_VERTEX_CREDENTIALS": "",
-            "STRIX_GITHUB_MODELS_TOKEN": "synthetic-models-token",
-            "TARGET_REPOSITORY_PRIVATE": "false",
         },
         capture_output=True,
         text=True,
@@ -504,45 +582,50 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "provider_mode=openai_direct",
-        "strix_model=gpt-5.4",
+        "strix_model=contextual-orchestrator/orchestrator/free",
+        "enabled=true",
+        "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
+    assert (
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
+        in workflow_text("strix.yml")
+    )
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
         in workflow_text("strix.yml")
     )
 
-    noema_probe = tmp_path / "noema-key"
     noema_script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
             "Run Noema LLM review and submit verdict",
         ).split("        run: |\n", 1)[1]
     )
-    noema = subprocess.run(
+    noema_env = {
+        **os.environ,
+        "PR_NUMBER": "1",
+        "GH_TOKEN": "synthetic-review-token",
+    }
+    for key in (
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+        "CONTEXTUAL_ORCHESTRATOR_TOKEN",
+        "NOEMA_LLM_VIA_ORCHESTRATOR",
+        "NOEMA_LLM_API_KEY",
+    ):
+        noema_env.pop(key, None)
+    noema = subprocess.run(  # noqa: S603, S607
         [
-            "bash",
+            bash_executable,
             "-c",
-            f"trap 'printf %s \"$NOEMA_LLM_API_KEY\" > {shlex.quote(str(noema_probe))}' EXIT\n"
-            + noema_script,
+            noema_script,
         ],
-        env={
-            **os.environ,
-            "PR_NUMBER": "1",
-            "GH_TOKEN": "synthetic-review-token",
-            "NOEMA_LLM_API_URL": "",
-            "NOEMA_LLM_MODEL": "",
-            "NOEMA_LLM_API_KEY": "synthetic-openai-key",
-            "NVIDIA_NIM_API_KEY": "",
-            "TARGET_REPOSITORY_PRIVATE": "false",
-        },
+        env=noema_env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert noema.returncode == 1
-    assert "Noema LLM is unconfigured" in noema.stdout
-    assert noema_probe.read_text() == "synthetic-openai-key"
+    assert "sidecar must be provisioned before Noema LLM review" in noema.stdout
 
 
 def test_noema_workflow_run_without_pull_request_skips_before_token_exchange() -> None:
@@ -1516,6 +1599,7 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
+    assert "STRIX_PROVIDER_UNAVAILABLE" in workflow
     assert "model_behavior_error_signal=" in workflow
     assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow

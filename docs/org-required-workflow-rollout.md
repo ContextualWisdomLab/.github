@@ -31,6 +31,12 @@ reports another ref, treat that as operations drift and restore ruleset
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
 
+The central `security-scan.yml` and `sast-semgrep.yml` pull-request triggers are
+base-ref agnostic. They therefore also run for stacked pull requests targeting a
+feature branch; the organization ruleset's protected-ref scope remains an
+independent administrative control and is not weakened by this trigger
+coverage.
+
 ## OpenCode required workflow posture
 
 The central `.github/workflows/opencode-review.yml` is now part of the active organization required workflow ruleset.
