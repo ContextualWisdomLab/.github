@@ -263,6 +263,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )
         == 0
     )
+    assert receipt.fetch_reviews("ContextualWisdomLab/.github", 1158)
 
     def fake_fail(args, **kwargs):
         return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "nope"})()

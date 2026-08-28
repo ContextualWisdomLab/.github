@@ -151,6 +151,23 @@ def test_fetch_check_runs_rejects_unvalidated_repo_and_head_sha(monkeypatch) -> 
 
 
 
+def test_fetch_check_runs_accepts_central_dot_github_repository(monkeypatch) -> None:
+    """The central special repository is a valid workflow identity."""
+    page = {"check_runs": [coverage_check(head=identity.KAEFA_78_HEAD, conclusion="success")]}
+
+    monkeypatch.setattr(
+        identity.subprocess,
+        "run",
+        lambda args, **kwargs: type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps(page), "stderr": ""},
+        )(),
+    )
+
+    assert identity.fetch_check_runs("ContextualWisdomLab/.github", identity.KAEFA_78_HEAD)
+
+
 def test_fetch_check_runs_retries_transient_github_read_failure(monkeypatch) -> None:
     """A transient 429 is retried before exact-head identity fails closed."""
     page = {
