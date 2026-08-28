@@ -47,6 +47,7 @@ ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(se
 case "$ORCHESTRATOR_TOKEN" in
   *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" ;;
 esac
+printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 
 mkdir -p "$ORCHESTRATOR_WORK"
 rm -rf "$ORCHESTRATOR_SOURCE" "$ORCHESTRATOR_SITE_PACKAGES"
@@ -114,7 +115,6 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
 done
 log "healthz confirmed after ${i}s (pid $sidecar_pid)"
 
-printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
     printf 'CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\n' "$ORCHESTRATOR_HOST" "$ORCHESTRATOR_PORT"

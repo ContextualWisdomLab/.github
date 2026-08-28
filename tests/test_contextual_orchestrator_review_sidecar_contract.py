@@ -93,6 +93,17 @@ def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     assert '>> "$ORCHESTRATOR_GITHUB_ENV"' in text
 
 
+def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
+    """Generated bearer material is masked before any startup subprocess runs."""
+    text = _read(SIDECAR)
+    token_assignment = 'ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-'
+    mask = "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\""
+    launcher = '"$ORCHESTRATOR_WORK/launch_sidecar.py"'
+    assert token_assignment in text
+    assert mask in text
+    assert text.index(token_assignment) < text.index(mask) < text.index(launcher)
+
+
 def test_launcher_registers_secrets_into_the_kv_once() -> None:
     """Secrets enter the KV in the same process that serves — never os.getenv later."""
     text = _read(LAUNCHER)
