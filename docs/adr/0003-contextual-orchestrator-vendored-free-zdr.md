@@ -62,7 +62,8 @@ all five, and auto-optimize routing by cost.
    the same sidecar and use the loopback chat-completions/API-compatible URL
    with virtual model `orchestrator/free`; every target passes the explicit
    ZDR-required policy to the gateway, while visibility remains independently
-   validated as trust metadata. Strix has no external fallback. Noema reviewer identity
+   validated as trust metadata. The sidecar also fails closed when the ZDR
+   requirement is missing or false. Strix has no external fallback. Noema reviewer identity
    remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
    `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
