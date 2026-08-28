@@ -76,6 +76,19 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
   'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)'
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" - <<'PY'
+from contextual_orchestrator.server import RequestError, _request_body_size
+from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES
+
+accepted_size = 64 * 1024 + 1
+assert _request_body_size({"content-length": str(accepted_size)}, REVIEW_MAX_BODY_BYTES) == accepted_size
+try:
+    _request_body_size({"content-length": str(REVIEW_MAX_BODY_BYTES + 1)}, REVIEW_MAX_BODY_BYTES)
+except RequestError as exc:
+    assert exc.code == 413 and exc.message == "request body exceeds configured limit"
+else:
+    raise AssertionError("pinned server did not enforce the configured review body limit")
+PY
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"

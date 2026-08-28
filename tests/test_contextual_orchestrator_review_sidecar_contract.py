@@ -140,6 +140,10 @@ def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:
     """The exact vendored SHA must accept the review envelope keyword at boot."""
     text = _read(SIDECAR)
     assert 'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)' in text
+    assert "from contextual_orchestrator.server import RequestError, _request_body_size" in text
+    assert "accepted_size = 64 * 1024 + 1" in text
+    assert "REVIEW_MAX_BODY_BYTES + 1" in text
+    assert 'exc.message == "request body exceeds configured limit"' in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
