@@ -300,11 +300,13 @@ flowchart LR
 
 ## 2026-08-28 #1374 trusted-base runtime boundary
 
-- Follow-up PR #1374 is open at head
-  `d3e7cee4b01219cb0a93f1a4249049de3bf05b4b`, based on current main
-  `8f84b661e468de451ba5c076dc938f342bf52d70`. Its launcher sets the bounded
+- Follow-up PR #1374 merged at head
+  `3d7cf123ea7459b7f0082bb354280288866256db` with merge commit
+  `7c55295ff2dd863d983822d991e67ba037e8f186`; its launcher sets the bounded
   8 MiB review envelope, and its sidecar boot check validates that keyword
-  against the exact pinned orchestrator SHA before discovery.
+  against the exact pinned orchestrator SHA before discovery. Its terminal
+  review decision was not an independent `APPROVED`, so this remains an
+  observed merge event rather than protected-main governance proof.
 - PR-target Strix run `33145070402` used trusted workflow source SHA
   `8f84b661e468de451ba5c076dc938f342bf52d70`, not the PR launcher. It reached
   the pinned sidecar and then failed three bounded attempts with HTTP 413
@@ -314,8 +316,14 @@ flowchart LR
   `orchestrator/free`, then skipped before the LLM call because the current
   head had no primary OpenCode approval. Required OpenCode run `33145070315`
   failed closed for the same missing current-head verdict. Therefore the
-  envelope fix still needs a normal governed merge followed by a post-merge
-  Strix runtime result; no protected completion is claimed here.
+  PR-target result was not an LLM verdict.
+- Post-merge Strix run `33145807836` used trusted workflow source SHA
+  `7c55295ff2dd863d983822d991e67ba037e8f186`, reached
+  `openai/orchestrator/free`, and produced no HTTP 413 or
+  `request_too_large`. It failed closed after three bounded attempts because
+  the Strix Caido target was unavailable at `127.0.0.1:48080`, reported as
+  `STRIX_PROVIDER_UNAVAILABLE`; this proves the request-envelope fix on main,
+  but not a successful end-to-end vulnerability scan.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
