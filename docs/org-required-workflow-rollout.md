@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-22 KST
+Updated: 2026-08-28 KST
 
 ## Decision
 
@@ -36,6 +36,15 @@ base-ref agnostic. They therefore also run for stacked pull requests targeting a
 feature branch; the organization ruleset's protected-ref scope remains an
 independent administrative control and is not weakened by this trigger
 coverage.
+
+Stacked pull requests use the separate active organization ruleset
+`CWL Stacked OpenCode required workflow` (`21732164`). It targets every
+non-default branch (`ref_name.include=["~ALL"]`,
+`ref_name.exclude=["~DEFAULT_BRANCH"]`) and requires only
+`.github/workflows/opencode-review.yml` from `.github@refs/heads/main`.
+It deliberately has no pull-request approval, deletion, or non-fast-forward
+rule, so feature branches receive central review without inheriting protected
+default-branch merge policy.
 
 ## OpenCode required workflow posture
 
@@ -225,6 +234,8 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 9. Same-repository approved PRs should merge immediately when GitHub reports `CLEAN`; fork or external-head PRs are excluded from scheduler merge and auto-merge.
 
 ## Evidence from this rollout
+
+- On 2026-08-28 21:43 KST, live organization ruleset `21732164` was created with active enforcement for non-default branches and the single central OpenCode workflow. This closes the ruleset-scope gap that left stacked TEPP PR `#294` without a central OpenCode required workflow while avoiding duplicate default-branch execution or feature-branch merge protection.
 
 - On 2026-06-30 08:33 KST, organization ruleset `18156473` was changed from an explicit repository-name list to `repository_name.include=["~ALL"]` while keeping `ref_name.include=["~DEFAULT_BRANCH"]` and the same three central required workflow paths from `.github@refs/heads/main`.
 - On 2026-07-01 02:52 KST, ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
