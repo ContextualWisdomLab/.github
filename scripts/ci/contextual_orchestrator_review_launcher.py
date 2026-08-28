@@ -35,7 +35,9 @@ REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 def _has_text_output(model: object) -> bool:
     """Return whether a discovered model can emit text responses."""
-    modalities = getattr(model, "output_modalities", ())
+    modalities = getattr(model, "output_modalities", None)
+    if modalities is None:
+        return False
     if isinstance(modalities, str):
         modalities = (modalities,)
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
@@ -143,12 +145,12 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    free_models = [
-        model
-        for model in (free_discovered_models(discovered) if discovered else [])
-        if is_general_chat_agent_model_id(model.model_id)
-        and _has_text_output(model)
-    ]
+    free_models = []
+    for model in free_discovered_models(discovered) if discovered else []:
+        model_id = getattr(model, "model_id", "")
+        if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
+            continue
+        free_models.append(model)
     if not free_models:
         raise SystemExit("review sidecar discovered no zero-cost models; orchestrator/free would fail closed")
 
