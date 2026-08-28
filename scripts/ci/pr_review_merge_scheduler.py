@@ -1828,7 +1828,9 @@ def post_update_branch_followup(
         wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
         if wait_reason:
             return f"{head_note}; {wait_reason}"
-        dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        dispatch_result = dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        if dispatch_result == "repository_busy":
+            return f"{head_note}; target repository already has active Strix evidence, so dispatch waits"
         return (
             f"{head_note}; same-head Strix evidence dispatched because workflow-token branch updates "
             "must not rely on a PR synchronize event to rerun evidence"
@@ -2234,9 +2236,27 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             )
         )
         return "already_running"
-    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
+    stale_ids = {run_id for _, run_id in stale_run_refs}
+    busy_refs = [
+        (dispatch_repo, str(run_data["id"]))
+        for run_data in active_workflow_runs(dispatch_repo)
+        if run_data.get("id")
+        and str(run_data["id"]) not in stale_ids
+        and run_data.get("name") == workflow
+        and run_data.get("event") == "repository_dispatch"
+        and str(run_data.get("display_title") or "").startswith(
+            f"Strix Security Scan {target_repo}#"
+        )
+    ]
+    if busy_refs:
+        print(
+            "Strix evidence dispatch skipped: target repository already has active run(s) "
+            + ", ".join(f"{run_repo}@{run_id}" for run_repo, run_id in busy_refs)
+        )
+        return "repository_busy"
+    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     run_github_dispatch(
         [
             "gh",
@@ -2809,7 +2829,12 @@ def inspect_pr(
             wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
-            dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            if dispatch_result == "repository_busy":
+                return decide(
+                    "wait",
+                    "current head has no completed Strix evidence; target repository already has active Strix evidence",
+                )
             return decide(
                 "security_dispatch",
                 "current head has no completed Strix evidence; same-head Strix dispatched",
