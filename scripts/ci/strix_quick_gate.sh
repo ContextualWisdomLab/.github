@@ -2547,6 +2547,16 @@ child_model_for_api_base() {
 	local model="$1"
 	local llm_api_base_value="$2"
 
+	# LiteLLM requires an explicit provider prefix even when the gateway is an
+	# OpenAI-compatible local endpoint. Keep the public gateway model name, but
+	# qualify only the child process model so the request still carries
+	# orchestrator/free to contextual-orchestrator.
+	if is_contextual_orchestrator_model "$model" &&
+		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		printf '%s\n' 'openai/orchestrator/free'
+		return 0
+	fi
+
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
 		github_models/openai/*)
