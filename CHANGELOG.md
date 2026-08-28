@@ -11,9 +11,9 @@ Semantic Versioning where the repository publishes a release.
 - Accept valid leading-dot repository names such as `ContextualWisdomLab/.github`
   in both OpenCode receipt and coverage-identity gates while rejecting dot-path
   segments and option-like names before any GitHub CLI call.
-- Keep OpenRouter endpoint-feed ZDR evidence scoped to OpenRouter routes;
-  direct provider routes remain non-ZDR until a dated provider-specific
-  attestation exists.
+- Keep OpenRouter endpoint-feed ZDR evidence exact for OpenRouter routes while
+  allowing an unambiguous matching feed model identity to attest supplied
+  non-OpenRouter provider rows; nonmatching or ambiguous rows remain non-ZDR.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator
