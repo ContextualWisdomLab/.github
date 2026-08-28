@@ -56,11 +56,10 @@ def _nested_inputs(tmp_path: Path, changed: str) -> tuple[Path, Path, Path, Path
 
 
 def test_nested_project_python_only_change_is_classifiable(tmp_path: Path) -> None:
-    """Repository-relative Python changes retain the nested project prefix."""
+    """Repository-relative test changes retain the nested project prefix."""
 
     repository_root, log_path, pyproject_path, changed_files_path = _nested_inputs(
         tmp_path,
-        "services/nested_project/python/nested_package/reporting.py\n"
         "services/nested_project/tests/test_reporting.py\n",
     )
 
@@ -82,6 +81,7 @@ def test_nested_project_native_and_metadata_changes_block_deferral(
         "services/nested_project/crates/native_bridge/README.md\n",
         "services/nested_project/crates/native_bridge/src/lib.rs\n",
         "services/nested_project/pyproject.toml\n",
+        "services/nested_project/python/nested_package/reporting.py\n",
         "services/nested_project/python/nested_package/_core.pyi\n",
     ):
         repository_root, log_path, pyproject_path, changed_files_path = (
@@ -221,4 +221,4 @@ def test_root_project_default_python_source_is_repo_relative(tmp_path: Path) -> 
         pyproject_path=pyproject_path,
         changed_files_path=changed_files_path,
         repo_root_path=repository_root,
-    ) == "nested_package._core"
+    ) is None

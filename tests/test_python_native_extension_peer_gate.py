@@ -159,6 +159,23 @@ def test_bounded_reader_rejects_a_read_that_exceeds_the_limit(
     assert gate._read_bounded_regular(target, 2) is None
 
 
+def test_native_absence_path_rejects_symlink_and_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absence evidence never crosses a symlink or hides filesystem errors."""
+
+    target = write(tmp_path / "target", "ok")
+    symlink = tmp_path / "link"
+    symlink.symlink_to(target)
+    assert gate._safe_absent_path(symlink) is False
+    monkeypatch.setattr(
+        os,
+        "lstat",
+        lambda _path: (_ for _ in ()).throw(OSError("unavailable")),
+    )
+    assert gate._safe_absent_path(tmp_path / "missing") is False
+
+
 def test_read_text_rejects_non_utf8(tmp_path: Path) -> None:
     """Malformed UTF-8 cannot influence classification."""
 
@@ -232,6 +249,122 @@ def test_maturin_contract_uses_default_manifest(tmp_path: Path) -> None:
     )
 
 
+def test_native_absence_evidence_enables_only_sealed_partial_imports(
+    tmp_path: Path,
+) -> None:
+    """Partial imports require an exact pre-test absence record."""
+
+    log = write(tmp_path / "pytest.log", PARTIAL_NATIVE_IMPORT_LOG)
+    pyproject = write(tmp_path / "pyproject.toml", PYPROJECT)
+    changed = write(tmp_path / "changed.txt", "tests/test_mle.py\n")
+    evidence = write(
+        tmp_path / "absence.txt",
+        gate.native_module_absence_evidence(pyproject_path=pyproject) or "",
+    )
+
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=pyproject,
+        changed_files_path=changed,
+        native_module_absence_evidence=evidence,
+    ) == "fast_mlsirm._core"
+    evidence.write_text("native-module-absent:other._core\n", encoding="utf-8")
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=pyproject,
+        changed_files_path=changed,
+        native_module_absence_evidence=evidence,
+    ) is None
+
+
+def test_native_absence_evidence_rejects_materialized_extension(
+    tmp_path: Path,
+) -> None:
+    """A materialized extension prevents sealed absence evidence."""
+
+    pyproject = write(tmp_path / "pyproject.toml", PYPROJECT)
+    extension = tmp_path / "python/fast_mlsirm/_core"
+    extension.parent.mkdir(parents=True)
+    write(extension.with_name(extension.name + gate.EXTENSION_SUFFIXES[0]), "native")
+
+    assert gate.native_module_absence_evidence(pyproject_path=pyproject) is None
+
+
+def test_native_absence_evidence_rejects_invalid_repository_context(
+    tmp_path: Path,
+) -> None:
+    """Sealing fails when metadata or repository anchoring is invalid."""
+
+    pyproject = write(tmp_path / "pyproject.toml", PYPROJECT)
+    assert (
+        gate.native_module_absence_evidence(
+            pyproject_path=tmp_path / "missing.toml",
+        )
+        is None
+    )
+    assert (
+        gate.native_module_absence_evidence(
+            pyproject_path=pyproject,
+            logical_pyproject_path=Path("pyproject.toml"),
+        )
+        is None
+    )
+    repository_file = write(tmp_path / "repository-file", "not a directory")
+    assert (
+        gate.native_module_absence_evidence(
+            pyproject_path=pyproject,
+            repo_root_path=repository_file,
+        )
+        is None
+    )
+
+
+def test_native_absence_evidence_rejects_resolution_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repository resolution error fails closed after path validation."""
+
+    pyproject = write(tmp_path / "pyproject.toml", PYPROJECT)
+    original_resolve = Path.resolve
+    resolve_calls = 0
+
+    def fail_second_resolve(path: Path, *args, **kwargs):
+        """Fail only while sealing the already validated repository root."""
+
+        nonlocal resolve_calls
+        if path == tmp_path:
+            resolve_calls += 1
+            if resolve_calls == 3:
+                raise OSError("unavailable")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fail_second_resolve)
+    assert gate.native_module_absence_evidence(pyproject_path=pyproject) is None
+
+
+def test_native_absence_evidence_rejects_repository_that_changes_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repository root that stops being a directory fails closed."""
+
+    pyproject = write(tmp_path / "pyproject.toml", PYPROJECT)
+    original_is_dir = Path.is_dir
+    is_dir_calls = 0
+
+    def false_second_is_dir(path: Path, *args, **kwargs):
+        """Fail the second root-directory check during sealing."""
+
+        nonlocal is_dir_calls
+        if path == tmp_path:
+            is_dir_calls += 1
+            if is_dir_calls == 2:
+                return False
+        return original_is_dir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", false_second_is_dir)
+    assert gate.native_module_absence_evidence(pyproject_path=pyproject) is None
+
+
 @pytest.mark.parametrize(
     "changed",
     [
@@ -247,6 +380,7 @@ def test_maturin_contract_uses_default_manifest(tmp_path: Path) -> None:
         ".github/workflows/ci.yml\n",
         ".github/actions/setup/action.yml\n",
         "python/fast_mlsirm/_core.pyi\n",
+        "python/fast_mlsirm/scoring/reporting.py\n",
         "crates/fast-mlsirm-py/README.md\n",
         "nested/pyproject.toml\n",
         "uv.lock\n",
@@ -363,9 +497,19 @@ def test_pytest_classifier_accepts_exact_missing_extension() -> None:
 
 
 def test_pytest_classifier_accepts_exact_partial_native_import() -> None:
-    """A PyO3 circular-import collection failure is classifiable when exact."""
+    """A PyO3 circular-import failure needs sealed absence evidence."""
 
     assert gate.classify_pytest_failure(
+        PARTIAL_NATIVE_IMPORT_LOG,
+        module_name="fast_mlsirm._core",
+        native_module_absent=True,
+    )
+
+
+def test_pytest_classifier_rejects_partial_native_import_without_absence_evidence() -> None:
+    """A partial-import message alone cannot prove that the extension is absent."""
+
+    assert not gate.classify_pytest_failure(
         PARTIAL_NATIVE_IMPORT_LOG,
         module_name="fast_mlsirm._core",
     )
@@ -394,6 +538,7 @@ def test_pytest_classifier_rejects_incomplete_partial_native_import_failure() ->
     assert not gate.classify_pytest_failure(
         log,
         module_name="fast_mlsirm._core",
+        native_module_absent=True,
     )
 
 
@@ -403,6 +548,7 @@ def test_pytest_classifier_rejects_undotted_partial_native_module() -> None:
     assert not gate.classify_pytest_failure(
         PARTIAL_NATIVE_IMPORT_LOG,
         module_name="_core",
+        native_module_absent=True,
     )
 
 
@@ -423,6 +569,20 @@ def test_pytest_classifier_rejects_mismatched_partial_native_import(
     assert not gate.classify_pytest_failure(
         log,
         module_name="fast_mlsirm._core",
+        native_module_absent=True,
+    )
+
+
+def test_pytest_classifier_rejects_partial_import_without_direct_native_import() -> None:
+    """A partial exception without a direct native import remains ambiguous."""
+
+    log = PARTIAL_NATIVE_IMPORT_LOG.replace(
+        "    import fast_mlsirm._core\n", "", 1
+    ).replace("    from . import _core\n", "")
+    assert not gate.classify_pytest_failure(
+        log,
+        module_name="fast_mlsirm._core",
+        native_module_absent=True,
     )
 
 
@@ -430,11 +590,24 @@ def test_classify_inputs_accepts_python_only_change(tmp_path: Path) -> None:
     """Python-only changes may defer to trusted native peer evidence."""
 
     log, pyproject, changed = valid_inputs(tmp_path)
+    changed.write_text("tests/test_scoring_reporting.py\n", encoding="utf-8")
     assert gate.classify_pytest_inputs(
         log_path=log,
         pyproject_path=pyproject,
         changed_files_path=changed,
     ) == "fast_mlsirm._core"
+
+
+def test_classify_inputs_rejects_python_source_change(tmp_path: Path) -> None:
+    """Changes below the declared Python source root require direct testing."""
+
+    log, pyproject, changed = valid_inputs(tmp_path)
+    changed.write_text("python/fast_mlsirm/scoring/reporting.py\n", encoding="utf-8")
+    assert gate.classify_pytest_inputs(
+        log_path=log,
+        pyproject_path=pyproject,
+        changed_files_path=changed,
+    ) is None
 
 
 def test_classify_inputs_separates_sealed_metadata_from_logical_path(
@@ -448,7 +621,7 @@ def test_classify_inputs_separates_sealed_metadata_from_logical_path(
     snapshot = write(tmp_path / "sealed-metadata", PYPROJECT)
     changed = write(
         tmp_path / "changed.txt",
-        "python/fast_mlsirm/scoring/reporting.py\n",
+        "tests/test_scoring_reporting.py\n",
     )
 
     assert gate.classify_pytest_inputs(
@@ -699,6 +872,19 @@ def test_cli_classify_and_require_checks(tmp_path: Path, capsys) -> None:
     """Both CLI operations emit explicit success and fail-closed diagnostics."""
 
     log, pyproject, changed = valid_inputs(tmp_path)
+    assert gate.main(
+        ["seal-native-absence", "--pyproject", str(tmp_path / "missing.toml")]
+    ) == 1
+    assert "could not be sealed" in capsys.readouterr().err
+    changed.write_text("tests/test_scoring_reporting.py\n", encoding="utf-8")
+    assert gate.main(
+        [
+            "seal-native-absence",
+            "--pyproject",
+            str(pyproject),
+        ]
+    ) == 0
+    assert capsys.readouterr().out == "native-module-absent:fast_mlsirm._core\n"
     assert gate.main(
         [
             "classify-pytest",

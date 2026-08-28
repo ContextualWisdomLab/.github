@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
+from importlib.machinery import EXTENSION_SUFFIXES
 from typing import Any, Sequence
 
 try:
@@ -322,15 +323,99 @@ def _touches_native_or_trust_boundary(
             return True
         if manifest_parent != PurePosixPath(".") and path.is_relative_to(manifest_parent):
             return True
+        if path == python_source or (
+            python_source != PurePosixPath(".") and path.is_relative_to(python_source)
+        ):
+            return True
+        if python_source == PurePosixPath(".") and path.suffix in {".py", ".pyi"}:
+            return True
         if path.name == "pyproject.toml":
             return True
     return False
+
+
+def _safe_absent_path(path: Path) -> bool:
+    """Return whether a path is absent without crossing a symlink component."""
+
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if stat.S_ISLNK(metadata.st_mode):
+            return False
+    return False
+
+
+def native_module_absence_evidence(
+    *,
+    pyproject_path: Path,
+    logical_pyproject_path: Path | None = None,
+    repo_root_path: Path | None = None,
+) -> str | None:
+    """Seal exact evidence that the declared native module is absent pre-test."""
+
+    contract = _maturin_contract(pyproject_path)
+    if contract is None:
+        return None
+    module_name, manifest_path, python_source = contract
+    repository_paths = _repository_contract_paths(
+        repo_root_path=repo_root_path,
+        pyproject_path=pyproject_path,
+        logical_pyproject_path=logical_pyproject_path,
+        manifest_path=manifest_path,
+        python_source=python_source,
+    )
+    if repository_paths is None:
+        return None
+    _, _, relative_python_source = repository_paths
+    candidate_root = pyproject_path.parent if repo_root_path is None else repo_root_path
+    try:
+        if not candidate_root.is_dir() or candidate_root.is_symlink():
+            return None
+        repository_root = candidate_root.resolve()
+        module_base = (
+            repository_root
+            / Path(relative_python_source.as_posix())
+            / Path(*module_name.split("."))
+        )
+    except (OSError, ValueError):
+        return None
+
+    candidates = [
+        module_base,
+        module_base.with_suffix(".py"),
+        module_base.with_suffix(".pyc"),
+        *(Path(f"{module_base}{suffix}") for suffix in EXTENSION_SUFFIXES),
+    ]
+    if not all(_safe_absent_path(candidate) for candidate in candidates):
+        return None
+    return f"native-module-absent:{module_name}\n"
+
+
+def _native_module_absence_is_sealed(
+    evidence_path: Path | None,
+    *,
+    module_name: str,
+) -> bool:
+    """Return whether a pre-test absence record exactly names the module."""
+
+    if evidence_path is None:
+        return False
+    return _read_text(evidence_path, MAX_METADATA_BYTES) == (
+        f"native-module-absent:{module_name}\n"
+    )
 
 
 def classify_pytest_failure(
     log_text: str,
     *,
     module_name: str,
+    native_module_absent: bool = False,
 ) -> bool:
     """Return whether pytest failed only because one declared module was absent."""
 
@@ -372,6 +457,8 @@ def classify_pytest_failure(
             return False
         expected_exception = "ModuleNotFoundError"
     else:
+        if not native_module_absent:
+            return False
         if len(partial_native_imports) != len(collection_errors):
             return False
         try:
@@ -409,6 +496,7 @@ def classify_pytest_inputs(
     logical_pyproject_path: Path | None = None,
     changed_files_path: Path,
     repo_root_path: Path | None = None,
+    native_module_absence_evidence: Path | None = None,
 ) -> str | None:
     """Return the safely deferred module name, or ``None`` when blocking."""
 
@@ -437,7 +525,14 @@ def classify_pytest_inputs(
         python_source=relative_python_source,
     ):
         return None
-    if not classify_pytest_failure(log_text, module_name=module_name):
+    if not classify_pytest_failure(
+        log_text,
+        module_name=module_name,
+        native_module_absent=_native_module_absence_is_sealed(
+            native_module_absence_evidence,
+            module_name=module_name,
+        ),
+    ):
         return None
     return module_name
 
@@ -532,6 +627,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     classify.add_argument("--logical-pyproject", type=Path)
     classify.add_argument("--changed-files", type=Path, required=True)
     classify.add_argument("--repo-root", type=Path)
+    classify.add_argument("--native-absence-evidence", type=Path)
+
+    seal = subparsers.add_parser("seal-native-absence")
+    seal.add_argument("--pyproject", type=Path, required=True)
+    seal.add_argument("--logical-pyproject", type=Path)
+    seal.add_argument("--repo-root", type=Path)
 
     require = subparsers.add_parser("require-checks")
     require.add_argument("--checks-json", type=Path, required=True)
@@ -549,6 +650,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected fail-closed native-extension peer gate."""
 
     args = parse_args(argv)
+    if args.command == "seal-native-absence":
+        evidence = native_module_absence_evidence(
+            pyproject_path=args.pyproject,
+            logical_pyproject_path=args.logical_pyproject,
+            repo_root_path=args.repo_root,
+        )
+        if evidence is None:
+            print("native module absence could not be sealed", file=sys.stderr)
+            return 1
+        print(evidence, end="")
+        return 0
+
     if args.command == "classify-pytest":
         module_name = classify_pytest_inputs(
             log_path=args.log,
@@ -556,6 +669,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             logical_pyproject_path=args.logical_pyproject,
             changed_files_path=args.changed_files,
             repo_root_path=args.repo_root,
+            native_module_absence_evidence=args.native_absence_evidence,
         )
         if module_name is None:
             print("pytest failure is not safely deferrable", file=sys.stderr)

@@ -983,6 +983,7 @@ jobs:
             local python_native_pytest_log="$2"
             local python_native_changed_files="$3"
             local python_native_pyproject_snapshot="$4"
+            local python_native_absence_evidence="$5"
 
             [ -s "$python_native_pyproject_snapshot" ] || return 1
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
@@ -991,7 +992,8 @@ jobs:
               --pyproject "$python_native_pyproject_snapshot" \
               --logical-pyproject "$project_dir/pyproject.toml" \
               --changed-files "$python_native_changed_files" \
-              --repo-root "$COVERAGE_SOURCE_WORKDIR"
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --native-absence-evidence "$python_native_absence_evidence"
           }
 
           run_python_test_and_capture() {
@@ -1001,6 +1003,7 @@ jobs:
             local python_native_pytest_log
             local python_native_changed_files
             local python_native_pyproject_snapshot
+            local python_native_absence_evidence
             local pyproject_repository_path
             local rc
 
@@ -1020,6 +1023,18 @@ jobs:
               chmod 0444 "$python_native_pyproject_snapshot"
             else
               : >"$python_native_pyproject_snapshot"
+            fi
+            python_native_absence_evidence="$(mktemp "$RUNNER_TEMP/python-native-absence.XXXXXX")"
+            if python3 -I "$GITHUB_WORKSPACE/scripts/ci/python_native_extension_peer_gate.py" \
+              seal-native-absence \
+              --pyproject "$python_native_pyproject_snapshot" \
+              --logical-pyproject "$project_dir/pyproject.toml" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              >"$python_native_absence_evidence"; then
+              chmod 0444 "$python_native_absence_evidence"
+            else
+              : >"$python_native_absence_evidence"
+              chmod 0444 "$python_native_absence_evidence"
             fi
 
             append "### ${label}"
@@ -1065,7 +1080,8 @@ jobs:
               "$project_dir" \
               "$python_native_pytest_log" \
               "$python_native_changed_files" \
-              "$python_native_pyproject_snapshot" >/dev/null 2>&1; then
+              "$python_native_pyproject_snapshot" \
+              "$python_native_absence_evidence" >/dev/null 2>&1; then
               append "### Python native-extension source-only deferral"
               append ""
               append "- Result: DEFERRED"
@@ -1080,7 +1096,8 @@ jobs:
             rm -f \
               "$python_native_pytest_log" \
               "$python_native_changed_files" \
-              "$python_native_pyproject_snapshot"
+              "$python_native_pyproject_snapshot" \
+              "$python_native_absence_evidence"
           }
 
           run_r_package_testthat() {

@@ -44,6 +44,11 @@ build, so collection stops at:
 ModuleNotFoundError: No module named 'fast_mlsirm._core'
 ```
 
+Some package layouts surface the same absent extension during package
+initialization as an exact partial-initialization `ImportError`. That message
+is not sufficient by itself: the workflow seals native-module absence before
+the untrusted test process starts and supplies that record to the classifier.
+
 Maturin documents that `module-name` places the compiled extension inside the
 configured Python source tree and that `maturin develop` or an installation step
 materializes the shared library. PyO3 likewise documents that a native module
@@ -66,7 +71,8 @@ failure only when every condition below is true:
 4. The pytest log is bounded, complete, and contains only collection errors.
 5. Every terminal exception is either `ModuleNotFoundError` for the declared
    module or the exact Python circular-import `ImportError` for the declared
-   package and native leaf.
+   package and native leaf. The partial-initialization form additionally
+   requires a pre-test sealed absence record naming the declared module.
 6. Every collection-error block contains a direct import of that module; the
    circular-import form additionally requires the exact relative, absolute,
    or dotted native import in the traceback.
@@ -77,7 +83,9 @@ failure only when every condition below is true:
 9. The changed-file list is bounded, unique, and traversal-free.
 10. The pull request does not change Rust source, Cargo metadata, native stubs,
     maturin metadata, dependency locks, requirements, packaging files, GitHub
-    workflows/actions, or any file under the native crate directory.
+    workflows/actions, any file below the declared `python-source` tree, or any
+    file under the native crate directory. For the default `python-source =
+    "."`, changed Python source and stub files are also blocking.
 
 A rejected classification remains an ordinary blocking test failure.
 
@@ -110,7 +118,9 @@ The deferral exists only for an unchanged native/package trust boundary. Any
 change to the extension implementation, Cargo manifests or lock, maturin
 configuration, native stub, packaging metadata, dependency locks (including
 `.in` / `.txt` / `.lock` files under a `requirements` path), or CI workflow
-requires a direct trusted native build path. A prose file such as
+requires a direct trusted native build path. Any file below the declared
+`python-source` tree is likewise boundary-sensitive, because it can change
+package initialization around the extension. A prose file such as
 `docs/requirements/overview.md` is not a lock. This prevents a pull request from
 changing the thing being imported while asking the central sandbox to trust an
 older binary or a weakly named passing check.
@@ -128,9 +138,11 @@ Repository paths reject absolute paths, parent traversal, current-directory
 aliases, Windows separators, NUL, and duplicates.
 
 Untrusted pytest executes only after the metadata snapshot is sealed. The
-classifier therefore reads maturin configuration from that immutable copy and
-derives change-boundary paths from a distinct, traversal-free logical path
-anchored to the validated coverage repository. It never resolves the temporary
+classifier therefore seals native-module absence before untrusted execution,
+reads maturin configuration from that immutable copy, and derives
+change-boundary paths from a distinct, traversal-free logical path anchored to
+the validated coverage repository. The absence record is root-owned and
+read-only while the sandbox runs. The classifier never resolves the temporary
 snapshot as though it lived inside the repository and never rereads mutable
 post-test project metadata.
 
@@ -149,7 +161,9 @@ adversarial cases for:
 - failed tests and setup/teardown errors;
 - internal pytest errors, crashes, and truncated output;
 - malformed TOML and unsafe paths;
-- changed Rust, Cargo, packaging, dependency, workflow, and native-stub inputs;
+- changed Rust, Cargo, packaging, dependency, workflow, Python-source, and
+  native-stub inputs;
+- exact partial-initialization imports with and without sealed native absence;
 - stale, pending, failed, status-only, wrong-workflow, and misleading checks;
 - malformed SHAs, duplicate requirements, unsafe JSON, and missing files;
 - flat and GraphQL-shaped workflow metadata;

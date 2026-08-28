@@ -54,6 +54,9 @@ def test_failed_python_suite_uses_bounded_repo_root_aware_classifier() -> None:
     assert "changed_files_for_coverage" in workflow
     assert "python_native_pytest_log" in workflow
     assert "python_native_changed_files" in workflow
+    assert "python_native_absence_evidence" in workflow
+    assert "seal-native-absence" in workflow
+    assert '--native-absence-evidence "$python_native_absence_evidence"' in workflow
     assert "if run_python_native_extension_classifier" in workflow
 
 
@@ -87,9 +90,13 @@ E   ModuleNotFoundError: No module named 'native_demo._core'
         encoding="utf-8",
     )
     changed_files = tmp_path / "changed-files.txt"
-    changed_files.write_text("python/native_demo/api.py\n", encoding="utf-8")
+    changed_files.write_text("tests/test_api.py\n", encoding="utf-8")
     sealed_snapshot = tmp_path / "sealed-metadata"
     sealed_snapshot.write_text(pyproject_text, encoding="utf-8")
+    absence_evidence = tmp_path / "native-absence"
+    absence_evidence.write_text(
+        "native-module-absent:native_demo._core\n", encoding="utf-8"
+    )
 
     script = "\n".join(
         (
@@ -97,7 +104,8 @@ E   ModuleNotFoundError: No module named 'native_demo._core'
             _workflow_function("run_python_native_extension_classifier"),
             (
                 "run_python_native_extension_classifier . "
-                f"{pytest_log!s} {changed_files!s} {sealed_snapshot!s}"
+                f"{pytest_log!s} {changed_files!s} {sealed_snapshot!s} "
+                f"{absence_evidence!s}"
             ),
         )
     )
@@ -150,6 +158,10 @@ def test_python_failure_log_is_materialized_under_runner_temp() -> None:
         'python_native_pytest_log="$(mktemp '
         '"$RUNNER_TEMP/python-native-pytest.XXXXXX")"'
     ) in function
+    assert (
+        'python_native_absence_evidence="$(mktemp '
+        '"$RUNNER_TEMP/python-native-absence.XXXXXX")"'
+    ) in function
 
 
 def test_python_metadata_snapshot_comes_from_exact_head_git_object() -> None:
@@ -167,6 +179,7 @@ def test_python_metadata_snapshot_comes_from_exact_head_git_object() -> None:
     assert 'if trusted_git show \\' in function
     assert 'chmod 0444 "$python_native_pyproject_snapshot"' in function
     assert ': >"$python_native_pyproject_snapshot"' in function
+    assert 'chmod 0444 "$python_native_absence_evidence"' in function
     snapshot_start = function.index("if trusted_git show")
     snapshot_end = function.index('\n\n  append "### ${label}"', snapshot_start)
     assert "failures" not in function[snapshot_start:snapshot_end]
