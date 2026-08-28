@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         require_zdr=args.require_zdr,
     )
     Path(args.catalog_out).write_text(
-        json.dumps(result["agents"], indent=2) + "\n", encoding="utf-8"
+        json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
     )
     Path(args.report_out).write_text(
         json.dumps(result["report"], indent=2) + "\n", encoding="utf-8"
