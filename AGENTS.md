@@ -12,6 +12,16 @@ Conflict-scope roots fail closed when the immediate parent directory is a symbol
 OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 
+Semgrep hosted scans bind one job-level `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`. See [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md).
 OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
+
+Central review routes through the vendored **contextual-orchestrator** gateway
+sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
+provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+`NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
+as bootstrap transport in the same process that discovers models and serves;
+the review model is the fail-closed zero-cost pool `orchestrator/free` with
+ZDR-compliant routes prioritized by [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
+See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md).
 
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
