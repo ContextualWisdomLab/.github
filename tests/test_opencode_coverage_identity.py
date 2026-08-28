@@ -356,7 +356,9 @@ def dispatch_run(
     return {
         "id": int(run_id),
         "event": "repository_dispatch",
-        "name": "OpenCode Review Dispatch",
+        "name": (
+            f"OpenCode Review Dispatch {target_repo}#{pr_number}@{head_sha}"
+        ),
         "display_title": (
             f"OpenCode Review Dispatch {target_repo}#{pr_number}@{head_sha}"
         ),
