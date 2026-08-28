@@ -332,8 +332,11 @@ is_contextual_orchestrator_model() {
 }
 
 is_contextual_orchestrator_api_base() {
+	# The sidecar deliberately binds this fixed process-local origin; accepting
+	# an environment override here would make the gateway trust boundary ambiguous.
+	local contextual_orchestrator_loopback_origin="http://127.0.0.1:18080"
 	case "$1" in
-	http://127.0.0.1:18080 | http://127.0.0.1:18080/*)
+	"$contextual_orchestrator_loopback_origin" | "$contextual_orchestrator_loopback_origin"/*)
 		return 0
 		;;
 	*)
