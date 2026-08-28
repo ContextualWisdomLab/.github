@@ -19,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "8d09540844a7c3e2421dfe2cf5b44e915c1fb41a"
+REVIEW_DISPATCH_BLOB_SHA = "3068fbc365dfe22d82adb523c3b36c0703e9c0a8"
 
 
 def _workflow_text(path: Path) -> str:
@@ -149,7 +149,7 @@ def test_missing_gateway_env_fails_closed_before_model_execution() -> None:
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     ordinary_guard = (
         'if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] '
-        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then\n'
+        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then\n'
         '            echo "::error::contextual-orchestrator review sidecar must be '
         'provisioned before scheduled OpenCode autofix."\n'
         "            exit 1\n"
@@ -157,7 +157,7 @@ def test_missing_gateway_env_fails_closed_before_model_execution() -> None:
     )
     conflict_guard = (
         'if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] '
-        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then\n'
+        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then\n'
         '            echo "::error::contextual-orchestrator review sidecar must be '
         'provisioned before scheduled OpenCode conflict resolution."\n'
         "            exit 1\n"
