@@ -131,7 +131,7 @@ sequenceDiagram
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
   Web E2E readiness URLs are loopback-only; see
   [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
-  and [`docs/adr/0003-sandboxed-web-readiness-loopback-boundary.md`](docs/adr/0003-sandboxed-web-readiness-loopback-boundary.md).
+  and [`docs/adr/0004-sandboxed-web-readiness-loopback-boundary.md`](docs/adr/0004-sandboxed-web-readiness-loopback-boundary.md).
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.

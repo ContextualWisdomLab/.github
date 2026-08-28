@@ -1,4 +1,4 @@
-# ADR-0003: Sandboxed web readiness loopback boundary
+# ADR-0004: Sandboxed web readiness loopback boundary
 
 - Status: accepted
 - Date: 2026-08-25
