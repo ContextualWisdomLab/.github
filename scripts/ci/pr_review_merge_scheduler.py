@@ -1937,6 +1937,8 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                     "--method",
                     "GET",
                     f"repos/{repo}/actions/runs",
+                    "--paginate",
+                    "--slurp",
                     "-f",
                     f"status={status}",
                     "-F",
@@ -1944,7 +1946,9 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                 ]
             )
         )
-        runs.extend(payload.get("workflow_runs") or [])
+        pages = payload if isinstance(payload, list) else [payload]
+        for page in pages:
+            runs.extend(page.get("workflow_runs") or [])
     return runs
 
 
