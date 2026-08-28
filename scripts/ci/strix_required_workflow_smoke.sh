@@ -118,9 +118,11 @@ PY
 	fi
 }
 
-if ! bash -n "$gate_script" "$full_gate_test" "$sidecar_script"; then
-	record_failure "Strix gate scripts must pass bash syntax checks"
-fi
+for shell_script in "$gate_script" "$full_gate_test" "$sidecar_script"; do
+	if ! bash -n -- "$shell_script"; then
+		record_failure "Strix gate script must pass bash syntax checks: $shell_script"
+	fi
+done
 
 echo "Checking Strix workflow contract in $workflow_file"
 
