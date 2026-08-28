@@ -61,8 +61,8 @@ def test_http_origin_rejects_non_http_userinfo_and_maps_default_ports():
     assert noema._http_origin(parse("http://[::1]:18080/v1/chat")) == ("http", "::1", 18080)
 
 
-def test_allowed_orchestrator_sidecar_url_matches_base_or_explicit_flag(monkeypatch):
-    """Allow only 127.0.0.1/::1 when the sidecar origin matches or the flag is set."""
+def test_allowed_orchestrator_sidecar_url_requires_exact_configured_origin(monkeypatch):
+    """The marker flag must not widen the exact sidecar-origin allowlist."""
     monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     sidecar = "http://127.0.0.1:18080/v1/chat/completions"
@@ -84,9 +84,13 @@ def test_allowed_orchestrator_sidecar_url_matches_base_or_explicit_flag(monkeypa
 
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
-    assert noema.is_allowed_orchestrator_sidecar_url(sidecar) is True
-    assert noema.is_allowed_orchestrator_sidecar_url("http://[::1]:18080/v1/chat/completions") is True
+    assert noema.is_allowed_orchestrator_sidecar_url(sidecar) is False
+    assert noema.is_allowed_orchestrator_sidecar_url("http://[::1]:18080/v1/chat/completions") is False
     assert noema.is_allowed_orchestrator_sidecar_url("http://localhost:18080/v1/chat/completions") is False
+
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
+    assert noema.is_allowed_orchestrator_sidecar_url(sidecar) is True
+    assert noema.is_allowed_orchestrator_sidecar_url("http://127.0.0.1:18081/v1/chat/completions") is False
 
 
 def test_reject_private_llm_url_allows_sidecar_and_keeps_ssrf_closed(monkeypatch):
@@ -105,7 +109,8 @@ def test_reject_private_llm_url_allows_sidecar_and_keeps_ssrf_closed(monkeypatch
         noema.reject_private_llm_url("http://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
         noema.reject_private_llm_url("http://agent.localhost/v1/chat")
-    noema.reject_private_llm_url("http://[::1]:18080/v1/chat/completions")
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.reject_private_llm_url("http://[::1]:18080/v1/chat/completions")
 
 
 def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
@@ -143,7 +148,8 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://[::1]:18080/v1/chat/completions")
-    assert noema.call_llm("owner/repo", 1, pr, "diff", False)["decision"] == "approve"
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False)
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):

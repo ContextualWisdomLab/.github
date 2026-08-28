@@ -53,8 +53,13 @@ checked_out="$(git -C "$ORCHESTRATOR_SOURCE" rev-parse HEAD)"
 if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then
   fail "vendored HEAD ${checked_out} != pin ${ORCHESTRATOR_PIN_SHA}"
 fi
-log "installing vendored orchestrator at ${checked_out}"
-python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir "$ORCHESTRATOR_SOURCE"
+requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
+if [ ! -f "$requirements_lock" ]; then
+  fail "vendored orchestrator is missing its hash-pinned requirements.lock"
+fi
+log "installing hash-pinned orchestrator dependencies at ${checked_out}"
+python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
+  --require-hashes --no-deps -r "$requirements_lock"
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"

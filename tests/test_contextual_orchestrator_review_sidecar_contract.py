@@ -19,6 +19,8 @@ SIDECAR = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh
 LAUNCHER = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 AUTOFIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/pr-review-autofix.yml"
 NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
+OPENCODE_DISPATCH_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml"
+STRIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/strix.yml"
 OPENCODE_CONFIG = _ORG_REPO_ROOT / "opencode.jsonc"
 
 FIVE_SECRETS = (
@@ -48,6 +50,8 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert 'if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then' in text
     assert "--filter=blob:none" in text or "--depth" in text
     assert "--no-cache-dir" in text
+    assert 'requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"' in text
+    assert "--require-hashes" in text
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
@@ -169,3 +173,27 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     assert "--require-zdr" in sidecar
     assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
     assert "require_zdr=args.require_zdr" in launcher
+
+
+def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosis() -> None:
+    """The privileged Required OpenCode path has no direct-provider model route."""
+    workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
+    assert "Provision contextual-orchestrator review sidecar" in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
+    assert '.model = "contextual-orchestrator/orchestrator/free"' in workflow
+
+
+def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
+    """Strix accepts only the gateway route and binds private scans to ZDR."""
+    workflow = _read(STRIX_WORKFLOW)
+    assert "Provision contextual-orchestrator Strix sidecar" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert "provider_mode=contextual_orchestrator" in workflow
+    assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
+    assert workflow.index("Resolve target repository visibility") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
+    assert "STRIX_FALLBACK_MODELS: \"\"" in workflow

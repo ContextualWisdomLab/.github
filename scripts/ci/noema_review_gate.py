@@ -43,7 +43,6 @@ MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
-ORCHESTRATOR_VIA_FLAG = "NOEMA_LLM_VIA_ORCHESTRATOR"
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
@@ -470,9 +469,9 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
     """Return True only for the process-local orchestrator sidecar loopback origin.
 
     ``localhost`` and other private hosts stay rejected. A loopback literal
-    (``127.0.0.1`` / ``::1``) is allowed only when it matches
-    ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` or when ``NOEMA_LLM_VIA_ORCHESTRATOR``
-    is an explicit truthy flag.
+    (``127.0.0.1`` / ``::1``) is allowed only when it matches the exact
+    ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin. The via-orchestrator marker is
+    metadata only and never widens this allowlist.
     """
     origin = _http_origin(urllib.parse.urlparse(api_url))
     if origin is None:
@@ -480,8 +479,6 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
     scheme, hostname, port = origin
     if not _is_loopback_literal_host(hostname):
         return False
-    if _truthy_env(ORCHESTRATOR_VIA_FLAG):
-        return True
     sidecar = os.environ.get(ORCHESTRATOR_BASE_ENV, "").strip()
     if not sidecar:
         return False

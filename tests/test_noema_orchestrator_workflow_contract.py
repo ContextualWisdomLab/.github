@@ -54,8 +54,8 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
-def test_strix_nim_defaults_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:
-    """Keep the Strix NIM empty-output contract; Noema now fails closed without the sidecar."""
+def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:
+    """Keep Strix on the gateway; Noema still fails closed without its sidecar."""
     bash_executable = shutil.which("bash") or "/bin/bash"
     strix_output = tmp_path / "strix-output"
     strix = subprocess.run(  # noqa: S603, S607
@@ -65,7 +65,7 @@ def test_strix_nim_defaults_and_noema_sidecar_fail_closed(tmp_path: Path) -> Non
             textwrap.dedent(
                 workflow_step(
                     workflow_text("strix.yml"),
-                    "Resolve live NVIDIA NIM Strix models",
+                    "Gate Strix secrets",
                 )
                 .split("        run: |\n", 1)[1]
             ),
@@ -73,20 +73,21 @@ def test_strix_nim_defaults_and_noema_sidecar_fail_closed(tmp_path: Path) -> Non
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
             "STRIX_MODEL_REQUESTED": "",
-            "NVIDIA_API_KEY": "",
-            "TARGET_REPOSITORY_PRIVATE": "false",
-            "STRIX_NVIDIA_PRIMARY_CANDIDATES": "nvidia/primary",
-            "STRIX_NVIDIA_FALLBACK_CANDIDATES": "nvidia/fallback",
         },
         capture_output=True,
         text=True,
         check=False,
     )
     assert strix.returncode == 0, strix.stderr
-    assert {"primary=", "fallback="} <= set(strix_output.read_text().splitlines())
+    assert {
+        "strix_model=contextual-orchestrator/orchestrator/free",
+        "enabled=true",
+        "provider_mode=contextual_orchestrator",
+    } <= set(strix_output.read_text().splitlines())
     assert (
-        "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
         in workflow_text("strix.yml")
     )
     assert (

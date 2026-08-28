@@ -2311,6 +2311,18 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
+      - name: Provision contextual-orchestrator review sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.validate-pr-metadata.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
       - name: Validate pull request head repository trust
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
@@ -3774,9 +3786,9 @@ jobs:
 
           jq -n '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-            "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
-            "enabled_providers": ["nvidia-nim", "opencode-free", "opencode", "openai", "openrouter", "github-models"],
+            "model": "contextual-orchestrator/orchestrator/free",
+            "small_model": "contextual-orchestrator/orchestrator/free",
+            "enabled_providers": ["contextual-orchestrator"],
             "lsp": false,
             "mcp": {},
             "permission": {
@@ -4458,10 +4470,38 @@ jobs:
             }
           }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
+          gateway_config="${OPENCODE_REVIEW_WORKDIR}/opencode.gateway.jsonc"
+          jq '
+            .model = "contextual-orchestrator/orchestrator/free" |
+            .small_model = "contextual-orchestrator/orchestrator/free" |
+            .enabled_providers = ["contextual-orchestrator"] |
+            .provider = {
+              "contextual-orchestrator": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Contextual Orchestrator",
+                "options": {
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+                },
+                "models": {
+                  "orchestrator/free": {
+                    "name": "Orchestrator Free (ZDR-first zero-cost pool)",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 32768
+                    }
+                  }
+                }
+              }
+            }
+          ' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" >"$gateway_config"
+          mv -- "$gateway_config" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
-          if ! grep -Fq 'nvidia-nim' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
-            || ! grep -Fq 'integrate.api.nvidia.com' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
-            echo '::error::Generated isolated opencode.jsonc is missing the nvidia-nim provider; refusing to run the model pool without NIM priority.'
+          if ! grep -Fq 'contextual-orchestrator/orchestrator/free' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
+            || ! grep -Fq 'CONTEXTUAL_ORCHESTRATOR_BASE_URL' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Generated isolated opencode.jsonc is missing the contextual-orchestrator gateway route.'
             exit 1
           fi
           printf 'Prepared isolated OpenCode review workspace: %s\n' "$OPENCODE_REVIEW_WORKDIR"
@@ -4472,41 +4512,10 @@ jobs:
         timeout-minutes: 205
         continue-on-error: true
         env:
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          # Native OpenAI backend for the lead review model. GitHub Models
-          # rate-limits every request and caps bodies at ~4000 tokens, so the
-          # rate-starved shared pool never returned a verdict; hitting
-          # api.openai.com directly with the org OPENAI_API_KEY gives the lead
-          # model a working, un-throttled backend. Resolves {env:OPENAI_API_KEY}
-          # in the opencode.jsonc "openai" provider block.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
-          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
-          # High-sensitivity review candidates only. Public repositories first
-          # try NVIDIA NIM when its scoped secret is available, then OpenCode
-          # Zen's anonymous active, zero-cost models, followed by the existing
-          # provider fallbacks. Trial/free-period data may be logged, retained,
-          # or used for product/model improvement, so private repositories
-          # include neither NIM nor anonymous free candidates and start at the
-          # existing keyed fallback list: OpenCode Zen GPT-5.6 Terra, DeepSeek
-          # V3, the direct GPT-5.4 slot, and pinned PAID
-          # OpenRouter coder models (free-tier candidates hit the shared
-          # free-models-per-day cap and hung for the full candidate timeout,
-          # so the OpenRouter slots use cheap paid models billed against the
-          # org's OpenRouter credits), then the full-size GPT-4.1 long-context
-          # endpoint and provider-specific GPT/o3 fallbacks.
-          # The direct-OpenAI slot runs GPT-5.4: gpt-5.6-luna returns 404 on
-          # the OpenAI API (see a724582), so the pool keeps the newest VALID
-          # direct-OpenAI model instead of burning a candidate on a certain
-          # failure.
-          OPENCODE_MODEL_CANDIDATES: "${{ needs.validate-pr-metadata.outputs.is_private == 'false' && 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 nvidia-nim/nvidia/nemotron-3-super-120b-a12b nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b nvidia-nim/meta/llama-3.3-70b-instruct nvidia-nim/deepseek-ai/deepseek-v4-pro nvidia-nim/mistralai/codestral-22b-instruct-v0.1 opencode-free/nemotron-3-ultra-free opencode-free/deepseek-v4-flash-free opencode-free/north-mini-code-free opencode-free/laguna-s-2.1-free opencode-free/ling-3.0-flash-free opencode-free/big-pickle opencode-free/mimo-v2.5-free opencode-free/hy3-free opencode-free/minimax-m3-free opencode-free/glm-5-free opencode-free/kimi-k2.5-free opencode-free/qwen3.6-plus-free ' || '' }}opencode/gpt-5.6-terra github-models/deepseek/deepseek-v3-0324 openai/gpt-5.4 openrouter/deepseek/deepseek-v3.2 openrouter/qwen/qwen3-coder github-models/openai/gpt-4.1 github-models/openai/gpt-5 github-models/openai/gpt-5-chat github-models/openai/o3 github-models/deepseek/deepseek-r1-0528 github-models/deepseek/deepseek-r1"
+          OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"
           # One attempt per model, then fall through to the next model. Retrying
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
@@ -5139,14 +5148,6 @@ jobs:
           CONFIGURED_REVIEW_WRITE_TOKEN_SOURCE: ${{ steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           CODE_SCANNING_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'github-token' }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          # Exposed so the "openai" provider in opencode.jsonc resolves during the
-          # failed-check diagnosis opencode run that shares this config.
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # The scoped NVIDIA_NIM_API_KEY is the only NIM credential source.
-          # opencode.jsonc expects that same scoped value in NVIDIA_API_KEY.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -5158,7 +5159,7 @@ jobs:
           COVERAGE_EVIDENCE_SUMMARY: ${{ needs.coverage-evidence.outputs.coverage_summary || 'Coverage evidence job did not run or did not publish coverage evidence.' }}
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
-          MODEL: github-models/deepseek/deepseek-v3-0324
+          MODEL: contextual-orchestrator/orchestrator/free
           USE_GITHUB_TOKEN: "true"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"

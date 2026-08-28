@@ -320,6 +320,28 @@ is_vertex_model() {
 	esac
 }
 
+is_contextual_orchestrator_model() {
+	case "$1" in
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_contextual_orchestrator_api_base() {
+	case "$1" in
+	http://127.0.0.1:18080 | http://127.0.0.1:18080/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 is_gemini_model() {
 	case "$1" in
 	gemini/*)
@@ -2497,7 +2519,8 @@ resolved_llm_api_base_for_model() {
 		echo "ERROR: LLM_API_BASE must not contain whitespace or control characters." >&2
 		return 2
 	fi
-	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]]; then
+	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]] &&
+		! { is_contextual_orchestrator_model "$model" && is_contextual_orchestrator_api_base "$llm_api_base_value"; }; then
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
 	fi
@@ -4253,7 +4276,10 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
+			return 1
+		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
@@ -4290,6 +4316,10 @@ run_current_target_scan() {
 
 	if ! is_model_retryable_error "$PRIMARY_MODEL"; then
 		echo "Strix quick scan failed with a non-recoverable error." >&2
+		return 1
+	fi
+	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
 		return 1
 	fi
 

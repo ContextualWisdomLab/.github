@@ -1,11 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
   // Default routed through the vendored contextual-orchestrator gateway
-  // (orchestrator/free: fail-closed zero-cost pool, ZDR-first). Falls back to
-  // the pool scheduler's provider selection when the gateway env is absent.
+  // (orchestrator/free: fail-closed zero-cost pool, ZDR-first). The gateway
+  // must be provisioned before a review starts; there is no direct-provider
+  // fallback for review content.
   "model": "contextual-orchestrator/orchestrator/free",
   "small_model": "contextual-orchestrator/orchestrator/free",
-  "enabled_providers": ["contextual-orchestrator", "nvidia-nim", "github-models"],
+  "enabled_providers": ["contextual-orchestrator"],
   "lsp": false,
   "mcp": {},
   "permission": {
@@ -384,8 +385,6 @@
     // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN,
     // which scripts/ci/contextual_orchestrator_review_sidecar.sh provisions on
     // each runner before OpenCode starts.
-    // If the gateway variables are absent, opencode falls back to the pool
-    // scheduler's own provider selection (nvidia-nim / github-models).
     "contextual-orchestrator": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Contextual Orchestrator",
