@@ -110,8 +110,8 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-' in text
     assert '[ ! -f "$token_file" ]' in text
     assert '[ -L "$token_file" ]' in text
-    assert 'stat -c %a -- "$token_file"' in text
-    assert 'stat -c %u -- "$token_file"' in text
+    assert 'stat -c "$format" -- "$path"' in text
+    assert 'stat -f "$bsd_format" -- "$path"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
