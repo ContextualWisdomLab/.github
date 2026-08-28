@@ -294,6 +294,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
 	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"' "strix workflow preserves a 95-minute bounded total Strix budget"
 	assert_file_contains "$workflow_file" 'process_budget_seconds="5400"' "strix workflow gives a legitimate scan up to 90 minutes"
+	assert_file_contains "$workflow_file" 'Error code:[[:space:]]*500[^[:cntrl:]]*internal_error' "strix workflow retries contextual-orchestrator internal provider failures"
 	assert_file_contains "$workflow_file" 'strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log' "strix workflow preserves partial console output after failures and timeouts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "gate-last-attempt.log" "strix gate preserves the last partial attempt before runtime cleanup"
 	assert_file_contains "$workflow_file" 'IS_PR_EVIDENCE_RUN: ${{ (github.event_name == '"'"'pull_request_target'"'"' || github.event.client_payload.pr_number != '"'"''"'"') && '"'"'true'"'"' || '"'"'false'"'"' }}' "strix workflow passes PR evidence mode through env"
