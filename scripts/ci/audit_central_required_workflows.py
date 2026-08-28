@@ -187,8 +187,8 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
         errors.append(f"expected stacked ruleset name {STACKED_RULESET_NAME}")
     if payload.get("target") != "branch":
         errors.append("stacked ruleset target is not branch")
-    if payload.get("enforcement") != "active":
-        errors.append("stacked ruleset enforcement is not active")
+    if payload.get("enforcement") != "evaluate":
+        errors.append("stacked ruleset enforcement is not evaluate")
 
     conditions = payload.get("conditions")
     conditions = conditions if isinstance(conditions, dict) else {}
@@ -209,8 +209,8 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
         raw_workflows = parameters.get("workflows")
         workflows = raw_workflows if isinstance(raw_workflows, list) else []
-    if parameters.get("do_not_enforce_on_create") is not False:
-        errors.append("stacked OpenCode workflow is not enforced on branch creation")
+    if parameters.get("do_not_enforce_on_create") is not True:
+        errors.append("stacked OpenCode workflow does not exempt branch creation")
     expected_workflow = {
         "repository_id": SOURCE_REPOSITORY_ID,
         "path": STACKED_WORKFLOW_PATH,
@@ -277,10 +277,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(
-        f"PASS: ruleset {ruleset_id} enforces "
-        f"{workflow_count} central required workflows"
-    )
+    if args.stacked:
+        print(
+            f"PASS: ruleset {ruleset_id} audits {workflow_count} "
+            "central required workflows in evaluate mode"
+        )
+    else:
+        print(
+            f"PASS: ruleset {ruleset_id} enforces "
+            f"{workflow_count} central required workflows"
+        )
     return 0
 
 

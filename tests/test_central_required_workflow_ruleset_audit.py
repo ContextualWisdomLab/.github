@@ -86,7 +86,7 @@ def stacked_ruleset_payload() -> dict:
         "id": 21732164,
         "name": "CWL Stacked OpenCode required workflow",
         "target": "branch",
-        "enforcement": "active",
+        "enforcement": "evaluate",
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]},
         },
@@ -94,7 +94,7 @@ def stacked_ruleset_payload() -> dict:
             {
                 "type": "workflows",
                 "parameters": {
-                    "do_not_enforce_on_create": False,
+                    "do_not_enforce_on_create": True,
                     "workflows": [
                         {
                             "repository_id": 1274066402,
@@ -128,7 +128,7 @@ def test_expected_stacked_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main(["--stacked"]) == 0
     assert (
-        "PASS: ruleset 21732164 enforces 1 central required workflows"
+        "PASS: ruleset 21732164 audits 1 central required workflows in evaluate mode"
         in capsys.readouterr().out
     )
 
@@ -150,7 +150,7 @@ def test_stacked_ruleset_rejects_wrong_workflow_contract() -> None:
     payload["rules"][0]["parameters"] = None
 
     assert audit.audit_stacked_ruleset(payload) == [
-        "stacked OpenCode workflow is not enforced on branch creation",
+        "stacked OpenCode workflow does not exempt branch creation",
         "stacked ruleset must require only the central OpenCode workflow",
     ]
 
@@ -160,11 +160,11 @@ def test_stacked_ruleset_reports_structural_drift() -> None:
         "expected stacked ruleset id 21732164",
         "expected stacked ruleset name CWL Stacked OpenCode required workflow",
         "stacked ruleset target is not branch",
-        "stacked ruleset enforcement is not active",
+        "stacked ruleset enforcement is not evaluate",
         "stacked ruleset does not include all branches",
         "stacked ruleset does not exclude default branches",
         "expected one stacked workflows rule, found 0",
-        "stacked OpenCode workflow is not enforced on branch creation",
+        "stacked OpenCode workflow does not exempt branch creation",
         "stacked ruleset must require only the central OpenCode workflow",
     ]
 
