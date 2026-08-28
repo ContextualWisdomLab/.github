@@ -53,6 +53,53 @@ def test_bounded_reader_accepts_one_stable_regular_file(tmp_path: Path) -> None:
     assert gate._read_bounded_regular(payload, 16) == b"stable"
 
 
+def test_bounded_reader_rejects_descriptor_metadata_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Reject evidence whose descriptor metadata changes during the read."""
+
+    payload = tmp_path / "payload.txt"
+    payload.write_bytes(b"stable")
+    original_fstat = os.fstat
+    calls = 0
+
+    def changing_fstat(file_descriptor: int) -> os.stat_result:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            payload.write_bytes(b"changed")
+        metadata = original_fstat(file_descriptor)
+        return metadata
+
+    monkeypatch.setattr(os, "fstat", changing_fstat)
+    assert gate._read_bounded_regular(payload, 16) is None
+
+
+def test_bounded_reader_rejects_live_path_replacement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Reject evidence when the lexical path is replaced before final sealing."""
+
+    payload = tmp_path / "payload.txt"
+    replacement = tmp_path / "replacement.txt"
+    payload.write_bytes(b"stable")
+    replacement.write_bytes(b"other")
+    original_read = os.read
+    replaced = False
+
+    def replacing_read(file_descriptor: int, count: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(file_descriptor, count)
+        if chunk and not replaced:
+            replaced = True
+            payload.unlink()
+            replacement.rename(payload)
+        return chunk
+
+    monkeypatch.setattr(os, "read", replacing_read)
+    assert gate._read_bounded_regular(payload, 16) is None
+
+
 def test_bounded_reader_rejects_a_negative_limit(tmp_path: Path) -> None:
     """A negative byte budget is invalid before any filesystem access."""
     payload = tmp_path / "payload.txt"

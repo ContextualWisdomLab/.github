@@ -61,6 +61,38 @@ PACKAGING_FILE_NAMES = {
 }
 
 
+def _regular_path_stat(path: Path) -> os.stat_result | None:
+    """Return a regular-file stat only when every lexical path component is safe."""
+
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            return None
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    return metadata if stat.S_ISREG(metadata.st_mode) else None
+
+
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two stats identify the same filesystem object."""
+
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _metadata_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return metadata that must remain stable while evidence is read."""
+
+    return (
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 def _read_bounded_regular(path: Path, maximum: int) -> bytes | None:
     """Return bounded regular-file bytes, or ``None`` for unsafe input."""
 
@@ -68,22 +100,34 @@ def _read_bounded_regular(path: Path, maximum: int) -> bytes | None:
         if maximum < 0:
             return None
         candidate = path.absolute()
-        current = Path(candidate.anchor)
-        for component in candidate.parts[1:]:
-            current /= component
-            if current.is_symlink():
-                return None
+        live_before_open = _regular_path_stat(candidate)
+        if live_before_open is None:
+            return None
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(candidate, flags)
         try:
             metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > maximum
+                or not _same_file(live_before_open, metadata)
+            ):
                 return None
+            initial_signature = _metadata_signature(metadata)
             payload = bytearray()
             while len(payload) <= maximum:
                 chunk = os.read(descriptor, maximum + 1 - len(payload))
                 if not chunk:
+                    metadata_after_read = os.fstat(descriptor)
+                    live_after_read = _regular_path_stat(candidate)
+                    if (
+                        _metadata_signature(metadata_after_read)
+                        != initial_signature
+                        or live_after_read is None
+                        or not _same_file(live_after_read, metadata_after_read)
+                    ):
+                        return None
                     return bytes(payload)
                 payload.extend(chunk)
                 if len(payload) > maximum:
