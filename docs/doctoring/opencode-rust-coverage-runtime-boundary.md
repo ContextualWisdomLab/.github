@@ -23,6 +23,15 @@ host-runner tool, a pull-request-selected path, or a dynamically downloaded LLVM
 binary. Missing, changed, or non-executable reviewed paths are coverage-evidence
 failures rather than reasons to measure a different toolchain.
 
+Rust dependency materialization follows the same boundary. The trusted
+`coverage-source-tree` job runs `cargo fetch --locked` from a runner-owned,
+neutral `HOME`/`CARGO_HOME`, with GitHub credentials removed, and copies only
+Cargo's content-addressed `registry/` and `git/` directories into the
+tree-local sandbox home. The PR execution container remains `--network=none`
+and uses `CARGO_NET_OFFLINE=true`; a reserved `.opencode-sandbox-home` path in
+the PR tree is rejected so PR content cannot be mixed with the trusted cache.
+Prefetch failure is retained as a fail-closed offline coverage failure.
+
 NIST SP 800-218 PW.4.1 covers acquiring and maintaining third-party software
 from expected, trusted sources and reviewing its provenance (Souppaya et al.,
 2022). PW.4.4 covers verifying the integrity of acquired components. The exact
@@ -57,6 +66,8 @@ flowchart LR
   C --> D["Require both paths executable"]
   D --> E["Fail closed before cargo llvm-cov"]
   F["Hashed opencode-review-dispatch.yml"] --> G["Unchanged review-agent key blob"]
+  H["Trusted cargo fetch: neutral HOME/CARGO_HOME"] --> I["registry/ + git/ cache only"]
+  I --> J["PR coverage: CARGO_NET_OFFLINE=true + --network=none"]
 ```
 
 Each arrow is fail-closed. A later stage does not repair or broaden an earlier
@@ -68,7 +79,10 @@ The reviewed paths are fixed in trusted central workflow source. Pull-request
 content cannot choose an LLVM package, executable path, download origin, or
 runtime environment value. The existing coverage sandbox retains
 `--network=none`, credential/Git isolation, exact-head/base materialization,
-and the separately checksum-pinned `cargo-llvm-cov` archive.
+and the separately checksum-pinned `cargo-llvm-cov` archive. Cargo dependency
+prefetch is performed before PR code execution, without the target repository's
+configuration or GitHub credentials, and only content-addressed caches cross
+into the sandbox.
 
 This binding narrows reproducibility risk but does not by itself attest Debian's
 whole package supply chain or prove a future Rust toolchain is compatible with
@@ -99,7 +113,9 @@ compatibility evidence and the same RED→GREEN exact-head verification sequence
    paths;
 3. the helper requires both paths to be executable and exits `1` on mismatch;
 4. the helper does not mention unversioned `llvm-cov` / `llvm-profdata`; and
-5. every exact path named by the permanent quality workflow's
+5. locked Rust dependencies are prefetched before the networkless sandbox,
+   with neutral Cargo configuration and credential removal; and
+6. every exact path named by the permanent quality workflow's
    `pull_request.paths` filter resolves to a repository file, including the
    helper, preventing a dangling documentation trigger from becoming
    invisible debt.
