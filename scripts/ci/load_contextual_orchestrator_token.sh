@@ -19,7 +19,10 @@ _contextual_orchestrator_token_stat() {
   fi
   case "$field" in
     u) value="$(stat -f '%u' -- "$token_file" 2>/dev/null)" || return 1 ;;
-    a) value="$(stat -f '%Lp' -- "$token_file" 2>/dev/null)" || return 1 ;;
+    a)
+      value="$(stat -f '%Mp%Lp' -- "$token_file" 2>/dev/null)" || return 1
+      value="${value#0}"
+      ;;
     *) return 1 ;;
   esac
   printf '%s\n' "$value"

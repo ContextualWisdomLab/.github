@@ -112,7 +112,7 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert '[ -L "$token_file" ]' in text
     assert 'stat -c "%${field}" -- "$token_file"' in text
     assert "stat -f '%u' -- \"$token_file\"" in text
-    assert "stat -f '%Lp' -- \"$token_file\"" in text
+    assert "stat -f '%Mp%Lp' -- \"$token_file\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -166,6 +166,11 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     wrong_mode = run(token_file)
     assert wrong_mode.returncode != 0
     assert "must have mode 600" in wrong_mode.stderr
+
+    token_file.chmod(0o4600)
+    privileged_mode = run(token_file)
+    assert privileged_mode.returncode != 0
+    assert "must have mode 600" in privileged_mode.stderr
 
     token_file.chmod(0o600)
     symlink = tmp_path / "bearer.link"
