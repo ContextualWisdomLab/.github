@@ -687,6 +687,9 @@ jobs:
               mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
+              has_exact_npm_package_manager() { \
+                jq -e '(.packageManager // null) as $spec | if $spec != null then if ($spec | type) == "string" then ($spec | test("^npm@[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else (.devEngines // {}) as $engines | (if ($engines | type) == "object" then ($engines.packageManager // null) else null end) as $dev | if ($dev | type) == "object" then if ($dev.name // null) == "npm" then ($dev.version // null) as $version | if ($version | type) == "string" then ($version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else false end else false end end' package.json >/dev/null 2>&1; \
+              }; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
@@ -694,7 +697,7 @@ jobs:
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
                     case "$package_manager" in \
                       npm) \
-                        if jq -e '(.packageManager // "") as $spec | if ($spec | type) == "string" then ($spec | test("^npm@[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end' package.json >/dev/null 2>&1; then \
+                        if has_exact_npm_package_manager; then \
                           corepack npm ci \
                             --ignore-scripts \
                             --cache /opt/npm-cache \

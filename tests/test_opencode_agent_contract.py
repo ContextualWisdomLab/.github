@@ -579,7 +579,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
     assert "corepack npm ci" in measure_step
-    assert 'if jq -e \'(.packageManager // "") as $spec' in measure_step
+    assert "has_exact_npm_package_manager() {" in measure_step
+    assert ".devEngines" in measure_step
+    assert "if has_exact_npm_package_manager; then" in measure_step
     assert "then \\\n                          corepack npm ci" in measure_step
     assert "else \\\n                          npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
@@ -835,6 +837,56 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     target_condition = target_job.split("    runs-on:", 1)[0]
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
+    """The trusted image resolver selects only deterministic npm versions."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    resolver_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith("jq -e '(.packageManager // null)")
+    )
+    expression = resolver_line.split("jq -e '", 1)[1].rsplit(
+        "' package.json", 1
+    )[0]
+    cases = [
+        ({"packageManager": "npm@10.9.9"}, True),
+        (
+            {
+                "packageManager": "npm@10",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {
+                "packageManager": "yarn@1.22.22",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}}},
+            True,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10"}}},
+            False,
+        ),
+        ({}, False),
+    ]
+    for manifest, expected in cases:
+        result = subprocess.run(
+            ["jq", "-e", expression],
+            input=json.dumps(manifest) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is expected, manifest
 
 
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
