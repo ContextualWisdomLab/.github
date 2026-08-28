@@ -180,8 +180,8 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["credential_key"]
 
 
-def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
-    """A matching model identity can attest a discovered provider row."""
+def test_build_catalog_keeps_feed_evidence_provider_specific() -> None:
+    """OpenRouter evidence does not attest a direct provider row."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(
             {
@@ -198,11 +198,9 @@ def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
         zdr_endpoints=ZDR_FEED,
     )
     assert result["agents"][0]["provider_name"] == "nvidia_nim"
-    assert "zdr" in result["agents"][0]["tags"]
-    assert result["report"]["zdr_selected_count"] == 1
-    assert result["report"]["zdr_sources"] == [
-        "https://openrouter.ai/api/v1/endpoints/zdr"
-    ]
+    assert "non-zdr" in result["agents"][0]["tags"]
+    assert result["report"]["zdr_selected_count"] == 0
+    assert result["report"]["zdr_sources"] == []
 
 
 def test_build_catalog_assigns_unique_priorities() -> None:
