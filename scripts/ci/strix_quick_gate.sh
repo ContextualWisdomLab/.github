@@ -320,6 +320,31 @@ is_vertex_model() {
 	esac
 }
 
+is_contextual_orchestrator_model() {
+	case "$1" in
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_contextual_orchestrator_api_base() {
+	# The sidecar deliberately binds this fixed process-local origin; accepting
+	# an environment override here would make the gateway trust boundary ambiguous.
+	local contextual_orchestrator_loopback_origin="http://127.0.0.1:18080"
+	case "$1" in
+	"$contextual_orchestrator_loopback_origin" | "$contextual_orchestrator_loopback_origin"/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 is_gemini_model() {
 	case "$1" in
 	gemini/*)
@@ -2474,6 +2499,10 @@ resolved_llm_api_base_for_model() {
 	fi
 
 	if [ -z "$api_base_file" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require LLM_API_BASE_FILE to select the pinned loopback gateway." >&2
+			return 2
+		fi
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
 			return 2
@@ -2491,13 +2520,23 @@ resolved_llm_api_base_for_model() {
 	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
 	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
 	if [ -z "$llm_api_base_value" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require a non-empty pinned loopback API base." >&2
+			return 2
+		fi
 		return 0
+	fi
+	if is_contextual_orchestrator_model "$model" &&
+		! is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		echo "ERROR: contextual-orchestrator Strix scans require the pinned loopback API base." >&2
+		return 2
 	fi
 	if [[ "$llm_api_base_value" =~ [[:space:][:cntrl:]] ]]; then
 		echo "ERROR: LLM_API_BASE must not contain whitespace or control characters." >&2
 		return 2
 	fi
-	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]]; then
+	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]] &&
+		! { is_contextual_orchestrator_model "$model" && is_contextual_orchestrator_api_base "$llm_api_base_value"; }; then
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
 	fi
@@ -2520,6 +2559,16 @@ resolved_llm_api_base_for_model() {
 child_model_for_api_base() {
 	local model="$1"
 	local llm_api_base_value="$2"
+
+	# LiteLLM requires an explicit provider prefix even when the gateway is an
+	# OpenAI-compatible local endpoint. Keep the public gateway model name, but
+	# qualify only the child process model so the request still carries
+	# orchestrator/free to contextual-orchestrator.
+	if is_contextual_orchestrator_model "$model" &&
+		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		printf '%s\n' 'openai/orchestrator/free'
+		return 0
+	fi
 
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
@@ -4253,7 +4302,10 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
+			return 1
+		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
@@ -4290,6 +4342,10 @@ run_current_target_scan() {
 
 	if ! is_model_retryable_error "$PRIMARY_MODEL"; then
 		echo "Strix quick scan failed with a non-recoverable error." >&2
+		return 1
+	fi
+	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
 		return 1
 	fi
 
