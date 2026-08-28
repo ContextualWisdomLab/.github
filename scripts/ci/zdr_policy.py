@@ -13,9 +13,9 @@ stance and assume that the endpoint both retains and trains on data".
 Two authoritative, machine-readable sources feed the policy at runtime:
 
 1. OpenRouter ZDR endpoint feed (``https://openrouter.ai/api/v1/endpoints/zdr``)
-   — public model-level evidence. A matching model identity is applied to
-   discovered rows from any configured provider; it is not an OpenRouter-only
-   routing rule.
+   — the exact list of OpenRouter endpoints served under a zero-data-retention
+   policy. It is not an upstream-routing restriction; exact model identity, or
+   one unambiguous final model component, can inform another provider row.
 2. OpenRouter provider data-policy catalog
    (``https://openrouter.ai/api/frontend/v1/all-providers``) — per-provider
    ``dataPolicy`` (``retainsPrompts`` / ``retentionDays`` / ``training``),

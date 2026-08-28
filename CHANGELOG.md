@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Keep OpenRouter endpoint-feed ZDR evidence provider-neutral: it can inform a
+  matching direct-provider model when the full identity or final component is
+  unambiguous, while ambiguous identities remain non-ZDR.
 - Ensure the central Security Scan and SAST Semgrep pull-request workflows
   trigger for stacked PRs targeting feature branches, preserving the same
   diff-scoped dependency and repository-wide filesystem security coverage.

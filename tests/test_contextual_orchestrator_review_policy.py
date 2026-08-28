@@ -181,7 +181,7 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
 
 
 def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
-    """OpenRouter evidence is not restricted to the OpenRouter row."""
+    """A matching model identity can attest a discovered provider row."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(
             {
