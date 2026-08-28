@@ -25,6 +25,9 @@ NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
 OPENCODE_DISPATCH_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml"
 STRIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/strix.yml"
 OPENCODE_CONFIG = _ORG_REPO_ROOT / "opencode.jsonc"
+SIDECAR_ADR = (
+    _ORG_REPO_ROOT / "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
+)
 
 FIVE_SECRETS = (
     "BYTEZ_API_KEY",
@@ -59,6 +62,11 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert "from contextual_orchestrator.review_gateway import register_review_credentials" in text
     assert 'ORCHESTRATOR_PORT="18080"' in text
     assert 'ORCHESTRATOR_HOST="127.0.0.1"' in text
+
+
+def test_sidecar_adr_names_the_current_vendored_revision() -> None:
+    """The accepted decision record must not advertise a stale runtime SHA."""
+    assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
