@@ -18,6 +18,14 @@ ZDR-prioritized free catalog at loopback. Both the ordinary autofix and the
 conflict-repair agent run `--model contextual-orchestrator/orchestrator/free`.
 The shared `opencode.jsonc` default route changes identically.
 
+`noema-review.yml` provisions the same sidecar with the same five secrets and
+points the required Noema LLM step at the loopback `orchestrator/free` pool.
+The public-repo NVIDIA NIM hardcode is deleted. `call_llm` keeps SSRF closed
+for arbitrary private IPs and `localhost`, and allows only the sidecar
+loopback (`127.0.0.1` / `::1`) when it matches the exact configured sidecar
+base URL. The via-orchestrator marker is metadata only and never widens this
+allowlist.
+
 `NVIDIA_NIM_API_KEY_SUB` and `BYTEZ_API_KEY` have no other workflow reference in
 this repository; the gateway KV is their only consumer, matching the
 orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
@@ -33,6 +41,8 @@ orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
 - The gateway binds to loopback only; it never leaves the runner. Secrets are
   bootstrap transport into the KV and are never read back from environment at
   request time.
+- Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
+  OIDC. Review mutation is still not `github.token`.
 
 ## ZDR definition and evidence
 
@@ -61,4 +71,36 @@ training (OpenRouter's own stance). Evidence sources:
   `tests/test_contextual_orchestrator_review_policy.py`,
   `tests/test_contextual_orchestrator_review_sidecar_contract.py`,
   `tests/test_pr_review_autofix_nvidia_nim_contract.py`,
-  `tests/test_pr_review_autofix_writer_security_contract.py`.
+  `tests/test_pr_review_autofix_writer_security_contract.py`,
+  `tests/test_noema_review_gate.py`,
+  `docs/doctoring/noema-orchestrator-free-zdr.md`.
+
+## 2026-08-28 runtime correction
+
+The first post-merge Strix execution (`33139957477`) failed before serving: the
+pinned orchestrator's `load_agents()` indexes the top-level `agents` field, but
+the launcher persisted only the list value. Follow-up PR [#1370](https://github.com/ContextualWisdomLab/.github/pull/1370)
+wraps both the launcher output and the standalone policy builder output in the
+loader-compatible `{"agents": [...]}` envelope. The regression is covered by
+`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract;
+the full local suite passed with `1689 passed, 1 skipped, 16 subtests passed`.
+
+The PR-target Noema check still runs the trusted base copy until this trusted
+workflow change is merged, so its reproduction of the old error is retained as
+bootstrap evidence rather than treated as a current-head runtime result.
+
+## 2026-08-28 post-#1370 runtime correction
+
+Main push run `33141468804` confirmed that the catalog envelope correction
+reached the Strix sidecar, but LiteLLM rejected the child model
+`orchestrator/free` because it had no provider prefix. Follow-up commits
+`9f58d74` and `5aa0a20` map only the pinned gateway request to
+`openai/orchestrator/free`, fail closed when that gateway base is absent or
+not loopback, and keep the loopback sidecar receiving `orchestrator/free`.
+
+The same follow-up masks the dynamic sidecar bearer before writing `GITHUB_ENV`
+and rejects carriage returns/newlines in an override. This closes the runtime
+log exposure observed in the Noema step environment block. Focused contracts
+pass (`32 passed`) and the full local suite passes (`1689 passed, 1 skipped`).
+The main Strix rerun and an independently authorized Noema model verdict are
+still required before claiming end-to-end review completion.

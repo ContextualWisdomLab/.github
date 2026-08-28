@@ -184,9 +184,6 @@ jobs:
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      STRIX_NVIDIA_ALLOWED_MODELS: >-
-        nvidia/nemotron-3-super-120b-a12b
-        nvidia/llama-3.1-nemotron-ultra-253b-v1
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -549,138 +546,37 @@ jobs:
             printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
           fi
 
-      - name: Resolve live NVIDIA NIM Strix models
-        id: resolve_nvidia_models
-        env:
-          STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
-            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          resolver="$TRUSTED_STRIX_SOURCE/scripts/ci/select_nvidia_nim_model.py"
-          primary_rc=0
-          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_ALLOWED_MODELS")" || primary_rc=$?
-          if [ "$primary_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM model catalog is unavailable; using the contracted OpenAI fallback.'
-            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          [ "$primary_rc" -eq 0 ] || exit "$primary_rc"
-
-          fallback_rc=0
-          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "$primary")" || fallback_rc=$?
-          if [ "$fallback_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
-            fallback=""
-          else
-            [ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"
-          fi
-          {
-            printf 'primary=nvidia_nim/%s\n' "$primary"
-            if [ -n "$fallback" ]; then
-              printf 'fallback=nvidia_nim/%s\n' "$fallback"
-            else
-              printf 'fallback=\n'
-            fi
-          } >> "$GITHUB_OUTPUT"
-
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4') }}
+          STRIX_MODEL: contextual-orchestrator/orchestrator/free
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
-          STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          STRIX_NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          STRIX_VERTEX_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
-          STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
-          strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
-          case "$strix_model" in
-            openai/gpt-5-mini* | openai/gpt-5-nano* | \
-            openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
-            github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
-              echo '::error::STRIX_LLM must not select mini or nano GPT-5 variants for security evidence.'
-              exit 1
-              ;;
-            openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
-            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]* | \
-            github_models/openai/gpt-5* | github_models/openai/gpt-[6-9]* | github_models/openai/gpt-[1-9][0-9]*)
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=github_models' >> "$GITHUB_OUTPUT"
-              sanitized_github_models_token="$(printf '%s' "$STRIX_GITHUB_MODELS_TOKEN" | tr -d '\r\n')"
-              trimmed_github_models_token="$(printf '%s' "$sanitized_github_models_token" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_github_models_token" ]; then
-                echo '::error::STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans.'
-                exit 1
-              fi
-              ;;
-            gpt-5.[4-9]* | gpt-5.[1-9][0-9]* | gpt-[6-9]* | gpt-[1-9][0-9]* | \
-            openai-direct/gpt-5.[4-9]* | openai-direct/gpt-5.[1-9][0-9]* | openai-direct/gpt-[6-9]* | openai-direct/gpt-[1-9][0-9]*)
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=openai_direct' >> "$GITHUB_OUTPUT"
-              sanitized_openai_key="$(printf '%s' "$STRIX_OPENAI_API_KEY" | tr -d '\r\n')"
-              trimmed_openai_key="$(printf '%s' "$sanitized_openai_key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_openai_key" ]; then
-                echo '::error::STRIX_OPENAI_API_KEY is required for Strix OpenAI Platform scans.'
-                exit 1
-              fi
-              ;;
-            openrouter/free | openrouter/openrouter/free)
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=openrouter' >> "$GITHUB_OUTPUT"
-              sanitized_openrouter_key="$(printf '%s' "$STRIX_OPENROUTER_API_KEY" | tr -d '\r\n')"
-              trimmed_openrouter_key="$(printf '%s' "$sanitized_openrouter_key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_openrouter_key" ]; then
-                echo '::error::OPENROUTER_API_KEY is required for Strix OpenRouter scans.'
-                exit 1
-              fi
-              ;;
-            # Trusted-main bootstrap compatibility until this PR merges; this is
-            # the provider-qualified form of the canonical allowlist default:
-            # nvidia_nim/nvidia/nemotron-3-super-120b-a12b
-            nvidia_nim/*)
-              case " $STRIX_NVIDIA_ALLOWED_MODELS " in
-                *" ${strix_model#nvidia_nim/} "*) ;;
-                *)
-                  echo '::error::STRIX_LLM selected an NVIDIA NIM model outside the reviewed allowlist.'
-                  exit 1
-                  ;;
-              esac
-              if [ "$TARGET_REPOSITORY_PRIVATE" != "false" ]; then
-                echo '::error::NVIDIA NIM hosted trial scans are limited to public repositories.'
-                exit 1
-              fi
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=nvidia_nim' >> "$GITHUB_OUTPUT"
-              sanitized_nvidia_key="$(printf '%s' "$STRIX_NVIDIA_NIM_API_KEY" | tr -d '\r\n')"
-              trimmed_nvidia_key="$(printf '%s' "$sanitized_nvidia_key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_nvidia_key" ]; then
-                echo '::error::NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans.'
-                exit 1
-              fi
-              ;;
-            vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
-              echo 'enabled=true' >> "$GITHUB_OUTPUT"
-              echo 'provider_mode=vertex_ai' >> "$GITHUB_OUTPUT"
-              sanitized_vertex_credentials="$(printf '%s' "$STRIX_VERTEX_CREDENTIALS" | tr -d '\r')"
-              trimmed_vertex_credentials="$(printf '%s' "$sanitized_vertex_credentials" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              if [ -z "$trimmed_vertex_credentials" ]; then
-                echo '::error::GCP_SA_KEY is required for Vertex AI Strix scans.'
-                exit 1
-              fi
-              ;;
+          requested_model="$(printf '%s' "$STRIX_MODEL_REQUESTED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          case "$requested_model" in
+            ""|orchestrator/free|contextual-orchestrator/orchestrator/free) ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/free.'
               exit 1
               ;;
           esac
+          strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
+          echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
+
+      - name: Provision contextual-orchestrator Strix sidecar
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Set up Python
         if: steps.gate.outputs.enabled == 'true'
@@ -752,11 +648,15 @@ jobs:
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
+          PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
+          if [ "$PROVIDER_MODE" != "contextual_orchestrator" ]; then
+            echo '::error::Strix must use the contextual-orchestrator provider.'
+            exit 1
+          fi
           # Sanitize CR/LF before masking to prevent broken ::add-mask::
           # commands and potential workflow command injection.
-          sanitized="$(printf '%s' "$LLM_API_KEY" | tr -d '\r\n')"
+          sanitized="$(printf '%s' "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" | tr -d '\r\n')"
           if [ -n "$sanitized" ]; then
             echo "::add-mask::${sanitized}"
             trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -768,25 +668,16 @@ jobs:
       - name: Prepare LLM API key input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
-          sanitized="$(printf '%s' "$LLM_API_KEY_SECRET" | tr -d '\r\n')"
+          if [ "$PROVIDER_MODE" != "contextual_orchestrator" ]; then
+            echo '::error::Strix must use the contextual-orchestrator provider.'
+            exit 1
+          fi
+          sanitized="$(printf '%s' "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" | tr -d '\r\n')"
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
-            echo '::error::STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans.'
-            exit 1
-          fi
-          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "openai_direct" ]; then
-            echo '::error::STRIX_OPENAI_API_KEY is required for Strix OpenAI Platform scans.'
-            exit 1
-          fi
-          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "openrouter" ]; then
-            echo '::error::OPENROUTER_API_KEY is required for Strix OpenRouter scans.'
-            exit 1
-          fi
-          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "nvidia_nim" ]; then
-            echo '::error::NVIDIA_NIM_API_KEY is required for Strix NVIDIA NIM scans.'
+          if [ -z "$trimmed" ]; then
+            echo '::error::CONTEXTUAL_ORCHESTRATOR_TOKEN is required for Strix scans.'
             exit 1
           fi
           umask 077
@@ -794,131 +685,19 @@ jobs:
           printf '%s' "$trimmed" > "$llm_api_key_file"
           echo "LLM_API_KEY_FILE=$llm_api_key_file" >> "$GITHUB_ENV"
 
-      - name: Prepare OpenRouter API base
-        if: steps.gate.outputs.provider_mode == 'openrouter'
+      - name: Prepare contextual-orchestrator API base
+        if: steps.gate.outputs.provider_mode == 'contextual_orchestrator'
         run: |
+          set -euo pipefail
+          sidecar_base="${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}"
+          if [ "$sidecar_base" != "http://127.0.0.1:18080" ]; then
+            echo '::error::Strix sidecar base URL is not the pinned local gateway origin.'
+            exit 1
+          fi
           umask 077
           llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
-          printf '%s' 'https://openrouter.ai/api/v1' > "$llm_api_base_file"
+          printf '%s/v1' "${sidecar_base%/}" > "$llm_api_base_file"
           echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
-
-      - name: Prepare NVIDIA NIM API base
-        if: steps.gate.outputs.provider_mode == 'nvidia_nim'
-        run: |
-          umask 077
-          llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
-          printf '%s' 'https://integrate.api.nvidia.com/v1' > "$llm_api_base_file"
-          echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
-
-      - name: Prepare GitHub Models API base
-        if: steps.gate.outputs.provider_mode == 'github_models'
-        run: |
-          umask 077
-          llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
-          printf '%s' 'https://models.github.ai/inference' > "$llm_api_base_file"
-          echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
-
-      - name: Prepare GitHub Models fallback credentials
-        # github_models is included because its STRIX_FALLBACK_MODELS chain
-        # ends in openai-direct/gpt-5.4, which needs the direct-OpenAI key and
-        # API base to authenticate and route after the primary is exhausted.
-        if: steps.gate.outputs.provider_mode == 'openai_direct' || steps.gate.outputs.provider_mode == 'openrouter' || steps.gate.outputs.provider_mode == 'nvidia_nim' || steps.gate.outputs.provider_mode == 'github_models'
-        env:
-          GITHUB_MODELS_FALLBACK_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
-          OPENAI_FALLBACK_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          OPENROUTER_FALLBACK_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          # Direct-OpenAI scans keep GitHub Models candidates as fallbacks, so
-          # a provider quota outage degrades to a slower model instead of a
-          # neutral skip with no security evidence. github_models/* fallback
-          # models read this token and endpoint; the primary keeps its own key.
-          umask 077
-          sanitized="$(printf '%s' "$GITHUB_MODELS_FALLBACK_TOKEN" | tr -d '\r\n')"
-          trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -z "$trimmed" ]; then
-            echo '::notice::No GitHub Models token available; direct-OpenAI Strix scans run without GitHub Models fallbacks.'
-          else
-            github_models_key_file="$RUNNER_TEMP/github_models_fallback_key.txt"
-            printf '%s' "$sanitized" > "$github_models_key_file"
-            echo "STRIX_GITHUB_MODELS_KEY_FILE=$github_models_key_file" >> "$GITHUB_ENV"
-            github_models_api_base_file="$RUNNER_TEMP/github_models_api_base.txt"
-            printf '%s' 'https://models.github.ai/inference' > "$github_models_api_base_file"
-            echo "STRIX_GITHUB_MODELS_API_BASE_FILE=$github_models_api_base_file" >> "$GITHUB_ENV"
-          fi
-          # openai-direct/* fallback models (the contracted final fallback for
-          # NVIDIA NIM and OpenRouter chains) authenticate against the direct
-          # OpenAI API, so they need the OpenAI key instead of the primary
-          # provider's key.
-          openai_sanitized="$(printf '%s' "$OPENAI_FALLBACK_KEY" | tr -d '\r\n')"
-          openai_trimmed="$(printf '%s' "$openai_sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -n "$openai_trimmed" ]; then
-            openai_fallback_key_file="$RUNNER_TEMP/openai_fallback_key.txt"
-            printf '%s' "$openai_trimmed" > "$openai_fallback_key_file"
-            echo "STRIX_OPENAI_FALLBACK_KEY_FILE=$openai_fallback_key_file" >> "$GITHUB_ENV"
-            openai_fallback_api_base_file="$RUNNER_TEMP/openai_fallback_api_base.txt"
-            printf '%s' 'https://api.openai.com/v1' > "$openai_fallback_api_base_file"
-            echo "STRIX_OPENAI_FALLBACK_API_BASE_FILE=$openai_fallback_api_base_file" >> "$GITHUB_ENV"
-          fi
-          openrouter_sanitized="$(printf '%s' "$OPENROUTER_FALLBACK_KEY" | tr -d '\r\n')"
-          openrouter_trimmed="$(printf '%s' "$openrouter_sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -n "$openrouter_trimmed" ]; then
-            openrouter_fallback_key_file="$RUNNER_TEMP/openrouter_fallback_key.txt"
-            printf '%s' "$openrouter_trimmed" > "$openrouter_fallback_key_file"
-            echo "STRIX_OPENROUTER_FALLBACK_KEY_FILE=$openrouter_fallback_key_file" >> "$GITHUB_ENV"
-            openrouter_fallback_api_base_file="$RUNNER_TEMP/openrouter_fallback_api_base.txt"
-            printf '%s' 'https://openrouter.ai/api/v1' > "$openrouter_fallback_api_base_file"
-            echo "STRIX_OPENROUTER_FALLBACK_API_BASE_FILE=$openrouter_fallback_api_base_file" >> "$GITHUB_ENV"
-          fi
-
-      - name: Prepare Vertex AI credentials
-        if: steps.gate.outputs.provider_mode == 'vertex_ai'
-        env:
-          GCP_SA_KEY_JSON: ${{ secrets.GCP_SA_KEY }}
-        run: |
-          umask 077
-          credentials_file="$RUNNER_TEMP/gcp-sa-key.json"
-          printf '%s' "$GCP_SA_KEY_JSON" > "$credentials_file"
-          python3 - "$credentials_file" >> "$GITHUB_ENV" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          credentials_path = pathlib.Path(sys.argv[1])
-
-          def reject_duplicate_json_keys(pairs):
-              parsed = {}
-              for key, value in pairs:
-                  if key in parsed:
-                      raise ValueError("duplicate credential key")
-                  parsed[key] = value
-              return parsed
-
-          try:
-              credentials_text = credentials_path.read_text(encoding="utf-8")
-              credentials = json.loads(
-                  credentials_text,
-                  object_pairs_hook=reject_duplicate_json_keys,
-              )
-          except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-              raise SystemExit(
-                  "GCP_SA_KEY must be valid service account JSON for Vertex AI Strix scans."
-              )
-          if not isinstance(credentials, dict):
-              raise SystemExit(
-                  "GCP_SA_KEY must be a JSON object for Vertex AI Strix scans."
-              )
-          project_id = str(credentials.get("project_id", "")).strip()
-          if not project_id:
-              raise SystemExit("GCP_SA_KEY must include project_id for Vertex AI Strix scans.")
-          print(f"GOOGLE_APPLICATION_CREDENTIALS={credentials_path}")
-          print(f"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE={credentials_path}")
-          print(f"VERTEXAI_PROJECT={project_id}")
-          print(f"GOOGLE_CLOUD_PROJECT={project_id}")
-          print(f"GCP_PROJECT={project_id}")
-          print(f"GCLOUD_PROJECT={project_id}")
-          print(f"CLOUDSDK_CORE_PROJECT={project_id}")
-          print(f"CLOUDSDK_PROJECT={project_id}")
-          PY
 
       - name: Prepare Strix model input file
         if: steps.gate.outputs.enabled == 'true'
@@ -929,37 +708,11 @@ jobs:
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$strix_model" in
-            openai/gpt-5-mini* | openai/gpt-5-nano* | \
-            openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
-            github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
-              echo '::error::STRIX_LLM must not select mini or nano GPT-5 variants for security evidence.'
-              exit 1
-              ;;
-            openai/gpt-5* | openai/gpt-[6-9]* | openai/gpt-[1-9][0-9]* | \
-            openai/openai/gpt-5* | openai/openai/gpt-[6-9]* | openai/openai/gpt-[1-9][0-9]* | \
-            github_models/openai/gpt-5* | github_models/openai/gpt-[6-9]* | github_models/openai/gpt-[1-9][0-9]*)
-              printf '%s' "${strix_model#github_models/}" > "$strix_llm_file"
-              ;;
-            openai/*)
-              printf '%s' "$strix_model" > "$strix_llm_file"
-              ;;
-            openai-direct/gpt-*)
-              printf 'openai_direct/%s' "${strix_model#openai-direct/}" > "$strix_llm_file"
-              ;;
-            gpt-*)
-              printf 'openai_direct/%s' "$strix_model" > "$strix_llm_file"
-              ;;
-            openrouter/free | openrouter/openrouter/free)
-              printf '%s' 'openrouter/free' > "$strix_llm_file"
-              ;;
-            nvidia_nim/*)
-              printf '%s' "$strix_model" > "$strix_llm_file"
-              ;;
-            vertex_ai/gemini-3.1-pro-preview-customtools | vertex_ai/gemini-2.5-flash)
-              printf '%s' "$strix_model" > "$strix_llm_file"
+            orchestrator/free | contextual-orchestrator/orchestrator/free)
+              printf '%s' 'orchestrator/free' > "$strix_llm_file"
               ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free.'
               exit 1
               ;;
           esac
@@ -978,35 +731,18 @@ jobs:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
           STRIX_REPO_ROOT: ${{ runner.temp }}/trusted-workspace
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
-          STRIX_LLM_DEFAULT_PROVIDER: ${{ steps.gate.outputs.provider_mode == 'vertex_ai' && 'vertex_ai' || steps.gate.outputs.provider_mode == 'nvidia_nim' && 'nvidia_nim' || 'openai' }}
+          STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
-          CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ${{ env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE }}
-          VERTEXAI_PROJECT: ${{ env.VERTEXAI_PROJECT }}
-          GOOGLE_CLOUD_PROJECT: ${{ env.GOOGLE_CLOUD_PROJECT }}
-          GCP_PROJECT: ${{ env.GCP_PROJECT }}
-          GCLOUD_PROJECT: ${{ env.GCLOUD_PROJECT }}
-          CLOUDSDK_CORE_PROJECT: ${{ env.CLOUDSDK_CORE_PROJECT }}
-          CLOUDSDK_PROJECT: ${{ env.CLOUDSDK_PROJECT }}
-          VERTEXAI_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
-          VERTEX_LOCATION: ${{ secrets.VERTEX_LOCATION || 'us-central1' }}
           STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '__PR_SCOPE__' || './' }}
           STRIX_SOURCE_DIRS: ". backend frontend"
           STRIX_REASONING_EFFORT: high
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
-          # `openrouter/free` is OpenRouter's authenticated dynamic router, not a
-          # pinned underlying model id; OpenRouter performs live model selection.
-          STRIX_FALLBACK_MODELS: ${{ steps.gate.outputs.provider_mode == 'github_models' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openai_direct' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'openrouter' && 'openai-direct/gpt-5.4' || steps.gate.outputs.provider_mode == 'nvidia_nim' && format('{0} openrouter/free openai-direct/gpt-5.4', steps.resolve_nvidia_models.outputs.fallback) || '' }}
-          STRIX_GITHUB_MODELS_API_BASE_FILE: ${{ env.STRIX_GITHUB_MODELS_API_BASE_FILE }}
-          STRIX_GITHUB_MODELS_KEY_FILE: ${{ env.STRIX_GITHUB_MODELS_KEY_FILE }}
-          STRIX_OPENAI_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENAI_FALLBACK_KEY_FILE }}
-          STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}
-          STRIX_OPENROUTER_FALLBACK_KEY_FILE: ${{ env.STRIX_OPENROUTER_FALLBACK_KEY_FILE }}
-          STRIX_OPENROUTER_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENROUTER_FALLBACK_API_BASE_FILE }}
+          # The gateway owns discovery and provider failover; Strix must not
+          # bypass its ZDR/privacy policy with an external fallback model.
+          STRIX_FALLBACK_MODELS: ""
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
-          STRIX_VERTEX_FALLBACK_MODELS: ""
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           PNPM_CONFIG_IGNORE_SCRIPTS: "true"
           YARN_ENABLE_SCRIPTS: "false"
@@ -1033,7 +769,7 @@ jobs:
           # Recognized signals that the LLM backend was unavailable / starved.
           # Defined before the gate loop so the bounded retry decision below
           # can classify outcomes without duplicating the patterns later.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
+          backend_unavailable_signal='STRIX_PROVIDER_UNAVAILABLE|RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
           model_behavior_error_signal='(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the

@@ -319,7 +319,7 @@ def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:
     )
     assert catalog.exists()
     assert report.exists()
-    assert result["agents"] == json.loads(catalog.read_text(encoding="utf-8"))
+    assert {"agents": result["agents"]} == json.loads(catalog.read_text(encoding="utf-8"))
     assert result["report"] == json.loads(report.read_text(encoding="utf-8"))
 
 
@@ -385,3 +385,30 @@ def test_main_requires_discovery_report_arg() -> None:
     """The CLI enforces its required arguments."""
     with pytest.raises(SystemExit):
         policy.main(["--out", "x.json", "--report", "y.json"])
+
+def test_private_catalog_admits_only_attested_zdr_routes() -> None:
+    """Private-target evidence never falls through to a non-ZDR free route."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()),
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+        require_zdr=True,
+    )
+
+    assert result["agents"]
+    assert all("zdr" in agent["tags"] for agent in result["agents"])
+    assert all("non-zdr" not in agent["tags"] for agent in result["agents"])
+    assert result["report"]["zdr_required"] is True
+    assert result["report"]["selected_count"] == 1
+
+
+def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
+    """A private target cannot use availability as permission for non-ZDR routing."""
+    with pytest.raises(policy.PolicyError, match="ZDR"):
+        policy.build_zdr_prioritized_catalog(
+            policy.parse_discovery_report(_report()),
+            limit=12,
+            family_cap=4,
+            require_zdr=True,
+        )
