@@ -8,6 +8,17 @@ Semantic Versioning where the repository publishes a release.
 - Ensure the central Security Scan and SAST Semgrep pull-request workflows
   trigger for stacked PRs targeting feature branches, preserving the same
   diff-scoped dependency and repository-wide filesystem security coverage.
+- Harden the contextual-orchestrator Strix sidecar by rejecting line-breaking
+  bearer tokens and masking the token before clone, install, launch, or health
+  diagnostics can emit it. The raw bearer no longer enters `GITHUB_ENV` (where
+  a later step header could render it before masking); only a mode-0600 token
+  file path crosses steps, and each model consumer validates and masks the file
+  inside its own step. The bounded required-workflow smoke now parses every
+  governed shell input independently, including the sidecar and token loader.
+  Strix also qualifies only the loopback child model as
+  `openai/orchestrator/free`, which satisfies LiteLLM's explicit-provider
+  contract while preserving `orchestrator/free` at the gateway boundary; a
+  missing, empty, or non-pinned contextual-orchestrator API base fails closed.
 - Restore OpenCode coverage honesty and mermaid surfaces stacked on main after #1360 squash `17052a7c`: `publish_fallback_diff_review` posts a COMMENT product-file review then `request_changes_for_coverage_evidence_failure` sets the status comment to `COVERAGE_BLOCKED` so a coverage miss never looks finished as `Gate result: COMMENT`; mermaid labels crates/packages instead of generic `Changed file (N files)` and does not invent class edges; findings say `Review process` instead of `.github/workflows/opencode-review.yml:1` unless that file is in the diff. Does not change `noema-review.yml` (PM owns `feat/noema-orchestrator-free-zdr`) and is not NIM-2h or GitHub Models.
 - Required OpenCode dispatch and Strix now use the vendored
   `contextual-orchestrator/orchestrator/free` gateway for model execution and
