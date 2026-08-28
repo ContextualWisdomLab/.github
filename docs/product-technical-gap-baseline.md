@@ -265,6 +265,13 @@ flowchart LR
   fresh protected-main canary must start the corrected sidecar and reach the
   scanner before the runtime gap is closed; queued or cancelled jobs do not
   satisfy that acceptance boundary.
+- Protected-main Strix run `33141468804` crossed the corrected catalog and
+  sidecar boundary, then LiteLLM rejected the unqualified scanner child model
+  `orchestrator/free` because the provider was not explicit. The follow-up maps
+  only that child to `openai/orchestrator/free` when the API base is the pinned
+  loopback gateway; the public gateway model remains
+  `contextual-orchestrator/orchestrator/free`, and absent, empty, or non-pinned
+  bases fail closed. This is reproduction evidence, not operational acceptance.
 - #1370 merged with no `APPROVED` review; all recorded Reviews API verdicts are
   `COMMENTED`. That governance contradiction is tracked in #1340 and is not
   retrospective approval evidence for this runtime correction.

@@ -103,3 +103,12 @@ review gate, but its retained job log showed that exporting the raw bearer via
 that step could mask it. The causal repair therefore exports only a private
 token-file path and rehydrates the bearer after each consumer step starts. No
 credential value is retained in this record.
+
+Protected-main Strix run `33141468804` then proved that the corrected catalog
+reached the sidecar, but LiteLLM rejected the unqualified child model
+`orchestrator/free` because its provider was not explicit. The repair keeps the
+public/gateway model `contextual-orchestrator/orchestrator/free` and maps only
+the scanner child to `openai/orchestrator/free` when its API base is exactly
+`http://127.0.0.1:18080/v1`. Missing, empty, or other contextual-orchestrator
+API bases fail closed. A fresh protected-main run is still required for
+operational acceptance.
