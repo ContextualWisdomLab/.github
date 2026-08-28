@@ -18,6 +18,7 @@ ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-18080}"
 ORCHESTRATOR_HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
 ORCHESTRATOR_SOURCE="${RUNNER_TEMP:-/tmp}/contextual-orchestrator"
 ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
+ORCHESTRATOR_SITE_PACKAGES="$ORCHESTRATOR_WORK/site-packages"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
@@ -43,9 +44,13 @@ fi
 log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+case "$ORCHESTRATOR_TOKEN" in
+  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" ;;
+esac
 
 mkdir -p "$ORCHESTRATOR_WORK"
-rm -rf "$ORCHESTRATOR_SOURCE"
+rm -rf "$ORCHESTRATOR_SOURCE" "$ORCHESTRATOR_SITE_PACKAGES"
+mkdir -p "$ORCHESTRATOR_SITE_PACKAGES"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
 git clone --quiet --filter=blob:none --no-checkout "$ORCHESTRATOR_GIT_URL" "$ORCHESTRATOR_SOURCE"
 git -C "$ORCHESTRATOR_SOURCE" -c advice.detachedHead=false checkout --quiet "$ORCHESTRATOR_PIN_SHA"
@@ -54,7 +59,7 @@ if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then
   fail "vendored HEAD ${checked_out} != pin ${ORCHESTRATOR_PIN_SHA}"
 fi
 log "installing vendored orchestrator at ${checked_out}"
-python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir "$ORCHESTRATOR_SOURCE"
+python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir --target "$ORCHESTRATOR_SITE_PACKAGES" "$ORCHESTRATOR_SOURCE"
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
@@ -75,7 +80,7 @@ log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
-PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
+PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
   "$(command -v python3)" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
     --host "$ORCHESTRATOR_HOST" \
@@ -106,6 +111,7 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
 done
 log "healthz confirmed after ${i}s (pid $sidecar_pid)"
 
+printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
     printf 'CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\n' "$ORCHESTRATOR_HOST" "$ORCHESTRATOR_PORT"

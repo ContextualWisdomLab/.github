@@ -186,12 +186,11 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
     def test_workflow_resolves_live_nvidia_models(self) -> None:
-        """Resolve live NIM candidates before cross-provider fallbacks."""
+        """Retain live NIM candidates for explicit direct diagnostics."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Resolve live NVIDIA NIM Strix models", workflow)
         self.assertIn("scripts/ci/select_nvidia_nim_model.py", workflow)
-        self.assertIn("steps.resolve_nvidia_models.outputs.primary", workflow)
         self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
         self.assertNotIn("vars.STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
         self.assertNotIn("vars.STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
@@ -200,11 +199,15 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn('[ "$fallback_rc" -eq 75 ]', workflow)
         self.assertIn('[ "$primary_rc" -eq 0 ] || exit "$primary_rc"', workflow)
         self.assertIn('[ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"', workflow)
-        default_expression = (
-            "steps.target_visibility.outputs.is_private == 'false' && "
-            "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        self.assertIn(
+            "github.event.client_payload.strix_llm || "
+            "'contextual-orchestrator/orchestrator/free'",
+            workflow,
         )
-        self.assertIn(default_expression, workflow)
+        self.assertNotIn(
+            "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'",
+            workflow,
+        )
         self.assertIn(
             "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
             "format('{0} openrouter/free openai-direct/gpt-5.4', "

@@ -516,10 +516,10 @@ def test_noema_review_credentials_and_llm_configuration_fail_closed() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
 
 
-def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
+def test_nvidia_nim_diagnostics_stay_inert_without_secret(
     tmp_path: Path,
 ) -> None:
-    """Leave NIM outputs empty so the workflow expression selects OpenAI."""
+    """Leave diagnostic NIM outputs empty while the gateway remains default."""
     strix_output = tmp_path / "strix-output"
     strix = subprocess.run(
         [
@@ -549,8 +549,13 @@ def test_nvidia_nim_defaults_preserve_existing_fallbacks_without_secret(
     assert strix.returncode == 0, strix.stderr
     assert {"primary=", "fallback="} <= set(strix_output.read_text().splitlines())
     assert (
-        "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        "STRIX_MODEL: ${{ github.event.client_payload.strix_llm || "
+        "'contextual-orchestrator/orchestrator/free' }}"
         in workflow_text("strix.yml")
+    )
+    assert (
+        "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'"
+        not in workflow_text("strix.yml")
     )
     assert (
         "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"

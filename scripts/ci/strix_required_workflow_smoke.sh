@@ -18,6 +18,7 @@ fi
 workflow_file="$workflow_root/.github/workflows/strix.yml"
 gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
+sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
 failures=0
 
@@ -117,7 +118,7 @@ PY
 	fi
 }
 
-if ! bash -n "$gate_script" "$full_gate_test"; then
+if ! bash -n "$gate_script" "$full_gate_test" "$sidecar_script"; then
 	record_failure "Strix gate scripts must pass bash syntax checks"
 fi
 
@@ -155,7 +156,14 @@ assert_file_contains "$gate_script" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "Strix ga
 assert_file_contains "$gate_script" "NPM_CONFIG_IGNORE_SCRIPTS" "Strix gate disables npm lifecycle scripts"
 assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardened" "Full Strix harness remains available outside the required path"
 
-assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
+assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix defaults normal scans to the contextual-orchestrator Strix sidecar"
+assert_file_contains "$workflow_file" "contextual-orchestrator/orchestrator/free" "Strix selects the fail-closed orchestrator/free gateway pool by default"
+assert_file_contains "$workflow_file" "openai/orchestrator/free" "Strix addresses the gateway through its OpenAI-compatible model namespace"
+assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "Strix consumes the loopback gateway base URL"
+assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "Strix consumes the generated gateway bearer token"
+assert_file_contains "$sidecar_script" '--target "$ORCHESTRATOR_SITE_PACKAGES"' "Strix sidecar dependencies are isolated from the hash-locked scanner runtime"
+assert_file_contains "$sidecar_script" "::add-mask::%s" "Strix sidecar masks its generated bearer token"
+assert_file_contains "$workflow_file" "nvidia/nemotron-3-super-120b-a12b" "Strix retains direct-provider models only as explicit diagnostics"
 assert_file_contains "$workflow_file" "nvidia_nim/*)" "Strix model preparation reuses the gate-validated NVIDIA provider namespace"
 assert_file_contains "$workflow_file" "steps.resolve_nvidia_models.outputs.fallback" "Strix resolves another live NVIDIA hosted model before falling back to direct OpenAI"
 assert_file_not_contains "$workflow_file" "nvidia/llama-3.3-nemotron-super-49b-v1.5" "Strix does not pin the retired NVIDIA hosted fallback"

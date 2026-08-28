@@ -549,6 +549,18 @@ jobs:
             printf 'Materialized central Strix dependency lock from same-repository PR head.\n'
           fi
 
+      - name: Provision contextual-orchestrator Strix sidecar
+        if: github.event_name != 'repository_dispatch' || github.event.client_payload.strix_llm == ''
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
       - name: Resolve live NVIDIA NIM Strix models
         id: resolve_nvidia_models
         env:
@@ -557,7 +569,7 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
+          if [ -z "$STRIX_MODEL_REQUESTED" ] || [ "$TARGET_REPOSITORY_PRIVATE" != "false" ] || [ -z "${NVIDIA_API_KEY:-}" ]; then
             printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -591,18 +603,39 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || (steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4') }}
+          STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'contextual-orchestrator/orchestrator/free' }}
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
           STRIX_OPENAI_API_KEY: ${{ secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           STRIX_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           STRIX_NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           STRIX_VERTEX_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
           STRIX_GITHUB_MODELS_TOKEN: ${{ secrets.STRIX_GITHUB_MODELS_TOKEN || github.token }}
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+          CONTEXTUAL_ORCHESTRATOR_TOKEN: ${{ env.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
           TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
           case "$strix_model" in
+            contextual-orchestrator/orchestrator/free)
+              echo 'enabled=true' >> "$GITHUB_OUTPUT"
+              echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
+              if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\.0\.0\.1:[0-9]{1,5}$ ]]; then
+                echo '::error::The contextual-orchestrator Strix sidecar must use an exact IPv4 loopback URL and explicit port.'
+                exit 1
+              fi
+              sidecar_port="${CONTEXTUAL_ORCHESTRATOR_BASE_URL##*:}"
+              if [ "$sidecar_port" -lt 1 ] || [ "$sidecar_port" -gt 65535 ]; then
+                echo '::error::The contextual-orchestrator Strix sidecar port must be between 1 and 65535.'
+                exit 1
+              fi
+              sanitized_orchestrator_token="$(printf '%s' "$CONTEXTUAL_ORCHESTRATOR_TOKEN" | tr -d '\r\n')"
+              trimmed_orchestrator_token="$(printf '%s' "$sanitized_orchestrator_token" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+              if [ -z "$trimmed_orchestrator_token" ] || [ "$trimmed_orchestrator_token" != "$CONTEXTUAL_ORCHESTRATOR_TOKEN" ]; then
+                echo '::error::The contextual-orchestrator Strix sidecar requires one non-empty, line-safe bearer token.'
+                exit 1
+              fi
+              ;;
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
             openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
             github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
@@ -677,7 +710,7 @@ jobs:
               fi
               ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free, NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
               exit 1
               ;;
           esac
@@ -752,7 +785,7 @@ jobs:
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
+          LLM_API_KEY: ${{ steps.gate.outputs.provider_mode == 'contextual_orchestrator' && env.CONTEXTUAL_ORCHESTRATOR_TOKEN || steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
         run: |
           # Sanitize CR/LF before masking to prevent broken ::add-mask::
           # commands and potential workflow command injection.
@@ -768,11 +801,15 @@ jobs:
       - name: Prepare LLM API key input file
         if: steps.gate.outputs.enabled == 'true'
         env:
-          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
+          LLM_API_KEY_SECRET: ${{ steps.gate.outputs.provider_mode == 'contextual_orchestrator' && env.CONTEXTUAL_ORCHESTRATOR_TOKEN || steps.gate.outputs.provider_mode == 'github_models' && (secrets.STRIX_GITHUB_MODELS_TOKEN || github.token) || steps.gate.outputs.provider_mode == 'openai_direct' && (secrets.STRIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY) || steps.gate.outputs.provider_mode == 'openrouter' && secrets.OPENROUTER_API_KEY || steps.gate.outputs.provider_mode == 'nvidia_nim' && secrets.NVIDIA_NIM_API_KEY || '' }}
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
           sanitized="$(printf '%s' "$LLM_API_KEY_SECRET" | tr -d '\r\n')"
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "contextual_orchestrator" ]; then
+            echo '::error::CONTEXTUAL_ORCHESTRATOR_TOKEN is required for gateway-backed Strix scans.'
+            exit 1
+          fi
           if [ -z "$trimmed" ] && [ "$PROVIDER_MODE" = "github_models" ]; then
             echo '::error::STRIX_GITHUB_MODELS_TOKEN is required for GitHub Models Strix scans.'
             exit 1
@@ -793,6 +830,21 @@ jobs:
           llm_api_key_file="$RUNNER_TEMP/llm_api_key.txt"
           printf '%s' "$trimmed" > "$llm_api_key_file"
           echo "LLM_API_KEY_FILE=$llm_api_key_file" >> "$GITHUB_ENV"
+
+      - name: Prepare contextual-orchestrator API base
+        if: steps.gate.outputs.provider_mode == 'contextual_orchestrator'
+        env:
+          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ env.CONTEXTUAL_ORCHESTRATOR_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$CONTEXTUAL_ORCHESTRATOR_BASE_URL" =~ ^http://127\.0\.0\.1:[0-9]{1,5}$ ]]; then
+            echo '::error::The contextual-orchestrator API base must remain on exact IPv4 loopback.'
+            exit 1
+          fi
+          umask 077
+          llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
+          printf '%s' "${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1" > "$llm_api_base_file"
+          echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
 
       - name: Prepare OpenRouter API base
         if: steps.gate.outputs.provider_mode == 'openrouter'
@@ -929,6 +981,9 @@ jobs:
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$strix_model" in
+            contextual-orchestrator/orchestrator/free)
+              printf '%s' 'openai/orchestrator/free' > "$strix_llm_file"
+              ;;
             openai/gpt-5-mini* | openai/gpt-5-nano* | \
             openai/openai/gpt-5-mini* | openai/openai/gpt-5-nano* | \
             github_models/openai/gpt-5-mini* | github_models/openai/gpt-5-nano*)
@@ -959,7 +1014,7 @@ jobs:
               printf '%s' "$strix_model" > "$strix_llm_file"
               ;;
             *)
-              echo '::error::STRIX_LLM must select NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
+              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free, NVIDIA NIM Nemotron, GitHub Models openai/gpt-5 or newer, direct OpenAI GPT-5.4 or newer, OpenRouter openrouter/free, or an approved organization Vertex AI model.'
               exit 1
               ;;
           esac

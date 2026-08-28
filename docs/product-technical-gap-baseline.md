@@ -7,6 +7,22 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+## 2026-08-28 live delta — Strix provider authority
+
+- DiskSage #264의 exact-head 제품·Release·SAST·Security 검증은 성공했지만,
+  중앙 Strix는 NVIDIA 429, NVIDIA fallback 404, OpenRouter 502, OpenAI
+  `insufficient_quota`가 연속 발생해 권위 있는 취약점 보고서를 만들지 못하고
+  `STRIX_PROVIDER_UNAVAILABLE`로 fail-closed 종료했다. 이 결과를 제품 결함이나
+  성공 증거로 오인하지 않는다.
+- 정상 Strix 실행의 provider/model 선택 권한은 vendored
+  `contextual-orchestrator`의 `orchestrator/free` ZDR-first pool로 이동한다.
+  명시적 `repository_dispatch.strix_llm`만 기존 direct-provider 진단 경로를
+  선택할 수 있다. Gateway 실패는 direct fallback으로 위장하지 않고 required
+  Check를 실패시킨다.
+- 소비 저장소 PR은 중앙 provider outage를 고치기 위한 no-op commit이나 반복
+  rerun을 만들지 않는다. 중앙 수정이 병합된 뒤 unchanged exact head에 새 Strix
+  evidence를 dispatch하고, 독립 승인과 모든 required Check를 다시 요구한다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거

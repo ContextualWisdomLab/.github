@@ -5,6 +5,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Required Strix security evidence now uses the existing vendored
+  `contextual-orchestrator` sidecar and its fail-closed `orchestrator/free`
+  ZDR-first zero-cost pool for normal scans. Direct NVIDIA NIM, OpenRouter,
+  GitHub Models, OpenAI, and Vertex paths remain available only when an
+  authorized `repository_dispatch` explicitly supplies `strix_llm` for
+  diagnosis. Gateway startup, loopback binding, bearer-token masking, and an
+  isolated `--target` dependency tree fail closed; Strix receives only the
+  loopback OpenAI-compatible token/base while provider credentials stay inside
+  the sidecar process. The gateway route owns provider/model failover, so the
+  scanner does not append a second direct-provider fallback chain.
 - Central review now routes through the vendored `contextual-orchestrator`
   gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
   default use the fail-closed zero-cost pool `orchestrator/free`, with
