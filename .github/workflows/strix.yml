@@ -650,10 +650,12 @@ jobs:
         env:
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
+          set -euo pipefail
           if [ "$PROVIDER_MODE" != "contextual_orchestrator" ]; then
             echo '::error::Strix must use the contextual-orchestrator provider.'
             exit 1
           fi
+          source "$TRUSTED_STRIX_SOURCE/scripts/ci/load_contextual_orchestrator_token.sh"
           # Sanitize CR/LF before masking to prevent broken ::add-mask::
           # commands and potential workflow command injection.
           sanitized="$(printf '%s' "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" | tr -d '\r\n')"
@@ -670,10 +672,12 @@ jobs:
         env:
           PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}
         run: |
+          set -euo pipefail
           if [ "$PROVIDER_MODE" != "contextual_orchestrator" ]; then
             echo '::error::Strix must use the contextual-orchestrator provider.'
             exit 1
           fi
+          source "$TRUSTED_STRIX_SOURCE/scripts/ci/load_contextual_orchestrator_token.sh"
           sanitized="$(printf '%s' "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" | tr -d '\r\n')"
           trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$trimmed" ]; then
