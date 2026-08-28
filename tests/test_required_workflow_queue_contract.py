@@ -889,6 +889,30 @@ def test_org_queue_sweep_empty_pr_ref_list_skips_the_ref_loop() -> None:
     assert 'done <<<"$open_pr_refs_tsv"\n              fi' in ref_loop
 
 
+def test_org_queue_sweep_bounds_live_ref_lookups_and_fails_closed() -> None:
+    """Large queues must not turn hygiene into an unbounded ref API fan-out."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    ref_loop = workflow.split('if open_pr_refs_tsv="$(\n', 1)[1].split(
+        '            else\n              echo "::warning::Current-HEAD cancellation skipped',
+        1,
+    )[0]
+
+    assert (
+        "ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS: ${{ "
+        "vars.ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS || '100' }}"
+    ) in workflow
+    assert '"$ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" =~ ^[1-9][0-9]*$' in workflow
+    assert 'open_pr_ref_count="$(printf \'%s\\n\' "$open_pr_refs_tsv"' in ref_loop
+    assert (
+        'if (( open_pr_ref_count > ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS )); then'
+        in ref_loop
+    )
+    assert "live-ref lookup limit" in ref_loop
+    assert ref_loop.index("queue_hygiene_ready=false") < ref_loop.index(
+        "while IFS=$'\\t' read -r head_repo head_ref; do"
+    )
+
+
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
     """Return only the rotation-offset bash block, without the surrounding
     `gh api`/dispatch logic that would require live network credentials."""

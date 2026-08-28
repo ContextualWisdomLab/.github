@@ -604,6 +604,11 @@ jobs:
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
+      # Resolving live refs protects against stale pull-request payloads, but
+      # each lookup consumes one REST request. Above this independent bound,
+      # skip destructive cancellation for the repository instead of exhausting
+      # the organization sweep's API/runtime budget.
+      ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS: ${{ vars.ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS || '100' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
@@ -830,6 +835,10 @@ jobs:
           fi
           if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
             echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
+            exit 1
+          fi
+          if ! [[ "$ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS must be a positive integer; got '${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}'. Fix the ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS repository variable."
             exit 1
           fi
           # Unset in production (see the env-block comment above). Primary
@@ -1083,7 +1092,11 @@ jobs:
                     | @tsv
                   '
             )"; then
-              if [ -n "$open_pr_refs_tsv" ]; then
+              open_pr_ref_count="$(printf '%s\n' "$open_pr_refs_tsv" | awk 'NF { count += 1 } END { print count + 0 }')"
+              if (( open_pr_ref_count > ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS )); then
+                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: ${open_pr_ref_count} open PR refs exceed the live-ref lookup limit ${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}. No run will be cancelled from incomplete evidence."
+                queue_hygiene_ready=false
+              elif [ -n "$open_pr_refs_tsv" ]; then
                 while IFS=$'\t' read -r head_repo head_ref; do
                   if [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
                     echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has a malformed head repository or ref. No run will be cancelled from incomplete evidence."
