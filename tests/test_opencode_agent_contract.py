@@ -2417,6 +2417,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
     assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
+    assert (
+        'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
+    ) in metadata_step
+    assert "private|internal) live_is_private=true" in metadata_step
+    assert "public) live_is_private=false" in metadata_step
+    assert ".base.repo.private | tostring" not in metadata_step
     trust_step = target_job.split(
         "      - name: Validate pull request head repository trust", 1
     )[1].split("\n      - name:", 1)[0]
@@ -2435,8 +2441,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "${{ needs.validate-pr-metadata.outputs.is_private }}"
     ) in trust_step
     assert (
-        'live_is_private="$(jq -r \'.base.repo.private | tostring\''
+        'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in trust_step
+    assert "private|internal) live_is_private=true" in trust_step
+    assert "public) live_is_private=false" in trust_step
+    assert "live_is_private=\"\"" in trust_step
+    assert ".base.repo.private | tostring" not in trust_step
     assert '! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]]' in trust_step
     assert '! [[ "$live_is_private" =~ ^(true|false)$ ]]' in trust_step
     assert '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' in trust_step

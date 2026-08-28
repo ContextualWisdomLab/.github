@@ -175,7 +175,12 @@ jobs:
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_is_private="$(jq -r '.base.repo.private | tostring' <<<"$pull_request_json")"
+          live_visibility="$(jq -r '.base.repo.visibility // empty | ascii_downcase' <<<"$pull_request_json")"
+          case "$live_visibility" in
+            private|internal) live_is_private=true ;;
+            public) live_is_private=false ;;
+            *) live_is_private="" ;;
+          esac
 
           if [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
@@ -2336,7 +2341,12 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          live_is_private="$(jq -r '.base.repo.private | tostring' <<<"$pull_request_json")"
+          live_visibility="$(jq -r '.base.repo.visibility // empty | ascii_downcase' <<<"$pull_request_json")"
+          case "$live_visibility" in
+            private|internal) live_is_private=true ;;
+            public) live_is_private=false ;;
+            *) live_is_private="" ;;
+          esac
           if [ "$live_state" != "open" ] ||
             [ "$base_repository" != "$GH_REPOSITORY" ] ||
             ! [[ "$head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
