@@ -22,6 +22,15 @@ on:
       - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
+      - scripts/ci/zdr_policy.py
+      - scripts/ci/contextual_orchestrator_review_policy.py
+      - scripts/ci/contextual_orchestrator_review_launcher.py
+      - scripts/ci/contextual_orchestrator_review_sidecar.sh
+      - tests/test_zdr_policy.py
+      - tests/test_contextual_orchestrator_review_policy.py
+      - tests/test_contextual_orchestrator_review_sidecar_contract.py
+      - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
+      - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_inkspan_hourly_review_caller.py
@@ -84,6 +93,15 @@ on:
       - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
+      - scripts/ci/zdr_policy.py
+      - scripts/ci/contextual_orchestrator_review_policy.py
+      - scripts/ci/contextual_orchestrator_review_launcher.py
+      - scripts/ci/contextual_orchestrator_review_sidecar.sh
+      - tests/test_zdr_policy.py
+      - tests/test_contextual_orchestrator_review_policy.py
+      - tests/test_contextual_orchestrator_review_sidecar_contract.py
+      - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
+      - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_inkspan_hourly_review_caller.py
@@ -162,16 +180,27 @@ jobs:
           python -m pytest -q \
             --cov=scripts.ci.pr_review_conflict_scope \
             --cov=scripts.ci.pr_review_autofix_context \
+            --cov=scripts.ci.zdr_policy \
+            --cov=scripts.ci.contextual_orchestrator_review_policy \
             --cov-branch \
             --cov-fail-under=100
           python -m interrogate \
             --fail-under 100 \
             scripts/ci/pr_review_conflict_scope.py \
-            scripts/ci/pr_review_autofix_context.py
+            scripts/ci/pr_review_autofix_context.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py
           python -m compileall -q \
             scripts/ci/pr_review_conflict_scope.py \
             scripts/ci/pr_review_autofix_context.py \
             tests/test_pr_review_conflict_scope.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py \
+            tests/test_zdr_policy.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_bandscope_hourly_review_caller.py \
             tests/test_disksage_hourly_review_caller.py \
             tests/test_inkspan_hourly_review_caller.py \
