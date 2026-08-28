@@ -13,6 +13,7 @@ OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/d
 nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
 Native-extension coverage may defer only one unchanged PyO3 collection limitation to successful exact-head Python, Rust/PyO3, and package CheckRuns. See [`docs/doctoring/python-native-extension-peer-evidence.md`](docs/doctoring/python-native-extension-peer-evidence.md).
 
+Semgrep hosted scans bind one job-level `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`. See [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md).
 OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
 
 Central review routes through the vendored **contextual-orchestrator** gateway
