@@ -525,10 +525,11 @@ def test_strix_nim_defaults_and_noema_sidecar_fail_closed(
     tmp_path: Path,
 ) -> None:
     """Keep Strix fallback defaults and fail Noema closed without its sidecar."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
     strix_output = tmp_path / "strix-output"
-    strix = subprocess.run(  # noqa: S603
+    strix = subprocess.run(  # noqa: S603, S607
         [
-            "bash",
+            bash_executable,
             "-c",
             textwrap.dedent(
                 workflow_step(
@@ -568,9 +569,9 @@ def test_strix_nim_defaults_and_noema_sidecar_fail_closed(
             "Run Noema LLM review and submit verdict",
         ).split("        run: |\n", 1)[1]
     )
-    noema = subprocess.run(  # noqa: S603
+    noema = subprocess.run(  # noqa: S603, S607
         [
-            "/usr/bin/bash",
+            bash_executable,
             "-c",
             noema_script,
         ],
