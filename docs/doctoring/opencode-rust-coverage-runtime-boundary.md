@@ -31,8 +31,9 @@ tree-local sandbox home. Prefetch and runtime force Cargo's `git` registry
 protocol so runner and container Cargo versions consume the same cache layout.
 The PR execution container remains `--network=none` and uses
 `CARGO_NET_OFFLINE=true`; a reserved `.opencode-sandbox-home` path in the PR
-tree is rejected so PR content cannot be mixed with the trusted cache. Prefetch
-failure is retained as a fail-closed offline coverage failure.
+tree is rejected before the Cargo-availability branch so PR content cannot be
+mixed with the trusted cache even when the runner lacks Cargo. Prefetch failure
+is retained as a fail-closed offline coverage failure.
 
 NIST SP 800-218 PW.4.1 covers acquiring and maintaining third-party software
 from expected, trusted sources and reviewing its provenance (Souppaya et al.,

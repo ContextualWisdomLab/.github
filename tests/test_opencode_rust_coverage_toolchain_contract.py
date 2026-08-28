@@ -126,6 +126,28 @@ def test_rust_coverage_prefetches_locked_crates_before_networkless_sandbox() -> 
     assert "docker run --rm --init --network=none" in dispatch
 
 
+def test_reserved_sandbox_path_is_rejected_without_cargo() -> None:
+    """Reject PR-controlled sandbox state even when the runner lacks Cargo."""
+
+    dispatch = _dispatch_text()
+    source_tree_start = dispatch.index(
+        "      - name: Materialize pull request merge tree for coverage measurement\n"
+    )
+    source_tree_end = dispatch.index(
+        "      - name: Upload materialized pull request merge tree\n",
+        source_tree_start,
+    )
+    source_tree = dispatch[source_tree_start:source_tree_end]
+
+    reserved_path_guard = (
+        'if [ -e "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ] ||'
+    )
+    cargo_gate = (
+        'if [ -n "$prefetch_manifests" ] && command -v cargo >/dev/null 2>&1; then'
+    )
+    assert source_tree.index(reserved_path_guard) < source_tree.index(cargo_gate)
+
+
 def test_quality_workflow_watches_the_trusted_dispatch_workflow() -> None:
     """Guard drift in the hashed review-dispatch blob must retrigger this contract."""
 

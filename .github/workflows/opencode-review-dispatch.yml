@@ -365,6 +365,12 @@ jobs:
           # copied into the tree-local sandbox home; config and credentials do
           # not cross the trust boundary.
           prefetch_manifests="$(git -C "$COVERAGE_SOURCE_WORKDIR" ls-files 'Cargo.toml' '*/Cargo.toml')"
+          sandbox_cargo_home="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo"
+          if [ -e "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ] ||
+            [ -L "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ]; then
+            echo "::error::PR tree already contains the reserved .opencode-sandbox-home path; refusing to mix it with trusted Cargo caches."
+            exit 1
+          fi
           if [ -n "$prefetch_manifests" ] && command -v cargo >/dev/null 2>&1; then
             prefetch_home="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cargo-prefetch.XXXXXX")"
             while IFS= read -r prefetch_manifest; do
@@ -391,13 +397,6 @@ jobs:
                 echo "::warning::Locked cargo prefetch failed for ${prefetch_manifest}; offline Rust coverage will surface the missing dependencies for this head."
               fi
             done <<<"$prefetch_manifests"
-            sandbox_cargo_home="$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home/.cargo"
-            if [ -e "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ] ||
-              [ -L "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ]; then
-              echo "::error::PR tree already contains the reserved .opencode-sandbox-home path; refusing to mix it with trusted Cargo caches."
-              rm -rf "$prefetch_home"
-              exit 1
-            fi
             mkdir -p "$sandbox_cargo_home"
             for prefetch_cache_dir in registry git; do
               if [ -d "$prefetch_home/.cargo/$prefetch_cache_dir" ]; then
