@@ -1092,6 +1092,7 @@ jobs:
                     | @tsv
                   '
             )"; then
+              open_pr_refs_tsv="$(printf '%s\n' "$open_pr_refs_tsv" | sort -u)"
               open_pr_ref_count="$(printf '%s\n' "$open_pr_refs_tsv" | awk 'NF { count += 1 } END { print count + 0 }')"
               if (( open_pr_ref_count > ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS )); then
                 echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: ${open_pr_ref_count} open PR refs exceed the live-ref lookup limit ${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}. No run will be cancelled from incomplete evidence."
