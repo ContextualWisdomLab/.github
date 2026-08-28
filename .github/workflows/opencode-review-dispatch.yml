@@ -694,11 +694,19 @@ jobs:
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
                     case "$package_manager" in \
                       npm) \
-                        corepack npm ci \
-                          --ignore-scripts \
-                          --cache /opt/npm-cache \
-                          --no-audit \
-                          --no-fund; \
+                        if jq -e '(.packageManager // "") as $spec | if ($spec | type) == "string" then ($spec | test("^npm@[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end' package.json >/dev/null 2>&1; then \
+                          corepack npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        else \
+                          npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        fi; \
                         rm -rf node_modules; \
                         ;; \
                       pnpm@*) \

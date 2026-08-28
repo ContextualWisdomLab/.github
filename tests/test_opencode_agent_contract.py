@@ -579,6 +579,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
     assert "corepack npm ci" in measure_step
+    assert 'if jq -e \'(.packageManager // "") as $spec' in measure_step
+    assert "then \\\n                          corepack npm ci" in measure_step
+    assert "else \\\n                          npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
     assert "corepack npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm@*)" in measure_step
