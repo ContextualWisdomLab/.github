@@ -234,6 +234,7 @@ def test_build_catalog_accepts_provider_specific_attestation(monkeypatch) -> Non
         require_zdr=True,
     )
     assert result["report"]["zdr_selected_count"] == 1
+    assert result["report"]["zdr_sources"] == ["https://provider.example/zdr"]
     assert result["agents"][0]["tags"][-1] == "zdr"
 
 

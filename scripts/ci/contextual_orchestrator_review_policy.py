@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from scripts.ci.zdr_policy import (
-    OPENROUTER_ZDR_ENDPOINTS_SOURCE,
     PROVIDER_AUTH_SCHEMES,
     PROVIDER_BASE_URLS,
     PROVIDER_CREDENTIAL_NAMES,
@@ -275,15 +274,7 @@ def build_zdr_prioritized_catalog(
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
                 {
-                    (
-                        OPENROUTER_ZDR_ENDPOINTS_SOURCE
-                        if zdr_endpoints
-                        and (
-                            provider_zdr_scope(row["provider"]).openrouter_endpoints_feed
-                            or not provider_zdr_scope(row["provider"]).zero_data_retention
-                        )
-                        else provider_zdr_scope(row["provider"]).source
-                    )
+                    provider_zdr_scope(row["provider"]).source
                     for row in picked
                     if is_zdr_model(
                         row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
