@@ -257,8 +257,9 @@ flowchart LR
   `contextual_orchestrator.orchestrator.load_agents()` requires an
   `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
   Follow-up #1370 fixes the launcher and the standalone policy catalog writer
-  at head `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; focused tests and the
-  full local suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
+  in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
+  `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
+  suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
 - #1370 remains open and blocked against main `f8823a5`. Its PR-target Noema
   run `33140830199` executes the trusted base launcher and reproduces the
   pre-fix bare-list error; its `opencode-review` check fails closed because no
