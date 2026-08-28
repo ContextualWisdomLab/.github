@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/strix.yml"
 SIDECAR = ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
+TOKEN_LOADER = ROOT / "scripts/ci/load_contextual_orchestrator_token.sh"
 SMOKE = ROOT / "scripts/ci/strix_required_workflow_smoke.sh"
 
 
@@ -89,6 +90,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                     ROOT / "scripts/ci/strix_quick_gate.sh",
                     ROOT / "scripts/ci/test_strix_quick_gate.sh",
                     SIDECAR,
+                    TOKEN_LOADER,
                 ):
                     shutil.copy2(source, root / source.relative_to(ROOT))
                 shutil.copy2(WORKFLOW, root / WORKFLOW.relative_to(ROOT))
@@ -110,6 +112,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, output)
         self.assertIn("Strix gate script must pass bash syntax checks", output)
         self.assertIn("contextual_orchestrator_review_sidecar.sh", output)
+        self.assertNotIn("load_contextual_orchestrator_token.sh", output)
 
 
 if __name__ == "__main__":
