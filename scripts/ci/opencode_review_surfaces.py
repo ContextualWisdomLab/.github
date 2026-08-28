@@ -19,7 +19,8 @@ from pathlib import Path, PurePosixPath
 
 CENTRAL_WORKFLOW_ANCHOR = ".github/workflows/opencode-review.yml"
 CENTRAL_WORKFLOW_ANCHOR_RE = re.compile(
-    r"\.github[\\/]+workflows(?:[\\/]+\.)*[\\/]+"
+    r"\.github[\\/]+workflows"
+    r"(?:(?:[\\/]+\.)|(?:[\\/]+\.\.[\\/]+workflows))*[\\/]+"
     r"opencode-review\.yml(?::[0-9]+)?"
 )
 PUB_ITEM_RE = re.compile(

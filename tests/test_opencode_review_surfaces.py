@@ -137,7 +137,12 @@ def test_workflow_anchor_variants_cannot_spoof_unrelated_findings() -> None:
     review = surfaces.format_request_changes_review(
         model_prose=(
             r"Finding: .github\workflows\opencode-review.yml:42 "
-            "and .github/workflows/./opencode-review.yml:7"
+            "and .github/workflows/./opencode-review.yml:7 "
+            "and .github/workflows/../workflows/opencode-review.yml:9"
+        ),
+        structured_findings=(
+            "### 1. HIGH "
+            ".github/workflows/../workflows/opencode-review.yml:11 - spoof"
         ),
         head_sha=HEAD,
         run_id="1",
@@ -146,7 +151,8 @@ def test_workflow_anchor_variants_cannot_spoof_unrelated_findings() -> None:
     )
     assert r".github\workflows\opencode-review.yml" not in review
     assert ".github/workflows/./opencode-review.yml" not in review
-    assert review.count("Review process") >= 2
+    assert ".github/workflows/../workflows/opencode-review.yml" not in review
+    assert review.count("Review process") >= 4
 
 def test_korean_status_and_review_keep_identifiers() -> None:
     """Korean PRs stay Korean while crate paths remain unchanged."""
