@@ -9,7 +9,7 @@ _contextual_orchestrator_token_fail() {
 }
 
 _contextual_orchestrator_stat() {
-  local format="$1" target="$2" value bsd_format
+  local format="$1" target="$2" value
 
   # Probe the exact GNU/BusyBox operation instead of the implementation's
   # version flag. BusyBox does not need the BSD fallback when its -c form is
@@ -18,7 +18,6 @@ _contextual_orchestrator_stat() {
     printf '%s\n' "$value"
     return 0
   fi
-  bsd_format="$format"
   if [ "$format" = "%a" ]; then
     if value="$(stat -f '%Mp %Lp' "$target" 2>/dev/null)"; then
       printf '%s\n' "$value"

@@ -267,6 +267,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     assert receipt.REPO_RE.fullmatch("ContextualWisdomLab/.github")
     assert not receipt.REPO_RE.fullmatch("owner/.")
     assert not receipt.REPO_RE.fullmatch("owner/..")
+    assert not receipt.REPO_RE.fullmatch("owner/-repo")
 
     def fake_fail(args, **kwargs):
         return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "nope"})()

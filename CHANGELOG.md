@@ -5,9 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Keep OpenRouter endpoint-feed ZDR evidence provider-neutral: it can inform a
-  matching direct-provider model when the full identity or final component is
-  unambiguous, while ambiguous identities remain non-ZDR.
+- Keep OpenRouter endpoint-feed ZDR evidence scoped to OpenRouter routes;
+  direct provider routes remain non-ZDR until a dated provider-specific
+  attestation exists.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator

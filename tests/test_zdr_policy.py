@@ -36,9 +36,16 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
         zdr_policy.provider_zdr_scope("made_up_provider")
 
 
-def test_feed_model_matches_rejects_non_string_model() -> None:
-    """Defensive matching must fail closed for malformed model values."""
-    assert zdr_policy._feed_model_matches(None, frozenset()) is False
+def test_is_zdr_model_rejects_non_string_model() -> None:
+    """Defensive route evaluation must fail closed for malformed model values."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model=object(),  # type: ignore[arg-type]
+            zdr_endpoints=frozenset({"openrouter/provider/model"}),
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -102,8 +109,8 @@ def test_route_key_strips_a_leading_slash() -> None:
     )
 
 
-def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
-    """A feed model identity can attest a matching non-OpenRouter row."""
+def test_is_zdr_model_feed_evidence_remains_provider_specific() -> None:
+    """An OpenRouter endpoint feed cannot attest direct provider endpoints."""
     feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
     assert (
         zdr_policy.is_zdr_model(
@@ -111,7 +118,7 @@ def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
             model="deepseek/deepseek-r1:free",
             zdr_endpoints=feed,
         )
-        is True
+        is False
     )
     assert (
         zdr_policy.is_zdr_model(
@@ -127,7 +134,7 @@ def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
             model="deepseek-r1:free",
             zdr_endpoints=feed,
         )
-        is True
+        is False
     )
     assert (
         zdr_policy.is_zdr_model(

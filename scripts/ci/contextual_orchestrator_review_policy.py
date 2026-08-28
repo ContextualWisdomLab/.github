@@ -47,8 +47,8 @@ PROVIDER_FAMILIES: Mapping[str, str] = {
     "nvidia_nim_sub": "nvidia_nim",
 }
 
-# OpenRouter's public catalog informs ZDR eligibility for other providers; it
-# is not itself an upstream in this review sidecar's model group.
+# OpenRouter supplies provider-scoped ZDR evidence but is not itself an
+# upstream in this review sidecar's model group.
 EVIDENCE_ONLY_PROVIDERS = frozenset({"openrouter"})
 
 DEFAULT_CATALOG_LIMIT = 12
@@ -176,8 +176,7 @@ def build_zdr_prioritized_catalog(
         limit: Maximum number of catalog agents (orchestrator default 12).
         family_cap: Maximum agents per provider outage-domain family.
         zdr_endpoints: ``provider/model`` route keys from the OpenRouter ZDR
-            feed; authoritative for OpenRouter routes and for an exact or
-            unambiguous model-identity match on another provider row.
+            feed; authoritative only for OpenRouter routes.
         require_zdr: Admit only routes with attested ZDR evidence. Intended for
             private/internal target repositories; an empty ZDR pool fails closed.
 

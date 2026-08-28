@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -157,8 +158,8 @@ def test_parse_discovery_report_rejects_invalid_rows(report: dict[str, object]) 
         policy.parse_discovery_report(report)
 
 
-def test_build_catalog_is_zdr_first_and_free_only() -> None:
-    """ZDR-compliant routes outrank non-ZDR free routes; priced routes stay out."""
+def test_build_catalog_is_free_only_and_provider_scoped() -> None:
+    """Priced routes stay out and cross-provider feed evidence grants no ZDR."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
@@ -168,12 +169,12 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
     agents = result["agents"]
     assert agents[0]["model"] == "deepseek/deepseek-r1:free"
     assert agents[0]["provider_name"] == "nvidia_nim"
-    assert "zdr" in agents[0]["tags"]
+    assert "non-zdr" in agents[0]["tags"]
     assert all(agent["provider_name"] != "openrouter" for agent in agents)
     models = [agent["model"] for agent in agents]
     assert "gpt-4.1" not in models
     assert result["report"]["pool"] == "orchestrator/free"
-    assert result["report"]["zdr_selected_count"] == 1
+    assert result["report"]["zdr_selected_count"] == 0
     assert result["report"]["zdr_endpoints_feed_used"] is True
     assert result["report"]["selected_count"] == len(agents)
     for agent in agents:
@@ -182,8 +183,8 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["credential_key"]
 
 
-def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
-    """A matching model identity can attest a discovered provider row."""
+def test_build_catalog_keeps_feed_evidence_provider_specific() -> None:
+    """OpenRouter evidence does not attest a direct provider row."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(
             {
@@ -200,11 +201,40 @@ def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
         zdr_endpoints=ZDR_FEED,
     )
     assert result["agents"][0]["provider_name"] == "nvidia_nim"
-    assert "zdr" in result["agents"][0]["tags"]
+    assert "non-zdr" in result["agents"][0]["tags"]
+    assert result["report"]["zdr_selected_count"] == 0
+    assert result["report"]["zdr_sources"] == []
+
+
+def test_build_catalog_accepts_provider_specific_attestation(monkeypatch) -> None:
+    """A dated direct-provider attestation can authorize its own route."""
+    monkeypatch.setitem(
+        zdr_policy.PROVIDER_ZDR_SCOPE,
+        "nvidia_nim",
+        replace(
+            zdr_policy.PROVIDER_ZDR_SCOPE["nvidia_nim"],
+            zero_data_retention=True,
+            source="https://provider.example/zdr",
+            as_of="2026-08-28",
+        ),
+    )
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(
+            {
+                "models": [
+                    {
+                        "provider": "nvidia_nim",
+                        "model": "deepseek/deepseek-r1:free",
+                        "agent_id": "nim_deepseek_r1",
+                        "is_free": True,
+                    }
+                ]
+            }
+        ),
+        require_zdr=True,
+    )
     assert result["report"]["zdr_selected_count"] == 1
-    assert result["report"]["zdr_sources"] == [
-        "https://openrouter.ai/api/v1/endpoints/zdr"
-    ]
+    assert result["agents"][0]["tags"][-1] == "zdr"
 
 
 def test_build_catalog_assigns_unique_priorities() -> None:
@@ -432,21 +462,16 @@ def test_main_requires_discovery_report_arg() -> None:
     with pytest.raises(SystemExit):
         policy.main(["--out", "x.json", "--report", "y.json"])
 
-def test_private_catalog_admits_only_attested_zdr_routes() -> None:
-    """Private-target evidence never falls through to a non-ZDR free route."""
-    result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(_report()),
-        limit=12,
-        family_cap=4,
-        zdr_endpoints=ZDR_FEED,
-        require_zdr=True,
-    )
-
-    assert result["agents"]
-    assert all("zdr" in agent["tags"] for agent in result["agents"])
-    assert all("non-zdr" not in agent["tags"] for agent in result["agents"])
-    assert result["report"]["zdr_required"] is True
-    assert result["report"]["selected_count"] == 1
+def test_private_catalog_rejects_cross_provider_zdr_evidence() -> None:
+    """An OpenRouter feed cannot authorize a direct route for a private target."""
+    with pytest.raises(policy.PolicyError, match="ZDR"):
+        policy.build_zdr_prioritized_catalog(
+            policy.parse_discovery_report(_report()),
+            limit=12,
+            family_cap=4,
+            zdr_endpoints=ZDR_FEED,
+            require_zdr=True,
+        )
 
 
 def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
