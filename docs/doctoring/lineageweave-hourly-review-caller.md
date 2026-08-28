@@ -11,8 +11,8 @@ head. A new heartbeat never cancels an in-flight diagnosis.
 The caller is deliberately thin. It does not approve, merge, release, or change
 a review-agent identity. It does not create product work. The reusable
 scheduler refetches the current head, reviews, threads, checks, and writer lease
-before dispatching the existing OpenCode repair worker. Independent
-current-head approval and all protected checks remain mandatory.
+before dispatching the existing OpenCode repair worker. Independent current-head approval
+and all protected checks remain mandatory.
 
 ## Credential and model boundary
 
