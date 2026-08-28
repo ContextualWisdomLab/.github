@@ -346,6 +346,22 @@ flowchart LR
   data URLs. The pinned-SHA probe accepts a body of 65,609 bytes and preserves
   1,025-, 1,026-, and 2,000-character tool descriptions byte-for-byte;
   provider/model context failures remain separate runtime evidence.
+- PR #1379 exact head `4a25c46dc2fe046368f304a589885ebffb757dfc`
+  reached the pinned sidecar in Strix run `33150437853`; sidecar provisioning
+  and the request-envelope preflight passed, but all three scanner attempts
+  received HTTP 500 `internal_error` (request IDs
+  `7ef2a6bfd7494f80adbf9109b2f5dea2`,
+  `193276c218884651a3940dd9a30bcf97`, and
+  `ff529b84b101458eae03287d3e8df52d`). No 413 or vulnerability report was
+  emitted, so this is an incomplete provider/backend result rather than proof
+  of either request-size rejection or scan success. The pinned server currently
+  collapses otherwise-unhandled provider exceptions into that generic 500.
+  Contextual-orchestrator PR #904 is the separately governed candidate that
+  classifies upstream request-size rejection, retries eligible members of the
+  virtual `orchestrator/free` pool, and returns `request_too_large` only after
+  eligible-provider exhaustion. The sidecar pin must remain on protected main
+  until that change is merged and then be reverified by a fresh exact-head
+  Strix run.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
