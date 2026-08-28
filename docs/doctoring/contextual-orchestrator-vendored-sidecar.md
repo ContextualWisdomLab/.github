@@ -16,7 +16,10 @@ request with HTTP 413 (`request_too_large`). The vendored server's generic
 include tool schemas and repository context and therefore need a larger,
 still-bounded integration envelope. The review launcher now sets an explicit
 8 MiB limit for this sidecar only; the library default remains unchanged for
-other deployments. A 413 remains fail-closed if a request exceeds that bound.
+other deployments. Its pinned-SHA preflight uses the public server builder and
+loopback HTTP boundary to verify that an oversized request returns 413; it does
+not depend on private server helpers or error-message text. A 413 remains
+fail-closed if a request exceeds that bound.
 
 ## What changed
 

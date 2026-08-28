@@ -293,15 +293,16 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
 
 
-def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:
-    """The exact vendored SHA must accept the review envelope keyword at boot."""
+def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
+    """The exact vendored SHA must enforce the review limit at its HTTP boundary."""
     text = _read(SIDECAR)
-    assert 'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)' in text
-    assert "from contextual_orchestrator.server import RequestError, _request_body_size" in text
+    assert "from contextual_orchestrator.server import SecurityConfig, build_server" in text
+    assert '"POST",' in text
+    assert '"/v1/chat/completions",' in text
     assert "accepted_size = 64 * 1024 + 1" in text
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
-    assert "exc.status == 413" in text
-    assert 'exc.message == "request body exceeds configured limit"' in text
+    assert "assert response.status == 413" in text
+    assert "_request_body_size" not in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:

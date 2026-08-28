@@ -85,20 +85,48 @@ python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   -r "$requirements_lock"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
-PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
-  'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" - <<'PY'
-from contextual_orchestrator.server import RequestError, _request_body_size
+import http.client
+import threading
+
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES
 
 accepted_size = 64 * 1024 + 1
-assert _request_body_size({"content-length": str(accepted_size)}, REVIEW_MAX_BODY_BYTES) == accepted_size
+assert accepted_size < REVIEW_MAX_BODY_BYTES
+orchestrator = TaskOrchestrator(
+    [ModelAgent(id="body_limit_probe", model="probe")],
+    client=ModelClient(max_output_tokens=1),
+)
+server = build_server(
+    orchestrator,
+    host="127.0.0.1",
+    port=0,
+    security=SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES),
+)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
 try:
-    _request_body_size({"content-length": str(REVIEW_MAX_BODY_BYTES + 1)}, REVIEW_MAX_BODY_BYTES)
-except RequestError as exc:
-    assert exc.status == 413 and exc.message == "request body exceeds configured limit"
-else:
-    raise AssertionError("pinned server did not enforce the configured review body limit")
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    connection.request(
+        "POST",
+        "/v1/chat/completions",
+        body=b"",
+        headers={
+            "Authorization": "Bearer contract",
+            "Content-Type": "application/json",
+            "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
+        },
+    )
+    response = connection.getresponse()
+    assert response.status == 413, response.status
+    response.read()
+    connection.close()
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
 PY
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
