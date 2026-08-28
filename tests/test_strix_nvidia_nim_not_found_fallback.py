@@ -194,10 +194,12 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
         self.assertNotIn("vars.STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
         self.assertNotIn("vars.STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
-        self.assertIn('--exclude "$primary"', workflow)
-        self.assertIn('[ "$primary_rc" -eq 75 ]', workflow)
+        self.assertIn(
+            '--exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}"',
+            workflow,
+        )
+        self.assertNotIn("primary_rc=", workflow)
         self.assertIn('[ "$fallback_rc" -eq 75 ]', workflow)
-        self.assertIn('[ "$primary_rc" -eq 0 ] || exit "$primary_rc"', workflow)
         self.assertIn('[ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"', workflow)
         self.assertIn(
             "github.event.client_payload.strix_llm || "
@@ -225,7 +227,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertNotIn("STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
         self.assertEqual(
             workflow.count('--candidates "$STRIX_NVIDIA_ALLOWED_MODELS"'),
-            2,
+            1,
         )
         self.assertIn('case " $STRIX_NVIDIA_ALLOWED_MODELS " in', workflow)
         self.assertIn('*" ${strix_model#nvidia_nim/} "*)', workflow)

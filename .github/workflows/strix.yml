@@ -586,17 +586,8 @@ jobs:
             exit 0
           fi
           resolver="$TRUSTED_STRIX_SOURCE/scripts/ci/select_nvidia_nim_model.py"
-          primary_rc=0
-          primary="$(python3 "$resolver" --role strix-primary --candidates "$STRIX_NVIDIA_ALLOWED_MODELS")" || primary_rc=$?
-          if [ "$primary_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM model catalog is unavailable; using the contracted OpenAI fallback.'
-            printf 'primary=\nfallback=\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          [ "$primary_rc" -eq 0 ] || exit "$primary_rc"
-
           fallback_rc=0
-          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "$primary")" || fallback_rc=$?
+          fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}")" || fallback_rc=$?
           if [ "$fallback_rc" -eq 75 ]; then
             echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
             fallback=""
@@ -604,7 +595,7 @@ jobs:
             [ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"
           fi
           {
-            printf 'primary=nvidia_nim/%s\n' "$primary"
+            printf 'primary=\n'
             if [ -n "$fallback" ]; then
               printf 'fallback=nvidia_nim/%s\n' "$fallback"
             else

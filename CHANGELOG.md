@@ -17,7 +17,9 @@ Semantic Versioning where the repository publishes a release.
   scanner does not append a second direct-provider fallback chain. Explicit
   gateway dispatches now provision the sidecar, unrelated diagnostic models do
   not invoke NVIDIA discovery, and private-repository source is admitted only
-  to exact ZDR-attested routes.
+  to exact ZDR-attested routes. NVIDIA diagnostic fallback resolution excludes
+  the caller's actual requested model instead of resolving an unused surrogate
+  primary.
 - Central review now routes through the vendored `contextual-orchestrator`
   gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
   default use the fail-closed zero-cost pool `orchestrator/free`, with

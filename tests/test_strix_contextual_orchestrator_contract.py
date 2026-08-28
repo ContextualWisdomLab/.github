@@ -61,6 +61,14 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.assertIn('nvidia_nim/*) ;;', self.workflow)
         self.assertIn("Skipping NVIDIA model resolution for non-NVIDIA Strix request", self.workflow)
 
+    def test_nvidia_fallback_excludes_the_actual_requested_model(self) -> None:
+        """Fallback discovery cannot reselect the caller's explicit primary."""
+        self.assertNotIn("--role strix-primary", self.workflow)
+        self.assertIn(
+            '--exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}"',
+            self.workflow,
+        )
+
     def test_private_gateway_scans_require_zdr_only_routing(self) -> None:
         """Private source never enters the gateway's non-ZDR fallback tier."""
         self.assertIn(
