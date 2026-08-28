@@ -311,6 +311,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "strix workflow resolves currently served NVIDIA models for public scans"
 	assert_file_contains "$workflow_file" "github.event.client_payload.strix_llm || 'contextual-orchestrator/orchestrator/free'" "strix workflow routes unoverridden scans through the contextual-orchestrator gateway"
 	assert_file_not_contains "$workflow_file" "steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'" "strix workflow does not bypass the contextual-orchestrator gateway for unoverridden scans"
+	assert_file_contains "$workflow_file" "NVIDIA NIM fallback resolution is unavailable; retaining only the contracted OpenAI fallback." "strix workflow does not claim to retain a resolved primary that is no longer emitted"
+	assert_file_not_contains "$workflow_file" "NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary" "strix workflow warning matches the empty primary output"
 	assert_file_contains "$sidecar_file" "--require-hashes" "strix contextual-orchestrator sidecar installs a hash-locked dependency set"
 	assert_file_contains "$sidecar_file" "--only-binary=:all:" "strix contextual-orchestrator sidecar refuses executable source distributions"
 	assert_file_contains "$sidecar_file" '-r "$ORCHESTRATOR_SOURCE/requirements.lock"' "strix contextual-orchestrator sidecar consumes the lock from the exact vendored commit"

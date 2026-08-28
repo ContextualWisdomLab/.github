@@ -589,7 +589,7 @@ jobs:
           fallback_rc=0
           fallback="$(python3 "$resolver" --role strix-fallback --candidates "$STRIX_NVIDIA_ALLOWED_MODELS" --exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}")" || fallback_rc=$?
           if [ "$fallback_rc" -eq 75 ]; then
-            echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining the resolved primary and contracted OpenAI fallback.'
+            echo '::warning::NVIDIA NIM fallback resolution is unavailable; retaining only the contracted OpenAI fallback.'
             fallback=""
           else
             [ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"
