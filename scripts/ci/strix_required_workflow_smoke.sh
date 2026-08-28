@@ -18,6 +18,8 @@ fi
 workflow_file="$workflow_root/.github/workflows/strix.yml"
 gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
+sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+token_loader_script="$repo_root/scripts/ci/load_contextual_orchestrator_token.sh"
 
 failures=0
 
@@ -43,18 +45,6 @@ assert_file_not_contains() {
 
 	if grep -Fq -- "$needle" "$file_path"; then
 		record_failure "$message (unexpected '$needle')"
-	fi
-}
-
-assert_file_contains_either() {
-	local file_path="$1"
-	local first_needle="$2"
-	local second_needle="$3"
-	local message="$4"
-
-	if ! grep -Fq -- "$first_needle" "$file_path" &&
-		! grep -Fq -- "$second_needle" "$file_path"; then
-		record_failure "$message (missing either '$first_needle' or '$second_needle')"
 	fi
 }
 
@@ -110,15 +100,15 @@ for line in lines[jobs_index + 1 :]:
     if not inside_permissions:
         continue
     if line.startswith("      "):
-        if line.strip() == "statuses: write":
+        if line.split("#", 1)[0].strip() == "statuses: write":
             status_write_jobs.append(current_job)
         continue
     if line.strip():
         inside_permissions = False
 
-if status_write_jobs != ["strix"]:
+if status_write_jobs != ["strix", "publish-manual-pr-evidence-status"]:
     print(
-        "Strix workflow must scope statuses: write only to the strix scan job; found: "
+        "Strix workflow must scope statuses: write only to the scan and manual-status jobs; found: "
         + (", ".join(status_write_jobs) if status_write_jobs else "none"),
         file=sys.stderr,
     )
@@ -129,9 +119,11 @@ PY
 	fi
 }
 
-if ! bash -n "$gate_script" "$full_gate_test"; then
-	record_failure "Strix gate scripts must pass bash syntax checks"
-fi
+for shell_script in "$gate_script" "$full_gate_test" "$sidecar_script" "$token_loader_script"; do
+	if ! bash -n -- "$shell_script"; then
+		record_failure "Strix gate script must pass bash syntax checks: $shell_script"
+	fi
+done
 
 echo "Checking Strix workflow contract in $workflow_file"
 
@@ -159,7 +151,6 @@ assert_file_contains "$workflow_file" 'context="strix"' "Strix workflow publishe
 assert_file_contains "$workflow_file" "Existing current-run Strix success status is already present" "Strix manual follow-up status publisher accepts already-published same-run evidence"
 assert_file_not_contains "$workflow_file" 'repository: ${{ github.repository }}' "Strix workflow must not checkout target repository with actions/checkout in privileged context"
 assert_file_not_contains "$workflow_file" 'bash "$TRUSTED_STRIX_GATE_TEST"' "Strix required path must not execute the full long-form gate harness"
-assert_file_contains "$workflow_file" "Prepare GitHub Models fallback credentials" "Strix workflow provisions GitHub Models fallback credentials for direct-OpenAI scans"
 assert_file_contains "$gate_script" "STRIX_GITHUB_MODELS_KEY_FILE" "Strix gate supports GitHub Models fallback credentials for cross-provider fallback"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT" "Strix gate consumes explicit target root"
 assert_file_contains "$gate_script" "STRIX_REPO_ROOT must reference a regular directory" "Strix gate rejects invalid or symlink target roots"
@@ -167,13 +158,13 @@ assert_file_contains "$gate_script" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "Strix ga
 assert_file_contains "$gate_script" "NPM_CONFIG_IGNORE_SCRIPTS" "Strix gate disables npm lifecycle scripts"
 assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardened" "Full Strix harness remains available outside the required path"
 
-assert_file_contains "$workflow_file" "nvidia_nim/nvidia/nemotron-3-super-120b-a12b" "Strix defaults public scans to the current hosted NVIDIA NIM model"
-assert_file_contains_either \
-	"$workflow_file" \
-	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai_direct/gpt-5.6-luna" \
-	"nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 openai-direct/gpt-5.6-luna" \
-	"Strix tries another NVIDIA hosted model before falling back to direct OpenAI"
-assert_file_not_contains "$workflow_file" "github_models/openai/o3" "Strix fallback list must not depend on GitHub Models, which is in platform-wide retirement"
+assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
+assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
+assert_file_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/free" "Strix defaults every scan to the contextual-orchestrator free pool"
+assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
+assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
+assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"
+assert_file_not_contains "$workflow_file" "steps.resolve_nvidia_models.outputs" "Strix cannot use a direct-provider resolver output"
 assert_file_contains "$workflow_file" "Nvidia_nimException" "Strix workflow recognizes provider-scoped NVIDIA NIM failures"
 assert_file_contains "$gate_script" "is_nvidia_nim_not_found_error" "Strix gate classifies NVIDIA NIM model-catalog 404s"
 
