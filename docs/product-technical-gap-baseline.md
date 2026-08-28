@@ -363,7 +363,7 @@ flowchart LR
   until that change is merged and then be reverified by a fresh exact-head
   Strix run.
 
-## 2026-08-29 512 MB review-envelope bootstrap
+## 2026-08-29 512 MiB review-envelope bootstrap
 
 - Contextual-orchestrator PR #904 head `6cd7d57c177d945f67ba3b86b699949584bc6b7e`
   passed its full unit/contract suite, Required bootstrap, Noema, fuzz, and
