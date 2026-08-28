@@ -207,13 +207,13 @@ else
   zdr_args=()
 fi
 
-case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
+case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-}" in
   true)
     privacy_args=(--require-zdr)
     log "requiring attested ZDR routes for every central review target"
     ;;
   false|"")
-    privacy_args=()
+    fail "central review sidecar requires CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true"
     ;;
   *)
     fail "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR must be true or false"

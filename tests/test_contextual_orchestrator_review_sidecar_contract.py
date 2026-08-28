@@ -432,6 +432,7 @@ def test_noema_review_targets_require_zdr_only_sidecar_routing() -> None:
     assert 'echo "require_zdr=false"' not in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
     assert "--require-zdr" in sidecar
+    assert 'fail "central review sidecar requires CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true"' in sidecar
     assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
     assert "require_zdr=args.require_zdr" in launcher
 
