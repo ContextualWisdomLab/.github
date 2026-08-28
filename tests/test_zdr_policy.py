@@ -89,10 +89,25 @@ def test_route_key_strips_a_leading_slash() -> None:
     )
 
 
-def test_is_zdr_model_feed_only_applies_to_the_openrouter_scope() -> None:
-    """Static non-ZDR providers stay non-ZDR even if a route key is present."""
-    feed = frozenset({"nvidia_nim/nvidia/nemotron-3-nano-30b-a3b"})
-    assert zdr_policy.is_zdr_model("nvidia_nim", zdr_endpoints=feed) is False
+def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
+    """A feed model identity can attest a matching non-OpenRouter row."""
+    feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=feed,
+        )
+        is True
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="nvidia/nemotron-3-nano-30b-a3b",
+            zdr_endpoints=feed,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

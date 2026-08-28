@@ -180,6 +180,28 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["credential_key"]
 
 
+def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
+    """OpenRouter evidence is not restricted to the OpenRouter row."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(
+            {
+                "models": [
+                    {
+                        "provider": "nvidia_nim",
+                        "model": "deepseek/deepseek-r1:free",
+                        "agent_id": "nim_deepseek_r1",
+                        "is_free": True,
+                    }
+                ]
+            }
+        ),
+        zdr_endpoints=ZDR_FEED,
+    )
+    assert result["agents"][0]["provider_name"] == "nvidia_nim"
+    assert "zdr" in result["agents"][0]["tags"]
+    assert result["report"]["zdr_selected_count"] == 1
+
+
 def test_build_catalog_assigns_unique_priorities() -> None:
     """Each selected agent gets a distinct priority so TaskOrchestrator cannot tie on id."""
     result = policy.build_zdr_prioritized_catalog(

@@ -13,8 +13,9 @@ stance and assume that the endpoint both retains and trains on data".
 Two authoritative, machine-readable sources feed the policy at runtime:
 
 1. OpenRouter ZDR endpoint feed (``https://openrouter.ai/api/v1/endpoints/zdr``)
-   — the exact list of model endpoints OpenRouter serves under a zero-data-
-   retention policy. Used verbatim for the ``openrouter`` provider scope.
+   — public model-level evidence. A matching model identity is applied to
+   discovered rows from any configured provider; it is not an OpenRouter-only
+   routing rule.
 2. OpenRouter provider data-policy catalog
    (``https://openrouter.ai/api/frontend/v1/all-providers``) — per-provider
    ``dataPolicy`` (``retainsPrompts`` / ``retentionDays`` / ``training``),
@@ -45,9 +46,8 @@ class ProviderZdrScope:
         source: URL or document that grounds the attestation.
         as_of: ISO date the attestation was last verified.
         note: One-sentence scope note; never fabricated policy language.
-        openrouter_endpoints_feed: When True, the authoritative OpenRouter
-            ``/api/v1/endpoints/zdr`` feed decides per-model ZDR membership for
-            this provider; the static table is then only the fallback.
+        openrouter_endpoints_feed: When True, this provider has no static
+            fallback and requires model-level feed evidence.
     """
 
     provider_name: str
@@ -171,6 +171,27 @@ def route_key(provider_name: str, model: str) -> str:
     return f"{provider_name}/{model.strip().lstrip('/')}"
 
 
+def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
+    """Extract model identities from provider/model evidence keys."""
+    return frozenset(
+        key.split("/", 1)[1].strip().casefold()
+        for key in zdr_endpoints
+        if isinstance(key, str) and "/" in key and key.split("/", 1)[1].strip()
+    )
+
+
+def _model_has_feed_evidence(model: str, zdr_endpoints: frozenset[str]) -> bool:
+    """Match feed evidence by exact identity, or an unambiguous model suffix."""
+    normalized = model.strip().lstrip("/").casefold()
+    if not normalized:
+        return False
+    model_ids = _feed_model_ids(zdr_endpoints)
+    if normalized in model_ids:
+        return True
+    suffix = normalized.rsplit("/", 1)[-1]
+    return sum(candidate.rsplit("/", 1)[-1] == suffix for candidate in model_ids) == 1
+
+
 def is_zdr_model(
     provider_name: str,
     *,
@@ -194,10 +215,10 @@ def is_zdr_model(
         membership match.
     """
     scope = provider_zdr_scope(provider_name)
+    if model and zdr_endpoints and _model_has_feed_evidence(model, zdr_endpoints):
+        return True
     if scope.openrouter_endpoints_feed:
-        if not zdr_endpoints or not model:
-            return False
-        return route_key(provider_name, model) in zdr_endpoints
+        return False
     return scope.zero_data_retention
 
 
