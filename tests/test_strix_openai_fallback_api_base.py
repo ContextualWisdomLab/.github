@@ -49,6 +49,8 @@ def _resolver_helpers() -> list[str]:
     utils_source = STRIX_MODEL_UTILS.read_text(encoding="utf-8")
     helper_names = (
         ("is_vertex_model", gate_source),
+        ("is_contextual_orchestrator_model", gate_source),
+        ("is_contextual_orchestrator_api_base", gate_source),
         ("is_github_models_model", gate_source),
         ("is_github_models_api_base", gate_source),
         ("is_known_foreign_provider_api_base", gate_source),
@@ -245,35 +247,42 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-class WorkflowProvisionsFallbackBase(unittest.TestCase):
-    """The workflow must publish and pass the explicit OpenAI fallback base."""
+class WorkflowUsesContextualOrchestrator(unittest.TestCase):
+    """The required workflow must expose only the local gateway route."""
 
-    def test_workflow_writes_openai_fallback_api_base_file(self) -> None:
+    def test_workflow_does_not_provision_direct_provider_fallbacks(self) -> None:
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("STRIX_OPENAI_FALLBACK_API_BASE_FILE=", workflow)
-        self.assertIn(OPENAI_FALLBACK_BASE, workflow)
+        self.assertEqual(workflow.count("secrets.OPENAI_API_KEY"), 1)
+        self.assertEqual(workflow.count("secrets.OPENROUTER_API_KEY"), 1)
+        self.assertNotIn("secrets.GCP_SA_KEY", workflow)
+        self.assertNotIn("STRIX_OPENAI_FALLBACK_API_BASE_FILE", workflow)
+        self.assertNotIn("STRIX_GITHUB_MODELS_KEY_FILE", workflow)
 
-    def test_workflow_passes_override_into_gate_environment(self) -> None:
-        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            "STRIX_OPENAI_FALLBACK_API_BASE_FILE: ${{ env.STRIX_OPENAI_FALLBACK_API_BASE_FILE }}",
-            workflow,
-        )
-
-    def test_workflow_routes_nvidia_exhaustion_through_live_catalog(self) -> None:
-        """The NVIDIA chain resolves a live distinct model before failover."""
+    def test_workflow_does_not_configure_an_external_fallback(self) -> None:
+        """The gateway owns model discovery and provider failover."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
         fallback_expression = next(
             line for line in workflow.splitlines() if "STRIX_FALLBACK_MODELS:" in line
         )
-        self.assertNotIn(
-            "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-            fallback_expression,
+        self.assertEqual(fallback_expression.strip(), 'STRIX_FALLBACK_MODELS: ""')
+        self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
+
+    def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
+        """The local sidecar is accepted without allowing arbitrary HTTP bases."""
+
+        rc, api_base = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+            "orchestrator/free",
         )
-        self.assertIn("openrouter/free", fallback_expression)
-        self.assertIn("openai-direct/gpt-5.4", fallback_expression)
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 2)
 
     def test_manual_status_job_has_status_write_permission(self) -> None:
         """OIDC target-app exchange may request the target commit status scope."""

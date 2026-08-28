@@ -18,6 +18,9 @@ _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
 SIDECAR = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
 LAUNCHER = _ORG_REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 AUTOFIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/pr-review-autofix.yml"
+NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
+OPENCODE_DISPATCH_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml"
+STRIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/strix.yml"
 OPENCODE_CONFIG = _ORG_REPO_ROOT / "opencode.jsonc"
 
 FIVE_SECRETS = (
@@ -47,6 +50,12 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert 'if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then' in text
     assert "--filter=blob:none" in text or "--depth" in text
     assert "--no-cache-dir" in text
+    assert 'requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"' in text
+    assert "--require-hashes" in text
+    assert 'PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT"' in text
+    assert "from contextual_orchestrator.review_gateway import register_review_credentials" in text
+    assert 'ORCHESTRATOR_PORT="18080"' in text
+    assert 'ORCHESTRATOR_HOST="127.0.0.1"' in text
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
@@ -129,6 +138,7 @@ def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
     assert '"orchestrator/free": {' in config
 
+
 def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     """Provisioning is a separate GHA step; EXIT must not kill a healthy sidecar."""
     text = _read(SIDECAR)
@@ -136,3 +146,70 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert "trap cleanup_sidecar_on_error EXIT" in text
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
 
+
+def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
+    """Required Noema review uses the gateway; the public NIM hardcode is gone."""
+    workflow = _read(NOEMA_WORKFLOW)
+    assert "contextual_orchestrator_review_sidecar.sh" in workflow
+    for secret in FIVE_SECRETS:
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
+    assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
+    assert "${CONTEXTUAL_ORCHESTRATOR_TOKEN}" in workflow
+    assert "https://integrate.api.nvidia.com" not in workflow
+    assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "secrets: inherit" not in workflow
+    assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+
+
+def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
+    """Repository visibility binds private review content to an attested ZDR-only pool."""
+    workflow = _read(NOEMA_WORKFLOW)
+    sidecar = _read(SIDECAR)
+    launcher = _read(LAUNCHER)
+
+    assert "Resolve Noema target repository visibility" in workflow
+    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
+    assert "--require-zdr" in sidecar
+    assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
+    assert "require_zdr=args.require_zdr" in launcher
+
+
+def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosis() -> None:
+    """The privileged Required OpenCode path has no direct-provider model route."""
+    workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
+    assert "Provision contextual-orchestrator review sidecar" in workflow
+    assert workflow.index("Validate pull request head repository trust") < workflow.index(
+        "Provision contextual-orchestrator review sidecar"
+    )
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+    assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
+    assert '.model = "contextual-orchestrator/orchestrator/free"' in workflow
+    assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN:-' in workflow
+    assert 'STRIX_GITHUB_MODELS_TOKEN:-' not in workflow
+    assert 'MODEL: github-models/' not in workflow
+
+
+def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
+    """Strix accepts only the gateway route and binds private scans to ZDR."""
+    workflow = _read(STRIX_WORKFLOW)
+    assert "Provision contextual-orchestrator Strix sidecar" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert "provider_mode=contextual_orchestrator" in workflow
+    assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
+    assert workflow.index("Resolve target repository visibility") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
+    assert workflow.index("Validate repository dispatch against live pull request metadata") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
+    assert workflow.index("Gate Strix secrets") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
+    assert "STRIX_FALLBACK_MODELS: \"\"" in workflow
