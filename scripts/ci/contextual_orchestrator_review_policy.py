@@ -251,7 +251,11 @@ def build_zdr_prioritized_catalog(
                 "base_url": row["base_url"],
                 "api_key_env": "",
                 "credential_key": row["credential_key"],
-                "tags": ["review", "cost:free", "zdr" if zdr else "non-zdr"],
+                "tags": [
+                    "review",
+                    "cost:free",
+                    "privacy:zdr" if zdr else "non-zdr",
+                ],
                 "priority": -rank,
                 "disabled": False,
                 "provider_name": row["provider"],

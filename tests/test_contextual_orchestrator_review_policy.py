@@ -169,7 +169,7 @@ def test_build_catalog_is_free_only_and_applies_model_evidence_across_providers(
     agents = result["agents"]
     assert agents[0]["model"] == "deepseek/deepseek-r1:free"
     assert agents[0]["provider_name"] == "nvidia_nim"
-    assert "zdr" in agents[0]["tags"]
+    assert "privacy:zdr" in agents[0]["tags"]
     assert all(agent["provider_name"] != "openrouter" for agent in agents)
     models = [agent["model"] for agent in agents]
     assert "gpt-4.1" not in models
@@ -201,7 +201,7 @@ def test_build_catalog_applies_feed_evidence_to_a_direct_provider_row() -> None:
         zdr_endpoints=ZDR_FEED,
     )
     assert result["agents"][0]["provider_name"] == "nvidia_nim"
-    assert "zdr" in result["agents"][0]["tags"]
+    assert "privacy:zdr" in result["agents"][0]["tags"]
     assert result["report"]["zdr_selected_count"] == 1
     assert result["report"]["zdr_sources"] == [zdr_policy.OPENROUTER_ZDR_ENDPOINTS_SOURCE]
 
@@ -235,7 +235,7 @@ def test_build_catalog_accepts_provider_specific_attestation(monkeypatch) -> Non
     )
     assert result["report"]["zdr_selected_count"] == 1
     assert result["report"]["zdr_sources"] == ["https://provider.example/zdr"]
-    assert result["agents"][0]["tags"][-1] == "zdr"
+    assert result["agents"][0]["tags"][-1] == "privacy:zdr"
 
 
 def test_build_catalog_assigns_unique_priorities() -> None:
