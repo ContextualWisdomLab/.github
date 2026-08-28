@@ -8,7 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission, ecosystem UML, cross-cutting
 disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap), the live
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
-truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
+truth), the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md)
+(not merge authorization; Figma File ID for this repo is N/A), and operate the Project per
+[`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
@@ -25,9 +27,11 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    An organization required-workflow ruleset (`CWL Central required workflows`, id `18156473`) runs
    Strix, OpenCode Review, and the PR Review Merge Scheduler from this repo in each target
    repository's context. Repository-local copies of these workflows are drift sources, not
-   repo-specific contracts. See `README.md` (operator overview),
-   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
-   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
+   repo-specific contracts. Central Semgrep binds one job-level `SEMGREP_IMAGE`
+   digest for log evidence, `docker manifest inspect`, and `docker run`. See
+   `README.md` (policy summary), `docs/pr-review-and-merge-procedure.md`
+   (bot/agent procedure), and `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo
+   DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
@@ -121,9 +125,15 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
-- **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
+- **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
+- **Central review routes through the vendored contextual-orchestrator gateway.**
+  `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
+  (the five provider secrets flow into its KV; the writer runs
+  `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
+  exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

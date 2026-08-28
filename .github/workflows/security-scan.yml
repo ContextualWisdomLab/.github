@@ -30,7 +30,8 @@ name: Security Scan
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
+    # Do not restrict the base ref: stacked PRs must receive the same
+    # diff-scoped OSV/dependency and repo-wide Trivy gate as default-branch PRs.
 
 concurrency:
   group: >-
@@ -71,6 +72,7 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name }}
           ref: ${{ github.event.pull_request.base.sha }}
+          path: source
           fetch-depth: 0
           persist-credentials: false
       - name: Scan base with OSV
@@ -86,7 +88,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Explain base OSV resolver fallback
         if: steps.osv_base.outcome == 'failure'
         run: |
@@ -103,14 +105,14 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          path: source
           fetch-depth: 0
-          clean: false
           persist-credentials: false
       - name: Scan head with OSV
         id: osv_head
@@ -125,7 +127,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Explain head OSV resolver fallback
         if: steps.osv_head.outcome == 'failure'
         run: |
@@ -142,7 +144,7 @@ jobs:
             --no-resolve
             --allow-no-lockfiles
             -r
-            ./
+            source/
       - name: Require OSV scan output
         run: |
           set -euo pipefail
