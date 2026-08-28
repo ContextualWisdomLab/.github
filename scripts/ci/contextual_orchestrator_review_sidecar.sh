@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Provision the vendored contextual-orchestrator review sidecar on a GitHub
-# Actions runner and export CONTEXTUAL_ORCHESTRATOR_BASE_URL / _TOKEN to
-# $GITHUB_ENV (when set).
+# Actions runner and export the loopback URL plus a private bearer-file path to
+# $GITHUB_ENV (when set). The raw bearer must never cross a step boundary in the
+# runner environment because GitHub renders that environment before a later
+# step can issue its own add-mask command.
 #
 # The five provider secrets arrive as bootstrap transport only (Actions env) and
 # are registered into the process-local KV by the launcher in the SAME process
@@ -45,16 +47,25 @@ fi
 log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
-if [[ "$ORCHESTRATOR_TOKEN" == *$'\r'* || "$ORCHESTRATOR_TOKEN" == *$'\n'* ]]; then
-  fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines"
-fi
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-  # Register the process-local bearer token before exporting it through
-  # GITHUB_ENV; later step environment blocks otherwise echo it verbatim.
-  echo "::add-mask::$ORCHESTRATOR_TOKEN"
+case "$ORCHESTRATOR_TOKEN" in
+  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
+esac
+# Mask the bearer before clone, dependency installation, launcher startup, or
+# health diagnostics can emit it. Later masking is too late for earlier logs,
+# but workflow commands are safe only on an Actions runner; elsewhere this
+# would print the raw bearer to ordinary stdout.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 fi
 
 mkdir -p "$ORCHESTRATOR_WORK"
+chmod 700 -- "$ORCHESTRATOR_WORK"
+token_file="$ORCHESTRATOR_WORK/bearer.token"
+(
+  umask 077
+  printf '%s' "$ORCHESTRATOR_TOKEN" > "$token_file"
+)
+chmod 600 -- "$token_file"
 rm -rf "$ORCHESTRATOR_SOURCE"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
 git clone --quiet --filter=blob:none --no-checkout "$ORCHESTRATOR_GIT_URL" "$ORCHESTRATOR_SOURCE"
@@ -144,7 +155,7 @@ log "healthz confirmed after ${i}s (pid $sidecar_pid)"
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
     printf 'CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\n' "$ORCHESTRATOR_HOST" "$ORCHESTRATOR_PORT"
-    printf 'CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\n' "$ORCHESTRATOR_TOKEN"
+    printf 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE=%s\n' "$token_file"
     printf 'CONTEXTUAL_ORCHESTRATOR_EVIDENCE=%s\n' "$policy_report"
   } >> "$ORCHESTRATOR_GITHUB_ENV"
   log "exported gateway env to $ORCHESTRATOR_GITHUB_ENV"

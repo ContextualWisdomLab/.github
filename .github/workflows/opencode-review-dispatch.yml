@@ -3998,6 +3998,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           set +e
           timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s" \
             bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
@@ -5932,6 +5933,7 @@ jobs:
               printf 'Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair; using collected current-head failed-check logs/SARIF fallback so the publish step stays bounded.\n' >&2
               return 1
             fi
+            source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
             if [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" ]; then
               return 1
             fi
