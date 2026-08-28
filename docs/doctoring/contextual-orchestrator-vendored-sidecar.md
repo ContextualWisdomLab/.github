@@ -93,13 +93,14 @@ bootstrap evidence rather than treated as a current-head runtime result.
 
 Main push run `33141468804` confirmed that the catalog envelope correction
 reached the Strix sidecar, but LiteLLM rejected the child model
-`orchestrator/free` because it had no provider prefix. Follow-up commit
-`8b02e17` maps only the pinned gateway request to `openai/orchestrator/free`;
-the loopback sidecar still receives `orchestrator/free`.
+`orchestrator/free` because it had no provider prefix. Follow-up commits
+`9f58d74` and `5aa0a20` map only the pinned gateway request to
+`openai/orchestrator/free`, fail closed when that gateway base is absent or
+not loopback, and keep the loopback sidecar receiving `orchestrator/free`.
 
 The same follow-up masks the dynamic sidecar bearer before writing `GITHUB_ENV`
 and rejects carriage returns/newlines in an override. This closes the runtime
 log exposure observed in the Noema step environment block. Focused contracts
-pass (`28 passed`) and the full local suite passes (`1689 passed, 1 skipped`).
+pass (`32 passed`) and the full local suite passes (`1689 passed, 1 skipped`).
 The main Strix rerun and an independently authorized Noema model verdict are
 still required before claiming end-to-end review completion.

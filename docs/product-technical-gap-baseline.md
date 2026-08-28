@@ -273,12 +273,13 @@ flowchart LR
   the unqualified child model `orchestrator/free` with `LLM Provider NOT
   provided`; this is a request-shape defect, not evidence that the sidecar
   catalog failed.
-- Follow-up commit `8b02e17` qualifies only the LiteLLM child request as
-  `openai/orchestrator/free` when the API base is the pinned loopback gateway;
-  the gateway still receives `orchestrator/free` and owns discovery/failover.
-  The same change registers the dynamic bearer token with `::add-mask::` before
-  exporting `GITHUB_ENV` and rejects token newlines. Focused contracts pass
-  (`28 passed`); the full local suite passes (`1689 passed, 1 skipped`).
+- Follow-up commits `9f58d74` and `5aa0a20` qualify only the LiteLLM child
+  request as `openai/orchestrator/free` when the API base is the pinned
+  loopback gateway; the gateway still receives `orchestrator/free` and owns
+  discovery/failover. They also fail closed when that base is absent or not
+  the pinned loopback, register the dynamic bearer token with `::add-mask::`
+  before exporting `GITHUB_ENV`, and reject token newlines. Focused contracts
+  pass (`32 passed`); the full local suite passes (`1689 passed, 1 skipped`).
 - A real current-main Noema run on #1369 (`33141494393`) also booted the
   sidecar and executed the Noema gate, but correctly skipped the LLM verdict
   because the exact head had no primary OpenCode approval. A successful
