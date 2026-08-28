@@ -172,11 +172,15 @@ def route_key(provider_name: str, model: str) -> str:
 
 
 def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
-    """Extract model identities from provider/model evidence keys."""
+    """Extract model identities from canonical OpenRouter evidence keys."""
     return frozenset(
         key.split("/", 1)[1].strip().casefold()
         for key in zdr_endpoints
-        if isinstance(key, str) and "/" in key and key.split("/", 1)[1].strip()
+        if (
+            isinstance(key, str)
+            and key.casefold().startswith("openrouter/")
+            and key.split("/", 1)[1].strip()
+        )
     )
 
 

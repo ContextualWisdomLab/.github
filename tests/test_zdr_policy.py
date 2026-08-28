@@ -101,7 +101,7 @@ def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
     """A feed model identity can attest a matching non-OpenRouter row."""
     feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
     assert zdr_policy._feed_model_ids(
-        frozenset({"noslash", "provider/", *feed})
+        frozenset({None, "noslash", "provider/", "DeepSeek/other-model", *feed})
     ) == frozenset({"deepseek/deepseek-r1:free"})
     assert (
         zdr_policy.is_zdr_model(
@@ -116,6 +116,19 @@ def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
             "nvidia_nim",
             model="nvidia/nemotron-3-nano-30b-a3b",
             zdr_endpoints=feed,
+        )
+        is False
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="nvidia/deepseek-r1:free",
+            zdr_endpoints=frozenset(
+                {
+                    "openrouter/deepseek/deepseek-r1:free",
+                    "openrouter/other/deepseek-r1:free",
+                }
+            ),
         )
         is False
     )
