@@ -56,26 +56,53 @@ jobs:
       # Deterministic, no telemetry: registry rules are fetched but no scan data
       # is sent back.
       SEMGREP_SEND_METRICS: "off"
+      # Semgrep OSS 1.169.0. Keep the immutable manifest reference in one
+      # place so hosted scans and local reproduction cannot drift.
+      SEMGREP_IMAGE: "semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
         with:
           egress-policy: audit
-      - name: Checkout
+      - name: Checkout exact submitted revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact submitted revision
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Semgrep checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SAST_CHECKOUT scanner=semgrep repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Verify pinned Semgrep manifest
+        run: |
+          set -euo pipefail
+          if [[ "${SEMGREP_IMAGE}" =~ ^semgrep/semgrep@sha256:[0-9a-f]{64}$ ]]; then
+            docker manifest inspect "${SEMGREP_IMAGE}" >/dev/null
+            echo "Verified immutable Semgrep manifest: ${SEMGREP_IMAGE}"
+          else
+            echo "::error::SEMGREP_IMAGE must be a complete semgrep/semgrep@sha256:<64-hex-digest> reference."
+            exit 1
+          fi
       - name: Run Semgrep (SARIF)
         id: semgrep
         run: |
           set +e
-          echo "Using semgrep/semgrep:1.169.0@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+          echo "Using ${SEMGREP_IMAGE}"
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/src" \
             -w /src \
             -e SEMGREP_SEND_METRICS=off \
             --entrypoint semgrep \
-            semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942 \
+            "${SEMGREP_IMAGE}" \
             scan \
             --config=p/default \
             --severity=WARNING \
@@ -107,6 +134,8 @@ jobs:
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Report every Semgrep finding in the job log
         if: always() && hashFiles('semgrep-results.sarif') != ''
         env:
