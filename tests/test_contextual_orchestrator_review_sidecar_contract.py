@@ -52,6 +52,10 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert "--no-cache-dir" in text
     assert 'requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"' in text
     assert "--require-hashes" in text
+    assert 'PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT"' in text
+    assert "from contextual_orchestrator.review_gateway import register_review_credentials" in text
+    assert 'ORCHESTRATOR_PORT="18080"' in text
+    assert 'ORCHESTRATOR_HOST="127.0.0.1"' in text
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
@@ -197,6 +201,9 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
+        "Provision contextual-orchestrator Strix sidecar"
+    )
+    assert workflow.index("Validate repository dispatch against live pull request metadata") < workflow.index(
         "Provision contextual-orchestrator Strix sidecar"
     )
     assert "STRIX_FALLBACK_MODELS: \"\"" in workflow

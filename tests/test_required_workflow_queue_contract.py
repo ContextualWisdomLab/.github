@@ -570,17 +570,25 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
             "Run Noema LLM review and submit verdict",
         ).split("        run: |\n", 1)[1]
     )
+    noema_env = {
+        **os.environ,
+        "PR_NUMBER": "1",
+        "GH_TOKEN": "synthetic-review-token",
+    }
+    for key in (
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+        "CONTEXTUAL_ORCHESTRATOR_TOKEN",
+        "NOEMA_LLM_VIA_ORCHESTRATOR",
+        "NOEMA_LLM_API_KEY",
+    ):
+        noema_env.pop(key, None)
     noema = subprocess.run(  # noqa: S603, S607
         [
             bash_executable,
             "-c",
             noema_script,
         ],
-        env={
-            **os.environ,
-            "PR_NUMBER": "1",
-            "GH_TOKEN": "synthetic-review-token",
-        },
+        env=noema_env,
         capture_output=True,
         text=True,
         check=False,
@@ -1560,6 +1568,7 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "exceeded your current quota" in workflow
     assert "billing details" in workflow
     assert "LLM warm-up failed" in workflow
+    assert "STRIX_PROVIDER_UNAVAILABLE" in workflow
     assert "model_behavior_error_signal=" in workflow
     assert "agents|pydantic_ai|strix" in workflow
     assert "zero_vulnerabilities_signal" not in workflow

@@ -385,18 +385,6 @@ jobs:
           esac
           echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
 
-      - name: Provision contextual-orchestrator Strix sidecar
-        env:
-          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
-        run: |
-          set -euo pipefail
-          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
-
       - name: Materialize target workspace
         if: github.event_name != 'repository_dispatch'
         env:
@@ -464,6 +452,18 @@ jobs:
           git -C "$trusted_workspace" checkout --detach --quiet "$live_base_sha"
           git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
+
+      - name: Provision contextual-orchestrator Strix sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Fetch pull request head for trusted scan
         if: github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != ''
@@ -768,7 +768,7 @@ jobs:
           # Recognized signals that the LLM backend was unavailable / starved.
           # Defined before the gate loop so the bounded retry decision below
           # can classify outcomes without duplicating the patterns later.
-          backend_unavailable_signal='RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
+          backend_unavailable_signal='STRIX_PROVIDER_UNAVAILABLE|RateLimitError|Too many requests\. For more on scraping GitHub|exceeded your current quota|insufficient_quota|billing details|"status"[[:space:]]*:[[:space:]]*"RESOURCE_EXHAUSTED"|tokens_limit_reached|Request body too large|Max size:[[:space:]]*[0-9]+[[:space:]]+tokens|Error code:[[:space:]]*413|LLM CONNECTION FAILED|Could not establish connection to the language model|LLM warm-up failed|Configured model and fallback models were unavailable|Configured Vertex model and fallback models were unavailable|emitted provider infrastructure or failure-signal output|before provider infrastructure failure|litellm(\.exceptions)?\.NotFoundError[^[:cntrl:]]*Nvidia_nimException[^[:cntrl:]]*Error code:[[:space:]]*404|Error during penetration test: loginAsGuest failed after [0-9]+ attempts: curl exit 7: curl: \(7\) Failed to connect to 127\.0\.0\.1 port 48080'
           model_behavior_error_signal='(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)'
           # Any evidence that a vulnerability was actually reported. Its presence
           # forces a hard failure so real findings are NEVER downgraded. Keep the

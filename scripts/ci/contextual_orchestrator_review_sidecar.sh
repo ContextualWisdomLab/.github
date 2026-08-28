@@ -14,8 +14,10 @@ set -euo pipefail
 
 ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
-ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-18080}"
-ORCHESTRATOR_HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
+# The Strix gate and Noema SSRF guard accept this one process-local origin.
+# Keep it fixed so an environment override cannot create an unvalidated sidecar.
+ORCHESTRATOR_PORT="18080"
+ORCHESTRATOR_HOST="127.0.0.1"
 ORCHESTRATOR_SOURCE="${RUNNER_TEMP:-/tmp}/contextual-orchestrator"
 ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
@@ -59,7 +61,11 @@ if [ ! -f "$requirements_lock" ]; then
 fi
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
-  --require-hashes --no-deps -r "$requirements_lock"
+  --require-hashes \
+  --no-deps \
+  -r "$requirements_lock"
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
+  'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
