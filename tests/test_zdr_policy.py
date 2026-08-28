@@ -97,8 +97,8 @@ def test_route_key_strips_a_leading_slash() -> None:
     )
 
 
-def test_is_zdr_model_feed_evidence_remains_provider_specific() -> None:
-    """An OpenRouter endpoint feed cannot attest direct provider endpoints."""
+def test_is_zdr_model_feed_evidence_applies_to_other_provider_rows() -> None:
+    """A feed model identity can attest a matching non-OpenRouter row."""
     feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
     assert (
         zdr_policy.is_zdr_model(
@@ -106,7 +106,7 @@ def test_is_zdr_model_feed_evidence_remains_provider_specific() -> None:
             model="deepseek/deepseek-r1:free",
             zdr_endpoints=feed,
         )
-        is False
+        is True
     )
     assert (
         zdr_policy.is_zdr_model(
@@ -122,7 +122,7 @@ def test_is_zdr_model_feed_evidence_remains_provider_specific() -> None:
             model="deepseek-r1:free",
             zdr_endpoints=feed,
         )
-        is False
+        is True
     )
     assert (
         zdr_policy.is_zdr_model(
