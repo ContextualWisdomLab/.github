@@ -275,12 +275,9 @@ jobs:
             fi
           done
           case "$visibility" in
-            private|internal)
+            private|internal|public)
               echo "require_zdr=true" >>"$GITHUB_OUTPUT"
-              echo "::notice::Private/internal target requires an attested ZDR-only review pool."
-              ;;
-            public)
-              echo "require_zdr=false" >>"$GITHUB_OUTPUT"
+              echo "::notice::Every target requires an attested ZDR-only review pool."
               ;;
             *)
               echo "::error::Noema target repository visibility is missing or unsupported: ${visibility:-<empty>}."

@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar, using the fail-closed zero-cost virtual model id `orchestrator/free`, with **Zero Data Retention (ZDR)-compliant routes prioritized** inside that pool.
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar, using the fail-closed zero-cost virtual model id `orchestrator/free`, with **Zero Data Retention (ZDR)-compliant routes required** inside that pool.
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -58,10 +58,11 @@ all five, and auto-optimize routing by cost.
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
-   `noema-review.yml` and `strix.yml` provision the same sidecar and use the
-   loopback chat-completions/API-compatible URL with virtual model
-   `orchestrator/free`; Strix has no external fallback and private targets pass
-   visibility through to the gateway's ZDR requirement. Noema reviewer identity
+   `noema-review.yml`, `strix.yml`, and the Required OpenCode dispatch provision
+   the same sidecar and use the loopback chat-completions/API-compatible URL
+   with virtual model `orchestrator/free`; every target passes the explicit
+   ZDR-required policy to the gateway, while visibility remains independently
+   validated as trust metadata. Strix has no external fallback. Noema reviewer identity
    remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
    `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
@@ -82,7 +83,7 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery + cost routing, under the zero-cost pool, with ZDR routes first.
+  discovery + cost routing, under the zero-cost pool, with ZDR routes required.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
@@ -106,7 +107,7 @@ all five, and auto-optimize routing by cost.
 - OpenAI. (n.d.). *Create file* [API reference].
   https://developers.openai.com/api/reference/resources/files/methods/create
 
-- **Private-target boundary (2026-08-27):** Noema resolves target visibility with
-  the selected repository-scoped reviewer token. Private/internal repositories
-  set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
-  every non-ZDR route and fails closed when no attested free ZDR route exists.
+- **ZDR-required boundary (2026-08-29):** Noema, Strix, and Required OpenCode
+  validate target visibility independently, but always set
+  `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog excludes every
+  non-ZDR route and fails closed when no attested free ZDR route exists.

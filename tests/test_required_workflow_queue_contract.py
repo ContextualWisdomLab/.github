@@ -531,6 +531,8 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     )
     assert "Resolve Noema target repository visibility" in workflow
     assert "target_visibility.outputs.require_zdr" in workflow
+    assert 'private|internal|public)' in workflow
+    assert 'echo "require_zdr=false"' not in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow

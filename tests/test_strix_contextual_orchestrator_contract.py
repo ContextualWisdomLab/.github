@@ -54,10 +54,10 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         for direct_route in ("nvidia_nim/*)", "openrouter/free", "openai-direct/gpt-5.4"):
             self.assertNotIn(direct_route, self.workflow)
 
-    def test_private_gateway_scans_require_zdr_only_routing(self) -> None:
-        """Private source never enters the gateway's non-ZDR fallback tier."""
+    def test_gateway_scans_require_zdr_only_routing(self) -> None:
+        """Every source never enters the gateway's non-ZDR fallback tier."""
         self.assertIn(
-            "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}",
+            'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"',
             self.workflow,
         )
 

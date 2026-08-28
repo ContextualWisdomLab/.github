@@ -626,7 +626,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_matches "$workflow_file" 'uses:[[:space:]]+actions/checkout@[0-9a-fA-F]{40}([[:space:]]|$)' "opencode review workflow pins checkout to a full commit SHA"
 	assert_file_contains "$workflow_file" "Provision contextual-orchestrator review sidecar" "opencode review provisions the central contextual-orchestrator sidecar"
 	assert_file_contains "$workflow_file" 'NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}' "opencode review passes the scoped provider credentials only to sidecar bootstrap"
-	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "opencode review passes repository privacy to the gateway ZDR policy"
+	assert_file_contains "$workflow_file" 'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"' "opencode review requires ZDR for every gateway review"
 	assert_file_contains "$workflow_file" 'is_private: ${{ steps.validate.outputs.is_private }}' "opencode review carries validated repository privacy into gateway routing"
 	assert_file_contains "$workflow_file" '"model": "contextual-orchestrator/orchestrator/free"' "opencode review uses the gateway free pool"
 	assert_file_contains "$workflow_file" '"small_model": "contextual-orchestrator/orchestrator/free"' "opencode review uses the gateway for the small model"

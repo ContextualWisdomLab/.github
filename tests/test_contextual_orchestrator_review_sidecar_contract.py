@@ -418,8 +418,8 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
 
 
-def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
-    """Repository visibility binds private review content to an attested ZDR-only pool."""
+def test_noema_review_targets_require_zdr_only_sidecar_routing() -> None:
+    """Every Noema review target uses an attested ZDR-only pool."""
     workflow = _read(NOEMA_WORKFLOW)
     sidecar = _read(SIDECAR)
     launcher = _read(LAUNCHER)
@@ -427,6 +427,8 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     assert "Resolve Noema target repository visibility" in workflow
     assert "target_visibility.outputs.require_zdr" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'private|internal|public)' in workflow
+    assert 'echo "require_zdr=false"' not in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
     assert "--require-zdr" in sidecar
     assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
@@ -450,10 +452,10 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
 
 
 def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
-    """Strix accepts only the gateway route and binds private scans to ZDR."""
+    """Strix accepts only the gateway route and requires ZDR for every scan."""
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
-    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"' in workflow
     assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow

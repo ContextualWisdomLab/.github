@@ -210,7 +210,7 @@ fi
 case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
   true)
     privacy_args=(--require-zdr)
-    log "private/internal target: requiring attested ZDR routes"
+    log "requiring attested ZDR routes for every central review target"
     ;;
   false|"")
     privacy_args=()
