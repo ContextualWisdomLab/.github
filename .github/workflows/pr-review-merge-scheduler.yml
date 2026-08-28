@@ -1083,31 +1083,33 @@ jobs:
                     | @tsv
                   '
             )"; then
-              while IFS=$'\t' read -r head_repo head_ref; do
-                if [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
-                  echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has a malformed head repository or ref. No run will be cancelled from incomplete evidence."
-                  queue_hygiene_ready=false
-                  break
-                fi
-                encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | split("/") | map(@uri) | join("/")')"
-                if ! live_head_sha="$(
-                  gh api \
-                    -H "Accept: application/vnd.github+json" \
-                    "/repos/${head_repo}/git/ref/heads/${encoded_head_ref}" \
-                    --jq '.object.sha // empty'
-                )" || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-                  echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: live ref ${head_repo}:${head_ref} could not be resolved safely. No run will be cancelled from incomplete evidence."
-                  queue_hygiene_ready=false
-                  break
-                fi
-                open_pr_heads_json="$(
-                  jq \
-                    --arg key "${head_repo}:${head_ref}" \
-                    --arg value "$live_head_sha" \
-                    '. + {($key): $value}' \
-                    <<<"$open_pr_heads_json"
-                )"
-              done <<<"$open_pr_refs_tsv"
+              if [ -n "$open_pr_refs_tsv" ]; then
+                while IFS=$'\t' read -r head_repo head_ref; do
+                  if [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
+                    echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has a malformed head repository or ref. No run will be cancelled from incomplete evidence."
+                    queue_hygiene_ready=false
+                    break
+                  fi
+                  encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | split("/") | map(@uri) | join("/")')"
+                  if ! live_head_sha="$(
+                    gh api \
+                      -H "Accept: application/vnd.github+json" \
+                      "/repos/${head_repo}/git/ref/heads/${encoded_head_ref}" \
+                      --jq '.object.sha // empty'
+                  )" || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                    echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: live ref ${head_repo}:${head_ref} could not be resolved safely. No run will be cancelled from incomplete evidence."
+                    queue_hygiene_ready=false
+                    break
+                  fi
+                  open_pr_heads_json="$(
+                    jq \
+                      --arg key "${head_repo}:${head_ref}" \
+                      --arg value "$live_head_sha" \
+                      '. + {($key): $value}' \
+                      <<<"$open_pr_heads_json"
+                  )"
+                done <<<"$open_pr_refs_tsv"
+              fi
             else
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
               queue_hygiene_ready=false

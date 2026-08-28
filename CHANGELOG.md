@@ -9,6 +9,9 @@ Semantic Versioning where the repository publishes a release.
   cancels superseded runs, and fail closed when any ref cannot be read. This
   prevents a briefly stale pull-request payload from cancelling current-head
   Checks without adding an arbitrary grace period.
+- Ensure the central Security Scan and SAST Semgrep pull-request workflows
+  trigger for stacked PRs targeting feature branches, preserving the same
+  diff-scoped dependency and repository-wide filesystem security coverage.
 - Harden the contextual-orchestrator Strix sidecar by rejecting line-breaking
   bearer tokens and masking the token before clone, install, launch, or health
   diagnostics can emit it. The raw bearer no longer enters `GITHUB_ENV` (where

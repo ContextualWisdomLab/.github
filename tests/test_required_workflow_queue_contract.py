@@ -803,7 +803,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert '"/repos/${head_repo}/git/ref/heads/${encoded_head_ref}"' in workflow
     assert '$value | split("/") | map(@uri) | join("/")' in workflow
     assert "--jq '.object.sha // empty'" in workflow
-    assert 'open_pr_heads_json="$(\n                  jq' in workflow
+    assert 'open_pr_heads_json="$(' in workflow
     assert "live ref ${head_repo}:${head_ref} could not be resolved safely" in workflow
     assert "an open PR has a malformed head repository or ref" in workflow
     assert "select(.head.repo.full_name != null and .head.ref != null)" not in workflow
@@ -872,6 +872,21 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "current_head=closed-or-no-open-pr" in result.stdout
+
+
+def test_org_queue_sweep_empty_pr_ref_list_skips_the_ref_loop() -> None:
+    """An empty open-PR listing must not be treated as one malformed PR."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    ref_loop = workflow.split('if open_pr_refs_tsv="$(\n', 1)[1].split(
+        '            else\n              echo "::warning::Current-HEAD cancellation skipped',
+        1,
+    )[0]
+
+    assert 'if [ -n "$open_pr_refs_tsv" ]; then' in ref_loop
+    assert ref_loop.index('if [ -n "$open_pr_refs_tsv" ]; then') < ref_loop.index(
+        "while IFS=$'\\t' read -r head_repo head_ref; do"
+    )
+    assert 'done <<<"$open_pr_refs_tsv"\n              fi' in ref_loop
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
