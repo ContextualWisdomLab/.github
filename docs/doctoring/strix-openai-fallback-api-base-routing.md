@@ -19,6 +19,18 @@ fallback key file, so every provider chain that ends in
 `openai-direct/gpt-5.4` (NVIDIA NIM primary, OpenRouter primary,
 GitHub Models primary) inherits correct routing automatically.
 
+Strix invokes function tools through chat completions. Direct OpenAI rejects
+those tools when `reasoning_effort` is non-none, so the gate scopes
+`STRIX_REASONING_EFFORT=none` to an explicit direct-OpenAI child using the
+native OpenAI endpoint. NVIDIA, other providers, and standalone explicit-model
+runs targeting a custom OpenAI-compatible endpoint retain their configured
+effort.
+
+Contextual-orchestrator PR #881 run `32967361853` demonstrated this boundary:
+the NVIDIA attempts exhausted with 429/410 provider responses, then the direct
+OpenAI fallback reached the correct endpoint but returned HTTP 400 because
+function tools were combined with `reasoning_effort=high`.
+
 ## Failure this fixes
 
 Required-CI evidence (BandScope PR #1021 strix run 32800796577, 2026-08-25)
@@ -71,7 +83,10 @@ Regression evidence proves that:
 8. the workflow provisions the override file and passes it into the gate env;
 9. the required-workflow smoke contract pins both sides of the wiring; and
 10. the stale `gpt-5.6-luna` expectations left behind by the model rename are
-   aligned with the valid `gpt-5.4` contract in queue-contract tests.
+    aligned with the valid `gpt-5.4` contract in queue-contract tests; and
+11. explicit direct-OpenAI attempts on the native endpoint receive reasoning
+    effort `none`, while custom compatible endpoints and other providers retain
+    their configured effort.
 
 ## Limitations
 

@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   required-workflow-bootstrap:
@@ -53,7 +54,57 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - run: >-
-          echo "Review approval remains a separate current-head PR review
-          requirement produced by the authenticated dispatch workflow."
+      - name: Fail closed without a current-head OpenCode verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.action }}" = "closed" ]; then
+            echo "PR closed; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
+            exit 1
+          fi
+          reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+            (add // [])
+            | [
+                .[]
+                | select(
+                    (.user.login // "" | ascii_downcase) as $user
+                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
+                  )
+                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+              ]
+            | (last // {}) as $review
+            | ($review.body // "" | ascii_downcase) as $body
+            | if $review.state == "CHANGES_REQUESTED" then
+                "CHANGES_REQUESTED"
+              elif $review.state == "APPROVED"
+                and ($body | contains("deterministic current-head evidence") | not)
+                and ($body | contains("deterministic fallback approval") | not)
+                and ($body | contains("model-unavailable evidence fallback") | not)
+                and ($body | contains("did not emit a usable current-head control block") | not)
+                and ($body | contains("scope: `unsupported`") | not)
+                and ($body | contains("model-pool outcome: `unknown`") | not)
+              then
+                "APPROVED"
+              else
+                empty
+              end
+          ')"
+          if [ -z "$verdict" ]; then
+            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
+            exit 1
+          fi
+          echo "Current-head OpenCode verdict: ${verdict}."

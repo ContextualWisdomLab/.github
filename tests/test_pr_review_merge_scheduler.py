@@ -4483,6 +4483,29 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     )
 
 
+def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch):
+    prs = [
+        make_pr(number=1, baseRefName="main"),
+        make_pr(number=2, baseRefName="feature-a"),
+        make_pr(number=3, baseRefName="main"),
+        make_pr(number=4, baseRefName="feature-b"),
+    ]
+    seen = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "inspect_pr",
+        lambda repo, pr, **kwargs: seen.append(pr["number"])
+        or sched.Decision(pr["number"], "skip", "observed"),
+    )
+
+    assert sched.main(
+        ["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github-flow"]
+    ) == 0
+    assert seen == [2, 4, 1, 3]
+
+
 def test_main_rejects_invalid_review_dispatch_limit():
     with pytest.raises(SystemExit, match="--review-dispatch-limit must be -1 or greater"):
         sched.main(
