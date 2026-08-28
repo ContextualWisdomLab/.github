@@ -1,9 +1,10 @@
-# Doctoring record: Noema review through the vendored orchestrator sidecar
+# Doctoring record: Required reviews through the vendored orchestrator sidecar
 
-- **Date:** 2026-08-27
-- **Subject:** Required Noema review no longer pins a public-repo NVIDIA NIM
-  endpoint. It uses the same vendored `contextual-orchestrator` sidecar as the
-  autofix writer (`orchestrator/free`, ZDR-first auto-discovery).
+- **Date:** 2026-08-28
+- **Subject:** Required Noema, OpenCode dispatch, and Strix reviews no longer
+  select direct provider model routes. They use the same vendored
+  `contextual-orchestrator` sidecar (`orchestrator/free`, ZDR-first
+  auto-discovery).
 - **Decision record:** [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](../adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 - **Related:** [`docs/doctoring/contextual-orchestrator-vendored-sidecar.md`](contextual-orchestrator-vendored-sidecar.md)
 
@@ -21,13 +22,14 @@ OpenAI or Azure fallback hop.
 
 `scripts/ci/noema_review_gate.py` `call_llm` still rejects `localhost` and
 arbitrary private, link-local, multicast, and unspecified targets. It allows
-only `127.0.0.1` / `::1` when that origin matches
-`CONTEXTUAL_ORCHESTRATOR_BASE_URL` or `NOEMA_LLM_VIA_ORCHESTRATOR` is an
-explicit truthy flag.
+only `127.0.0.1` / `::1` when that origin matches the exact configured
+`CONTEXTUAL_ORCHESTRATOR_BASE_URL` origin. The `NOEMA_LLM_VIA_ORCHESTRATOR`
+marker is metadata only and never widens the allowlist.
 
 Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
-OIDC. Review mutation is still not `github.token`. `strix.yml` and the
-hourly-review-repair roster are untouched.
+OIDC. Review mutation is still not `github.token`. Required OpenCode and Strix
+use the same gateway model and do not add direct-provider fallback paths. The
+hourly-review-repair roster is untouched.
 
 ## Verification contract
 
@@ -35,7 +37,9 @@ hourly-review-repair roster are untouched.
 `tests/test_required_workflow_queue_contract.py` assert the workflow provisions
 the sidecar, the five secrets, and `orchestrator/free`, and no longer mentions
 the NIM hardcode. `tests/test_noema_review_gate.py` covers the sidecar
-allowlist and keeps localhost / non-sidecar private IP rejection.
+allowlist and keeps localhost / non-sidecar private IP rejection. The required
+OpenCode/Strix workflow contracts cover the gateway-only model, exact ZDR
+visibility wiring, gateway token diagnosis, and the empty external fallback.
 
 ## Rollback
 

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-27
-- Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix + shared `opencode.jsonc` default + required Noema review)
+- Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar, using the fail-closed zero-cost virtual model id `orchestrator/free`, with **Zero Data Retention (ZDR)-compliant routes prioritized** inside that pool.
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
@@ -23,6 +23,9 @@ all five, and auto-optimize routing by cost.
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
    (`c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7` today) into `RUNNER_TEMP`. The
+   source's `requirements.lock` is installed with `--require-hashes` and
+   `--no-deps`, so dependency resolution cannot silently move the reviewed
+   runtime.
    runtime entry (`contextual_orchestrator_review_launcher.py`) registers the
    five provider secrets plus the gateway bearer token into the process-local
    KV in the **same process** that performs model discovery and serves
@@ -47,14 +50,17 @@ all five, and auto-optimize routing by cost.
    discovery report into a ZDR-prioritized, provider-family-diverse agents
    catalog (primary/secondary NVIDIA keys share one outage-domain family),
    capped in size, in the orchestrator's own `ModelAgent` schema.
-4. **Wiring**: `pr-review-autofix.yml` provisions the sidecar with the five
-   secrets before both OpenCode runs and points the write-capable agent at
-   `contextual-orchestrator/orchestrator/free`; the shared `opencode.jsonc`
-   default `model`/`small_model` becomes the gateway route. `noema-review.yml`
-   provisions the same sidecar and points `call_llm` at the loopback
-   chat-completions URL with virtual model `orchestrator/free`. Noema reviewer
-   identity remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
-   `github.token`. Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
+4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
+   provision the sidecar with the five secrets before OpenCode runs and point
+   every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
+   the generated dispatch config contains only the gateway provider. The shared
+   `opencode.jsonc` default `model`/`small_model` is the same gateway route.
+   `noema-review.yml` and `strix.yml` provision the same sidecar and use the
+   loopback chat-completions/API-compatible URL with virtual model
+   `orchestrator/free`; Strix has no external fallback and private targets pass
+   visibility through to the gateway's ZDR requirement. Noema reviewer identity
+   remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
+   `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
    `github.token`; model subprocesses still run with
    `GITHUB_TOKEN`/`GH_TOKEN`/OIDC request env stripped.
@@ -73,11 +79,11 @@ all five, and auto-optimize routing by cost.
 - A new central dep (vendored repo pinned to a SHA) must be reviewed when the
   orchestrator upgrades; the pin is centralized in one script and one contract
   test.
-- `noema-review.yml` now reviews through the same gateway; the public-repo
-  NVIDIA NIM hardcode is gone. Reviewer identity is unchanged. The remaining
-  stages named by the 2026-08-18 decision (`strix.yml` and the read-only
-  dispatch pool) stay on their pinned direct-pool providers and remain
-  follow-up PRs. The hourly-review-repair roster is not collapsed here.
+- `noema-review.yml`, `strix.yml`, and the Required OpenCode dispatch now
+  review through the same gateway; direct provider model routes and Strix
+  external fallbacks are gone from these required workflows. Reviewer and
+  mutation identities are unchanged. The hourly-review-repair roster is not
+  collapsed here.
 
 ## References (and ZDR standardization)
 
