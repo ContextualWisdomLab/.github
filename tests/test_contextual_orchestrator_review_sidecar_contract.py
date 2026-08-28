@@ -110,8 +110,9 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-' in text
     assert '[ ! -f "$token_file" ]' in text
     assert '[ -L "$token_file" ]' in text
-    assert 'stat -c %a -- "$token_file"' in text
-    assert 'stat -c %u -- "$token_file"' in text
+    assert 'stat -c "%${field}" -- "$token_file"' in text
+    assert "stat -f '%u' -- \"$token_file\"" in text
+    assert "stat -f '%Lp' -- \"$token_file\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -189,6 +190,7 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
         'source "$TOKEN_LOADER"; '
         'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
         'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
+        'declare -F _contextual_orchestrator_token_stat >/dev/null && exit 93; '
         'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
     )
     result = subprocess.run(

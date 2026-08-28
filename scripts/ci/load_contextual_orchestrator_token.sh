@@ -8,6 +8,23 @@ _contextual_orchestrator_token_fail() {
   return 1
 }
 
+_contextual_orchestrator_token_stat() {
+  local field token_file value
+
+  field="$1"
+  token_file="$2"
+  if value="$(stat -c "%${field}" -- "$token_file" 2>/dev/null)"; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+  case "$field" in
+    u) value="$(stat -f '%u' -- "$token_file" 2>/dev/null)" || return 1 ;;
+    a) value="$(stat -f '%Lp' -- "$token_file" 2>/dev/null)" || return 1 ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$value"
+}
+
 _contextual_orchestrator_load_token() {
   local token_file token_size
 
@@ -18,10 +35,10 @@ _contextual_orchestrator_load_token() {
   if [ ! -f "$token_file" ] || [ -L "$token_file" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must name a regular, non-symlink file." || return 1
   fi
-  if [ "$(stat -c %u -- "$token_file")" != "$(id -u)" ]; then
+  if [ "$(_contextual_orchestrator_token_stat u "$token_file")" != "$(id -u)" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must be owned by the current runner user." || return 1
   fi
-  if [ "$(stat -c %a -- "$token_file")" != "600" ]; then
+  if [ "$(_contextual_orchestrator_token_stat a "$token_file")" != "600" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must have mode 600." || return 1
   fi
   token_size="$(wc -c < "$token_file")"
@@ -41,7 +58,7 @@ _contextual_orchestrator_load_token() {
 
 _contextual_orchestrator_load_token || {
   _contextual_orchestrator_status=$?
-  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_token_fail
+  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_token_fail _contextual_orchestrator_token_stat
   return "$_contextual_orchestrator_status"
 }
-unset -f _contextual_orchestrator_load_token _contextual_orchestrator_token_fail
+unset -f _contextual_orchestrator_load_token _contextual_orchestrator_token_fail _contextual_orchestrator_token_stat
