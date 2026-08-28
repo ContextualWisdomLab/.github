@@ -52,6 +52,10 @@ orchestrator's `review_gateway.REVIEW_CREDENTIAL_NAMES`.
 - The gateway binds to loopback only; it never leaves the runner. Secrets are
   bootstrap transport into the KV and are never read back from environment at
   request time.
+- The generated bearer is stored in a runner-owned mode-0600 regular file.
+  `GITHUB_ENV` carries only that path; every Noema, Strix, OpenCode review, and
+  autofix consumer validates ownership, mode, symlink status, size, and line
+  structure before reading and masking the bearer inside its own step.
 - Noema reviewer identity is unchanged: `NOEMA_REVIEW_TOKEN` / GitHub App /
   OIDC. Review mutation is still not `github.token`.
 
@@ -77,7 +81,9 @@ training (OpenRouter's own stance). Evidence sources:
 - `scripts/ci/contextual_orchestrator_review_launcher.py` — same-process KV
   registration + discovery + serve (runs in the vendored runtime only).
 - `scripts/ci/contextual_orchestrator_review_sidecar.sh` — pinned-SHA vendoring +
-  health gate + GITHUB_ENV export.
+  health gate + private token-file creation and path export.
+- `scripts/ci/load_contextual_orchestrator_token.sh` — per-step file validation,
+  bearer masking, and process-local export for the consuming model command.
 - `tests/test_zdr_policy.py`,
   `tests/test_contextual_orchestrator_review_policy.py`,
   `tests/test_contextual_orchestrator_review_sidecar_contract.py`,
@@ -91,27 +97,34 @@ training (OpenRouter's own stance). Evidence sources:
 The first post-merge Strix execution (`33139957477`) failed before serving: the
 pinned orchestrator's `load_agents()` indexes the top-level `agents` field, but
 the launcher persisted only the list value. Follow-up PR [#1370](https://github.com/ContextualWisdomLab/.github/pull/1370)
-wraps both the launcher output and the standalone policy builder output in the
-loader-compatible `{"agents": [...]}` envelope. The regression is covered by
-`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract;
-the full local suite passed with `1689 passed, 1 skipped, 16 subtests passed`.
+wrapped both the launcher output and the standalone policy builder output in the
+loader-compatible `{"agents": [...]}` envelope and merged exact head
+`0f40d415b112ca0055f5db5b2f434788b08f01f1` into protected
+`main@24ee38b097dbfc1a895e1199ade48cff36431d05`. The regression is covered by
+`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract.
 
-The PR-target Noema check still runs the trusted base copy until this trusted
-workflow change is merged, so its reproduction of the old error is retained as
-bootstrap evidence rather than treated as a current-head runtime result.
+The earlier PR-target Noema failure remains bootstrap evidence because it ran
+the pre-fix trusted base copy. Operational acceptance now requires a fresh
+protected-main run that starts the corrected sidecar, passes authenticated
+health, and reaches the scanner; queued or cancelled jobs are non-passing.
 
-## 2026-08-28 post-#1370 runtime correction
+The first corrected-catalog Noema canary reached authenticated health and the
+review gate, but its retained job log showed that exporting the raw bearer via
+`GITHUB_ENV` exposed it in the next step's rendered environment header before
+that step could mask it. The causal repair therefore exports only a private
+token-file path and rehydrates the bearer after each consumer step starts. No
+credential value is retained in this record.
 
-Main push run `33141468804` confirmed that the catalog envelope correction
-reached the Strix sidecar, but LiteLLM rejected the child model
-`orchestrator/free` because it had no provider prefix. Follow-up commits
-`9f58d74` and `5aa0a20` map only the pinned gateway request to
-`openai/orchestrator/free`, fail closed when that gateway base is absent or
-not loopback, and keep the loopback sidecar receiving `orchestrator/free`.
+Protected-main Strix run `33141468804` then proved that the corrected catalog
+reached the sidecar, but LiteLLM rejected the unqualified child model
+`orchestrator/free` because its provider was not explicit. The repair keeps the
+public/gateway model `contextual-orchestrator/orchestrator/free` and maps only
+the scanner child to `openai/orchestrator/free` when its API base is exactly
+`http://127.0.0.1:18080/v1`. Missing, empty, or other contextual-orchestrator
+API bases fail closed. A fresh protected-main run is still required for
+operational acceptance.
 
-The same follow-up masks the dynamic sidecar bearer before writing `GITHUB_ENV`
-and rejects carriage returns/newlines in an override. This closes the runtime
-log exposure observed in the Noema step environment block. Focused contracts
-pass (`32 passed`) and the full local suite passes (`1689 passed, 1 skipped`).
-The main Strix rerun and an independently authorized Noema model verdict are
-still required before claiming end-to-end review completion.
+PR #1373 merged the model qualification into
+`main@8f84b661e468de451ba5c076dc938f342bf52d70`, but retained the raw bearer in
+`GITHUB_ENV`. PR #1369 supersedes that credential boundary with file-only
+cross-step transport; source integration alone remains insufficient acceptance.
