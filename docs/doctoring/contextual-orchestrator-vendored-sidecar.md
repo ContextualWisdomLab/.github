@@ -7,6 +7,17 @@
   prioritized.
 - **Decision record:** [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 
+## 2026-08-28 Strix request envelope
+
+The first post-#1373 main Strix execution reached the gateway and selected
+`openai/orchestrator/free`, but the pinned server rejected the initial agent
+request with HTTP 413 (`request_too_large`). The vendored server's generic
+`SecurityConfig.max_body_bytes` default is 64 KiB; Strix and Noema requests
+include tool schemas and repository context and therefore need a larger,
+still-bounded integration envelope. The review launcher now sets an explicit
+8 MiB limit for this sidecar only; the library default remains unchanged for
+other deployments. A 413 remains fail-closed if a request exceeds that bound.
+
 ## What changed
 
 `pr-review-autofix.yml` now provisions the sidecar
