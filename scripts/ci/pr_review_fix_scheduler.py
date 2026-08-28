@@ -282,6 +282,11 @@ def dispatch_autofix(
     run(args, stdin=json.dumps(payload))
 
 
+def _base_branch_matches(pr: dict[str, Any], expected: str) -> bool:
+    """Return whether a PR belongs to the configured base scope."""
+    return expected == "*" or pr.get("baseRefName") == expected
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -293,7 +298,7 @@ def inspect_pr(
     number = int(pr["number"])
     if pr.get("isDraft"):
         return "skip", ("draft PR",)
-    if pr.get("baseRefName") != args.base_branch:
+    if not _base_branch_matches(pr, args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
         )
@@ -363,7 +368,7 @@ def process_queue(args: argparse.Namespace) -> int:
     for pr in prs:
         if pr.get("isDraft"):
             continue
-        if pr.get("baseRefName") != args.base_branch:
+        if not _base_branch_matches(pr, args.base_branch):
             continue
         if not same_repository_head(args.repo, pr):
             continue
