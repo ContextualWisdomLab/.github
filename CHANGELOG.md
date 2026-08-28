@@ -11,7 +11,9 @@ Semantic Versioning where the repository publishes a release.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator
-  capability and is not claimed by this caller.
+  capability and is not claimed by this caller. The shared repair scheduler
+  now treats an explicit `*` base scope as all branch bases so stacked pull
+  requests are inspected instead of silently filtered out.
 - Ensure the central Security Scan and SAST Semgrep pull-request workflows
   trigger for stacked PRs targeting feature branches, preserving the same
   diff-scoped dependency and repository-wide filesystem security coverage.
