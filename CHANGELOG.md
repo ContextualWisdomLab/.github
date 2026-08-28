@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Preserve the private contextual-orchestrator bearer-file owner and mode gate
+  across GNU, BusyBox, and BSD/macOS `stat` implementations without relaxing
+  the required current-user ownership or exact mode `600` contract.
 - Accept valid leading-dot repository names such as `ContextualWisdomLab/.github`
   in both OpenCode receipt and coverage-identity gates while rejecting dot-path
   segments and option-like names before any GitHub CLI call.
