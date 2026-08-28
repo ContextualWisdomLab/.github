@@ -578,9 +578,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
-    assert "npm ci" in measure_step
+    assert "corepack npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
-    assert "npm cache verify --cache /opt/npm-cache" in measure_step
+    assert "corepack npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm@*)" in measure_step
     assert "corepack pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
@@ -988,6 +988,7 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert "or fall back to npm" in measure_step
     assert "ensure_corepack_runner pnpm" in select_function
     assert "ensure_corepack_runner yarn" in select_function
+    assert "ensure_corepack_runner npm" in select_function
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
         "elif command -v npm"
     )
@@ -1017,7 +1018,7 @@ def test_opencode_coverage_uses_corepack_for_all_pnpm_package_scripts():
         'pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;'
         in measure_step
     )
-    assert 'npm) run_and_capture "$label" npm run "$script" ;;' in measure_step
+    assert 'npm) run_and_capture "$label" corepack npm run "$script" ;;' in measure_step
     assert 'yarn) run_and_capture "$label" yarn run "$script" ;;' in measure_step
     assert '"$package_runner" run' not in measure_step
 
@@ -1040,11 +1041,11 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     )
     assert "javascript_coverage_provider_declared" not in measure_step
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;'
         in measure_step
     )
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;'
         in measure_step
     )
     assert (

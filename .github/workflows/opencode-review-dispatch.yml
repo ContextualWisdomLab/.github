@@ -694,7 +694,7 @@ jobs:
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
                     case "$package_manager" in \
                       npm) \
-                        npm ci \
+                        corepack npm ci \
                           --ignore-scripts \
                           --cache /opt/npm-cache \
                           --no-audit \
@@ -713,7 +713,7 @@ jobs:
                         ;; \
                     esac; \
                   done; \
-              npm cache verify --cache /opt/npm-cache; \
+              corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
@@ -1276,6 +1276,9 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
+            if [ "$runner" = "npm" ] && command -v corepack >/dev/null 2>&1; then
+              return 0
+            fi
             if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
               return 0
             fi
@@ -1303,7 +1306,7 @@ jobs:
                 return
                 ;;
               npm)
-                command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+                ensure_corepack_runner npm "$declared_spec" && printf '%s\n' "npm"
                 return
                 ;;
             esac
@@ -1324,7 +1327,7 @@ jobs:
             local package_runner="$2"
             local script="$3"
             case "$package_runner" in
-              npm) run_and_capture "$label" npm run "$script" ;;
+              npm) run_and_capture "$label" corepack npm run "$script" ;;
               pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
               yarn) run_and_capture "$label" yarn run "$script" ;;
             esac
@@ -1570,7 +1573,7 @@ jobs:
                     return 0
                   fi
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
-                    npm ci \
+                    corepack npm ci \
                       --offline \
                       --ignore-scripts \
                       --cache "$writable_npm_cache_dir" \
@@ -1702,9 +1705,9 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack npm run build --workspace "$package_name"
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack npm run build' bash "$package_dir"
                 fi
                 ;;
               pnpm)
@@ -2110,13 +2113,13 @@ jobs:
                 if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
                   if javascript_test_script_collects_coverage; then
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                     esac
                   else
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                     esac
@@ -2124,7 +2127,7 @@ jobs:
                   javascript_coverage_ran=1
                 else
                   case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" npm test ;;
+                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack npm test ;;
                     pnpm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" yarn test ;;
                   esac
