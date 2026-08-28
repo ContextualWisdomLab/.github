@@ -22,7 +22,7 @@ name: SAST Semgrep
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
+    # Scan every PR base ref, including feature branches used by stacked PRs.
   push:
     branches: [main, master, develop]
   schedule:
