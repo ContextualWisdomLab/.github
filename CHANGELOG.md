@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Restore OpenCode coverage honesty and mermaid surfaces stacked on main after #1360 squash `17052a7c`: `publish_fallback_diff_review` posts a COMMENT product-file review then `request_changes_for_coverage_evidence_failure` sets the status comment to `COVERAGE_BLOCKED` so a coverage miss never looks finished as `Gate result: COMMENT`; mermaid labels crates/packages instead of generic `Changed file (N files)` and does not invent class edges; findings say `Review process` instead of `.github/workflows/opencode-review.yml:1` unless that file is in the diff. Does not change `noema-review.yml` (PM owns `feat/noema-orchestrator-free-zdr`) and is not NIM-2h or GitHub Models.
+- Required OpenCode dispatch and Strix now use the vendored
+  `contextual-orchestrator/orchestrator/free` gateway for model execution and
+  failed-check diagnosis. The generated OpenCode config contains only the
+  gateway provider, Strix rejects non-gateway model overrides and external
+  fallbacks, and private-target visibility enables the sidecar's attested ZDR
+  requirement. The sidecar installs its vendored dependencies with the
+  hash-pinned lock, and gateway provider exhaustion remains fail-closed.
+- Required Noema review now routes through the same vendored
+  `contextual-orchestrator` sidecar as the autofix writer: `noema-review.yml`
+  provisions the gateway with the five provider secrets, points the LLM step
+  at the loopback `orchestrator/free` pool (ZDR-first auto-discovery), and
+  deletes the public-repo NVIDIA NIM hardcode. `call_llm` keeps SSRF closed
+  for arbitrary private and `localhost` targets and allows only the
+  orchestrator sidecar loopback (`127.0.0.1` / `::1`) only when it matches the
+  exact configured sidecar base URL. Reviewer identity
+  is unchanged (`NOEMA_REVIEW_TOKEN` / GitHub App / OIDC; never
+  `github.token`). The hourly-review-repair roster is untouched.
 - Central review now routes through the vendored `contextual-orchestrator`
   gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
   default use the fail-closed zero-cost pool `orchestrator/free`, with

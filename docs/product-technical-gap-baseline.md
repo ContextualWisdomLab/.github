@@ -234,9 +234,58 @@ flowchart LR
   `zdr_policy.py`, `contextual_orchestrator_review_policy.py`,
   `contextual_orchestrator_review_launcher.py`; records
   `docs/adr/0003-…`, `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`.
-- Remaining (follow-up loops): read-only dispatch pool, `noema-review.yml`,
-  and `strix.yml` still use pinned direct-provider pools; ZDR feed integration
-  in the standard opencode pool and runner-side egress attestation per stage.
+- At the time of this 2026-08-27 snapshot, the remaining follow-up was the
+  read-only dispatch pool, `noema-review.yml`, and `strix.yml` migration. This
+  historical observation is superseded by the current-main evidence below.
+
+## 2026-08-28 current-main routing and runtime recheck
+
+- Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
+  the merge commit for #1370. #1364 is merged at
+  `f8823a544c3c4c046977f8511f683e85f83eb496`; #1360 is merged at
+  `17052a7ca3c16db90932a4d6036b43165ddee418`.
+- The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
+  and write-capable `pr-review-autofix.yml` all provision the pinned
+  `contextual-orchestrator` sidecar. Their model route is the
+  `contextual-orchestrator/orchestrator/free` gateway, with the five provider
+  secrets entering the sidecar KV and model discovery performed there. No
+  `COPILOT_GITHUB_TOKEN` route is present.
+- #1364 was merged by `seonghobae` while its terminal review decision remained
+  `CHANGES_REQUESTED`; this is an observed merge event, not protected-main
+  governance evidence. The required branch checks still include
+  `noema-review` and `opencode-review`.
+- Post-merge Strix run `33139957477` exposed a real sidecar runtime defect:
+  `contextual_orchestrator.orchestrator.load_agents()` requires an
+  `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
+  Follow-up #1370 fixes the launcher and the standalone policy catalog writer
+  in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
+  `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
+  suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
+- #1370 merged on `24ee38b…`; its pre-merge PR-target Noema run
+  `33140830199` executed the trusted base launcher and reproduced the
+  pre-fix bare-list error. The post-merge push run below shows that the
+  catalog-envelope fix reached the Strix sidecar successfully.
+
+## 2026-08-28 post-#1370 Strix runtime recheck
+
+- Main push run `33141468804` reached `Provision contextual-orchestrator Strix
+  sidecar` successfully, then failed in `Run Strix (quick)`. LiteLLM rejected
+  the unqualified child model `orchestrator/free` with `LLM Provider NOT
+  provided`; this is a request-shape defect, not evidence that the sidecar
+  catalog failed.
+- Follow-up commits `9f58d74` and `5aa0a20` qualify only the LiteLLM child
+  request as `openai/orchestrator/free` when the API base is the pinned
+  loopback gateway; the gateway still receives `orchestrator/free` and owns
+  discovery/failover. They also fail closed when that base is absent or not
+  the pinned loopback, register the dynamic bearer token with `::add-mask::`
+  before exporting `GITHUB_ENV`, and reject token newlines. Focused contracts
+  pass (`32 passed`); the full local suite passes (`1689 passed, 1 skipped`).
+- A real current-main Noema run on #1369 (`33141494393`) also booted the
+  sidecar and executed the Noema gate, but correctly skipped the LLM verdict
+  because the exact head had no primary OpenCode approval. A successful
+  sidecar/bootstrap step is not counted as a model-review result; post-fix
+  Strix completion and an independently authorized Noema verdict remain
+  separate evidence items.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
