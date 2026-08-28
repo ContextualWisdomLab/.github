@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Accept valid leading-dot repository names such as `ContextualWisdomLab/.github`
+  in both OpenCode receipt and coverage-identity gates while rejecting dot-path
+  segments and option-like names before any GitHub CLI call.
 - Keep OpenRouter endpoint-feed ZDR evidence scoped to OpenRouter routes;
   direct provider routes remain non-ZDR until a dated provider-specific
   attestation exists.
