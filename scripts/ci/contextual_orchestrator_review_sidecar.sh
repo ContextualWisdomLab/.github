@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -87,6 +87,7 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" - <<'PY'
 import http.client
+import json
 import threading
 
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
@@ -95,9 +96,22 @@ from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_B
 
 accepted_size = 64 * 1024 + 1
 assert accepted_size < REVIEW_MAX_BODY_BYTES
+
+
+class CaptureClient(ModelClient):
+    def __init__(self):
+        super().__init__(max_output_tokens=1)
+        self.proxy_payloads = []
+
+    def proxy_send(self, agent, endpoint, payload):
+        self.proxy_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
+        return super().proxy_send(agent, endpoint, payload)
+
+
+client = CaptureClient()
 orchestrator = TaskOrchestrator(
-    [ModelAgent(id="body_limit_probe", model="probe")],
-    client=ModelClient(max_output_tokens=1),
+    [ModelAgent(id="body_limit_probe", model="openai/gpt-5")],
+    client=client,
 )
 server = build_server(
     orchestrator,
@@ -123,6 +137,55 @@ try:
     assert response.status == 413, response.status
     response.read()
     connection.close()
+
+    def post_payload(payload):
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=5
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                body=encoded,
+                headers={
+                    "Authorization": "Bearer contract",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(encoded)),
+                },
+            )
+            response = connection.getresponse()
+            result = json.loads(response.read().decode("utf-8"))
+            return response.status, result, len(encoded)
+        finally:
+            connection.close()
+
+    large_status, large_body, encoded_size = post_payload({
+        "model": "openai/gpt-5",
+        "messages": [{"role": "user", "content": "x" * accepted_size}],
+    })
+    assert large_status == 200, large_body
+    assert encoded_size > accepted_size
+
+    for description_length in (1025, 1026, 2000):
+        prefix = "preserve bytes – 🙂 "
+        description = prefix + ("x" * (description_length - len(prefix)))
+        status, body, _ = post_payload({
+            "model": "openai/gpt-5",
+            "messages": [{"role": "user", "content": "probe"}],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "scan_target",
+                    "description": description,
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+        })
+        assert status == 200, body
+        assert len(description) == description_length
+        forwarded = client.proxy_payloads[-1]["tools"][0]["function"]["description"]
+        assert forwarded.encode("utf-8") == description.encode("utf-8")
 finally:
     server.shutdown()
     server.server_close()

@@ -325,6 +325,23 @@ flowchart LR
   `STRIX_PROVIDER_UNAVAILABLE`; this proves the request-envelope fix on main,
   but not a successful end-to-end vulnerability scan.
 
+## 2026-08-28 OpenAI request-envelope specification check
+
+- OpenAI's official API reference models a function-tool `description` as an
+  optional string and does not publish a universal 1024-character field limit.
+  The official OpenAPI document also contains no `413` or
+  `request_too_large` response definition for the inference operations. The
+  `413 Content Too Large` observed above is therefore the vendored gateway's
+  HTTP framing response, not evidence of an OpenAI tool-description rule.
+- OpenAI documents model-specific token/context limits and endpoint-specific
+  payload limits instead of one universal inference-body byte ceiling (for
+  example, Files permits 512 MB per file and Batch permits 200 MB JSONL files).
+  The sidecar's 8 MiB limit is consequently an explicitly local, bounded
+  ingress policy and is not claimed to be an OpenAI guarantee. Its pinned-SHA
+  probe now accepts a body of 65,609 bytes and preserves 1,025-, 1,026-, and
+  2,000-character tool descriptions byte-for-byte; provider/model context
+  failures remain separate runtime evidence.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

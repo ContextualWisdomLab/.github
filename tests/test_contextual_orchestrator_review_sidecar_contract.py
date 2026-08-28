@@ -35,7 +35,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7"
+ORCH_PIN_SHA = "8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f"
 
 
 def _read(path: Path) -> str:
@@ -113,7 +113,7 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert '_contextual_orchestrator_stat()' in text
     assert 'stat -c "$format" -- "$target"' in text
     assert '[ "$format" = "%a" ]' in text
-    assert 'stat -f %OLp "$target"' in text
+    assert "stat -f '%OMp %OLp' \"$target\"" in text
     assert 'stat -f "$format" "$target"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
@@ -168,6 +168,12 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     wrong_mode = run(token_file)
     assert wrong_mode.returncode != 0
     assert "must have mode 600" in wrong_mode.stderr
+
+    for special_mode in (0o1600, 0o2600, 0o4600):
+        token_file.chmod(special_mode)
+        special_bits = run(token_file)
+        assert special_bits.returncode != 0
+        assert "must have mode 600" in special_bits.stderr
 
     token_file.chmod(0o600)
     symlink = tmp_path / "bearer.link"
@@ -303,6 +309,14 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
     assert "assert response.status == 413" in text
     assert "_request_body_size" not in text
+    assert "class CaptureClient(ModelClient):" in text
+    assert '"description": description' in text
+    assert "large_status" in text
+    assert "assert encoded_size > accepted_size" in text
+    assert "for description_length in (1025, 1026, 2000)" in text
+    assert "assert status == 200" in text
+    assert "proxy_payloads[-1]" in text
+    assert '"utf-8"' in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:

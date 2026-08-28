@@ -20,6 +20,20 @@ other deployments. Its pinned-SHA preflight uses the public server builder and
 loopback HTTP boundary to verify that an oversized request returns 413; it does
 not depend on private server helpers or error-message text. A 413 remains
 fail-closed if a request exceeds that bound.
+This 8 MiB value is a local ingress safety bound, not an OpenAI limit. OpenAI's
+official API reference describes a function-tool `description` as an optional
+string without a 1024-character `maxLength`, and its published examples expose
+model/token context limits rather than one universal JSON-body byte limit.
+Endpoint-specific payload limits are separate: for example, the Files API
+documents 512 MB per file and the Batch API 200 MB JSONL files. Therefore the
+sidecar must measure representative Strix envelopes and keep provider/model
+context failures distinct from its own HTTP framing failure.
+The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
+incorrect 1024-character rejection. The same probe sends Strix-shaped function
+tools with 1025-, 1026-, and 2000-character descriptions and verifies that
+each reaches the provider payload byte-for-byte; arbitrary truncation is not
+used. Provider/model-specific context limits remain provider errors, not a
+reason for this gateway to rewrite the request.
 
 ## What changed
 

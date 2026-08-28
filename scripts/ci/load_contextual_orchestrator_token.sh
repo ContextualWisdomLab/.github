@@ -16,7 +16,7 @@ _contextual_orchestrator_stat() {
     return 0
   fi
   if [ "$format" = "%a" ]; then
-    stat -f %OLp "$target"
+    stat -f '%OMp %OLp' "$target"
     return 0
   fi
   stat -f "$format" "$target"
@@ -35,7 +35,7 @@ _contextual_orchestrator_load_token() {
   if [ "$(_contextual_orchestrator_stat %u "$token_file")" != "$(id -u)" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must be owned by the current runner user." || return 1
   fi
-  if [ "$(_contextual_orchestrator_stat %a "$token_file")" != "600" ]; then
+  if [ "$(_contextual_orchestrator_stat %a "$token_file")" != "0 600" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must have mode 600." || return 1
   fi
   token_size="$(wc -c < "$token_file")"
