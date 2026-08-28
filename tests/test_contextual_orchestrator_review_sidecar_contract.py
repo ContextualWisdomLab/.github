@@ -377,6 +377,7 @@ def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
     for secret in FIVE_SECRETS:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert 'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"' in workflow
     assert GATEWAY_MODEL in workflow
     assert workflow.count(f"MODEL: {GATEWAY_MODEL}") == 2
     assert "https://integrate.api.nvidia.com/v1" not in workflow

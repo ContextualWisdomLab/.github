@@ -254,6 +254,7 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/contextual_orchestrator_review_sidecar.sh"
