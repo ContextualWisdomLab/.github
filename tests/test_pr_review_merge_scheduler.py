@@ -1733,8 +1733,14 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"],
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=queued", "-F", "per_page=100",
+        ],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=in_progress", "-F", "per_page=100",
+        ],
     ]
     assert calls[2:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
@@ -2174,6 +2180,29 @@ def test_run_github_dispatch_falls_back_to_actions_token(monkeypatch):
     assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "fallback"
 
 
+def test_active_workflow_runs_reads_every_paginated_page(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps(
+            [
+                {"workflow_runs": [{"id": 1}]},
+                {"workflow_runs": [{"id": 2}]},
+            ]
+        )
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    assert sched.active_workflow_runs("owner/repo", statuses=("queued",)) == [
+        {"id": 1},
+        {"id": 2},
+    ]
+    assert "--paginate" in calls[0]
+    assert "--slurp" in calls[0]
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -2223,7 +2252,19 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     )
 
     assert result == "already_running"
-    assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
+    assert [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "repos/owner/repo/actions/runs",
+        "--paginate",
+        "--slurp",
+        "-f",
+        "status=queued",
+        "-F",
+        "per_page=100",
+    ] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
