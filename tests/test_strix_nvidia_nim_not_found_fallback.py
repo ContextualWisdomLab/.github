@@ -185,74 +185,24 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_workflow_resolves_live_nvidia_models(self) -> None:
-        """Retain live NIM candidates for explicit direct diagnostics."""
+    def test_workflow_routes_all_scans_through_contextual_orchestrator(self) -> None:
+        """The central workflow owns one gateway route and no provider override."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("Resolve live NVIDIA NIM Strix models", workflow)
-        self.assertIn("scripts/ci/select_nvidia_nim_model.py", workflow)
-        self.assertIn("steps.resolve_nvidia_models.outputs.fallback", workflow)
-        self.assertNotIn("vars.STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
-        self.assertNotIn("vars.STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
-        self.assertIn(
-            '--exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}"',
-            workflow,
-        )
-        self.assertNotIn("primary_rc=", workflow)
-        self.assertIn('[ "$fallback_rc" -eq 75 ]', workflow)
-        self.assertIn('[ "$fallback_rc" -eq 0 ] || exit "$fallback_rc"', workflow)
-        self.assertIn(
-            "github.event.client_payload.strix_llm || "
-            "'contextual-orchestrator/orchestrator/free'",
-            workflow,
-        )
-        self.assertNotIn(
-            "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'",
-            workflow,
-        )
-        self.assertIn(
-            "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            "format('{0} openrouter/free openai-direct/gpt-5.4', "
-            "steps.resolve_nvidia_models.outputs.fallback)",
-            workflow,
-        )
-        self.assertNotIn(RETIRED_NVIDIA_FALLBACK, workflow)
+        self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", workflow)
+        self.assertIn("provider_mode=contextual_orchestrator", workflow)
+        self.assertIn("STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator", workflow)
+        self.assertNotIn("Resolve live NVIDIA NIM Strix models", workflow)
+        self.assertNotIn("steps.resolve_nvidia_models.outputs", workflow)
 
-    def test_workflow_uses_one_nvidia_model_allowlist(self) -> None:
-        """Resolver candidates and gate admission share one reviewed list."""
+    def test_workflow_rejects_non_gateway_model_overrides(self) -> None:
+        """Repository-dispatch callers cannot select a direct provider."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("STRIX_NVIDIA_ALLOWED_MODELS: >-", workflow)
-        self.assertNotIn("STRIX_NVIDIA_PRIMARY_CANDIDATES", workflow)
-        self.assertNotIn("STRIX_NVIDIA_FALLBACK_CANDIDATES", workflow)
-        self.assertEqual(
-            workflow.count('--candidates "$STRIX_NVIDIA_ALLOWED_MODELS"'),
-            1,
-        )
-        self.assertIn('case " $STRIX_NVIDIA_ALLOWED_MODELS " in', workflow)
-        self.assertIn('*" ${strix_model#nvidia_nim/} "*)', workflow)
-
-        model_input = workflow.split(
-            "- name: Prepare Strix model input file",
-            maxsplit=1,
-        )[1]
-        model_input = model_input.split("- name: Run Strix", maxsplit=1)[0]
-        self.assertIn("nvidia_nim/*)", model_input)
-        self.assertNotIn(
-            "nvidia_nim/nvidia/nemotron-3-super-120b-a12b |",
-            model_input,
-        )
-        self.assertNotIn(
-            "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1)",
-            model_input,
-        )
-
-        default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
-        default_gate = default_gate.split(
-            "- name: Prepare LLM API key input file",
-            maxsplit=1,
-        )[0]
-        self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
+        self.assertIn("STRIX_MODEL_REQUESTED", workflow)
+        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/free.", workflow)
+        self.assertIn("STRIX_FALLBACK_MODELS: \"\"", workflow)
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""

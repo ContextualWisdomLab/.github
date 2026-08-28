@@ -14,7 +14,7 @@ SMOKE = ROOT / "scripts/ci/strix_required_workflow_smoke.sh"
 
 
 class StrixContextualOrchestratorContract(unittest.TestCase):
-    """Pin the gateway-first default while retaining explicit diagnostics."""
+    """Pin the protected-main gateway-only Strix contract."""
 
     def setUp(self) -> None:
         """Load the tracked workflow and helper contracts."""
@@ -23,13 +23,11 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.smoke = SMOKE.read_text(encoding="utf-8")
 
     def test_default_scan_provisions_the_existing_gateway_sidecar(self) -> None:
-        """Normal scans use the five-provider gateway, not a direct pool."""
+        """Every scan uses the five-provider gateway, never a direct pool."""
         self.assertIn("Provision contextual-orchestrator Strix sidecar", self.workflow)
-        self.assertIn(
-            "STRIX_MODEL: ${{ github.event.client_payload.strix_llm || 'contextual-orchestrator/orchestrator/free' }}",
-            self.workflow,
-        )
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.workflow)
         self.assertIn("provider_mode=contextual_orchestrator", self.workflow)
+        self.assertIn("STRIX_FALLBACK_MODELS: \"\"", self.workflow)
         self.assertNotIn(
             "steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'",
             self.workflow,
@@ -37,55 +35,36 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
 
     def test_gateway_is_openai_compatible_and_loopback_bound(self) -> None:
         """Strix calls the local OpenAI-compatible route with a bearer token."""
-        self.assertIn("openai/orchestrator/free", self.workflow)
         self.assertIn("CONTEXTUAL_ORCHESTRATOR_BASE_URL", self.workflow)
         self.assertIn("CONTEXTUAL_ORCHESTRATOR_TOKEN", self.workflow)
-        self.assertIn("^http://127\\.0\\.0\\.1:[0-9]{1,5}$", self.workflow)
-        self.assertIn("${CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1", self.workflow)
+        self.assertIn(
+            'if [ "$sidecar_base" != "http://127.0.0.1:18080" ]; then',
+            self.workflow,
+        )
+        self.assertIn("printf '%s/v1' \"${sidecar_base%/}\"", self.workflow)
 
-    def test_explicit_direct_provider_diagnostics_remain_available(self) -> None:
-        """A caller-selected diagnostic model preserves existing direct modes."""
+    def test_model_override_cannot_escape_the_gateway(self) -> None:
+        """A dispatch payload cannot select a direct provider route."""
         self.assertIn("github.event.client_payload.strix_llm", self.workflow)
-        self.assertIn("nvidia_nim/*)", self.workflow)
-        self.assertIn("openrouter/free", self.workflow)
-        self.assertIn("openai-direct/gpt-5.4", self.workflow)
-
-    def test_explicit_gateway_dispatch_provisions_the_sidecar(self) -> None:
-        """An explicit gateway request must start the same sidecar as the default."""
         self.assertIn(
-            "github.event.client_payload.strix_llm == 'contextual-orchestrator/orchestrator/free'",
+            "Strix model overrides are limited to contextual-orchestrator/orchestrator/free",
             self.workflow,
         )
-
-    def test_nvidia_resolution_is_scoped_to_nvidia_diagnostics(self) -> None:
-        """Unrelated explicit diagnostics cannot be failed by NVIDIA discovery."""
-        self.assertIn('case "$STRIX_MODEL_REQUESTED" in', self.workflow)
-        self.assertIn('nvidia_nim/*) ;;', self.workflow)
-        self.assertIn("Skipping NVIDIA model resolution for non-NVIDIA Strix request", self.workflow)
-
-    def test_nvidia_fallback_excludes_the_actual_requested_model(self) -> None:
-        """Fallback discovery cannot reselect the caller's explicit primary."""
-        self.assertNotIn("--role strix-primary", self.workflow)
-        self.assertIn(
-            '--exclude "${STRIX_MODEL_REQUESTED#nvidia_nim/}"',
-            self.workflow,
-        )
+        for direct_route in ("nvidia_nim/*)", "openrouter/free", "openai-direct/gpt-5.4"):
+            self.assertNotIn(direct_route, self.workflow)
 
     def test_private_gateway_scans_require_zdr_only_routing(self) -> None:
         """Private source never enters the gateway's non-ZDR fallback tier."""
         self.assertIn(
-            "ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}",
+            "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}",
             self.workflow,
         )
 
-    def test_gateway_install_is_isolated_and_token_is_masked(self) -> None:
-        """The sidecar cannot overwrite Strix's hash-locked Python runtime."""
-        self.assertIn('--target "$ORCHESTRATOR_SITE_PACKAGES"', self.sidecar)
+    def test_gateway_install_is_hash_locked_and_token_is_masked(self) -> None:
+        """The vendored dependencies are hash locked and bearer logs are masked."""
         self.assertIn("--require-hashes", self.sidecar)
-        self.assertIn("--only-binary=:all:", self.sidecar)
-        self.assertIn('-r "$ORCHESTRATOR_SOURCE/requirements.lock"', self.sidecar)
         self.assertIn(
-            'PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT"',
+            'requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"',
             self.sidecar,
         )
         self.assertIn("::add-mask::%s", self.sidecar)
@@ -93,8 +72,8 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_required_smoke_pins_the_gateway_default(self) -> None:
         """The bounded required-path smoke rejects a future direct-default regression."""
         self.assertIn("contextual-orchestrator Strix sidecar", self.smoke)
-        self.assertIn("openai/orchestrator/free", self.smoke)
-        self.assertIn("direct-provider models only as explicit diagnostics", self.smoke)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.smoke)
+        self.assertIn("Strix does not resolve a direct provider outside the gateway", self.smoke)
 
     def test_required_smoke_rejects_invalid_sidecar_syntax(self) -> None:
         """Every shell input is parsed, not passed as an argument to one parse."""

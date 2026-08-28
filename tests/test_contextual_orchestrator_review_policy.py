@@ -180,33 +180,6 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["credential_key"]
 
 
-def test_build_catalog_require_zdr_excludes_non_zdr_free_routes() -> None:
-    """Private-source policy retains only exact attested ZDR routes."""
-    result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(_report()),
-        limit=12,
-        family_cap=4,
-        zdr_endpoints=ZDR_FEED,
-        require_zdr=True,
-    )
-    assert [agent["model"] for agent in result["agents"]] == [
-        "deepseek/deepseek-r1:free"
-    ]
-    assert result["report"]["zdr_required"] is True
-    assert result["report"]["zdr_selected_count"] == 1
-
-
-def test_build_catalog_require_zdr_fails_without_attested_route() -> None:
-    """Private-source routing cannot silently fall back to retained providers."""
-    with pytest.raises(policy.PolicyError, match="no free ZDR-attested"):
-        policy.build_zdr_prioritized_catalog(
-            policy.parse_discovery_report(_report()),
-            limit=12,
-            family_cap=4,
-            require_zdr=True,
-        )
-
-
 def test_build_catalog_assigns_unique_priorities() -> None:
     """Each selected agent gets a distinct priority so TaskOrchestrator cannot tie on id."""
     result = policy.build_zdr_prioritized_catalog(
@@ -412,3 +385,30 @@ def test_main_requires_discovery_report_arg() -> None:
     """The CLI enforces its required arguments."""
     with pytest.raises(SystemExit):
         policy.main(["--out", "x.json", "--report", "y.json"])
+
+def test_private_catalog_admits_only_attested_zdr_routes() -> None:
+    """Private-target evidence never falls through to a non-ZDR free route."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()),
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+        require_zdr=True,
+    )
+
+    assert result["agents"]
+    assert all("zdr" in agent["tags"] for agent in result["agents"])
+    assert all("non-zdr" not in agent["tags"] for agent in result["agents"])
+    assert result["report"]["zdr_required"] is True
+    assert result["report"]["selected_count"] == 1
+
+
+def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
+    """A private target cannot use availability as permission for non-ZDR routing."""
+    with pytest.raises(policy.PolicyError, match="ZDR"):
+        policy.build_zdr_prioritized_catalog(
+            policy.parse_discovery_report(_report()),
+            limit=12,
+            family_cap=4,
+            require_zdr=True,
+        )

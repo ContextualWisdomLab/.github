@@ -14,11 +14,12 @@ set -euo pipefail
 
 ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
-ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-18080}"
-ORCHESTRATOR_HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
+# The Strix gate and Noema SSRF guard accept this one process-local origin.
+# Keep it fixed so an environment override cannot create an unvalidated sidecar.
+ORCHESTRATOR_PORT="18080"
+ORCHESTRATOR_HOST="127.0.0.1"
 ORCHESTRATOR_SOURCE="${RUNNER_TEMP:-/tmp}/contextual-orchestrator"
 ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
-ORCHESTRATOR_SITE_PACKAGES="$ORCHESTRATOR_WORK/site-packages"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
@@ -45,13 +46,14 @@ log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in
-  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" ;;
+  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
 esac
+# Mask the bearer before clone, dependency installation, launcher startup, or
+# health diagnostics can emit it.  Later masking is too late for earlier logs.
 printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 
 mkdir -p "$ORCHESTRATOR_WORK"
-rm -rf "$ORCHESTRATOR_SOURCE" "$ORCHESTRATOR_SITE_PACKAGES"
-mkdir -p "$ORCHESTRATOR_SITE_PACKAGES"
+rm -rf "$ORCHESTRATOR_SOURCE"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
 git clone --quiet --filter=blob:none --no-checkout "$ORCHESTRATOR_GIT_URL" "$ORCHESTRATOR_SOURCE"
 git -C "$ORCHESTRATOR_SOURCE" -c advice.detachedHead=false checkout --quiet "$ORCHESTRATOR_PIN_SHA"
@@ -59,11 +61,17 @@ checked_out="$(git -C "$ORCHESTRATOR_SOURCE" rev-parse HEAD)"
 if [ "$checked_out" != "$ORCHESTRATOR_PIN_SHA" ]; then
   fail "vendored HEAD ${checked_out} != pin ${ORCHESTRATOR_PIN_SHA}"
 fi
-log "installing vendored orchestrator at ${checked_out}"
+requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
+if [ ! -f "$requirements_lock" ]; then
+  fail "vendored orchestrator is missing its hash-pinned requirements.lock"
+fi
+log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
-  --require-hashes --only-binary=:all: --no-deps \
-  --target "$ORCHESTRATOR_SITE_PACKAGES" \
-  -r "$ORCHESTRATOR_SOURCE/requirements.lock"
+  --require-hashes \
+  --no-deps \
+  -r "$requirements_lock"
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
+  'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
@@ -80,11 +88,24 @@ else
   zdr_args=()
 fi
 
+case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
+  true)
+    privacy_args=(--require-zdr)
+    log "private/internal target: requiring attested ZDR routes"
+    ;;
+  false|"")
+    privacy_args=()
+    ;;
+  *)
+    fail "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR must be true or false"
+    ;;
+esac
+
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
-PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
   "$(command -v python3)" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
     --host "$ORCHESTRATOR_HOST" \
@@ -93,6 +114,7 @@ PYTHONPATH="$ORCHESTRATOR_SITE_PACKAGES:$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --catalog-out "$catalog_file" \
     --report-out "$policy_report" \
     "${zdr_args[@]}" \
+    "${privacy_args[@]}" \
 > "$ORCHESTRATOR_WORK/sidecar.stdout" 2> "$ORCHESTRATOR_WORK/sidecar.stderr" &
 sidecar_pid=$!
 cleanup_sidecar_on_error() {
