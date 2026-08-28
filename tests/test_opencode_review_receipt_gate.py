@@ -278,6 +278,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     with pytest.raises(receipt.ReceiptGateError, match="malformed"):
         receipt.fetch_reviews("ContextualWisdomLab/aFIPC", 230)
 
+
     bad_file = tmp_path / "obj.json"
     bad_file.write_text("{}", encoding="utf-8")
     with pytest.raises(receipt.ReceiptGateError, match="JSON array"):
@@ -303,3 +304,28 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )(),
     )
     assert receipt.load_reviews("-")[0]["commit_id"] == receipt.AFIPC_230_HEAD
+
+
+def test_fetch_reviews_accepts_central_dot_github_repository(monkeypatch) -> None:
+    """The central repository's valid leading-dot name passes validation."""
+
+    def fake_run(args, **kwargs):
+        assert args[:3] == [
+            "gh",
+            "api",
+            "repos/ContextualWisdomLab/.github/pulls/1382/reviews",
+        ]
+        return type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(receipt.subprocess, "run", fake_run)
+    assert receipt.fetch_reviews("ContextualWisdomLab/.github", 1382)
