@@ -183,6 +183,9 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
     """The privileged Required OpenCode path has no direct-provider model route."""
     workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
     assert "Provision contextual-orchestrator review sidecar" in workflow
+    assert workflow.index("Validate pull request head repository trust") < workflow.index(
+        "Provision contextual-orchestrator review sidecar"
+    )
     assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert '.enabled_providers = ["contextual-orchestrator"]' in workflow

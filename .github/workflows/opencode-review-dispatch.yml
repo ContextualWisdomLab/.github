@@ -2311,18 +2311,6 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.trusted_source.outputs.ref }}
 
-      - name: Provision contextual-orchestrator review sidecar
-        env:
-          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.validate-pr-metadata.outputs.is_private }}
-        run: |
-          set -euo pipefail
-          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
-
       - name: Validate pull request head repository trust
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
@@ -2365,6 +2353,18 @@ jobs:
           fi
           printf 'Validated exact-head OpenCode review source for %s#%s (%s).\n' \
             "$GH_REPOSITORY" "$PR_NUMBER" "$head_repository"
+
+      - name: Provision contextual-orchestrator review sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.validate-pr-metadata.outputs.is_private }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Exchange OpenCode app token for target repository review reads
         id: review_read_app_token

@@ -22,8 +22,9 @@ The shared `opencode.jsonc` default route changes identically.
 points the required Noema LLM step at the loopback `orchestrator/free` pool.
 The public-repo NVIDIA NIM hardcode is deleted. `call_llm` keeps SSRF closed
 for arbitrary private IPs and `localhost`, and allows only the sidecar
-loopback (`127.0.0.1` / `::1`) when it matches the sidecar base URL or an
-explicit via-orchestrator flag.
+loopback (`127.0.0.1` / `::1`) when it matches the exact configured sidecar
+base URL. The via-orchestrator marker is metadata only and never widens this
+allowlist.
 
 `NVIDIA_NIM_API_KEY_SUB` and `BYTEZ_API_KEY` have no other workflow reference in
 this repository; the gateway KV is their only consumer, matching the
