@@ -491,13 +491,13 @@ def artifact_identity_error(
 def current_changed_files() -> frozenset[str]:
     """Return the exact current-head changed files when the workflow provides them."""
     changed_files_path = trusted_artifact_path("OPENCODE_CHANGED_FILES_FILE")
-    if changed_files_path is None:
-        return frozenset()
-    return frozenset(
-        line.strip()
-        for line in changed_files_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    )
+    if changed_files_path is not None:
+        return frozenset(
+            line.strip()
+            for line in changed_files_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return frozenset()
 
 
 def runtime_tool_slug(tool_name: str) -> str:
