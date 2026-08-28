@@ -13,9 +13,9 @@ stance and assume that the endpoint both retains and trains on data".
 Two authoritative, machine-readable sources feed the policy at runtime:
 
 1. OpenRouter ZDR endpoint feed (``https://openrouter.ai/api/v1/endpoints/zdr``)
-   — public model-level evidence. A matching model identity is applied to
-   discovered rows from any configured provider; it is not an OpenRouter-only
-   routing rule.
+   — the exact list of OpenRouter endpoints served under a zero-data-retention
+   policy. It is evidence for OpenRouter routes only; a matching model name
+   does not attest a direct endpoint from another provider.
 2. OpenRouter provider data-policy catalog
    (``https://openrouter.ai/api/frontend/v1/all-providers``) — per-provider
    ``dataPolicy`` (``retainsPrompts`` / ``retentionDays`` / ``training``),
@@ -171,19 +171,6 @@ def route_key(provider_name: str, model: str) -> str:
     return f"{provider_name}/{model.strip().lstrip('/')}"
 
 
-def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
-    """Extract model identities from canonical OpenRouter evidence keys."""
-    return frozenset(
-        key.split("/", 1)[1].strip().casefold()
-        for key in zdr_endpoints
-        if (
-            isinstance(key, str)
-            and key.casefold().startswith("openrouter/")
-            and key.split("/", 1)[1].strip()
-        )
-    )
-
-
 def is_zdr_model(
     provider_name: str,
     *,
@@ -195,8 +182,7 @@ def is_zdr_model(
     Args:
         provider_name: Orchestrator provider identifier of the model route.
         model: Specific model or route identifier. OpenRouter rows require
-            exact route membership; matching model identity can provide
-            evidence for other configured providers.
+            exact route membership; the feed does not attest other providers.
         zdr_endpoints: Frozen set of ``\"provider/model\"`` keys from the
             OpenRouter ``/api/v1/endpoints/zdr`` feed. An empty set never
             grants feed-based ZDR.
@@ -210,10 +196,6 @@ def is_zdr_model(
         if not zdr_endpoints or not model:
             return False
         return route_key(provider_name, model) in zdr_endpoints
-    if model and zdr_endpoints:
-        normalized = model.strip().lstrip("/").casefold()
-        if normalized in _feed_model_ids(zdr_endpoints):
-            return True
     return scope.zero_data_retention
 
 
