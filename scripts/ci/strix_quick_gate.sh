@@ -2499,6 +2499,10 @@ resolved_llm_api_base_for_model() {
 	fi
 
 	if [ -z "$api_base_file" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require LLM_API_BASE_FILE to select the pinned loopback gateway." >&2
+			return 2
+		fi
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
 			return 2
@@ -2516,7 +2520,16 @@ resolved_llm_api_base_for_model() {
 	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
 	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
 	if [ -z "$llm_api_base_value" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require a non-empty pinned loopback API base." >&2
+			return 2
+		fi
 		return 0
+	fi
+	if is_contextual_orchestrator_model "$model" &&
+		! is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		echo "ERROR: contextual-orchestrator Strix scans require the pinned loopback API base." >&2
+		return 2
 	fi
 	if [[ "$llm_api_base_value" =~ [[:space:][:cntrl:]] ]]; then
 		echo "ERROR: LLM_API_BASE must not contain whitespace or control characters." >&2
@@ -2546,6 +2559,16 @@ resolved_llm_api_base_for_model() {
 child_model_for_api_base() {
 	local model="$1"
 	local llm_api_base_value="$2"
+
+	# LiteLLM requires an explicit provider prefix even when the gateway is an
+	# OpenAI-compatible local endpoint. Keep the public gateway model name, but
+	# qualify only the child process model so the request still carries
+	# orchestrator/free to contextual-orchestrator.
+	if is_contextual_orchestrator_model "$model" &&
+		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		printf '%s\n' 'openai/orchestrator/free'
+		return 0
+	fi
 
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
