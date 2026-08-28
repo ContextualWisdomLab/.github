@@ -112,6 +112,8 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert '[ -L "$token_file" ]' in text
     assert 'stat -c %a -- "$token_file"' in text
     assert 'stat -c %u -- "$token_file"' in text
+    assert 'stat -f %Lp "$token_file"' in text
+    assert 'stat -f %u "$token_file"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -260,8 +262,11 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
 def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
     """Discovery, free filtering, and serving come from the vendored library."""
     text = _read(LAUNCHER)
+    assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
     assert "free_discovered_models(discovered)" in text
+    assert "model.output_modalities" in text
+    assert '"text" in {modality.casefold() for modality in model.output_modalities}' in text
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
     assert "orchestrator/free would fail closed" in text
@@ -288,6 +293,12 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     text = _read(LAUNCHER)
     assert "REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024" in text
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
+
+
+def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
+    """Gateway free-pool scans must not force unsupported provider controls."""
+    text = _read(STRIX_WORKFLOW)
+    assert "STRIX_REASONING_EFFORT: none" in text
 
 
 def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:

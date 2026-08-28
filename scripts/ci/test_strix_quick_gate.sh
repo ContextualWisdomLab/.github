@@ -351,7 +351,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "secrets.LLM_API_KEY" "strix workflow must not expose the legacy generic LLM secret"
 	assert_file_contains "$workflow_file" 'PROVIDER_MODE: ${{ steps.gate.outputs.provider_mode }}' "strix workflow passes provider mode through env"
 	assert_file_contains "$workflow_file" 'if [ "$PROVIDER_MODE" != "contextual_orchestrator" ]; then' "strix workflow fails closed if the provider mode changes"
-	assert_file_contains "$workflow_file" "STRIX_REASONING_EFFORT: high" "strix workflow uses high reasoning effort when the selected provider/model supports it"
+	assert_file_contains "$workflow_file" "STRIX_REASONING_EFFORT: none" "strix gateway free-pool scans use provider-neutral reasoning effort"
 	assert_file_contains "$workflow_file" "llm_api_key_file" "strix workflow writes the gateway token into the trusted input file"
 	assert_file_contains "$workflow_file" "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" "strix workflow sends Strix through the gateway provider"
 	assert_file_contains "$workflow_file" "Prepare contextual-orchestrator API base" "strix workflow prepares the gateway API base"

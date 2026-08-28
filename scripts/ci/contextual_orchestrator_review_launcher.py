@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
+    from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
     from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
@@ -134,7 +135,15 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    free_models = free_discovered_models(discovered) if discovered else []
+    free_models = [
+        model
+        for model in (free_discovered_models(discovered) if discovered else [])
+        if is_general_chat_agent_model_id(model.model_id)
+        and (
+            not model.output_modalities
+            or "text" in {modality.casefold() for modality in model.output_modalities}
+        )
+    ]
     if not free_models:
         raise SystemExit("review sidecar discovered no zero-cost models; orchestrator/free would fail closed")
 
