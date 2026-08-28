@@ -240,8 +240,9 @@ flowchart LR
 
 ## 2026-08-28 current-main routing and runtime recheck
 
-- Current protected-main candidate is `f8823a544c3c4c046977f8511f683e85f83eb496`,
-  the merge commit for #1364. #1360 is merged at
+- Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
+  the merge commit for #1370. #1364 is merged at
+  `f8823a544c3c4c046977f8511f683e85f83eb496`; #1360 is merged at
   `17052a7ca3c16db90932a4d6036b43165ddee418`.
 - The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
   and write-capable `pr-review-autofix.yml` all provision the pinned
@@ -260,11 +261,30 @@ flowchart LR
   in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
   `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
   suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
-- #1370 remains open and blocked against main `f8823a5`. Its PR-target Noema
-  run `33140830199` executes the trusted base launcher and reproduces the
-  pre-fix bare-list error; its `opencode-review` check fails closed because no
-  current-head OpenCode verdict exists. These are bootstrap evidence gaps,
-  not proof that the #1370 catalog-envelope patch fails.
+- #1370 merged on `24ee38b…`; its pre-merge PR-target Noema run
+  `33140830199` executed the trusted base launcher and reproduced the
+  pre-fix bare-list error. The post-merge push run below shows that the
+  catalog-envelope fix reached the Strix sidecar successfully.
+
+## 2026-08-28 post-#1370 Strix runtime recheck
+
+- Main push run `33141468804` reached `Provision contextual-orchestrator Strix
+  sidecar` successfully, then failed in `Run Strix (quick)`. LiteLLM rejected
+  the unqualified child model `orchestrator/free` with `LLM Provider NOT
+  provided`; this is a request-shape defect, not evidence that the sidecar
+  catalog failed.
+- Follow-up commit `8b02e17` qualifies only the LiteLLM child request as
+  `openai/orchestrator/free` when the API base is the pinned loopback gateway;
+  the gateway still receives `orchestrator/free` and owns discovery/failover.
+  The same change registers the dynamic bearer token with `::add-mask::` before
+  exporting `GITHUB_ENV` and rejects token newlines. Focused contracts pass
+  (`28 passed`); the full local suite passes (`1689 passed, 1 skipped`).
+- A real current-main Noema run on #1369 (`33141494393`) also booted the
+  sidecar and executed the Noema gate, but correctly skipped the LLM verdict
+  because the exact head had no primary OpenCode approval. A successful
+  sidecar/bootstrap step is not counted as a model-review result; post-fix
+  Strix completion and an independently authorized Noema verdict remain
+  separate evidence items.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
