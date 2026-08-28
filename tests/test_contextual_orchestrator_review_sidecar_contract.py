@@ -82,6 +82,11 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     """The gateway address and bearer token land in GITHUB_ENV for later steps."""
     text = _read(SIDECAR)
+    assert 'echo "::add-mask::$ORCHESTRATOR_TOKEN"' in text
+    assert "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" in text
+    assert text.index('echo "::add-mask::$ORCHESTRATOR_TOKEN"') < text.index(
+        'if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then'
+    )
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN=%s\\n' \"$ORCHESTRATOR_TOKEN\"" in text
     assert "CONTEXTUAL_ORCHESTRATOR_EVIDENCE=%s\\n' \"$policy_report\"" in text

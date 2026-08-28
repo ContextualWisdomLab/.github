@@ -45,6 +45,14 @@ fi
 log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+if [[ "$ORCHESTRATOR_TOKEN" == *$'\r'* || "$ORCHESTRATOR_TOKEN" == *$'\n'* ]]; then
+  fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines"
+fi
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  # Register the process-local bearer token before exporting it through
+  # GITHUB_ENV; later step environment blocks otherwise echo it verbatim.
+  echo "::add-mask::$ORCHESTRATOR_TOKEN"
+fi
 
 mkdir -p "$ORCHESTRATOR_WORK"
 rm -rf "$ORCHESTRATOR_SOURCE"
