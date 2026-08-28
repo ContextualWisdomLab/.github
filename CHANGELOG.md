@@ -6,7 +6,8 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - Accept valid leading-dot GitHub repository names such as
-  `ContextualWisdomLab/.github` in the OpenCode receipt gate.
+  `ContextualWisdomLab/.github` in the OpenCode receipt gate while rejecting
+  `.` and `..` path components.
 - Ensure the central Security Scan and SAST Semgrep pull-request workflows
   trigger for stacked PRs targeting feature branches, preserving the same
   diff-scoped dependency and repository-wide filesystem security coverage.

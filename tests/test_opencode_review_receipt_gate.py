@@ -290,6 +290,9 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(receipt.subprocess, "run", unexpected_run)
     with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
         receipt.fetch_reviews("../evil", 230)
+    for invalid_repo in ("ContextualWisdomLab/.", "ContextualWisdomLab/.."):
+        with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
+            receipt.fetch_reviews(invalid_repo, 230)
     monkeypatch.setattr(
         receipt.sys,
         "stdin",
