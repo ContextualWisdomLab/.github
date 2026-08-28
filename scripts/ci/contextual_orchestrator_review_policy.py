@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import re
 from collections import Counter
@@ -30,6 +29,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from scripts.ci.zdr_policy import (
+    OPENROUTER_ZDR_ENDPOINTS_SOURCE,
     PROVIDER_AUTH_SCHEMES,
     PROVIDER_BASE_URLS,
     PROVIDER_CREDENTIAL_NAMES,
@@ -171,7 +171,8 @@ def build_zdr_prioritized_catalog(
         limit: Maximum number of catalog agents (orchestrator default 12).
         family_cap: Maximum agents per provider outage-domain family.
         zdr_endpoints: ``provider/model`` route keys from the OpenRouter ZDR
-            feed; authoritative when non-empty for the openrouter scope.
+            feed; authoritative for OpenRouter routes and for an exact or
+            unambiguous model-identity match on another provider row.
         require_zdr: Admit only routes with attested ZDR evidence. Intended for
             private/internal target repositories; an empty ZDR pool fails closed.
 
@@ -263,7 +264,21 @@ def build_zdr_prioritized_catalog(
             "free_selected_count": len(picked),
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
-                {provider_zdr_scope(row["provider"]).source for row in picked if is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints)}
+                {
+                    (
+                        OPENROUTER_ZDR_ENDPOINTS_SOURCE
+                        if zdr_endpoints
+                        and (
+                            provider_zdr_scope(row["provider"]).openrouter_endpoints_feed
+                            or not provider_zdr_scope(row["provider"]).zero_data_retention
+                        )
+                        else provider_zdr_scope(row["provider"]).source
+                    )
+                    for row in picked
+                    if is_zdr_model(
+                        row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+                    )
+                }
             ),
             "zdr_endpoints_feed_used": bool(zdr_endpoints),
             "selected": [

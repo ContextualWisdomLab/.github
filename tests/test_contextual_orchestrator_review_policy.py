@@ -200,6 +200,9 @@ def test_build_catalog_applies_feed_model_evidence_to_other_provider() -> None:
     assert result["agents"][0]["provider_name"] == "nvidia_nim"
     assert "zdr" in result["agents"][0]["tags"]
     assert result["report"]["zdr_selected_count"] == 1
+    assert result["report"]["zdr_sources"] == [
+        "https://openrouter.ai/api/v1/endpoints/zdr"
+    ]
 
 
 def test_build_catalog_assigns_unique_priorities() -> None:

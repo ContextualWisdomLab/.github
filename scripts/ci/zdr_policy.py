@@ -34,6 +34,9 @@ import re
 from typing import Mapping
 
 
+OPENROUTER_ZDR_ENDPOINTS_SOURCE = "https://openrouter.ai/api/v1/endpoints/zdr"
+
+
 @dataclasses.dataclass(frozen=True)
 class ProviderZdrScope:
     """One provider's ZDR attestation for the CI review sidecar.
