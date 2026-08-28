@@ -27,6 +27,12 @@ DOTTED_MODULE_RE = re.compile(
 MISSING_MODULE_RE = re.compile(
     r"ModuleNotFoundError:\s+No module named ['\"]([^'\"]+)['\"]"
 )
+PARTIAL_NATIVE_IMPORT_RE = re.compile(
+    r"^E\s+ImportError:\s+cannot import name ['\"]([^'\"]+)['\"] "
+    r"from partially initialized module ['\"]([^'\"]+)['\"] "
+    r"\(most likely due to a circular import\)",
+    re.MULTILINE,
+)
 COLLECTION_ERROR_RE = re.compile(
     r"^_+\s+ERROR collecting\s+.+?\s+_+\s*$", re.MULTILINE
 )
@@ -334,35 +340,65 @@ def classify_pytest_failure(
         return False
 
     missing_modules = MISSING_MODULE_RE.findall(log_text)
+    partial_native_imports = PARTIAL_NATIVE_IMPORT_RE.findall(log_text)
     collection_errors = COLLECTION_ERROR_RE.findall(log_text)
     interruptions = INTERRUPTED_RE.findall(log_text)
     if (
-        not missing_modules
+        not missing_modules and not partial_native_imports
         or not collection_errors
         or len(interruptions) != 1
-        or any(name != module_name for name in missing_modules)
     ):
         return False
-    if len(missing_modules) != len(collection_errors):
+    if missing_modules and partial_native_imports:
         return False
     if int(interruptions[0]) != len(collection_errors):
         return False
 
     escaped_module = re.escape(module_name)
-    imported_module_count = len(
-        re.findall(
-            rf"^\s*(?:from\s+{escaped_module}\s+import|import\s+{escaped_module}(?:\s|$))",
-            log_text,
-            re.MULTILINE,
+    if missing_modules:
+        if (
+            len(missing_modules) != len(collection_errors)
+            or any(name != module_name for name in missing_modules)
+        ):
+            return False
+        imported_module_count = len(
+            re.findall(
+                rf"^\s*(?:from\s+{escaped_module}\s+import|import\s+{escaped_module}(?:\s|$))",
+                log_text,
+                re.MULTILINE,
+            )
         )
-    )
-    if imported_module_count < len(collection_errors):
-        return False
+        if imported_module_count < len(collection_errors):
+            return False
+        expected_exception = "ModuleNotFoundError"
+    else:
+        if len(partial_native_imports) != len(collection_errors):
+            return False
+        try:
+            expected_parent, expected_leaf = module_name.rsplit(".", 1)
+        except ValueError:
+            return False
+        if any(
+            (leaf, parent) != (expected_leaf, expected_parent)
+            for leaf, parent in partial_native_imports
+        ):
+            return False
+        imported_module_count = len(
+            re.findall(
+                rf"^\s*(?:from\s+\.\s+import\s+{re.escape(expected_leaf)}|"
+                rf"from\s+{re.escape(expected_parent)}\s+import\s+{re.escape(expected_leaf)}|"
+                rf"import\s+{escaped_module})(?:\s|$)",
+                log_text,
+                re.MULTILINE,
+            )
+        )
+        if imported_module_count < len(collection_errors):
+            return False
+        expected_exception = "ImportError"
 
     exception_types = EXCEPTION_LINE_RE.findall(log_text)
     return bool(exception_types) and all(
-        exception_type == "ModuleNotFoundError"
-        for exception_type in exception_types
+        exception_type == expected_exception for exception_type in exception_types
     )
 
 

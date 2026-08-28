@@ -142,6 +142,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Recognize the exact PyO3 circular-import collection failure emitted by a
+  source-only Python sandbox when the declared native package and leaf, import
+  evidence, collection count, and terminal `ImportError` all match. Unrelated,
+  mixed, or non-native import failures remain fail-closed.
 - Restored the PyO3 source-only coverage deferral by teaching its classifier
   CLI to accept the workflow's sealed metadata snapshot and distinct logical
   repository path. When metadata exists, the gate reads immutable exact-head

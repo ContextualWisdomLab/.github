@@ -46,6 +46,32 @@ E   ModuleNotFoundError: No module named "fast_mlsirm._core"
 ============================== 2 errors in 0.42s ===============================
 """
 
+PARTIAL_NATIVE_IMPORT_LOG = """\
+============================= test session starts ==============================
+collected 0 items / 2 errors
+
+_____________ ERROR collecting tests/test_marginal_parity.py ______________
+ImportError while importing test module '/work/tests/test_marginal_parity.py'.
+Traceback:
+/usr/lib/python3/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_marginal_parity.py:13: in <module>
+    from fast_mlsirm.config import FitConfig
+python/fast_mlsirm/interaction_map.py:10: in <module>
+    from . import _core
+E   ImportError: cannot import name '_core' from partially initialized module 'fast_mlsirm' (most likely due to a circular import) (/work/python/fast_mlsirm/__init__.py)
+_____________ ERROR collecting tests/test_mle.py ______________
+ImportError while importing test module '/work/tests/test_mle.py'.
+Traceback:
+tests/test_mle.py:3: in <module>
+    import fast_mlsirm._core
+python/fast_mlsirm/interaction_map.py:10: in <module>
+    from . import _core
+E   ImportError: cannot import name '_core' from partially initialized module 'fast_mlsirm' (most likely due to a circular import) (/work/python/fast_mlsirm/__init__.py)
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+============================== 2 errors in 0.42s ===============================
+"""
+
 
 def write(path: Path, text: str) -> Path:
     """Write UTF-8 fixture text and return its path."""
@@ -332,6 +358,70 @@ def test_pytest_classifier_accepts_exact_missing_extension() -> None:
 
     assert gate.classify_pytest_failure(
         LOG,
+        module_name="fast_mlsirm._core",
+    )
+
+
+def test_pytest_classifier_accepts_exact_partial_native_import() -> None:
+    """A PyO3 circular-import collection failure is classifiable when exact."""
+
+    assert gate.classify_pytest_failure(
+        PARTIAL_NATIVE_IMPORT_LOG,
+        module_name="fast_mlsirm._core",
+    )
+
+
+def test_pytest_classifier_rejects_mixed_native_import_failure() -> None:
+    """A native-import failure mixed with another category remains blocking."""
+
+    log = PARTIAL_NATIVE_IMPORT_LOG.replace(
+        "E   ImportError: cannot import name '_core'",
+        "E   ModuleNotFoundError: No module named 'fast_mlsirm._core'",
+        1,
+    )
+    assert not gate.classify_pytest_failure(
+        log,
+        module_name="fast_mlsirm._core",
+    )
+
+
+def test_pytest_classifier_rejects_incomplete_partial_native_import_failure() -> None:
+    """Every collection error must carry the exact native-import exception."""
+
+    log = PARTIAL_NATIVE_IMPORT_LOG.replace(
+        "E   ImportError: cannot import name '_core'", "", 1
+    )
+    assert not gate.classify_pytest_failure(
+        log,
+        module_name="fast_mlsirm._core",
+    )
+
+
+def test_pytest_classifier_rejects_undotted_partial_native_module() -> None:
+    """A partial-import exception cannot bind to an undotted module name."""
+
+    assert not gate.classify_pytest_failure(
+        PARTIAL_NATIVE_IMPORT_LOG,
+        module_name="_core",
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        ("fast_mlsirm' (most likely", "other_package' (most likely"),
+        ("cannot import name '_core'", "cannot import name 'other'"),
+        ("from . import _core", "from . import other"),
+    ],
+)
+def test_pytest_classifier_rejects_mismatched_partial_native_import(
+    replacement: tuple[str, str],
+) -> None:
+    """A circular import from another package or symbol remains blocking."""
+
+    log = PARTIAL_NATIVE_IMPORT_LOG.replace(*replacement)
+    assert not gate.classify_pytest_failure(
+        log,
         module_name="fast_mlsirm._core",
     )
 

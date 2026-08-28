@@ -64,8 +64,12 @@ failure only when every condition below is true:
 2. The build backend is exactly `maturin` and bindings are exactly `pyo3`.
 3. `module-name`, `manifest-path`, and `python-source` are safe relative values.
 4. The pytest log is bounded, complete, and contains only collection errors.
-5. Every terminal exception is `ModuleNotFoundError` for the declared module.
-6. Every collection-error block contains a direct import of that module.
+5. Every terminal exception is either `ModuleNotFoundError` for the declared
+   module or the exact Python circular-import `ImportError` for the declared
+   package and native leaf.
+6. Every collection-error block contains a direct import of that module; the
+   circular-import form additionally requires the exact relative, absolute,
+   or dotted native import in the traceback.
 7. The interruption count, collection-block count, and missing-module count
    agree exactly.
 8. There is no failure, setup/teardown error, internal pytest error, crash,
@@ -130,9 +134,10 @@ anchored to the validated coverage repository. It never resolves the temporary
 snapshot as though it lived inside the repository and never rereads mutable
 post-test project metadata.
 
-The classifier does not make arbitrary `ModuleNotFoundError` safe. Missing
-third-party dependencies, syntax/import defects in Python modules, mixed
-exceptions, runtime crashes, and ordinary test failures remain blocking.
+The classifier does not make arbitrary `ModuleNotFoundError` or `ImportError`
+safe. Missing third-party dependencies, syntax/import defects in Python
+modules, non-native circular imports, mixed exceptions, runtime crashes, and
+ordinary test failures remain blocking.
 
 ## Testing evidence
 
