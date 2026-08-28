@@ -240,8 +240,9 @@ flowchart LR
 
 ## 2026-08-28 current-main routing and runtime recheck
 
-- Current protected-main candidate is `f8823a544c3c4c046977f8511f683e85f83eb496`,
-  the merge commit for #1364. #1360 is merged at
+- Current protected main is `24ee38b097dbfc1a895e1199ade48cff36431d05`,
+  the merge commit for #1370. #1364 is merged at
+  `f8823a544c3c4c046977f8511f683e85f83eb496` and #1360 at
   `17052a7ca3c16db90932a4d6036b43165ddee418`.
 - The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
   and write-capable `pr-review-autofix.yml` all provision the pinned
@@ -256,15 +257,17 @@ flowchart LR
 - Post-merge Strix run `33139957477` exposed a real sidecar runtime defect:
   `contextual_orchestrator.orchestrator.load_agents()` requires an
   `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
-  Follow-up #1370 fixes the launcher and the standalone policy catalog writer
-  in commit `861463c11a7ca8b1f9179073e2a3db9eba5aa5ab`; its current head is
-  `38e0307c655823a1e474b29aae89f8cfcb1edbc0`. Focused tests and the full local
-  suite pass (`1689 passed, 1 skipped, 16 subtests passed`).
-- #1370 remains open and blocked against main `f8823a5`. Its PR-target Noema
-  run `33140830199` executes the trusted base launcher and reproduces the
-  pre-fix bare-list error; its `opencode-review` check fails closed because no
-  current-head OpenCode verdict exists. These are bootstrap evidence gaps,
-  not proof that the #1370 catalog-envelope patch fails.
+  Follow-up #1370 fixes the launcher and the standalone policy catalog writer.
+  Its exact head `0f40d415b112ca0055f5db5b2f434788b08f01f1` merged as
+  `24ee38b097dbfc1a895e1199ade48cff36431d05`.
+- #1370's earlier PR-target Noema run `33140830199` executed the pre-fix trusted
+  base launcher and is retained only as bootstrap reproduction evidence. A
+  fresh protected-main canary must start the corrected sidecar and reach the
+  scanner before the runtime gap is closed; queued or cancelled jobs do not
+  satisfy that acceptance boundary.
+- #1370 merged with no `APPROVED` review; all recorded Reviews API verdicts are
+  `COMMENTED`. That governance contradiction is tracked in #1340 and is not
+  retrospective approval evidence for this runtime correction.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

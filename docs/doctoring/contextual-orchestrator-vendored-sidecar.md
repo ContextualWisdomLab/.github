@@ -80,11 +80,13 @@ training (OpenRouter's own stance). Evidence sources:
 The first post-merge Strix execution (`33139957477`) failed before serving: the
 pinned orchestrator's `load_agents()` indexes the top-level `agents` field, but
 the launcher persisted only the list value. Follow-up PR [#1370](https://github.com/ContextualWisdomLab/.github/pull/1370)
-wraps both the launcher output and the standalone policy builder output in the
-loader-compatible `{"agents": [...]}` envelope. The regression is covered by
-`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract;
-the full local suite passed with `1689 passed, 1 skipped, 16 subtests passed`.
+wrapped both the launcher output and the standalone policy builder output in the
+loader-compatible `{"agents": [...]}` envelope and merged exact head
+`0f40d415b112ca0055f5db5b2f434788b08f01f1` into protected
+`main@24ee38b097dbfc1a895e1199ade48cff36431d05`. The regression is covered by
+`tests/test_contextual_orchestrator_review_policy.py` and the sidecar contract.
 
-The PR-target Noema check still runs the trusted base copy until this trusted
-workflow change is merged, so its reproduction of the old error is retained as
-bootstrap evidence rather than treated as a current-head runtime result.
+The earlier PR-target Noema failure remains bootstrap evidence because it ran
+the pre-fix trusted base copy. Operational acceptance now requires a fresh
+protected-main run that starts the corrected sidecar, passes authenticated
+health, and reaches the scanner; queued or cancelled jobs are non-passing.
