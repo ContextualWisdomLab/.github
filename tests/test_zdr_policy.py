@@ -80,6 +80,14 @@ def test_is_zdr_model_openrouter_feed_is_authoritative_when_present() -> None:
         )
         is False
     )
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="other/deepseek-r1:free",
+            zdr_endpoints=frozenset({"openrouter/deepseek/deepseek-r1:free"}),
+        )
+        is False
+    )
 
 
 def test_route_key_strips_a_leading_slash() -> None:

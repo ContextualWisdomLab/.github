@@ -202,23 +202,24 @@ def is_zdr_model(
 
     Args:
         provider_name: Orchestrator provider identifier of the model route.
-        model: Specific model or route identifier. Required for an exact
-            OpenRouter feed match; omitted or empty never grants ZDR from
-            the feed.
-        zdr_endpoints: Frozen set of exact ``\"provider/model\"`` route keys
-            from the OpenRouter ``/api/v1/endpoints/zdr`` feed. When the
-            provider uses the feed, an empty set is not a fallback to
-            \"all OpenRouter is ZDR\".
+        model: Specific model or route identifier. OpenRouter rows require
+            exact route membership; matching model identity can provide
+            evidence for other configured providers.
+        zdr_endpoints: Frozen set of ``\"provider/model\"`` keys from the
+            OpenRouter ``/api/v1/endpoints/zdr`` feed. An empty set never
+            grants feed-based ZDR.
 
     Returns:
         True only for an attested zero-retention scope or an exact feed
         membership match.
     """
     scope = provider_zdr_scope(provider_name)
+    if scope.openrouter_endpoints_feed:
+        if not zdr_endpoints or not model:
+            return False
+        return route_key(provider_name, model) in zdr_endpoints
     if model and zdr_endpoints and _model_has_feed_evidence(model, zdr_endpoints):
         return True
-    if scope.openrouter_endpoints_feed:
-        return False
     return scope.zero_data_retention
 
 
