@@ -110,6 +110,13 @@ def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
     assert "from scripts.ci import zdr_policy" in text
 
 
+def test_launcher_wraps_catalog_for_vendored_load_agents() -> None:
+    """Persist the catalog envelope expected by the pinned orchestrator loader."""
+    text = _read(LAUNCHER)
+    assert 'json.dumps({"agents": result["agents"]}' in text
+    assert 'json.dumps(result["agents"]' not in text
+
+
 def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
     """The sidecar never boots without an auth token and a provider credential."""
     text = _read(LAUNCHER)

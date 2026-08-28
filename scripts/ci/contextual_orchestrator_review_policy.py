@@ -337,7 +337,9 @@ def build_catalog_from_paths(
         zdr_endpoints=zdr_endpoints,
         require_zdr=require_zdr,
     )
-    Path(out_path).write_text(json.dumps(result["agents"], indent=2) + "\n", encoding="utf-8")
+    Path(out_path).write_text(
+        json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
+    )
     Path(report_path).write_text(json.dumps(result["report"], indent=2) + "\n", encoding="utf-8")
     return result
 
