@@ -48,6 +48,8 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     manifest = runner_temp / "opencode-artifact-manifest.json"
+    changed_files.chmod(0o644)
+    manifest.touch(mode=0o644)
     manifest.write_text(
         json.dumps(
             {

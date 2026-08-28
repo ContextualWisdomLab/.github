@@ -289,6 +289,8 @@ def trusted_dispatch_status_artifacts(
     changed_files = runner_temp / "opencode-changed-files.txt"
     changed_files.write_text(".github/workflows/opencode-review.yml\n", encoding="utf-8")
     manifest = runner_temp / "opencode-artifact-manifest.json"
+    changed_files.chmod(0o644)
+    manifest.touch(mode=0o644)
     manifest.write_text(
         json.dumps(
             {
