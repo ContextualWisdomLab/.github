@@ -33,7 +33,9 @@ _contextual_orchestrator_load_token() {
   fi
 
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$(cat -- "$token_file")"
-  printf '::add-mask::%s\n' "$CONTEXTUAL_ORCHESTRATOR_TOKEN"
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    printf '::add-mask::%s\n' "$CONTEXTUAL_ORCHESTRATOR_TOKEN"
+  fi
   export CONTEXTUAL_ORCHESTRATOR_TOKEN
 }
 

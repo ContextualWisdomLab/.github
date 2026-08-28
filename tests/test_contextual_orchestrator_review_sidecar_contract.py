@@ -85,9 +85,14 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     """Only a private token-file path crosses the GitHub step boundary."""
     text = _read(SIDECAR)
-    assert "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"" in text
+    guarded_mask = (
+        'if [ "${GITHUB_ACTIONS:-}" = "true" ]; then\n'
+        "  printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"\n"
+        "fi"
+    )
+    assert guarded_mask in text
     assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
-    assert text.index("printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"") < text.index(
+    assert text.index(guarded_mask) < text.index(
         'if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then'
     )
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
@@ -137,8 +142,23 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
 
     accepted = run(token_file)
     assert accepted.returncode == 0, accepted.stderr
-    assert "::add-mask::synthetic-test-bearer" in accepted.stdout
+    assert "::add-mask::synthetic-test-bearer" not in accepted.stdout
     assert "loaded=synthetic-test-bearer" in accepted.stdout
+
+    actions = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_file),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert actions.returncode == 0, actions.stderr
+    assert "::add-mask::synthetic-test-bearer" in actions.stdout
 
     token_file.chmod(0o644)
     wrong_mode = run(token_file)

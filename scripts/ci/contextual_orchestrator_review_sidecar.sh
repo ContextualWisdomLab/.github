@@ -51,8 +51,12 @@ case "$ORCHESTRATOR_TOKEN" in
   *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
 esac
 # Mask the bearer before clone, dependency installation, launcher startup, or
-# health diagnostics can emit it.  Later masking is too late for earlier logs.
-printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
+# health diagnostics can emit it. Later masking is too late for earlier logs,
+# but workflow commands are safe only on an Actions runner; elsewhere this
+# would print the raw bearer to ordinary stdout.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
+fi
 
 mkdir -p "$ORCHESTRATOR_WORK"
 chmod 700 -- "$ORCHESTRATOR_WORK"
