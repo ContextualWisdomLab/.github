@@ -287,6 +287,37 @@ def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -
     assert "Semgrep engine/configuration failed with rc=${SEMGREP_RC}" in workflow
 
 
+def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
+    """Reject GitHub's synthetic merge as SAST source or SARIF identity."""
+    workflow = workflow_text("sast-semgrep.yml")
+    checkout = workflow_step(workflow, "Checkout exact submitted revision")
+    verify = workflow_step(workflow, "Verify exact submitted revision")
+    upload = workflow_step(workflow, "Upload Semgrep SARIF to code scanning")
+
+    assert (
+        "repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}"
+        in checkout
+    )
+    assert (
+        "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in checkout
+    )
+    assert "persist-credentials: false" in checkout
+    assert (
+        "EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}"
+        in verify
+    )
+    assert 'actual_sha="$(git rev-parse HEAD)"' in verify
+    assert 'if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then' in verify
+    assert "exit 1" in verify
+    assert (
+        "ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}"
+        in upload
+    )
+    assert (
+        "sha: ${{ github.event.pull_request.head.sha || github.sha }}" in upload
+    )
+
+
 def test_strix_serializes_provider_evidence_per_repository() -> None:
     """Serialize Strix per repository so shared provider keys are not rate-limited.
 
