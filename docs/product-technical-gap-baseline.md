@@ -225,8 +225,8 @@ flowchart LR
   (`ContextualWisdomLab/contextual-orchestrator` AGENTS.md) migrated
   OpenCode/Noema/Strix to the gateway; this snapshot lands the org-repo half.
 - `pr-review-autofix.yml` now provisions
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (pinned SHA
-  `8d5924f8…`, same-process KV registration of `BYTEZ_API_KEY`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (current pinned SHA
+  `b2164511…`, same-process KV registration of `BYTEZ_API_KEY`,
   `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
   `OPENAI_API_KEY`, live auto model discovery, ZDR-prioritized free catalog),
   and the writer runs `--model contextual-orchestrator/orchestrator/free`.
@@ -362,6 +362,33 @@ flowchart LR
   eligible-provider exhaustion. The sidecar pin must remain on protected main
   until that change is merged and then be reverified by a fresh exact-head
   Strix run.
+
+## 2026-08-29 512 MB review-envelope bootstrap
+
+- Contextual-orchestrator PR #904 head `6cd7d57c177d945f67ba3b86b699949584bc6b7e`
+  passed its full unit/contract suite, Required bootstrap, Noema, fuzz, and
+  security checks with zero unresolved review threads. Its Required Strix ran
+  the pre-change `.github` main sidecar pin and failed three times with generic
+  HTTP 500 responses and no vulnerability report; Required OpenCode failed
+  closed because no current-head formal verdict existed. The bootstrap cycle
+  was resolved by an explicitly authorized admin merge to protected-main commit
+  `b21645116b352967e50fc497b87eb745b9cc8c61`; this is an observed bootstrap
+  merge, not ordinary protected-governance proof.
+- `.github` PR #1379 then pinned that protected-main orchestrator commit and
+  changed only the loopback, bearer-authenticated, per-job review sidecar from
+  the prior 8 MiB local envelope to the OpenAI image-input ceiling of 512 MiB.
+  The generic orchestrator default remains 64 KiB; Files retains its separate
+  512 MB per-file and 200 MB Batch JSONL contracts. The branch passed 216
+  Required/Noema/Strix/OpenCode/autofix contract tests plus the Strix shell
+  smoke. Because pull-request-target loaded the old trusted base pin
+  `889b24f8547d059d1bf2b2f9a043aff15c9ea59d`, branch Noema success was not
+  runtime proof of the new pin. The same explicitly authorized bootstrap merge
+  produced `.github` main `e1b03eebc6dc5c85aed393e5928927c96376cf46`.
+- Acceptance remains open until a fresh post-merge PR run proves that Required
+  Noema and Strix provision `b2164511…`, route only through
+  `contextual-orchestrator/orchestrator/free`, and produce an actual LLM verdict
+  or typed provider result. A green event handler that skips the LLM call is not
+  acceptance evidence.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
