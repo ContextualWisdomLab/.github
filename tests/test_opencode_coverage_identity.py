@@ -405,6 +405,29 @@ def test_repository_dispatch_coverage_binds_to_current_central_run_job() -> None
     ) == "failure"
 
 
+def test_repository_dispatch_coverage_accepts_legacy_base_workflow_name() -> None:
+    """Older fixtures may expose the workflow name instead of the run-name."""
+    run_id = "33112315024"
+    target_repo = "ContextualWisdomLab/scopeweave"
+    run = dispatch_run(
+        run_id=run_id,
+        target_repo=target_repo,
+        pr_number=523,
+        head_sha=identity.KAEFA_78_HEAD,
+    )
+    run["name"] = "OpenCode Review Dispatch"
+
+    assert identity.terminal_dispatch_coverage_result(
+        run,
+        [coverage_job()],
+        workflow_repo="ContextualWisdomLab/.github",
+        target_repo=target_repo,
+        pr_number="523",
+        head_sha=identity.KAEFA_78_HEAD,
+        run_id=run_id,
+    ) == "success"
+
+
 def test_repository_dispatch_coverage_rejects_job_from_another_run() -> None:
     """A same-named completed job from a different run is never authoritative."""
     run_id = "33112315024"
