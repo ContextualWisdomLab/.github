@@ -13,13 +13,13 @@ _contextual_orchestrator_stat() {
 
   format="$1"
   path="$2"
-  if value="$(stat -c "$format" -- "$path" 2>/dev/null)"; then
-    printf '%s' "$value"
-  else
-    bsd_format="$format"
-    [ "$format" = "%a" ] && bsd_format="%Lp"
-    stat -f "$bsd_format" -- "$path"
+  if stat --version >/dev/null 2>&1; then
+    stat -c "$format" -- "$path"
+    return
   fi
+  bsd_format="$format"
+  [ "$format" = "%a" ] && bsd_format="%Lp"
+  stat -f "$bsd_format" -- "$path"
 }
 
 _contextual_orchestrator_load_token() {
