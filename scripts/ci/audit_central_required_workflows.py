@@ -196,8 +196,8 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
     ref_names = ref_names if isinstance(ref_names, dict) else {}
     if "~ALL" not in (ref_names.get("include") or []):
         errors.append("stacked ruleset does not include all branches")
-    if "~DEFAULT_BRANCH" not in (ref_names.get("exclude") or []):
-        errors.append("stacked ruleset does not exclude default branches")
+    if set(ref_names.get("exclude") or []) != {"~DEFAULT_BRANCH"}:
+        errors.append("stacked ruleset does not exclude only default branches")
 
     workflow_rules = _typed_rules(payload, "workflows")
     if len(workflow_rules) != 1:

@@ -1829,6 +1829,8 @@ def post_update_branch_followup(
         if wait_reason:
             return f"{head_note}; {wait_reason}"
         dispatch_result = dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return f"{head_note}; same-head Strix evidence is already running"
         if dispatch_result == "repository_busy":
             return f"{head_note}; target repository already has active Strix evidence, so dispatch waits"
         return (
@@ -2830,6 +2832,8 @@ def inspect_pr(
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return decide("wait", "same-head Strix evidence is still running")
             if dispatch_result == "repository_busy":
                 return decide(
                     "wait",

@@ -3872,6 +3872,14 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
     assert "target repository already has active Strix evidence" in followup(
         make_pr(headRefOid="new-head")
     )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert "same-head Strix evidence is already running" in followup(
+        make_pr(headRefOid="new-head")
+    )
 
     monkeypatch.setattr(
         sched,
@@ -4270,6 +4278,12 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     busy_strix = inspect(make_pr())
     assert busy_strix.action == "wait"
     assert "target repository already has active Strix evidence" in busy_strix.reason
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert inspect(make_pr()).reason == "same-head Strix evidence is still running"
     monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert (
         inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}})).reason

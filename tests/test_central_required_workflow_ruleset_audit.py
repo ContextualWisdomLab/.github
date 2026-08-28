@@ -141,8 +141,17 @@ def test_stacked_ruleset_rejects_merge_policy_and_wrong_scope() -> None:
 
     assert audit.audit_stacked_ruleset(payload) == [
         "stacked ruleset does not include all branches",
-        "stacked ruleset does not exclude default branches",
+        "stacked ruleset does not exclude only default branches",
         "stacked ruleset has forbidden rule types: ['pull_request']",
+    ]
+
+
+def test_stacked_ruleset_rejects_additional_excluded_refs() -> None:
+    payload = stacked_ruleset_payload()
+    payload["conditions"]["ref_name"]["exclude"].append("refs/heads/release/**")
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset does not exclude only default branches"
     ]
 
 
@@ -163,7 +172,7 @@ def test_stacked_ruleset_reports_structural_drift() -> None:
         "stacked ruleset target is not branch",
         "stacked ruleset enforcement is not evaluate",
         "stacked ruleset does not include all branches",
-        "stacked ruleset does not exclude default branches",
+        "stacked ruleset does not exclude only default branches",
         "expected one stacked workflows rule, found 0",
         "stacked OpenCode workflow does not exempt branch creation",
         "stacked ruleset must require only the central OpenCode workflow",
