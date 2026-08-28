@@ -216,7 +216,9 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
         "path": STACKED_WORKFLOW_PATH,
         "ref": SOURCE_REF,
     }
-    if workflows != [expected_workflow]:
+    if len(workflows) != 1 or not isinstance(workflows[0], dict) or not all(
+        workflows[0].get(key) == value for key, value in expected_workflow.items()
+    ):
         errors.append("stacked ruleset must require only the central OpenCode workflow")
 
     extra_rule_types = (

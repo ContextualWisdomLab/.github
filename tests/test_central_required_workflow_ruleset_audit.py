@@ -124,6 +124,7 @@ def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
 
 def test_expected_stacked_ruleset_passes(monkeypatch, capsys) -> None:
     payload = stacked_ruleset_payload()
+    payload["rules"][0]["parameters"]["workflows"][0]["sha"] = "a" * 40
     monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(payload)))
 
     assert audit.main(["--stacked"]) == 0
