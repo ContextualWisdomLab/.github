@@ -20,13 +20,18 @@ other deployments. Its pinned-SHA preflight uses the public server builder and
 loopback HTTP boundary to verify that an oversized request returns 413; it does
 not depend on private server helpers or error-message text. A 413 remains
 fail-closed if a request exceeds that bound.
-This 8 MiB value is a local ingress safety bound, not an OpenAI limit. OpenAI's
-official API reference describes a function-tool `description` as an optional
-string without a 1024-character `maxLength`, and its published examples expose
-model/token context limits rather than one universal JSON-body byte limit.
-Endpoint-specific payload limits are separate: for example, the Files API
-documents 512 MB per file and the Batch API 200 MB JSONL files. Therefore the
-sidecar must measure representative Strix envelopes and keep provider/model
+This 8 MiB value is a local ingress safety bound for this review sidecar, not a
+general OpenAI multimodal limit. OpenAI's official images guide permits image
+URLs, Base64 data URLs, and file IDs in ordinary model-input JSON and specifies
+up to 512 MB total payload for an image-input request. The separate Files API
+specifies up to 512 MB per uploaded file, while Batch has its own 200 MB JSONL
+limit. A URL or file ID keeps the model-input JSON small; an inline Base64 image
+can exceed this sidecar's 8 MiB review envelope. The sidecar therefore fails
+that local boundary closed and must not claim general 512 MB multimodal
+compatibility. Supporting that broader contract requires a separately governed
+streaming/spooling path and provider capability checks; adding `/files` alone
+would not handle an inline Base64 image in an ordinary JSON request.
+The sidecar must measure representative Strix envelopes and keep provider/model
 context failures distinct from its own HTTP framing failure.
 The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
 incorrect 1024-character rejection. The same probe sends Strix-shaped function

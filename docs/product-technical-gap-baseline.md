@@ -333,14 +333,19 @@ flowchart LR
   `request_too_large` response definition for the inference operations. The
   `413 Content Too Large` observed above is therefore the vendored gateway's
   HTTP framing response, not evidence of an OpenAI tool-description rule.
-- OpenAI documents model-specific token/context limits and endpoint-specific
-  payload limits instead of one universal inference-body byte ceiling (for
-  example, Files permits 512 MB per file and Batch permits 200 MB JSONL files).
-  The sidecar's 8 MiB limit is consequently an explicitly local, bounded
-  ingress policy and is not claimed to be an OpenAI guarantee. Its pinned-SHA
-  probe now accepts a body of 65,609 bytes and preserves 1,025-, 1,026-, and
-  2,000-character tool descriptions byte-for-byte; provider/model context
-  failures remain separate runtime evidence.
+- OpenAI's current images-and-vision guide specifies up to 512 MB total payload
+  for an image-input request and accepts an image URL, Base64 data URL, or file
+  ID in ordinary model-input JSON. The Files API separately permits 512 MB per
+  uploaded file, and Batch separately permits 200 MB JSONL files. These are not
+  one universal limit for every JSON endpoint. The sidecar's 8 MiB limit is an
+  explicitly local, bounded policy for text/tool review envelopes and is not
+  claimed to provide general multimodal compatibility: a large inline Base64
+  image can fail locally even though a URL or file ID keeps the JSON small. A
+  future general multimodal proxy needs a separately governed streaming/spooling
+  and provider-capability contract; `/files` alone does not cover inline image
+  data URLs. The pinned-SHA probe accepts a body of 65,609 bytes and preserves
+  1,025-, 1,026-, and 2,000-character tool descriptions byte-for-byte;
+  provider/model context failures remain separate runtime evidence.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
