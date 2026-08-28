@@ -194,11 +194,11 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     token_path.write_text("synthetic-test-bearer", encoding="utf-8")
     token_path.chmod(0o600)
     command = (
-        'set -euo pipefail; token_file=caller-file; token_size=caller-size; '
+        'set -euo pipefail; token_file=caller-file; token_mode=caller-mode; token_size=caller-size; '
         'source "$TOKEN_LOADER"; '
         'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
         'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
-        'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
+        'printf "caller=%s:%s:%s\\n" "$token_file" "$token_mode" "$token_size"'
     )
     result = subprocess.run(
         ["bash", "-c", command],
@@ -213,7 +213,7 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     )
 
     assert result.returncode == 0, result.stderr
-    assert "caller=caller-file:caller-size" in result.stdout
+    assert "caller=caller-file:caller-mode:caller-size" in result.stdout
 
 
 def test_sidecar_scopes_private_umask_to_token_creation() -> None:

@@ -23,7 +23,7 @@ _contextual_orchestrator_stat() {
 }
 
 _contextual_orchestrator_load_token() {
-  local token_file token_size
+  local token_file token_mode token_size
 
   token_file="${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}"
   if [ -z "$token_file" ]; then
@@ -35,9 +35,13 @@ _contextual_orchestrator_load_token() {
   if [ "$(_contextual_orchestrator_stat %u "$token_file")" != "$(id -u)" ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must be owned by the current runner user." || return 1
   fi
-  if [ "$(_contextual_orchestrator_stat %a "$token_file")" != "0 600" ]; then
-    _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must have mode 600." || return 1
-  fi
+  token_mode="$(_contextual_orchestrator_stat %a "$token_file")"
+  case "$token_mode" in
+    600|"0 600") ;;
+    *)
+      _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE must have mode 600." || return 1
+      ;;
+  esac
   token_size="$(wc -c < "$token_file")"
   if [ "$token_size" -lt 1 ] || [ "$token_size" -gt 4096 ]; then
     _contextual_orchestrator_token_fail "CONTEXTUAL_ORCHESTRATOR_TOKEN must contain between 1 and 4096 bytes." || return 1
