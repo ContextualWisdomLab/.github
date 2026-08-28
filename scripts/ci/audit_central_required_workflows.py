@@ -224,7 +224,7 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
     extra_rule_types = (
         sorted(
             {
-                rule.get("type")
+                str(rule.get("type") or "<missing>")
                 for rule in payload.get("rules", [])
                 if isinstance(rule, dict) and rule.get("type") != "workflows"
             }

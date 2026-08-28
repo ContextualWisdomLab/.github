@@ -165,6 +165,15 @@ def test_stacked_ruleset_rejects_wrong_workflow_contract() -> None:
     ]
 
 
+def test_stacked_ruleset_reports_typeless_rules_as_drift() -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"].append({"parameters": {}})
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset has forbidden rule types: ['<missing>']"
+    ]
+
+
 def test_stacked_ruleset_reports_structural_drift() -> None:
     assert audit.audit_stacked_ruleset({"rules": "invalid"}) == [
         "expected stacked ruleset id 21732164",
