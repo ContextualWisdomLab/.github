@@ -226,7 +226,7 @@ flowchart LR
   OpenCode/Noema/Strix to the gateway; this snapshot lands the org-repo half.
 - `pr-review-autofix.yml` now provisions
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` (pinned SHA
-  `8d5924f8…`, same-process KV registration of `BYTEZ_API_KEY`,
+  `c60ec889…`, same-process KV registration of `BYTEZ_API_KEY`,
   `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
   `OPENAI_API_KEY`, live auto model discovery, ZDR-prioritized free catalog),
   and the writer runs `--model contextual-orchestrator/orchestrator/free`.
@@ -300,13 +300,11 @@ flowchart LR
 
 ## 2026-08-28 #1374 trusted-base runtime boundary
 
-- Follow-up PR #1374 merged at head
-  `3d7cf123ea7459b7f0082bb354280288866256db` with merge commit
-  `7c55295ff2dd863d983822d991e67ba037e8f186`; its launcher sets the bounded
+- Follow-up PR #1374 is open at head
+  `d3e7cee4b01219cb0a93f1a4249049de3bf05b4b`, based on current main
+  `8f84b661e468de451ba5c076dc938f342bf52d70`. Its launcher sets the bounded
   8 MiB review envelope, and its sidecar boot check validates that keyword
-  against the exact pinned orchestrator SHA before discovery. Its terminal
-  review decision was not an independent `APPROVED`, so this remains an
-  observed merge event rather than protected-main governance proof.
+  against the exact pinned orchestrator SHA before discovery.
 - PR-target Strix run `33145070402` used trusted workflow source SHA
   `8f84b661e468de451ba5c076dc938f342bf52d70`, not the PR launcher. It reached
   the pinned sidecar and then failed three bounded attempts with HTTP 413
@@ -316,52 +314,8 @@ flowchart LR
   `orchestrator/free`, then skipped before the LLM call because the current
   head had no primary OpenCode approval. Required OpenCode run `33145070315`
   failed closed for the same missing current-head verdict. Therefore the
-  PR-target result was not an LLM verdict.
-- Post-merge Strix run `33145807836` used trusted workflow source SHA
-  `7c55295ff2dd863d983822d991e67ba037e8f186`, reached
-  `openai/orchestrator/free`, and produced no HTTP 413 or
-  `request_too_large`. It failed closed after three bounded attempts because
-  the Strix Caido target was unavailable at `127.0.0.1:48080`, reported as
-  `STRIX_PROVIDER_UNAVAILABLE`; this proves the request-envelope fix on main,
-  but not a successful end-to-end vulnerability scan.
-
-## 2026-08-28 OpenAI request-envelope specification check
-
-- OpenAI's official API reference models a function-tool `description` as an
-  optional string and does not publish a universal 1024-character field limit.
-  The official OpenAPI document also contains no `413` or
-  `request_too_large` response definition for the inference operations. The
-  `413 Content Too Large` observed above is therefore the vendored gateway's
-  HTTP framing response, not evidence of an OpenAI tool-description rule.
-- OpenAI's current images-and-vision guide specifies up to 512 MB total payload
-  for an image-input request and accepts an image URL, Base64 data URL, or file
-  ID in ordinary model-input JSON. The Files API separately permits 512 MB per
-  uploaded file, and Batch separately permits 200 MB JSONL files. These are not
-  one universal limit for every JSON endpoint. The sidecar's 8 MiB limit is an
-  explicitly local, bounded policy for text/tool review envelopes and is not
-  claimed to provide general multimodal compatibility: a large inline Base64
-  image can fail locally even though a URL or file ID keeps the JSON small. A
-  future general multimodal proxy needs a separately governed streaming/spooling
-  and provider-capability contract; `/files` alone does not cover inline image
-  data URLs. The pinned-SHA probe accepts a body of 65,609 bytes and preserves
-  1,025-, 1,026-, and 2,000-character tool descriptions byte-for-byte;
-  provider/model context failures remain separate runtime evidence.
-- PR #1379 exact head `4a25c46dc2fe046368f304a589885ebffb757dfc`
-  reached the pinned sidecar in Strix run `33150437853`; sidecar provisioning
-  and the request-envelope preflight passed, but all three scanner attempts
-  received HTTP 500 `internal_error` (request IDs
-  `7ef2a6bfd7494f80adbf9109b2f5dea2`,
-  `193276c218884651a3940dd9a30bcf97`, and
-  `ff529b84b101458eae03287d3e8df52d`). No 413 or vulnerability report was
-  emitted, so this is an incomplete provider/backend result rather than proof
-  of either request-size rejection or scan success. The pinned server currently
-  collapses otherwise-unhandled provider exceptions into that generic 500.
-  Contextual-orchestrator PR #904 is the separately governed candidate that
-  classifies upstream request-size rejection, retries eligible members of the
-  virtual `orchestrator/free` pool, and returns `request_too_large` only after
-  eligible-provider exhaustion. The sidecar pin must remain on protected main
-  until that change is merged and then be reverified by a fresh exact-head
-  Strix run.
+  envelope fix still needs a normal governed merge followed by a post-merge
+  Strix runtime result; no protected completion is claimed here.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

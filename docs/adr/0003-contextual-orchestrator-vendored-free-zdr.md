@@ -22,7 +22,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`b21645116b352967e50fc497b87eb745b9cc8c61` today) into `RUNNER_TEMP`. The
+   (`889b24f8547d059d1bf2b2f9a043aff15c9ea59d` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -67,13 +67,6 @@ all five, and auto-optimize routing by cost.
 5. **Evidence**: the sidecar writes a discovery report, the policy report (pool,
    counts, ZDR sources, feed-used flag, selected routes), and exports
    `CONTEXTUAL_ORCHESTRATOR_EVIDENCE`; these are auditable per run.
-6. **Review request envelope**: the library keeps its generic 64 KiB default,
-   while this loopback, bearer-authenticated, per-job sidecar configures a
-   512 MiB ceiling so inline image inputs can reach routing. This follows the
-   OpenAI image-input limit of 512 MB total payload per request; it is not
-   treated as a universal JSON default or as the Files API's separate 512 MB
-   per-file limit. The sidecar startup probe verifies the configured HTTP
-   boundary before any review model runs.
 
 ## Consequences
 
@@ -98,10 +91,6 @@ all five, and auto-optimize routing by cost.
 - OpenRouter. (2026, August). *Provider logging: Data retention & logging* [Documentation]. https://openrouter.ai/docs/guides/privacy/provider-logging
 - OpenRouter. (n.d.). *List all models and their properties* API reference; the per-model data-retention metadata (`data_retention: crichton | none`) and the ZDR endpoint feed `https://openrouter.ai/api/v1/endpoints/zdr` are consumed at runtime.
 - ContextualWisdomLab/contextual-orchestrator. (2026, August 18). *AGENTS.md*, section “Policy change” — org migration of OpenCode/Noema/Strix to the gateway with the five KV credentials and auto-discovery.
-- OpenAI. (n.d.). *Images and vision: Image input requirements*.
-  https://developers.openai.com/api/docs/guides/images-vision
-- OpenAI. (n.d.). *Create file* [API reference].
-  https://developers.openai.com/api/reference/resources/files/methods/create
 
 - **Private-target boundary (2026-08-27):** Noema resolves target visibility with
   the selected repository-scoped reviewer token. Private/internal repositories

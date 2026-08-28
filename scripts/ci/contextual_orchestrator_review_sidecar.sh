@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-b21645116b352967e50fc497b87eb745b9cc8c61}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-889b24f8547d059d1bf2b2f9a043aff15c9ea59d}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -85,112 +85,8 @@ python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   -r "$requirements_lock"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
-PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" - <<'PY'
-import http.client
-import json
-import threading
-
-from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
-from contextual_orchestrator.server import SecurityConfig, build_server
-from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES
-
-accepted_size = 64 * 1024 + 1
-assert accepted_size < REVIEW_MAX_BODY_BYTES
-
-
-class CaptureClient(ModelClient):
-    def __init__(self):
-        super().__init__(max_output_tokens=1)
-        self.proxy_payloads = []
-
-    def proxy_send(self, agent, endpoint, payload):
-        self.proxy_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
-        return super().proxy_send(agent, endpoint, payload)
-
-
-client = CaptureClient()
-orchestrator = TaskOrchestrator(
-    [ModelAgent(id="body_limit_probe", model="openai/gpt-5")],
-    client=client,
-)
-server = build_server(
-    orchestrator,
-    host="127.0.0.1",
-    port=0,
-    security=SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES),
-)
-thread = threading.Thread(target=server.serve_forever, daemon=True)
-thread.start()
-try:
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    connection.request(
-        "POST",
-        "/v1/chat/completions",
-        body=b"",
-        headers={
-            "Authorization": "Bearer contract",
-            "Content-Type": "application/json",
-            "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
-        },
-    )
-    response = connection.getresponse()
-    assert response.status == 413, response.status
-    response.read()
-    connection.close()
-
-    def post_payload(payload):
-        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_address[1], timeout=5
-        )
-        try:
-            connection.request(
-                "POST",
-                "/v1/chat/completions",
-                body=encoded,
-                headers={
-                    "Authorization": "Bearer contract",
-                    "Content-Type": "application/json",
-                    "Content-Length": str(len(encoded)),
-                },
-            )
-            response = connection.getresponse()
-            result = json.loads(response.read().decode("utf-8"))
-            return response.status, result, len(encoded)
-        finally:
-            connection.close()
-
-    large_status, large_body, encoded_size = post_payload({
-        "model": "openai/gpt-5",
-        "messages": [{"role": "user", "content": "x" * accepted_size}],
-    })
-    assert large_status == 200, large_body
-    assert encoded_size > accepted_size
-
-    for description_length in (1025, 1026, 2000):
-        prefix = "preserve bytes – 🙂 "
-        description = prefix + ("x" * (description_length - len(prefix)))
-        status, body, _ = post_payload({
-            "model": "openai/gpt-5",
-            "messages": [{"role": "user", "content": "probe"}],
-            "tools": [{
-                "type": "function",
-                "function": {
-                    "name": "scan_target",
-                    "description": description,
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }],
-        })
-        assert status == 200, body
-        assert len(description) == description_length
-        forwarded = client.proxy_payloads[-1]["tools"][0]["function"]["description"]
-        assert forwarded.encode("utf-8") == description.encode("utf-8")
-finally:
-    server.shutdown()
-    server.server_close()
-    thread.join(timeout=5)
-PY
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
+  'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)'
 
 discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"

@@ -16,29 +16,7 @@ request with HTTP 413 (`request_too_large`). The vendored server's generic
 include tool schemas and repository context and therefore need a larger,
 still-bounded integration envelope. The review launcher now sets an explicit
 8 MiB limit for this sidecar only; the library default remains unchanged for
-other deployments. Its pinned-SHA preflight uses the public server builder and
-loopback HTTP boundary to verify that an oversized request returns 413; it does
-not depend on private server helpers or error-message text. A 413 remains
-fail-closed if a request exceeds that bound.
-This 8 MiB value is a local ingress safety bound for this review sidecar, not a
-general OpenAI multimodal limit. OpenAI's official images guide permits image
-URLs, Base64 data URLs, and file IDs in ordinary model-input JSON and specifies
-up to 512 MB total payload for an image-input request. The separate Files API
-specifies up to 512 MB per uploaded file, while Batch has its own 200 MB JSONL
-limit. A URL or file ID keeps the model-input JSON small; an inline Base64 image
-can exceed this sidecar's 8 MiB review envelope. The sidecar therefore fails
-that local boundary closed and must not claim general 512 MB multimodal
-compatibility. Supporting that broader contract requires a separately governed
-streaming/spooling path and provider capability checks; adding `/files` alone
-would not handle an inline Base64 image in an ordinary JSON request.
-The sidecar must measure representative Strix envelopes and keep provider/model
-context failures distinct from its own HTTP framing failure.
-The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
-incorrect 1024-character rejection. The same probe sends Strix-shaped function
-tools with 1025-, 1026-, and 2000-character descriptions and verifies that
-each reaches the provider payload byte-for-byte; arbitrary truncation is not
-used. Provider/model-specific context limits remain provider errors, not a
-reason for this gateway to rewrite the request.
+other deployments. A 413 remains fail-closed if a request exceeds that bound.
 
 ## What changed
 

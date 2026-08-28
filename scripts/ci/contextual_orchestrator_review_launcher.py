@@ -27,10 +27,10 @@ import os
 from pathlib import Path
 
 
-# The vendored server's generic 64 KiB default is intentionally conservative.
-# This loopback, bearer-authenticated review sidecar accepts OpenAI's image-input
-# request ceiling so repository context can include inline image inputs.
-REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024
+# The vendored server's generic 64 KiB default is intentionally conservative,
+# but Strix and Noema send tool schemas plus repository context in one request.
+# Keep the review-specific envelope bounded without weakening the library default.
+REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
