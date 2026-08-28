@@ -180,18 +180,6 @@ def _feed_model_ids(zdr_endpoints: frozenset[str]) -> frozenset[str]:
     )
 
 
-def _model_has_feed_evidence(model: str, zdr_endpoints: frozenset[str]) -> bool:
-    """Match feed evidence by exact identity, or an unambiguous model suffix."""
-    normalized = model.strip().lstrip("/").casefold()
-    if not normalized:
-        return False
-    model_ids = _feed_model_ids(zdr_endpoints)
-    if normalized in model_ids:
-        return True
-    suffix = normalized.rsplit("/", 1)[-1]
-    return sum(candidate.rsplit("/", 1)[-1] == suffix for candidate in model_ids) == 1
-
-
 def is_zdr_model(
     provider_name: str,
     *,
@@ -218,8 +206,10 @@ def is_zdr_model(
         if not zdr_endpoints or not model:
             return False
         return route_key(provider_name, model) in zdr_endpoints
-    if model and zdr_endpoints and _model_has_feed_evidence(model, zdr_endpoints):
-        return True
+    if model and zdr_endpoints:
+        normalized = model.strip().lstrip("/").casefold()
+        if normalized in _feed_model_ids(zdr_endpoints):
+            return True
     return scope.zero_data_retention
 
 
