@@ -250,6 +250,7 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )()
 
     monkeypatch.setattr(receipt.subprocess, "run", fake_run)
+    assert receipt.fetch_reviews("ContextualWisdomLab/.github", 1392)
     assert (
         receipt.main(
             [
