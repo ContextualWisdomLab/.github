@@ -85,9 +85,14 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
     """Only a private token-file path crosses the GitHub step boundary."""
     text = _read(SIDECAR)
-    assert 'echo "::add-mask::$ORCHESTRATOR_TOKEN"' in text
-    assert "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines" in text
-    assert text.index('echo "::add-mask::$ORCHESTRATOR_TOKEN"') < text.index(
+    guarded_mask = (
+        'if [ "${GITHUB_ACTIONS:-}" = "true" ]; then\n'
+        "  printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\"\n"
+        "fi"
+    )
+    assert guarded_mask in text
+    assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
+    assert text.index(guarded_mask) < text.index(
         'if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then'
     )
     assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\\n' \"$ORCHESTRATOR_HOST\" \"$ORCHESTRATOR_PORT\"" in text
@@ -129,6 +134,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
             ["bash", "-c", command],
             env={
                 **os.environ,
+                "GITHUB_ACTIONS": "false",
                 "TOKEN_LOADER": str(TOKEN_LOADER),
                 "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(candidate),
             },
@@ -139,8 +145,23 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
 
     accepted = run(token_file)
     assert accepted.returncode == 0, accepted.stderr
-    assert "::add-mask::synthetic-test-bearer" in accepted.stdout
+    assert "::add-mask::synthetic-test-bearer" not in accepted.stdout
     assert "loaded=synthetic-test-bearer" in accepted.stdout
+
+    actions = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_file),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert actions.returncode == 0, actions.stderr
+    assert "::add-mask::synthetic-test-bearer" in actions.stdout
 
     token_file.chmod(0o644)
     wrong_mode = run(token_file)
@@ -158,6 +179,41 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     multiline = run(token_file)
     assert multiline.returncode != 0
     assert "must not contain CR or LF" in multiline.stderr
+
+
+def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path) -> None:
+    """Sourcing the loader must not clobber common caller names or leak functions."""
+    token_path = tmp_path / "bearer.token"
+    token_path.write_text("synthetic-test-bearer", encoding="utf-8")
+    token_path.chmod(0o600)
+    command = (
+        'set -euo pipefail; token_file=caller-file; token_size=caller-size; '
+        'source "$TOKEN_LOADER"; '
+        'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
+        'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
+        'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_path),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "caller=caller-file:caller-size" in result.stdout
+
+
+def test_sidecar_scopes_private_umask_to_token_creation() -> None:
+    """Private token creation must not change modes of later sidecar artifacts."""
+    text = _read(SIDECAR)
+    assert "(\n  umask 077\n  printf '%s' \"$ORCHESTRATOR_TOKEN\" > \"$token_file\"\n)" in text
+    assert "\numask 077\nprintf '%s' \"$ORCHESTRATOR_TOKEN\"" not in text
 
 
 def test_every_model_consumer_loads_the_bearer_inside_its_own_step() -> None:
@@ -181,7 +237,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     """The bearer is masked before clone, install, launch, or health output."""
     text = _read(SIDECAR)
     mask = "printf '::add-mask::%s\\n' \"$ORCHESTRATOR_TOKEN\""
-    assert "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines (CR or LF)" in text
+    assert "ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert mask in text
     mask_index = text.index(mask)
     for later_operation in (

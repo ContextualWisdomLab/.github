@@ -48,22 +48,23 @@ log "provider secrets present: $provider_secret_count of 5"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in
-  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain carriage returns or newlines (CR or LF)" ;;
+  *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
 esac
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-  # Register the process-local bearer token before exporting it through
-  # GITHUB_ENV; later step environment blocks otherwise echo it verbatim.
-  echo "::add-mask::$ORCHESTRATOR_TOKEN"
-else
-  # Keep local contract tests and non-Actions diagnostics on the same masking path.
+# Mask the bearer before clone, dependency installation, launcher startup, or
+# health diagnostics can emit it. Later masking is too late for earlier logs,
+# but workflow commands are safe only on an Actions runner; elsewhere this
+# would print the raw bearer to ordinary stdout.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 fi
 
 mkdir -p "$ORCHESTRATOR_WORK"
 chmod 700 -- "$ORCHESTRATOR_WORK"
 token_file="$ORCHESTRATOR_WORK/bearer.token"
-umask 077
-printf '%s' "$ORCHESTRATOR_TOKEN" > "$token_file"
+(
+  umask 077
+  printf '%s' "$ORCHESTRATOR_TOKEN" > "$token_file"
+)
 chmod 600 -- "$token_file"
 rm -rf "$ORCHESTRATOR_SOURCE"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
