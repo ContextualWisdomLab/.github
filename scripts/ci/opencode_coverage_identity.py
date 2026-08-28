@@ -132,8 +132,6 @@ def terminal_dispatch_coverage_result(
         raise CoverageQuoteError("coverage workflow run id does not match the current run")
     if str(workflow_run.get("event") or "") != "repository_dispatch":
         raise CoverageQuoteError("coverage workflow run is not repository_dispatch")
-    if str(workflow_run.get("name") or "") != DISPATCH_WORKFLOW_NAME:
-        raise CoverageQuoteError("coverage workflow name is not OpenCode Review Dispatch")
     repository = workflow_run.get("repository") or {}
     recorded_repo = (
         str(repository.get("full_name") or "").strip()
@@ -145,6 +143,9 @@ def terminal_dispatch_coverage_result(
     expected_title = (
         f"{DISPATCH_WORKFLOW_NAME} {target_repo}#{pr_number}@{head_sha}"
     )
+    workflow_name = str(workflow_run.get("name") or "").strip()
+    if workflow_name not in {DISPATCH_WORKFLOW_NAME, expected_title}:
+        raise CoverageQuoteError("coverage workflow name is not OpenCode Review Dispatch")
     if str(workflow_run.get("display_title") or "").strip() != expected_title:
         raise CoverageQuoteError("coverage workflow target identity does not match")
     matches = [
