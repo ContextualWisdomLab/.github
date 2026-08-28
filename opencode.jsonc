@@ -397,6 +397,14 @@
           "name": "Orchestrator Free (ZDR-first zero-cost pool)",
           "tool_call": true,
           "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            }
+          },
           "limit": {
             "context": 200000,
             "output": 32768
