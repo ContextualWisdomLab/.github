@@ -556,14 +556,16 @@ def materialize(
             repo_root, head_sha
         ):
             head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
+            lock_matches_base = base_npm_blobs.get(source_path) == head_blob
             if (
-                base_npm_blobs.get(source_path) == head_blob
+                lock_matches_base
                 and base_npm_manifests.get(source_path)
                 == head_inputs["package.json"]
             ):
                 continue
             lock_name = pathlib.PurePosixPath(source_path).name
-            validate_head_npm_lock(source_path, head_inputs[lock_name])
+            if not lock_matches_base:
+                validate_head_npm_lock(source_path, head_inputs[lock_name])
             projects.append(
                 (
                     source_path,
