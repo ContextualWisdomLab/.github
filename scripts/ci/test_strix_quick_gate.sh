@@ -6080,6 +6080,18 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	contextual-orchestrator-missing-api-base-fails-closed)
+		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
+			"orchestrator/free" \
+			"" \
+			"2" \
+			"require LLM_API_BASE_FILE to select the pinned loopback gateway" \
+			"0" \
+			"" \
+			"" \
+			"contextual_orchestrator" \
+			""
+		;;
 	contextual-orchestrator-gateway-model-qualification)
 		run_gate_case "contextual-orchestrator-gateway-model-qualification" \
 			"orchestrator/free" \
@@ -9770,6 +9782,17 @@ run_gate_case "success" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"
+
+run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
+	"orchestrator/free" \
+	"" \
+	"2" \
+	"require LLM_API_BASE_FILE to select the pinned loopback gateway" \
+	"0" \
+	"" \
+	"" \
+	"contextual_orchestrator" \
+	""
 
 run_gate_case "contextual-orchestrator-gateway-model-qualification" \
 	"orchestrator/free" \
