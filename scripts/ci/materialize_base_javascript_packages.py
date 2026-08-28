@@ -24,8 +24,33 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PNPM_SPEC_RE = re.compile(r"^pnpm@[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9._+-]+)?$")
 PNPM_BASE_INPUT_NAMES = ("package.json", "pnpm-workspace.yaml", ".pnpmfile.cjs")
 NPM_LOCK_NAMES = ("npm-shrinkwrap.json", "package-lock.json")
+PNPM_LOCK_NAME = "pnpm-lock.yaml"
 NPM_REGISTRY_HOST = "registry.npmjs.org"
 SHA512_SRI_RE = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
+PNPM_PACKAGE_ENTRY_RE = re.compile(r"^  ([^ #][^:]*):(?:\s.*)?$")
+PNPM_RESOLUTION_RE = re.compile(r"resolution:\s*\{(.*)\}\s*$")
+PNPM_TARBALL_RE = re.compile(r"tarball:\s*([^,\s}]+)")
+PNPM_INTEGRITY_RE = re.compile(r"integrity:\s*([^,\s}]+)")
+PNPM_DIRECTORY_RE = re.compile(r"directory:\s*\"?([^,\"}]+)\"?")
+PNPM_LINK_TRUE_RE = re.compile(r"link:\s*true\b")
+
+
+def _github_actions_escape(value: object) -> str:
+    """Escape untrusted text before writing it to a GitHub Actions log.
+
+    GitHub Actions recognizes workflow commands in log lines. Repository paths
+    and git diagnostics can contain command delimiters, newlines, or percent
+    escapes when a pull request controls the tree, so diagnostics must never be
+    emitted verbatim. The manifest itself remains raw; this helper only protects
+    the human-readable CLI output.
+    """
+    return (
+        str(value)
+        .replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace(":", "%3A")
+    )
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
@@ -340,6 +365,147 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
             )
 
 
+def _validate_pnpm_tarball_url(
+    lock_path: str, package_key: str, tarball_url: str
+) -> None:
+    """Fail closed unless one pnpm tarball URL is an npm-registry HTTPS URL."""
+    parsed = urllib.parse.urlsplit(tarball_url)
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"current-head pnpm lock {lock_path} package {package_key} has an invalid tarball URL"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != NPM_REGISTRY_HOST
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed_port is not None
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or not parsed.path.endswith(".tgz")
+    ):
+        raise ValueError(
+            f"current-head pnpm lock {lock_path} package {package_key} must resolve from https://{NPM_REGISTRY_HOST}/"
+        )
+
+
+def validate_head_pnpm_lock(lock_path: str, lock_content: bytes) -> None:
+    """Fail closed unless a changed HEAD pnpm lock is registry- and hash-bounded.
+
+    The validator is intentionally line-based and standard-library-only: pnpm
+    lockfiles always emit each package's ``resolution`` as a single-line inline
+    mapping, so scanning those lines covers every fetched artifact while never
+    introducing a YAML parser dependency into the trusted materializer.
+    """
+    try:
+        text = lock_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"current-head pnpm lock {lock_path} is invalid UTF-8: {exc}"
+        ) from exc
+    if not text.strip():
+        raise ValueError(f"current-head pnpm lock {lock_path} is empty")
+
+    in_packages_section = False
+    package_entry_count = 0
+    current_package_key = ""
+    current_resolution_seen = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+
+        if indent == 0 and stripped.endswith(":"):
+            in_packages_section = stripped == "packages:"
+            continue
+        if not in_packages_section:
+            continue
+
+        if indent == 2:
+            entry_match = PNPM_PACKAGE_ENTRY_RE.match(line)
+            if entry_match is None:
+                raise ValueError(
+                    f"current-head pnpm lock {lock_path} contains an unexpected "
+                    f"two-space entry {stripped!r}"
+                )
+            if current_package_key and not current_resolution_seen:
+                raise ValueError(
+                    f"current-head pnpm lock {lock_path} package {current_package_key} "
+                    "has no resolution entry"
+                )
+            current_package_key = entry_match.group(1).strip()
+            package_entry_count += 1
+            current_resolution_seen = False
+            continue
+
+        if current_package_key and stripped.startswith("resolution:"):
+            resolution_match = PNPM_RESOLUTION_RE.search(stripped)
+            if resolution_match is None:
+                raise ValueError(
+                    f"current-head pnpm lock {lock_path} package {current_package_key} "
+                    "has a multi-line or malformed resolution mapping"
+                )
+            resolution_body = resolution_match.group(1)
+            integrity_match = PNPM_INTEGRITY_RE.search(resolution_body)
+            link_match = PNPM_LINK_TRUE_RE.search(resolution_body)
+            directory_match = PNPM_DIRECTORY_RE.search(resolution_body)
+            if link_match is not None:
+                if directory_match is None:
+                    raise ValueError(
+                        f"current-head pnpm lock {lock_path} workspace link "
+                        f"{current_package_key} must carry a relative directory target"
+                    )
+                directory_value = directory_match.group(1).strip().strip('"')
+                directory_candidate = pathlib.PurePosixPath(directory_value)
+                if (
+                    directory_candidate.is_absolute()
+                    or ".." in directory_candidate.parts
+                    or "node_modules" in directory_candidate.parts
+                ):
+                    raise ValueError(
+                        f"current-head pnpm lock {lock_path} workspace link "
+                        f"{current_package_key} has an unsafe directory target"
+                    )
+            elif integrity_match is None or not SHA512_SRI_RE.fullmatch(
+                integrity_match.group(1)
+            ):
+                raise ValueError(
+                    f"current-head pnpm lock {lock_path} package {current_package_key} "
+                    "must pin exactly one SHA-512 integrity value"
+                )
+            tarball_match = PNPM_TARBALL_RE.search(resolution_body)
+            if tarball_match is not None:
+                _validate_pnpm_tarball_url(
+                    lock_path, current_package_key, tarball_match.group(1)
+                )
+            current_resolution_seen = True
+            continue
+
+        if current_package_key and (
+            stripped.startswith("tarball:") or stripped.startswith("git+")
+        ):
+            raise ValueError(
+                f"current-head pnpm lock {lock_path} package {current_package_key} "
+                "carries an out-of-band fetch source"
+            )
+
+    if current_package_key and not current_resolution_seen:
+        raise ValueError(
+            f"current-head pnpm lock {lock_path} package {current_package_key} "
+            "has no resolution entry"
+        )
+    if package_entry_count == 0:
+        raise ValueError(
+            f"current-head pnpm lock {lock_path} contains no package entries"
+        )
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
@@ -356,6 +522,7 @@ def materialize(
     base_npm = base_npm_projects(repo_root, base_sha)
     base_npm_paths = {source_path for source_path, _manager, _inputs in base_npm}
     base_npm_blobs: dict[str, str] = {}
+    base_pnpm_blobs: dict[str, str] = {}
     for source_path, package_manager, base_inputs in (
         base_pnpm_projects(repo_root, base_sha) + base_npm
     ):
@@ -371,6 +538,8 @@ def materialize(
         )
         if source_path in base_npm_paths:
             base_npm_blobs[source_path] = lock_blob
+        else:
+            base_pnpm_blobs[source_path] = lock_blob
 
     if head_sha is not None:
         if not SHA_RE.fullmatch(head_sha):
@@ -383,6 +552,22 @@ def materialize(
                 continue
             lock_name = pathlib.PurePosixPath(source_path).name
             validate_head_npm_lock(source_path, head_inputs[lock_name])
+            projects.append(
+                (
+                    source_path,
+                    package_manager,
+                    head_inputs,
+                    head_sha.lower(),
+                    head_blob,
+                )
+            )
+        for source_path, package_manager, head_inputs in base_pnpm_projects(
+            repo_root, head_sha
+        ):
+            head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
+            if base_pnpm_blobs.get(source_path) == head_blob:
+                continue
+            validate_head_pnpm_lock(source_path, head_inputs[PNPM_LOCK_NAME])
             projects.append(
                 (
                     source_path,
@@ -442,7 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
-            f"::error::Could not materialize base JavaScript package locks: {exc}",
+            "::error::Could not materialize base JavaScript package locks: "
+            f"{_github_actions_escape(exc)}",
             file=sys.stderr,
         )
         return 1
@@ -451,9 +637,11 @@ def main(argv: list[str] | None = None) -> int:
         for entry in manifest:
             print(
                 "Materialized trusted JavaScript lock "
-                f"{entry['source']} for {entry['package_manager']} "
-                f"from {entry['revision_sha']} as "
-                f"{entry['directory']}/{pathlib.PurePosixPath(entry['source']).name}."
+                f"{_github_actions_escape(entry['source'])} for "
+                f"{_github_actions_escape(entry['package_manager'])} from "
+                f"{_github_actions_escape(entry['revision_sha'])} as "
+                f"{_github_actions_escape(entry['directory'])}/"
+                f"{_github_actions_escape(pathlib.PurePosixPath(entry['source']).name)}."
             )
     else:
         print(

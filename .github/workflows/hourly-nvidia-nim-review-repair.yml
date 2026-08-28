@@ -7,8 +7,10 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
+      - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
+      - .github/workflows/inkspan-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
       - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
@@ -20,8 +22,18 @@ on:
       - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
+      - scripts/ci/zdr_policy.py
+      - scripts/ci/contextual_orchestrator_review_policy.py
+      - scripts/ci/contextual_orchestrator_review_launcher.py
+      - scripts/ci/contextual_orchestrator_review_sidecar.sh
+      - tests/test_zdr_policy.py
+      - tests/test_contextual_orchestrator_review_policy.py
+      - tests/test_contextual_orchestrator_review_sidecar_contract.py
+      - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
+      - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
+      - tests/test_inkspan_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
@@ -30,6 +42,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_contextual_orchestrator_hourly_review_caller.py
       - tests/test_afipc_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
@@ -48,6 +61,7 @@ on:
       - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
+      - docs/doctoring/inkspan-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
@@ -56,6 +70,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/contextual-orchestrator-hourly-review-caller.md
       - docs/doctoring/afipc-hourly-review-caller.md
   push:
     paths:
@@ -63,8 +78,10 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/bandscope-hourly-review-repair.yml
+      - .github/workflows/contextual-orchestrator-hourly-review-repair.yml
       - .github/workflows/clearfolio-hourly-review-repair.yml
       - .github/workflows/disksage-hourly-review-repair.yml
+      - .github/workflows/inkspan-hourly-review-repair.yml
       - .github/workflows/fast-mlsirm-hourly-review-repair.yml
       - .github/workflows/github-hourly-review-repair.yml
       - .github/workflows/governance-risk-compliance-hourly-review-repair.yml
@@ -76,8 +93,18 @@ on:
       - .github/workflows/afipc-hourly-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
+      - scripts/ci/zdr_policy.py
+      - scripts/ci/contextual_orchestrator_review_policy.py
+      - scripts/ci/contextual_orchestrator_review_launcher.py
+      - scripts/ci/contextual_orchestrator_review_sidecar.sh
+      - tests/test_zdr_policy.py
+      - tests/test_contextual_orchestrator_review_policy.py
+      - tests/test_contextual_orchestrator_review_sidecar_contract.py
+      - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
+      - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
+      - tests/test_inkspan_hourly_review_caller.py
       - tests/test_fast_mlsirm_hourly_review_caller.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_governance_risk_compliance_hourly_review_caller.py
@@ -86,6 +113,7 @@ on:
       - tests/test_orgmetra_hourly_review_caller.py
       - tests/test_originweave_hourly_review_caller.py
       - tests/test_quarantine_sandbox_hourly_review_caller.py
+      - tests/test_contextual_orchestrator_hourly_review_caller.py
       - tests/test_afipc_hourly_review_caller.py
       - tests/test_hourly_autofix_context_quality_gate.py
       - tests/test_pr_review_conflict_scope.py
@@ -104,6 +132,7 @@ on:
       - docs/doctoring/clearfolio-hourly-review-caller.md
       - docs/doctoring/conflict-control-evidence-isolation.md
       - docs/doctoring/disksage-hourly-review-caller.md
+      - docs/doctoring/inkspan-hourly-review-caller.md
       - docs/doctoring/fast-mlsirm-hourly-review-caller.md
       - docs/doctoring/github-hourly-conflict-repair.md
       - docs/doctoring/governance-risk-compliance-hourly-review-caller.md
@@ -112,6 +141,7 @@ on:
       - docs/doctoring/orgmetra-hourly-review-caller.md
       - docs/doctoring/originweave-hourly-review-caller.md
       - docs/doctoring/quarantine-sandbox-hourly-review-caller.md
+      - docs/doctoring/contextual-orchestrator-hourly-review-caller.md
       - docs/doctoring/afipc-hourly-review-caller.md
 
 permissions:
@@ -150,18 +180,30 @@ jobs:
           python -m pytest -q \
             --cov=scripts.ci.pr_review_conflict_scope \
             --cov=scripts.ci.pr_review_autofix_context \
+            --cov=scripts.ci.zdr_policy \
+            --cov=scripts.ci.contextual_orchestrator_review_policy \
             --cov-branch \
             --cov-fail-under=100
           python -m interrogate \
             --fail-under 100 \
             scripts/ci/pr_review_conflict_scope.py \
-            scripts/ci/pr_review_autofix_context.py
+            scripts/ci/pr_review_autofix_context.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py
           python -m compileall -q \
             scripts/ci/pr_review_conflict_scope.py \
             scripts/ci/pr_review_autofix_context.py \
             tests/test_pr_review_conflict_scope.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py \
+            tests/test_zdr_policy.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_bandscope_hourly_review_caller.py \
             tests/test_disksage_hourly_review_caller.py \
+            tests/test_inkspan_hourly_review_caller.py \
             tests/test_fast_mlsirm_hourly_review_caller.py \
             tests/test_github_hourly_conflict_repair.py \
             tests/test_governance_risk_compliance_hourly_review_caller.py \
@@ -170,6 +212,7 @@ jobs:
             tests/test_orgmetra_hourly_review_caller.py \
             tests/test_originweave_hourly_review_caller.py \
             tests/test_quarantine_sandbox_hourly_review_caller.py \
+            tests/test_contextual_orchestrator_hourly_review_caller.py \
             tests/test_afipc_hourly_review_caller.py \
             tests/test_pr_review_conflict_scope_control_files.py \
             tests/test_hourly_autofix_context_quality_gate.py \
