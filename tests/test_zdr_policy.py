@@ -36,6 +36,11 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
         zdr_policy.provider_zdr_scope("made_up_provider")
 
 
+def test_feed_model_matches_rejects_non_string_model() -> None:
+    """Defensive matching must fail closed for malformed model values."""
+    assert zdr_policy._feed_model_matches(None, frozenset()) is False
+
+
 @pytest.mark.parametrize(
     ("provider_name", "expected_zdr"),
     [
