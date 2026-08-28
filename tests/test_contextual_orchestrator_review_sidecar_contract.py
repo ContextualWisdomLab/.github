@@ -38,7 +38,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f"
+ORCH_PIN_SHA = "b21645116b352967e50fc497b87eb745b9cc8c61"
 
 
 def _read(path: Path) -> str:
@@ -301,9 +301,9 @@ def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
 
 
 def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
-    """Large review envelopes fit without changing the library's generic default."""
+    """Review images fit without changing the library's generic default."""
     text = _read(LAUNCHER)
-    assert "REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024" in text
+    assert "REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024" in text
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
 
 
