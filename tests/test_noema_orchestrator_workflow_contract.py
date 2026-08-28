@@ -54,6 +54,20 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
+def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
+    """Bound transient GitHub API failures without weakening visibility validation."""
+    workflow = workflow_text("noema-review.yml")
+    start = workflow.index("      - name: Resolve Noema target repository visibility")
+    end = workflow.index("      - name: Provision contextual-orchestrator review sidecar", start)
+    visibility_step = workflow[start:end]
+
+    assert "for target_visibility_attempt in 1 2 3 4 5 6; do" in visibility_step
+    assert 'if visibility="$(' in visibility_step
+    assert 'sleep "$(( target_visibility_attempt * 5 ))"' in visibility_step
+    assert "possibly a transient GitHub API rate limit; retrying after backoff." in visibility_step
+    assert "case \"$visibility\" in" in visibility_step
+
+
 def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:
     """Keep Strix on the gateway; Noema still fails closed without its sidecar."""
     bash_executable = shutil.which("bash") or "/bin/bash"

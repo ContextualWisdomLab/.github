@@ -261,7 +261,19 @@ jobs:
             echo "::error::Noema target visibility cannot be resolved without the selected repository-scoped reviewer token."
             exit 1
           fi
-          visibility="$(gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)')"
+          visibility=""
+          for target_visibility_attempt in 1 2 3 4 5 6; do
+            if visibility="$(
+              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
+            )"; then
+              break
+            fi
+            visibility=""
+            if [ "$target_visibility_attempt" -lt 6 ]; then
+              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+              sleep "$(( target_visibility_attempt * 5 ))"
+            fi
+          done
           case "$visibility" in
             private|internal)
               echo "require_zdr=true" >>"$GITHUB_OUTPUT"
