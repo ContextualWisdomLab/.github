@@ -57,8 +57,10 @@ printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 mkdir -p "$ORCHESTRATOR_WORK"
 chmod 700 -- "$ORCHESTRATOR_WORK"
 token_file="$ORCHESTRATOR_WORK/bearer.token"
-umask 077
-printf '%s' "$ORCHESTRATOR_TOKEN" > "$token_file"
+(
+  umask 077
+  printf '%s' "$ORCHESTRATOR_TOKEN" > "$token_file"
+)
 chmod 600 -- "$token_file"
 rm -rf "$ORCHESTRATOR_SOURCE"
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"

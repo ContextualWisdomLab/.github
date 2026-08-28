@@ -158,6 +158,41 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     assert "must not contain CR or LF" in multiline.stderr
 
 
+def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path) -> None:
+    """Sourcing the loader must not clobber common caller names or leak functions."""
+    token_path = tmp_path / "bearer.token"
+    token_path.write_text("synthetic-test-bearer", encoding="utf-8")
+    token_path.chmod(0o600)
+    command = (
+        'set -euo pipefail; token_file=caller-file; token_size=caller-size; '
+        'source "$TOKEN_LOADER"; '
+        'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
+        'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
+        'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_path),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "caller=caller-file:caller-size" in result.stdout
+
+
+def test_sidecar_scopes_private_umask_to_token_creation() -> None:
+    """Private token creation must not change modes of later sidecar artifacts."""
+    text = _read(SIDECAR)
+    assert "(\n  umask 077\n  printf '%s' \"$ORCHESTRATOR_TOKEN\" > \"$token_file\"\n)" in text
+    assert "\numask 077\nprintf '%s' \"$ORCHESTRATOR_TOKEN\"" not in text
+
+
 def test_every_model_consumer_loads_the_bearer_inside_its_own_step() -> None:
     """No workflow relies on a raw bearer persisted through GITHUB_ENV."""
     noema = _read(NOEMA_WORKFLOW)
