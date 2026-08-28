@@ -33,6 +33,14 @@ from pathlib import Path
 REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
+def _has_text_output(model: object) -> bool:
+    """Return whether a discovered model can emit text responses."""
+    modalities = getattr(model, "output_modalities", ())
+    if isinstance(modalities, str):
+        modalities = (modalities,)
+    return not modalities or "text" in {str(modality).casefold() for modality in modalities}
+
+
 def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
     """Convert in-process discovered models into free-only report rows.
 
@@ -139,10 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         model
         for model in (free_discovered_models(discovered) if discovered else [])
         if is_general_chat_agent_model_id(model.model_id)
-        and (
-            not model.output_modalities
-            or "text" in {modality.casefold() for modality in model.output_modalities}
-        )
+        and _has_text_output(model)
     ]
     if not free_models:
         raise SystemExit("review sidecar discovered no zero-cost models; orchestrator/free would fail closed")

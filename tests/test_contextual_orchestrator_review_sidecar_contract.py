@@ -187,11 +187,13 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     token_path.write_text("synthetic-test-bearer", encoding="utf-8")
     token_path.chmod(0o600)
     command = (
-        'set -euo pipefail; token_file=caller-file; token_size=caller-size; '
+        'set -euo pipefail; token_file=caller-file; token_owner=caller-owner; '
+        'token_mode=caller-mode; token_size=caller-size; '
         'source "$TOKEN_LOADER"; '
         'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
         'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
-        'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
+        'printf "caller=%s:%s:%s:%s\\n" "$token_file" "$token_owner" '
+        '"$token_mode" "$token_size"'
     )
     result = subprocess.run(
         ["bash", "-c", command],
@@ -206,7 +208,7 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     )
 
     assert result.returncode == 0, result.stderr
-    assert "caller=caller-file:caller-size" in result.stdout
+    assert "caller=caller-file:caller-owner:caller-mode:caller-size" in result.stdout
 
 
 def test_sidecar_scopes_private_umask_to_token_creation() -> None:
@@ -265,8 +267,10 @@ def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
     assert "free_discovered_models(discovered)" in text
-    assert "model.output_modalities" in text
-    assert '"text" in {modality.casefold() for modality in model.output_modalities}' in text
+    assert 'getattr(model, "output_modalities", ())' in text
+    assert 'isinstance(modalities, str)' in text
+    assert '"text" in {str(modality).casefold() for modality in modalities}' in text
+    assert "and _has_text_output(model)" in text
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
     assert "orchestrator/free would fail closed" in text

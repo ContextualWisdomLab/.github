@@ -9,7 +9,7 @@ _contextual_orchestrator_token_fail() {
 }
 
 _contextual_orchestrator_load_token() {
-  local token_file token_size
+  local token_file token_owner token_mode token_size
 
   token_file="${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}"
   if [ -z "$token_file" ]; then
