@@ -3918,6 +3918,10 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if not args.pr_number:
+        # Stacked PRs have no injected required workflow and depend exclusively
+        # on this bounded sweep; default-base PRs also receive event-driven runs.
+        prs.sort(key=lambda pr: pr.get("baseRefName") == args.base_branch)
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0
