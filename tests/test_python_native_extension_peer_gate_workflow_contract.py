@@ -153,7 +153,7 @@ def test_python_failure_log_is_materialized_under_runner_temp() -> None:
 
 
 def test_python_metadata_snapshot_comes_from_exact_head_git_object() -> None:
-    """Later untrusted project tests cannot rewrite trusted PyO3 metadata."""
+    """Later tests cannot rewrite metadata or block projects without pyproject."""
 
     function = _workflow_function("run_python_test_and_capture")
     assert 'pyproject_repository_path="pyproject.toml"' in function
@@ -164,6 +164,12 @@ def test_python_metadata_snapshot_comes_from_exact_head_git_object() -> None:
         '"${PR_HEAD_SHA:-HEAD}:${pyproject_repository_path}"'
         in function
     )
+    assert 'if trusted_git show \\' in function
+    assert 'chmod 0444 "$python_native_pyproject_snapshot"' in function
+    assert ': >"$python_native_pyproject_snapshot"' in function
+    snapshot_start = function.index("if trusted_git show")
+    snapshot_end = function.index('\n\n  append "### ${label}"', snapshot_start)
+    assert "failures" not in function[snapshot_start:snapshot_end]
     assert 'if [ -f "$project_dir/pyproject.toml" ]' not in function
 
 

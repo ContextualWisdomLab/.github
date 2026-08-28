@@ -1014,20 +1014,13 @@ jobs:
             else
               pyproject_repository_path="${project_dir#./}/pyproject.toml"
             fi
-            if ! trusted_git show \
+            if trusted_git show \
               "${PR_HEAD_SHA:-HEAD}:${pyproject_repository_path}" \
               >"$python_native_pyproject_snapshot"; then
-              append "- Result: FAIL"
-              append "- Reason: the exact-head pyproject.toml blob could not be snapshotted before classification."
-              append ""
-              failures=$((failures + 1))
-              rm -f \
-                "$python_native_pytest_log" \
-                "$python_native_changed_files" \
-                "$python_native_pyproject_snapshot"
-              return
+              chmod 0444 "$python_native_pyproject_snapshot"
+            else
+              : >"$python_native_pyproject_snapshot"
             fi
-            chmod 0444 "$python_native_pyproject_snapshot"
 
             append "### ${label}"
             append ""

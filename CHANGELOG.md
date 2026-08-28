@@ -144,11 +144,12 @@ Semantic Versioning where the repository publishes a release.
 
 - Restored the PyO3 source-only coverage deferral by teaching its classifier
   CLI to accept the workflow's sealed metadata snapshot and distinct logical
-  repository path. The gate now reads immutable exact-head Git-blob TOML bytes
-  even when an earlier untrusted project test rewrites the working tree, while
-  deriving native/package change boundaries from a traversal-free canonical
-  `pyproject.toml` location, with an integration test executing the exact
-  embedded workflow command.
+  repository path. When metadata exists, the gate reads immutable exact-head
+  Git-blob TOML bytes even when an earlier untrusted project test rewrites the
+  working tree; projects without `pyproject.toml` still use ordinary test
+  results and cannot enter native deferral. Native/package change boundaries
+  remain derived from a traversal-free canonical `pyproject.toml` location,
+  with an integration test executing the exact embedded workflow command.
 
 - Keep contextual-orchestrator token-file ownership and mode validation
   portable across GNU and BSD `stat` implementations without weakening the
