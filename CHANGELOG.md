@@ -8,8 +8,10 @@ Semantic Versioning where the repository publishes a release.
 - Repair Rust coverage dependency materialization by prefetching locked Cargo
   sources with a neutral runner-owned Cargo home and carrying only the
   content-addressed registry/git caches into the existing networkless sandbox.
-  GitHub credentials and PR-controlled Cargo configuration do not cross the
-  boundary, and missing caches remain fail-closed.
+  Both prefetch and runtime force Cargo's git registry protocol so their cache
+  layouts remain compatible; GitHub credentials and PR-controlled Cargo
+  configuration do not cross the boundary, and missing caches remain
+  fail-closed.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator

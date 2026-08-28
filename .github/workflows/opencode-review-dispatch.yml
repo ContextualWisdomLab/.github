@@ -377,6 +377,7 @@ jobs:
                 cd "$prefetch_home" \
                   && HOME="$prefetch_home" \
                     CARGO_HOME="$prefetch_home/.cargo" \
+                    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git \
                     CARGO_NET_GIT_FETCH_WITH_CLI=false \
                     GIT_CONFIG_NOSYSTEM=1 \
                     GIT_CONFIG_GLOBAL=/dev/null \
@@ -1939,6 +1940,7 @@ jobs:
             # The sandbox has no network access; resolve Rust dependencies only
             # from the content-addressed cache prepared above.
             export CARGO_NET_OFFLINE=true
+            export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git
             if [ "${LLVM_COV:-}" != "/usr/bin/llvm-cov-19" ] || \
               [ "${LLVM_PROFDATA:-}" != "/usr/bin/llvm-profdata-19" ] || \
               ! test -x "$LLVM_COV" || ! test -x "$LLVM_PROFDATA"; then
