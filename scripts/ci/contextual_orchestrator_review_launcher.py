@@ -33,6 +33,16 @@ from pathlib import Path
 REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024
 
 
+def _has_text_output(model: object) -> bool:
+    """Return whether a discovered model can emit text responses."""
+    modalities = getattr(model, "output_modalities", None)
+    if modalities is None:
+        return False
+    if isinstance(modalities, str):
+        modalities = (modalities,)
+    return not modalities or "text" in {str(modality).casefold() for modality in modalities}
+
+
 def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
     """Convert in-process discovered models into free-only report rows.
 
@@ -107,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
+    from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
     from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
@@ -134,7 +145,12 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    free_models = free_discovered_models(discovered) if discovered else []
+    free_models = []
+    for model in free_discovered_models(discovered) if discovered else []:
+        model_id = getattr(model, "model_id", "")
+        if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
+            continue
+        free_models.append(model)
     if not free_models:
         raise SystemExit("review sidecar discovered no zero-cost models; orchestrator/free would fail closed")
 
