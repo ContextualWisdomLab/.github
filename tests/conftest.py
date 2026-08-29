@@ -17,8 +17,6 @@ def clear_trusted_uv_process_caches() -> Iterator[None]:
     yield
     materializer._install_trusted_uv.cache_clear()
     materializer._install_trusted_uv_url_opener.cache_clear()
-
-
 class FakeHttpResponse:
     """Expose bounded context-managed reads from one deterministic final URL."""
 
