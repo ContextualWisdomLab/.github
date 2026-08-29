@@ -141,6 +141,9 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
     assert '[ "$live_state" != "open" ]' in validation
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert 'target_default_branch="$(gh api "repos/${TARGET_REPOSITORY_INPUT}" --jq' in validation
+    assert 'printf \'base_branch=%s\\n\' "$target_default_branch"' in validation
+    assert "PR base %s; scheduler default branch %s" in validation
     assert (
         '! [[ "$live_head_repository" =~ '
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
