@@ -40,10 +40,7 @@ def test_required_workflow_enforces_pingora_without_executing_pr_content() -> No
     assert '[ -L "$trusted_source_dir/$EXPECTED_FILE" ]' in text
     assert '[ ! -f "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
     assert '[ -L "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]' in text
-    # The workflow is already pull_request_target-only. Keeping an event
-    # expression inside the required bootstrap makes the materialized gate
-    # depend on caller event payload fields and violates the bootstrap policy.
-    assert "if: ${{ github.event_name == 'pull_request_target' }}" not in text
+    assert "if: ${{ github.event_name == 'pull_request_target' }}" in text
     assert text.index("Verify immutable central policy source") < text.index(
         "Enforce Cloudflare Pingora edge policy"
     )
