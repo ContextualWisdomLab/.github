@@ -152,6 +152,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Web verification now checks services through local readiness addresses only.
+  Start the backend and frontend on this computer and use their local health
+  URLs when running the check.
+- Review results now separate cosmetic notices from blocking failures. Open the
+  failure details and correct the requested issue before running the check
+  again.
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
   dispatches whose workflow token may not see the target repository.
