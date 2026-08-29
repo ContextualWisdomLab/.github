@@ -3739,7 +3739,7 @@ REPORT
 			;;
 		esac
 		;;
-	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success)
+	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success|internal-server-error-unrelated-output-nonretryable)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-api-connection-primary|vertex_ai/retry-api-connection-primary|openai/openai/retry-api-connection-primary)
 			attempt="0"
