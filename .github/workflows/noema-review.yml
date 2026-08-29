@@ -297,7 +297,6 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
-          CONTEXTUAL_ORCHESTRATOR_POOL: auto
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -323,7 +322,7 @@ jobs:
           fi
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
-          export NOEMA_LLM_MODEL="orchestrator/auto"
+          export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
           python3 scripts/ci/noema_review_gate.py \
