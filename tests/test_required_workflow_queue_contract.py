@@ -1231,7 +1231,7 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
         "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
     ) in workflow
     assert (
-        "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || inputs.stacked_review_dispatch_limit || "
+        "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || "
         "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}"
     ) in workflow
     assert (
@@ -1260,6 +1260,17 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
     assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
     assert 'if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then' in workflow
+
+
+def test_stacked_budget_is_not_declared_as_an_unused_workflow_call_input() -> None:
+    """Keep the stacked-only organization setting out of the reusable API."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    workflow_call = workflow.split("  workflow_call:", 1)[1].split(
+        "  schedule:", 1
+    )[0]
+
+    assert "stacked_review_dispatch_limit" not in workflow_call
+    assert "inputs.stacked_review_dispatch_limit" not in workflow
 
 
 def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
