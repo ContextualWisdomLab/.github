@@ -55,13 +55,25 @@ RUNTIME_PATH_PARTS = frozenset(
         "ops",
     }
 )
+SUDO_ARGUMENT_OPTION_RE = (
+    r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
+)
+SUDO_OPTION_RE = (
+    rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|\s+)\S+|"
+    rf"(?!(?:{SUDO_ARGUMENT_OPTION_RE})(?:=|\s|$))--?\S+|--)"
+)
+SUDO_PREFIX_RE = rf"(?:sudo\s+(?:{SUDO_OPTION_RE}\s+)*|)"
+NGINX_RUNTIME_IMAGE_RE = (
+    r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
+)
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_container_image",
         re.compile(
             r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+"
-            r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*(?:nginx|nginx-unprivileged)"
+            r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
+            rf"{NGINX_RUNTIME_IMAGE_RE}"
             r"(?:[:@]\S+|\s|$)"
         ),
     ),
@@ -77,7 +89,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_runtime_command",
         re.compile(
             r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
-            r"^\s*(?:sudo\s+(?:-\S+\s+)*)?nginx(?=\s|$|[;&|])|"
+            rf"^\s*{SUDO_PREFIX_RE}nginx(?=\s|$|[;&|])|"
             r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
@@ -92,7 +104,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_package_install",
         re.compile(
-            r"(?im)^\s*(?:RUN\s+)?(?:sudo\s+(?:-\S+\s+)*)?(?:apk\s+add|apt(?:-get)?\s+install|"
+            rf"(?im)^\s*(?:RUN\s+)?{SUDO_PREFIX_RE}(?:apk\s+add|apt(?:-get)?\s+install|"
             r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
         ),
     ),

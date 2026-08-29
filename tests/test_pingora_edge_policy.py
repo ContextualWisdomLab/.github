@@ -67,6 +67,9 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content(
         "deploy/monitoring.yaml", "image: nginx/nginx-prometheus-exporter:1.0\n"
     ) == ()
+    assert policy.scan_content(
+        "deploy/ingress.yaml", "image: nginx/nginx-ingress:1.11\n"
+    )
 
 
 def test_nested_documentation_path_allows_prose_samples() -> None:
@@ -141,6 +144,20 @@ def test_sudo_options_are_supported_for_runtime_commands_and_packages() -> None:
 
     violations = policy.scan_content(
         "src/runtime.sh", "sudo -n nginx -s reload\nsudo -n apt-get install nginx\n"
+    )
+    assert {item.rule for item in violations} == {
+        "nginx_runtime_command",
+        "nginx_package_install",
+    }
+
+
+def test_sudo_argument_options_do_not_reinterpret_their_values() -> None:
+    """Sudo user values do not become false Nginx commands."""
+
+    violations = policy.scan_content(
+        "src/runtime.sh",
+        "sudo -u nginx php-fpm\nsudo -u root nginx -s reload\n"
+        "sudo --user root apt-get install nginx\n",
     )
     assert {item.rule for item in violations} == {
         "nginx_runtime_command",
