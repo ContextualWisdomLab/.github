@@ -3,9 +3,9 @@
 ## Decision
 
 The OpenCode coverage image may expose a Python dependency directly from source
-only when the validated base branch's frozen `uv.lock`, or a changed exact-head
-`uv.lock` project selected for coverage, names an HTTPS GitHub repository owned
-by `ContextualWisdomLab` and a full 40-character Git commit. Registry
+only when the validated base branch's frozen `uv.lock`, or a changed or newly
+added exact-head `uv.lock` project selected for coverage, names an HTTPS GitHub
+repository owned by `ContextualWisdomLab` and a full 40-character Git commit. Registry
 dependencies remain exact-version, SHA-256-pinned `pip` installs.
 
 The trusted materializer separates those two dependency classes. Unchanged
@@ -34,8 +34,9 @@ product's current-head tests passing.
   organization origin fail closed.
 - Duplicate references to one repository must resolve to one commit; conflicting
   revisions fail before the image build.
-- Only metadata read from the validated base SHA or a changed project in the
-  exact validated HEAD can select a dependency. Pull request source cannot
+- Only metadata read from the validated base SHA or a changed or newly added
+  project in the exact validated HEAD can select a dependency. Pull request
+  source cannot
   modify the networked image build inputs outside those immutable revisions.
 - Source dependencies are import-only. No `pip install`, PEP 517 backend, setup
   hook, or dependency lifecycle script runs while the network is available.
