@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import runpy
 import subprocess
+from types import SimpleNamespace
 
 _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -257,7 +259,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     mask_index = text.index(mask)
     for later_operation in (
         "git clone",
-        "python3 -m pip install",
+        '"$sidecar_python" -m pip install',
         '"$ORCHESTRATOR_WORK/launch_sidecar.py"',
         "healthz",
     ):
@@ -274,14 +276,47 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
     assert "get_credential(REVIEW_AUTH_CREDENTIAL_NAME)" in text
 
 
-def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
-    """Discovery, free filtering, and serving come from the vendored library."""
+def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
+    """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
+    assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
     assert "free_discovered_models(discovered)" in text
+    assert 'getattr(model, "output_modalities", None)' in text
+    assert 'isinstance(modalities, str)' in text
+    assert '"text" in {str(modality).casefold() for modality in modalities}' in text
+    assert "not _has_text_output(model)" in text
+    assert 'model_id = getattr(model, "model_id", "")' in text
+
+    launcher = runpy.run_path(str(LAUNCHER))
+    has_text_output = launcher["_has_text_output"]
+    assert has_text_output(SimpleNamespace(output_modalities="text"))
+    assert has_text_output(SimpleNamespace(output_modalities=("text", "image")))
+    assert not has_text_output(SimpleNamespace(output_modalities=("video",)))
+    assert not has_text_output(SimpleNamespace())
+    report_rows = launcher["_report_rows"]
+    free = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="free/model",
+        agent_id="openrouter_free_model",
+        output_modalities=("text",),
+    )
+    priced = SimpleNamespace(
+        provider_name="openai",
+        model_id="priced-model",
+        agent_id="openai_priced_model",
+        output_modalities=("text",),
+        prompt_price_per_1k=0.002,
+        completion_price_per_1k=0.008,
+        currency_code="USD",
+    )
+    rows = report_rows([free, priced], frozenset({("openrouter", "free/model")}))
+    assert [row["is_free"] for row in rows] == [True, False]
+    assert rows[1]["prompt_price_per_1k"] == 0.002
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
-    assert "orchestrator/free would fail closed" in text
+    assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
+    assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text
 
@@ -305,6 +340,13 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     text = _read(LAUNCHER)
     assert "REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024" in text
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
+
+
+def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
+    """Gateway free-pool scans must not force unsupported provider controls."""
+    text = _read(STRIX_WORKFLOW)
+    assert "STRIX_REASONING_EFFORT: none" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -410,7 +452,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
