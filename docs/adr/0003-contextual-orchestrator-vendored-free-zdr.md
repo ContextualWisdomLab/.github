@@ -33,17 +33,20 @@ all five, and auto-optimize routing by cost.
    transport only; request-time credential reads go through the KV.
 2. **Auto model discovery + governed virtual pools**: discovery runs with the
    orchestrator's own `discover_all_models()` against the KV credentials.
-   OpenCode and Noema admit only zero-priced routes. Strix admits provider-
-   diverse priced routes only when discovery supplies finite, nonnegative
-   prompt and completion prices plus an explicit currency; missing or malformed
-   price evidence fails closed. The gateway's
+   OpenCode and Noema admit only zero-priced routes. Strix ranks routes in three
+   explicit evidence tiers: zero-priced first, then routes with finite,
+   nonnegative prompt and completion prices plus an explicit currency, then
+   bounded `cost:unknown` fallbacks for providers that expose model availability
+   while publishing neither per-token price component. A missing pair is never
+   relabeled free or price-attested; a partial price vector, malformed numeric
+   value, or missing currency for a published vector fails closed. The gateway's
    `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
    enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
-   may admit priced routes only through the same evidence-bearing policy, never
-   through a direct-provider model identifier.
-3. **ZDR-first selection**: `scripts/ci/zdr_policy.py` defines ZDR the way
-   OpenRouter does ("a provider will not store your data for any period of
-   time"; zero retention also implies no training) and is deliberately
+   may admit priced or unknown-cost routes only through this evidence-bearing
+   policy, never through a direct-provider model identifier.
+3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
+   the way OpenRouter does ("a provider will not store your data for any period
+   of time"; zero retention also implies no training) and is deliberately
    conservative: any provider whose zero-retention guarantee cannot be
    attested from a machine-readable, dated source is treated as non-ZDR,
    mirroring OpenRouter's stance on unascertained policies. The
@@ -51,10 +54,11 @@ all five, and auto-optimize routing by cost.
    fetched when egress allows it and is authoritative for the `openrouter`
    scope; otherwise the dated static attestation table is used, never a
    fabricated policy.
-   `scripts/ci/contextual_orchestrator_review_policy.py` turns the price-
-   evidenced discovery report into a ZDR-prioritized, provider-family-diverse agents
-   catalog (primary/secondary NVIDIA keys share one outage-domain family),
-   capped in size, in the orchestrator's own `ModelAgent` schema.
+   `scripts/ci/contextual_orchestrator_review_policy.py` turns the discovery
+   report into a free-first, cost-evidence-ranked, ZDR-prioritized,
+   provider-family-diverse agents catalog (primary/secondary NVIDIA keys share
+   one outage-domain family), capped in size, in the orchestrator's own
+   `ModelAgent` schema.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
    provision the sidecar with the five secrets before OpenCode runs and point
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
@@ -66,17 +70,18 @@ all five, and auto-optimize routing by cost.
    discovered free routes all shared the OpenRouter outage domain, which the
    gateway correctly collapsed to one provider attempt. Strix therefore uses
    the provider-diverse pool supplied by all five configured credentials.
-   Provider diversity and provider cost evidence remain delegated to the
+   Provider diversity and cost-evidence classification remain delegated to the
    gateway rather than embedding a second routing policy in GitHub Actions.
-   Strix has no external fallback and private targets pass
-   visibility through to the gateway's ZDR requirement. Noema reviewer identity
-   remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
-   `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
+   Strix has no external fallback and private targets pass visibility through
+   to the gateway's ZDR requirement. Noema reviewer identity remains
+   `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never `github.token`;
+   Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
    `github.token`; model subprocesses still run with
    `GITHUB_TOKEN`/`GH_TOKEN`/OIDC request env stripped.
 5. **Evidence**: the sidecar writes a discovery report, the policy report (pool,
-   counts, ZDR sources, feed-used flag, selected routes), and exports
+   total/free/priced/unknown counts, selected counts by cost tier, ZDR sources,
+   feed-used flag, selected routes), and exports
    `CONTEXTUAL_ORCHESTRATOR_EVIDENCE`; these are auditable per run.
 6. **Review request envelope**: the library keeps its generic 64 KiB default,
    while this loopback, bearer-authenticated, per-job sidecar configures a
@@ -91,10 +96,13 @@ all five, and auto-optimize routing by cost.
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
   discovery under the zero-cost pool. Strix uses the separately governed auto
-  pool without treating absent price metadata as paid-route evidence.
+  pool without treating absent price metadata as either free or paid-route
+  evidence.
 - Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
   remains distinct from the zero-cost OpenCode/Noema pool, while private-target
-  ZDR admission remains fail-closed.
+  ZDR admission remains fail-closed. Public-target unknown-cost routes remain
+  last-resort, family-capped fallbacks after free and fully price-attested
+  routes.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
