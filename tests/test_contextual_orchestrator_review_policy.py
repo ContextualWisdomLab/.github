@@ -208,6 +208,14 @@ def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
     assert result["report"]["priced_selected_count"] == 1
 
 
+def test_build_auto_catalog_order_is_independent_of_discovery_order() -> None:
+    """Equivalent route tiers have deterministic provider/model priority."""
+    parsed = policy.parse_discovery_report(_report())
+    forward = policy.build_zdr_prioritized_catalog(parsed, pool="auto")
+    reversed_result = policy.build_zdr_prioritized_catalog(reversed(parsed), pool="auto")
+    assert forward["report"]["selected"] == reversed_result["report"]["selected"]
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

@@ -243,6 +243,8 @@ def build_zdr_prioritized_catalog(
             )
             else 1,
             0 if row["is_free"] else 1,
+            row["provider"],
+            row["model"],
         )
     )
     picked: list[dict[str, Any]] = []

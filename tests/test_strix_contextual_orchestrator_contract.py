@@ -73,7 +73,11 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_required_smoke_pins_the_gateway_default(self) -> None:
         """The bounded required-path smoke rejects a future direct-default regression."""
         self.assertIn("contextual-orchestrator Strix sidecar", self.smoke)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/auto", self.smoke)
+        self.assertIn("active_strix_models=", self.smoke)
+        self.assertIn(
+            '"$active_strix_models" = "contextual-orchestrator/orchestrator/auto"',
+            self.smoke,
+        )
         self.assertIn("Strix does not resolve a direct provider outside the gateway", self.smoke)
 
     def test_required_smoke_rejects_invalid_sidecar_syntax(self) -> None:

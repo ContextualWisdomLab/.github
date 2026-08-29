@@ -180,7 +180,9 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
-assert_file_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" "Strix defaults every scan to the contextual-orchestrator provider-diverse pool"
+active_strix_models="$(sed -n -E 's/^[[:space:]]*STRIX_MODEL:[[:space:]]*([^#[:space:]]+)[[:space:]]*$/\1/p' "$workflow_file")"
+[ "$active_strix_models" = "contextual-orchestrator/orchestrator/auto" ] || record_failure "Strix must define exactly one active provider-diverse auto default model"
+assert_file_not_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/free" "Strix must not retain the free default route"
 assert_file_contains "$decision_record" "authoritative Strix security analysis uses the provider-diverse \`orchestrator/auto\` pool" "The binding ADR authorizes the Strix auto route"
 assert_file_contains "$decision_record" "Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets" "The binding ADR preserves private-target privacy"
 assert_file_contains "$decision_record" "Strix is intentionally correctness-first rather than zero-cost" "The binding ADR records the Strix cost boundary"
