@@ -149,14 +149,28 @@ def _redact_unstructured(text: str, *, redact_assignments: bool = True) -> str:
 
 def _redact_operational_identifiers(text: str) -> str:
     """Apply the minimum-disclosure allowlist to common operational PII."""
-    cleaned = EMAIL_RE.sub(
-        lambda match: f"{match.group(1)}[REDACTED_EMAIL]{match.group(2)}", text
-    )
-    cleaned = PHONE_RE.sub(
-        lambda match: f"{match.group(1)}[REDACTED_PHONE]{match.group(2)}", cleaned
-    )
+    cleaned = _redact_bounded_matches(text, EMAIL_RE, "[REDACTED_EMAIL]")
+    cleaned = _redact_bounded_matches(cleaned, PHONE_RE, "[REDACTED_PHONE]")
     cleaned = _redact_ipv4_addresses(cleaned)
     return RUNNER_PATH_RE.sub(r"\1[REDACTED_PATH]", cleaned)
+
+
+def _redact_bounded_matches(text: str, pattern: re.Pattern[str], replacement: str) -> str:
+    """Replace bounded matches while leaving each trailing delimiter searchable."""
+    pieces: list[str] = []
+    cursor = 0
+    search_from = 0
+    while True:
+        match = pattern.search(text, search_from)
+        if match is None:
+            pieces.append(text[cursor:])
+            return "".join(pieces)
+        prefix = match.group(1)
+        suffix = match.group(2)
+        value_end = match.end(2) - len(suffix)
+        pieces.extend((text[cursor : match.start(1)], prefix, replacement))
+        cursor = value_end
+        search_from = value_end
 
 
 def _redact_ipv4_addresses(text: str) -> str:

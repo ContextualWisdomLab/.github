@@ -98,6 +98,19 @@ def test_sensitive_log_redaction_handles_adjacent_ipv4_addresses() -> None:
     )
 
 
+def test_sensitive_log_redaction_handles_adjacent_emails_and_phones() -> None:
+    """Email and phone delimiters remain available for adjacent matches."""
+    operational = (
+        "emails=first@example.test second@example.test "
+        "phones=010-1234-5678 010-9876-5432"
+    )
+
+    assert redactor._redact_operational_identifiers(operational) == (
+        "emails=[REDACTED_EMAIL] [REDACTED_EMAIL] "
+        "phones=[REDACTED_PHONE] [REDACTED_PHONE]"
+    )
+
+
 def test_sensitive_log_redaction_handles_adversarial_quoted_values() -> None:
     """Quoted sensitive assignments are parsed linearly even with many escapes."""
     source = "_jwt:\"" + "\\!" * 5000
