@@ -519,9 +519,12 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
-	if awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
-		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
-	fi
+	local bootstrap_conditions
+	bootstrap_conditions="$(awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep '^[[:space:]]*if:' || true)"
+	assert_equals \
+		"        if: \${{ github.event_name == 'pull_request_target' }}" \
+		"$bootstrap_conditions" \
+		"opencode bootstrap permits only the explicit pull_request_target Pingora policy condition"
 	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
 	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
