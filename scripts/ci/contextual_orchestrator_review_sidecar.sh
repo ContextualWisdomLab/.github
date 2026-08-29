@@ -32,17 +32,26 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
-# Require at least one of the five provider secrets so we never boot an empty
-# (or mock) pool. Missing individual secrets are allowed — discovery skips the
-# unregistered provider — matching the review gateway contract.
+# Require the OpenRouter evidence credential plus at least one serving-provider
+# credential for the mandatory-ZDR review pool. Missing other individual
+# secrets are allowed — discovery skips that unregistered provider.
 provider_secret_count=0
 for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY; do
   if [ -n "${!secret_name:-}" ]; then
     provider_secret_count=$((provider_secret_count + 1))
   fi
 done
-if [ "$provider_secret_count" -lt 1 ]; then
-  fail "at least one of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY / NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY is required"
+serving_provider_secret_count=0
+for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENAI_API_KEY; do
+  if [ -n "${!secret_name:-}" ]; then
+    serving_provider_secret_count=$((serving_provider_secret_count + 1))
+  fi
+done
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+  fail "OPENROUTER_API_KEY is required for mandatory-ZDR evidence discovery"
+fi
+if [ "$serving_provider_secret_count" -lt 1 ]; then
+  fail "at least one non-OpenRouter serving provider credential is required for mandatory-ZDR review"
 fi
 log "provider secrets present: $provider_secret_count of 5"
 

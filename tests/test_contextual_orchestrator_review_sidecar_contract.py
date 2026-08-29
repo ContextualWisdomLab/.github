@@ -69,10 +69,11 @@ def test_sidecar_adr_names_the_current_vendored_revision() -> None:
     assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
-def test_sidecar_requires_the_five_provider_secrets() -> None:
-    """At least one of the five secrets must be present as bootstrap transport."""
+def test_sidecar_requires_zdr_evidence_and_serving_provider() -> None:
+    """Mandatory ZDR needs the evidence key and a non-evidence provider."""
     text = _read(SIDECAR)
-    assert '"$provider_secret_count" -lt 1 ]; then' in text
+    assert 'OPENROUTER_API_KEY is required for mandatory-ZDR evidence discovery' in text
+    assert '"$serving_provider_secret_count" -lt 1 ]; then' in text
     for secret in FIVE_SECRETS:
         assert secret in text
 
