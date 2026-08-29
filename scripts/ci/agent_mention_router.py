@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -383,24 +384,45 @@ def dispatched_agents(
     artifact_cache = (
         ledger_artifact_cache if ledger_artifact_cache is not None else {}
     )
+
+    def _fetch_agent(agent: str) -> None:
+        artifact_name = agent_ledger_artifact_name(request, agent)
+        response = dispatch_client.request(
+            [
+                LEDGER_ARTIFACTS_ENDPOINT,
+                "-X",
+                "GET",
+                "-f",
+                f"name={artifact_name}",
+                "-f",
+                "per_page=100",
+            ]
+        )
+        artifact_cache[artifact_name] = bool(
+            _artifact_records(response, expected_name=artifact_name)
+        )
+
+    agents_to_fetch = [
+        agent
+        for agent in candidates
+        if agent_ledger_artifact_name(request, agent) not in artifact_cache
+    ]
+
+    if len(agents_to_fetch) <= 1:
+        for agent in agents_to_fetch:
+            _fetch_agent(agent)
+    else:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        try:
+            list(executor.map(_fetch_agent, agents_to_fetch))
+        except Exception:  # pragma: no cover
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     for agent in candidates:
         artifact_name = agent_ledger_artifact_name(request, agent)
-        if artifact_name not in artifact_cache:
-            response = dispatch_client.request(
-                [
-                    LEDGER_ARTIFACTS_ENDPOINT,
-                    "-X",
-                    "GET",
-                    "-f",
-                    f"name={artifact_name}",
-                    "-f",
-                    "per_page=100",
-                ]
-            )
-            artifact_cache[artifact_name] = bool(
-                _artifact_records(response, expected_name=artifact_name)
-            )
-        if artifact_cache[artifact_name]:
+        if artifact_cache.get(artifact_name):
             observed.add(agent)
     return frozenset(observed)
 

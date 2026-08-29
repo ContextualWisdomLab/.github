@@ -51,3 +51,7 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+
+## 2026-09-12 - Avoid N+1 API blocking in agent router
+**Learning:** The `dispatched_agents` function in `scripts/ci/agent_mention_router.py` was fetching ledger artifacts from the GitHub API synchronously for each agent. This N+1 network/API bottleneck stalled execution when multiple agents were requested.
+**Action:** Use `concurrent.futures.ThreadPoolExecutor` bounded by a small `max_workers` to concurrently fetch ledger artifacts for multiple agents, avoiding sequential API delays while keeping the fast serial path for single-item inputs. Also, explicitly instantiate the executor and shut it down in a `finally` block to avoid hang issues.
