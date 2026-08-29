@@ -240,11 +240,14 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
-    for page in range(1, 32):
+    page = 1
+    while True:
         url = f"{api_url}/repos/{repository}/pulls/{pull_request}/files?per_page=100&page={page}"
         payload = opener(url, token)
         if not isinstance(payload, list):
             raise PolicyError("GitHub changed-file evidence is not a JSON array")
+        if page == 31 and len(payload) >= 100:
+            raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         for item in payload:
             if not isinstance(item, Mapping):
                 raise PolicyError("GitHub changed-file entry is not an object")
@@ -271,7 +274,7 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
+        page += 1
 
 
 def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:

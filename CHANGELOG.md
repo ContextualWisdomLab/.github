@@ -13,7 +13,9 @@ Semantic Versioning where the repository publishes a release.
   `--only-binary=:all:`.
 - Re-export changed or newly added `uv.lock` projects from the exact HEAD with
   the existing frozen/offline exporter, while removing deleted projects' base
-  registry and VCS inputs and retaining unchanged projects at the base revision.
+  registry and VCS inputs and retaining unchanged projects at the base revision;
+  changed or deleted projects are inventoried before any base export so a stale
+  base project cannot block its exact-head repair.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

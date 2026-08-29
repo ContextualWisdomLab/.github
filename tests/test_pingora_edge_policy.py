@@ -290,7 +290,19 @@ def test_changed_file_evidence_shape_is_fail_closed(payload: object, message: st
 def test_changed_file_pagination_bound_is_fail_closed() -> None:
     """More than 3,000 changed files cannot silently truncate policy evidence."""
 
-    page = [{"filename": f"f-{index}", "status": "modified", "patch": ""} for index in range(100)]
+    oversized_page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(3_001)
+    ]
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files(
+            "api", "a/b", 1, "x", lambda _url, _token: oversized_page
+        )
+
+    page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(100)
+    ]
     with pytest.raises(policy.PolicyError, match="3,000"):
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 

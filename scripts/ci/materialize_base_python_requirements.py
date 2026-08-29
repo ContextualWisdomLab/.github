@@ -616,12 +616,16 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
 
 
 def _base_python_inputs(
-    repo_root: pathlib.Path, base_sha: str
+    repo_root: pathlib.Path,
+    base_sha: str,
+    *,
+    excluded_uv_paths: set[str] | None = None,
 ) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
-    """Return hash locks and exact VCS sources from one validated base commit."""
+    """Return selected hash locks and exact VCS sources from one base commit."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
+    excluded_uv_paths = excluded_uv_paths or set()
     entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", base_sha)
     regular_blobs = _regular_base_blob_paths(entries)
     regular_paths = {path for path, _candidate in regular_blobs}
@@ -634,6 +638,8 @@ def _base_python_inputs(
             if _is_hash_pinned(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
+            if path in excluded_uv_paths:
+                continue
             if _uv_pyproject_path(path) not in regular_paths:
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
@@ -895,6 +901,7 @@ def materialize(
     base_uv_paths = _regular_uv_lock_paths(regular_blobs, regular_paths)
     head_regular_paths: set[str] | None = None
     head_uv_paths: set[str] = set()
+    changed_uv_paths: set[str] = set()
     if head_sha is not None:
         head_entries = _git(
             resolved_repo, "ls-tree", "-r", "-z", "--full-tree", head_sha
@@ -902,17 +909,24 @@ def materialize(
         head_regular_blobs = _regular_base_blob_paths(head_entries)
         head_regular_paths = {path for path, _candidate in head_regular_blobs}
         head_uv_paths = _regular_uv_lock_paths(head_regular_blobs, head_regular_paths)
-    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
-    if head_sha is not None:
-        locks = _select_python_locks(
-            resolved_repo, base_sha, locks, head_sha
-        )
         changed_uv_paths = _changed_uv_lock_paths(
             resolved_repo,
             base_sha,
             base_uv_paths,
             head_sha,
             head_uv_paths,
+        )
+    if changed_uv_paths:
+        locks, vcs_manifest = _base_python_inputs(
+            resolved_repo,
+            base_sha,
+            excluded_uv_paths=changed_uv_paths,
+        )
+    else:
+        locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    if head_sha is not None:
+        locks = _select_python_locks(
+            resolved_repo, base_sha, locks, head_sha
         )
         if changed_uv_paths:
             locks, vcs_manifest = _replace_changed_uv_inputs(

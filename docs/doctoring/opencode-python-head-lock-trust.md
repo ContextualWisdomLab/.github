@@ -19,7 +19,9 @@ deleted or invalid content fails closed. A base lock that becomes unbounded
 fails closed. A changed or newly added `uv.lock` project with a regular sibling
 `pyproject.toml` is re-exported from the exact HEAD through the existing frozen,
 offline, checksum-validating exporter; deleted projects remove their base
-registry and VCS inputs, and unchanged projects remain base-bound.
+registry and VCS inputs, and unchanged projects remain base-bound. Base and HEAD
+`uv.lock` inventories are completed before export, so a changed or deleted HEAD
+project never requires its stale base export to succeed first.
 
 ## Root cause
 

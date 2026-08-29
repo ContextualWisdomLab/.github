@@ -19,13 +19,16 @@ The implementation therefore:
    same immutable revision; an absent sibling is an explicit orphan, while a
    read failure for an inventoried blob is fatal and cannot be misclassified as
    absence;
-3. compares the base and current-head `uv.lock` plus sibling metadata blob IDs
-   before re-exporting a changed project; a deleted project removes its prior
-   registry and VCS entries, while a changed project uses the same isolated
+3. inventories the base and current-head `uv.lock` projects plus sibling metadata
+   blob IDs before export; unchanged projects use the base revision, changed or
+   newly added projects use HEAD, and deleted projects remove their base registry
+   and VCS entries;
+4. compares the base and current-head `uv.lock` plus sibling metadata blob IDs
+   before re-exporting a changed project; a changed project uses the same isolated
    exporter and exact registry/VCS validators against HEAD;
-4. installs one process-wide urllib opener with an empty proxy map and a redirect
+5. installs one process-wide urllib opener with an empty proxy map and a redirect
    handler that rejects every redirect before urllib creates a target request;
-5. downloads one fixed official `uv` archive from the literal GitHub Releases
+6. downloads one fixed official `uv` archive from the literal GitHub Releases
    HTTPS URL and accepts a response only when its parsed origin remains HTTPS on
    `github.com`, `release-assets.githubusercontent.com`, or
    `objects.githubusercontent.com` with the absent or explicit default port 443;
@@ -35,22 +38,22 @@ The implementation therefore:
    because that vanity host now returns HTTP 403 for the pinned 0.12.1 archive
    (ContextualWisdomLab/.github#1109) while the GitHub Releases asset keeps the
    same SHA-256 digest;
-6. verifies the bounded archive with a pinned SHA-256 digest before extraction;
-7. accepts only the expected regular-file tar member within explicit size bounds;
-8. writes the executable with mode `0755` and verifies that it reports the exact
+7. verifies the bounded archive with a pinned SHA-256 digest before extraction;
+8. accepts only the expected regular-file tar member within explicit size bounds;
+9. writes the executable with mode `0755` and verifies that it reports the exact
    pinned `uv` version;
-9. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
+10. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
    `--no-progress`, `--color never`, `--no-emit-project`, and `--no-editable` in
    an isolated temporary project;
-10. supplies a minimal environment with isolated home, temporary, cache, and
+11. supplies a minimal environment with isolated home, temporary, cache, and
    configuration directories, disables dotenv loading and managed Python
    downloads, and does not inherit arbitrary runner variables;
-11. keeps project metadata discovery enabled because the reconstructed
+12. keeps project metadata discovery enabled because the reconstructed
     `pyproject.toml` is an authoritative input; `--no-config` is deliberately not
     used because uv documents that it disables `pyproject.toml` discovery;
-12. rejects every nonempty export unless every logical line is an exact normalized
+13. rejects every nonempty export unless every logical line is an exact normalized
     package `==` pin followed only by complete SHA-256 hashes; and
-13. exposes only generated requirements files and a source manifest to the later
+14. exposes only generated requirements files and a source manifest to the later
     networkless coverage environment.
 
 ## Standards and current-tool rationale

@@ -1186,6 +1186,32 @@ def test_changed_uv_lock_replaces_base_registry_and_vcs_inputs(
     ]
 
 
+def test_changed_uv_lock_does_not_require_a_base_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repaired HEAD uv project replaces a base project that no longer exports."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-m", "repair uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    head_registry = b"head-dep==2 --hash=sha256:" + b"b" * 64 + b"\n"
+
+    def export(_repo: Path, revision: str, _lock_path: str):
+        if revision == base_sha:
+            raise RuntimeError("base uv lock is stale")
+        return head_registry, []
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == [
+        {"file": "requirements-000.txt", "source": "uv.lock"}
+    ]
+    assert (output / "requirements-000.txt").read_bytes() == head_registry
+
+
 def test_deleted_uv_lock_removes_base_registry_and_vcs_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1210,6 +1236,28 @@ def test_deleted_uv_lock_removes_base_registry_and_vcs_inputs(
         "_export_uv_lock",
         lambda _repo, _revision, _path: (base_registry, base_vcs),
     )
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
+    assert json.loads((output / "vcs-manifest.json").read_text()) == []
+
+
+def test_deleted_uv_lock_does_not_require_a_base_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a broken base uv project omits it without exporting the stale lock."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").unlink()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "delete stale uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    def fail_base_export(_repo: Path, revision: str, _lock_path: str):
+        assert revision == base_sha
+        raise RuntimeError("base uv lock is stale")
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", fail_base_export)
 
     output = tmp_path / "output"
     assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
