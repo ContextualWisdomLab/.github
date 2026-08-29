@@ -89,6 +89,13 @@ ceiling turns out to be conservative.
   rather than reverting to the original fixed order; it only loses the
   strict per-execution guarantee for that one run, logged as a
   `::warning::`.
+- A stacked PR whose OpenCode evidence is absent or stale is logged as `wait`
+  when the shared review-dispatch budget is exhausted, preserving the real
+  blocker instead of misreporting it as a no-action `skip`.
+- Targeted scheduler dispatch validates the PR's live base branch but passes
+  the target repository's default branch to the scheduler. Passing the PR base
+  itself would make a stacked PR appear default-base and bypass its central
+  OpenCode dispatch path.
 
 ## Verification
 

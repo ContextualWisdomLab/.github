@@ -2406,6 +2406,13 @@ def inspect_pr(
                 "review_dispatch",
                 f"stacked PR onto {base_ref}; OpenCode review dispatched",
             )
+        if opencode_state in {"absent", "stale"} and trigger_reviews and not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                f"stacked PR onto {base_ref}; OpenCode review {opencode_state}; "
+                "review dispatch limit reached",
+            )
         return Decision(
             number,
             "skip",
