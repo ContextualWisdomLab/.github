@@ -640,7 +640,6 @@ jobs:
             python_coverage_required=0
             while IFS= read -r -d '' changed_path; do
               changed_basename="${changed_path##*/}"
-              changed_parent="${changed_path%/*}"
               case "$changed_basename" in
                 *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
                 setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
@@ -650,8 +649,11 @@ jobs:
                   break
                   ;;
               esac
-              case "$changed_parent" in
-                requirements|*/requirements)
+              # Any text file below a requirements directory may be a bounded
+              # include target of a base lock, so retain materialization
+              # conservatively instead of relying on path depth alone.
+              case "/$changed_path/" in
+                */requirements/*)
                   case "$changed_basename" in
                     *.txt|*.in)
                       python_coverage_required=1

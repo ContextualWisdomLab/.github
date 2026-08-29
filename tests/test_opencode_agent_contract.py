@@ -588,7 +588,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert "*.py|pyproject.toml|uv.lock|poetry.lock" in measure_step
     assert "requirements.lock|requirements*.txt|requirements*.in" in measure_step
-    assert "requirements|*/requirements" in measure_step
+    assert "*/requirements/*" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
@@ -880,8 +880,8 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
         ("services/requirements-dev.txt", "1", False),
         ("requirements/ci.txt", "1", False),
         ("services/requirements/ci.txt", "1", False),
-        ("requirements/docs/notes.txt", "0", False),
-        ("services/requirements/docs/notes.txt", "0", False),
+        ("requirements/docs/notes.txt", "1", False),
+        ("services/requirements/docs/notes.txt", "1", False),
         ("services/requirements/requirements-extra.txt", "1", False),
         ("deleted.py", "1", True),
         ("README.md", "0", False),
@@ -941,6 +941,72 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == expected, relative_path
+
+
+def test_opencode_python_lock_classifier_keeps_nested_include_targets(tmp_path: Path):
+    """A nested requirements include keeps trusted base materialization enabled."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    repository = tmp_path / "repo-with-nested-include"
+    repository.mkdir()
+    subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "test"], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "config",
+            "user.email",
+            "test@example.com",
+        ],
+        check=True,
+    )
+    nested = repository / "requirements/docs/notes.txt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("base dependency\n", encoding="utf-8")
+    (repository / "requirements.txt").write_text(
+        "-r requirements/docs/notes.txt\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+    )
+    base_sha = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    nested.write_text("changed dependency\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", classifier],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "COVERAGE_SOURCE_WORKDIR": str(repository),
+            "PR_BASE_SHA": base_sha,
+            "RUNNER_TEMP": str(tmp_path),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
 
 
 def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
