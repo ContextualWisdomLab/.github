@@ -775,9 +775,9 @@ google-cloud-core==2.6.0 \
     # via
     #   google-cloud-bigquery
     #   google-cloud-storage
-google-cloud-resource-manager==1.17.0 \
-    --hash=sha256:0f486b62e2c58ff992a3a50fa0f4a96eef7750aa6c971bb373398ccb91828660 \
-    --hash=sha256:e479baf4b014a57f298e01b8279e3290b032e3476d69c8e5e1427af8f82739a5
+google-cloud-resource-manager==1.18.0 \
+    --hash=sha256:69bab144acd75878ebe44b720903dc3d140cb7d3be3261eaa8bc81e48afaff33 \
+    --hash=sha256:db689f800a14c66d041196a7fbb8bb8aae8dc87f28c2929e101a5ec766b15512
     # via google-cloud-aiplatform
 google-cloud-storage==3.12.1 \
     --hash=sha256:1d81491c7663bc26c5056d00b834356f2253b910ef467f9cf9928a87fca1e04b \
