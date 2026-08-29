@@ -65,7 +65,9 @@ def _has_text_output(model: object) -> bool:
         return False
     if isinstance(modalities, str):
         modalities = (modalities,)
-    return not modalities or "text" in {str(modality).casefold() for modality in modalities}
+    return not modalities or "text" in {
+        str(modality).casefold() for modality in modalities
+    }
 
 
 def _route_identity(model: object) -> tuple[str, str]:
@@ -104,21 +106,30 @@ def _report_rows(
         model_id = str(getattr(model, "model_id", None) or "")
         if not provider or not model_id:
             continue
-        base_url = str(getattr(model, "chat_base_url", None) or zdr_policy.PROVIDER_BASE_URLS[provider])
+        base_url = str(
+            getattr(model, "chat_base_url", None)
+            or zdr_policy.PROVIDER_BASE_URLS[provider]
+        )
         credential_key = str(
-            getattr(model, "credential_name", None) or zdr_policy.PROVIDER_CREDENTIAL_NAMES[provider]
+            getattr(model, "credential_name", None)
+            or zdr_policy.PROVIDER_CREDENTIAL_NAMES[provider]
         )
         auth_scheme = str(
-            getattr(model, "auth_scheme", None) or zdr_policy.PROVIDER_AUTH_SCHEMES[provider]
+            getattr(model, "auth_scheme", None)
+            or zdr_policy.PROVIDER_AUTH_SCHEMES[provider]
         )
         rows.append(
             {
                 "provider": provider,
                 "model": model_id,
-                "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
+                "agent_id": str(
+                    getattr(model, "agent_id", None) or f"{provider}_{model_id}"
+                ),
                 "is_free": (provider, model_id) in free_route_identities,
                 "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
-                "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
+                "completion_price_per_1k": getattr(
+                    model, "completion_price_per_1k", None
+                ),
                 "currency_code": getattr(model, "currency_code", None),
                 "base_url": base_url,
                 "credential_key": credential_key,
@@ -151,6 +162,42 @@ def _safe_http_status(exc: Exception) -> int | None:
     if type(status) is int and 100 <= status <= 599:
         return status
     return None
+
+
+def _sanitized_discovery_errors(errors: list[object]) -> list[dict[str, str]]:
+    """Return stable provider discovery failures without response text."""
+    rows: list[dict[str, str]] = []
+    for error in errors:
+        provider = str(getattr(error, "provider_name", ""))
+        code = str(getattr(error, "error_code", ""))
+        rows.append(
+            {
+                "provider": provider
+                if provider.isidentifier() and len(provider) <= 64
+                else "unknown",
+                "error_code": code
+                if code.isidentifier() and len(code) <= 64
+                else "provider_error",
+            }
+        )
+    return rows
+
+
+def _require_complete_discovery(
+    discovered: list[object], errors: list[object], output_path: str
+) -> list[object]:
+    """Return a complete catalog or persist sanitized failure evidence."""
+    if not errors:
+        return discovered
+    _write_json(
+        output_path,
+        {
+            "complete": False,
+            "models": [],
+            "errors": _sanitized_discovery_errors(errors),
+        },
+    )
+    raise SystemExit("review sidecar discovery incomplete")
 
 
 def _preflight_review_agents(
@@ -197,7 +244,9 @@ def _preflight_review_agents(
             row["status"] = "rejected"
             error_type = type(exc).__name__
             row["error_type"] = (
-                error_type if error_type.isidentifier() and len(error_type) <= 64 else "ProviderError"
+                error_type
+                if error_type.isidentifier() and len(error_type) <= 64
+                else "ProviderError"
             )
             http_status = _safe_http_status(exc)
             if http_status is not None:
@@ -238,7 +287,9 @@ def _preflight_with_fallback(
         if not fallback_agents:
             raise
         try:
-            viable, report = _preflight_review_agent_batches(fallback_agents, client=client)
+            viable, report = _preflight_review_agent_batches(
+                fallback_agents, client=client
+            )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report
             raise
@@ -311,9 +362,7 @@ def _bounded_primary_catalog_limit(
     return total_limit
 
 
-def _bounded_fallback_catalog_limit(
-    requested_limit: int, *, primary_count: int
-) -> int:
+def _bounded_fallback_catalog_limit(requested_limit: int, *, primary_count: int) -> int:
     """Return remaining priced-fallback capacity after primary selection."""
     if requested_limit < 1:
         raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
@@ -331,9 +380,15 @@ def _with_discovery_counts(
     enriched.update(
         {
             "total_routes": len(rows),
-            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
-            "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
-            "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+            "total_free_routes": sum(
+                row.get("cost_evidence") == "free" for row in rows
+            ),
+            "total_priced_routes": sum(
+                row.get("cost_evidence") == "priced" for row in rows
+            ),
+            "total_unknown_routes": sum(
+                row.get("cost_evidence") == "unknown" for row in rows
+            ),
         }
     )
     return enriched
@@ -389,23 +444,52 @@ def main(argv: list[str] | None = None) -> int:
             preflight, or no auth token is available — the sidecar must fail
             closed rather than boot a mock or unaudited pool.
     """
-    parser = argparse.ArgumentParser(description="Serve the contextual-orchestrator review sidecar.")
+    parser = argparse.ArgumentParser(
+        description="Serve the contextual-orchestrator review sidecar."
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
-    parser.add_argument("--auth-token", default="", help="Explicit bearer token; else resolve from the KV")
-    parser.add_argument("--discovery-out", required=True, help="Path to write the free-only discovery report JSON")
-    parser.add_argument("--catalog-out", required=True, help="Path to write the agents catalog JSON")
-    parser.add_argument("--report-out", required=True, help="Path to write the policy evidence JSON")
-    parser.add_argument("--preflight-out", required=True, help="Path to write sanitized runtime preflight JSON")
-    parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
+    parser.add_argument(
+        "--auth-token",
+        default="",
+        help="Explicit bearer token; else resolve from the KV",
+    )
+    parser.add_argument(
+        "--discovery-out",
+        required=True,
+        help="Path to write the free-only discovery report JSON",
+    )
+    parser.add_argument(
+        "--catalog-out", required=True, help="Path to write the agents catalog JSON"
+    )
+    parser.add_argument(
+        "--report-out", required=True, help="Path to write the policy evidence JSON"
+    )
+    parser.add_argument(
+        "--preflight-out",
+        required=True,
+        help="Path to write sanitized runtime preflight JSON",
+    )
+    parser.add_argument(
+        "--zdr-endpoints",
+        default=None,
+        help="Optional OpenRouter /api/v1/endpoints/zdr JSON path",
+    )
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
     from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
-    from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
-    from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
+    from contextual_orchestrator.model_discovery import (
+        discover_all_models,
+        free_discovered_models,
+    )
+    from contextual_orchestrator.orchestrator import (
+        ModelClient,
+        TaskOrchestrator,
+        load_agents,
+    )
     from contextual_orchestrator.review_gateway import (
         REVIEW_AUTH_CREDENTIAL_NAME,
         register_review_credentials,
@@ -426,13 +510,23 @@ def main(argv: list[str] | None = None) -> int:
             "review sidecar requires an explicit --auth-token or the "
             f"KV credential {REVIEW_AUTH_CREDENTIAL_NAME!r}"
         )
-    if not any(name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_")) for name in registered):
-        raise SystemExit("review sidecar requires at least one provider credential in the KV")
+    if not any(
+        name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_"))
+        for name in registered
+    ):
+        raise SystemExit(
+            "review sidecar requires at least one provider credential in the KV"
+        )
 
     try:
-        discovered, _ = discover_all_models()
-    except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
+        discovered, discovery_errors = discover_all_models()
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
+    discovered = _require_complete_discovery(
+        list(discovered), list(discovery_errors), args.discovery_out
+    )
     free_models = list(free_discovered_models(discovered)) if discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
@@ -449,12 +543,13 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     rows = _report_rows(selected_models, free_route_identities)
-    _write_json(args.discovery_out, {"models": rows})
+    _write_json(
+        args.discovery_out,
+        {"complete": True, "models": rows, "errors": []},
+    )
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     normalized_rows = parse_discovery_report({"models": rows})
-    free_rows = [
-        row for row in normalized_rows if row.get("cost_evidence") == "free"
-    ]
+    free_rows = [row for row in normalized_rows if row.get("cost_evidence") == "free"]
     priced_rows = [
         row for row in normalized_rows if row.get("cost_evidence") == "priced"
     ]

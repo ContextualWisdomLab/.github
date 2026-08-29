@@ -280,11 +280,15 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
-    assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
+    normalized = " ".join(text.split())
+    assert (
+        "from contextual_orchestrator.model_discovery import ( discover_all_models, "
+        "free_discovered_models, )" in normalized
+    )
     assert "free_discovered_models(discovered)" in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
-    assert '"text" in {str(modality).casefold() for modality in modalities}' in text
+    assert '"text" in { str(modality).casefold() for modality in modalities }' in normalized
     assert "not _has_text_output(model)" in text
     assert 'model_id = getattr(model, "model_id", "")' in text
 
@@ -313,8 +317,11 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     rows = report_rows([free, priced], frozenset({("openrouter", "free/model")}))
     assert [row["is_free"] for row in rows] == [True, False]
     assert rows[1]["prompt_price_per_1k"] == 0.002
-    assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
-    assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
+    assert (
+        "from contextual_orchestrator.orchestrator import ( ModelClient, "
+        "TaskOrchestrator, load_agents, )" in normalized
+    )
+    assert "from contextual_orchestrator.server import SecurityConfig, serve" in normalized
     assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
     assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text

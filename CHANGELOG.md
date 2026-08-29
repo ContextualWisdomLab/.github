@@ -8,7 +8,9 @@ Semantic Versioning where the repository publishes a release.
 - Probe contextual-orchestrator review routes in bounded concurrent batches so
   a rejected first discovery slice can advance to later routes, and capture the
   intentional oversized-body 413 self-test without mislabeling it as provider
-  discovery failure.
+  discovery failure. Incomplete provider discovery now writes sanitized
+  `complete: false` evidence and stops startup instead of serving a partial
+  catalog.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

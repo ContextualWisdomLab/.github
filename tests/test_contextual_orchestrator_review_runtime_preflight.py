@@ -15,7 +15,9 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 _SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
-_SANITIZER = _REPO_ROOT / "scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
+_SANITIZER = (
+    _REPO_ROOT / "scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
+)
 
 
 class _ProbeClient:
@@ -110,7 +112,9 @@ def test_preflight_fails_closed_when_every_route_rejects() -> None:
     preflight = namespace.get("_preflight_review_agents")
     error_type = namespace.get("ReviewPreflightError")
     assert callable(preflight), "launcher must expose provider-route preflight"
-    assert isinstance(error_type, type), "launcher must expose a typed preflight failure"
+    assert isinstance(error_type, type), (
+        "launcher must expose a typed preflight failure"
+    )
 
     agent = SimpleNamespace(
         id="openrouter_rejected", provider_name="openrouter", model="rejected/free"
@@ -135,9 +139,7 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
         {primary.id: TimeoutError("unavailable"), fallback.id: _openai_text("OK")}
     )
 
-    viable, report, fallback_used = preflight(
-        [primary], [fallback], client=client
-    )
+    viable, report, fallback_used = preflight([primary], [fallback], client=client)
 
     assert viable == [fallback]
     assert fallback_used is True
@@ -171,12 +173,12 @@ def test_preflight_advances_to_next_bounded_batch() -> None:
     preflight = namespace["_preflight_review_agent_batches"]
     batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
     agents = [
-        SimpleNamespace(id=f"route_{index}", provider_name="openrouter", model=f"model/{index}")
+        SimpleNamespace(
+            id=f"route_{index}", provider_name="openrouter", model=f"model/{index}"
+        )
         for index in range(batch_size + 1)
     ]
-    outcomes = {
-        agent.id: TimeoutError("unavailable") for agent in agents[:-1]
-    }
+    outcomes = {agent.id: TimeoutError("unavailable") for agent in agents[:-1]}
     outcomes[agents[-1].id] = _openai_text("OK")
     client = _ProbeClient(outcomes)
 
@@ -192,15 +194,47 @@ def test_preflight_advances_to_next_bounded_batch() -> None:
     assert client.calls[-1][0] == agents[-1]
 
 
+def test_discovery_errors_are_sanitized_and_fail_closed(tmp_path: Path) -> None:
+    """A partial provider catalog must retain safe evidence and fail closed."""
+    namespace = _load_launcher()
+    sanitize = namespace["_sanitized_discovery_errors"]
+    require_complete = namespace["_require_complete_discovery"]
+    secret = "sk-secret-must-not-enter-evidence"
+    errors = [
+        SimpleNamespace(provider_name="openrouter", error_code="http_status_413"),
+        SimpleNamespace(provider_name=f"bad/{secret}", error_code=f"failure/{secret}"),
+    ]
+
+    rows = sanitize(errors)
+
+    assert rows == [
+        {"provider": "openrouter", "error_code": "http_status_413"},
+        {"provider": "unknown", "error_code": "provider_error"},
+    ]
+    assert secret not in repr(rows)
+
+    evidence_path = tmp_path / "discovery.json"
+    with pytest.raises(SystemExit, match="review sidecar discovery incomplete"):
+        require_complete(
+            [SimpleNamespace(model_id="partial")], errors, str(evidence_path)
+        )
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == {
+        "complete": False,
+        "models": [],
+        "errors": rows,
+    }
+
+    complete = [SimpleNamespace(model_id="complete")]
+    assert require_complete(complete, [], str(evidence_path)) is complete
+
+
 def test_preflight_stage_limits_share_one_startup_budget() -> None:
     """Free-first and priced-fallback probes share one bounded route budget."""
     namespace = _load_launcher()
     primary = namespace["_bounded_primary_catalog_limit"](
         99, pool="auto", has_free_rows=True
     )
-    fallback = namespace["_bounded_fallback_catalog_limit"](
-        99, primary_count=primary
-    )
+    fallback = namespace["_bounded_fallback_catalog_limit"](99, primary_count=primary)
     assert (primary, fallback) == (8, 16)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
@@ -247,9 +281,15 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
     ]
     enriched = namespace["_with_discovery_counts"](base, rows)
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
-    assert [enriched[key] for key in (
-        "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
-    )] == [4, 1, 2, 1]
+    assert [
+        enriched[key]
+        for key in (
+            "total_routes",
+            "total_free_routes",
+            "total_priced_routes",
+            "total_unknown_routes",
+        )
+    ] == [4, 1, 2, 1]
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:
@@ -262,7 +302,9 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
         assert json.loads(Path(value).read_text(encoding="utf-8")) == {"agents": agents}
         return [SimpleNamespace(id="priced_route")]
 
-    assert [agent.id for agent in helper(str(path), agents, loader=loader)] == ["priced_route"]
+    assert [agent.id for agent in helper(str(path), agents, loader=loader)] == [
+        "priced_route"
+    ]
     assert not path.exists()
 
     def failing_loader(value: str) -> list[object]:
@@ -292,28 +334,56 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
     assert "_preflight_with_fallback(" in launcher
+    assert "_require_complete_discovery(" in launcher
+    assert '"complete": False' in launcher
+    assert '"complete": True' in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 
-    assert 'STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"' in sidecar
-    assert 'sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"' in sidecar
-    assert 'sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"' in sidecar
-    assert 'preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"' in sidecar
+    assert (
+        'STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"'
+        in sidecar
+    )
+    assert (
+        'sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"'
+        in sidecar
+    )
+    assert (
+        'sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"'
+        in sidecar
+    )
+    assert (
+        'preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"'
+        in sidecar
+    )
     assert '--preflight-out "$preflight_report"' in sidecar
-    assert 'gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"' in sidecar
-    assert '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"' in sidecar
-    assert 'Authorization: Bearer ${ORCHESTRATOR_TOKEN}' in sidecar
+    assert (
+        'gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"'
+        in sidecar
+    )
+    assert (
+        '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"'
+        in sidecar
+    )
+    assert "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" in sidecar
     assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in sidecar
     assert 'gateway_virtual_model="orchestrator/${orchestrator_pool}"' in sidecar
     assert '"model":"%s"' in sidecar
     assert '"$gateway_virtual_model" > "$gateway_preflight_request"' in sidecar
     assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
-    assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
+    assert (
+        'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"'
+        in sidecar
+    )
     assert "contextlib.redirect_stderr(expected_rejection_log)" in sidecar
-    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
-    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
+    assert (
+        '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
+    )
+    assert (
+        '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
+    )
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
 
 
@@ -322,19 +392,29 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     namespace = _load_sanitizer()
     sanitize_line = namespace["sanitize_line"]
 
-    assert sanitize_line(
-        "request_failed status=500 code=internal_error upstream sk-secret"
-    ) == "request_failed status=500 code=internal_error"
+    assert (
+        sanitize_line(
+            "request_failed status=500 code=internal_error upstream sk-secret"
+        )
+        == "request_failed status=500 code=internal_error"
+    )
     assert sanitize_line("client_disconnected") == "client_disconnected"
-    assert sanitize_line(
-        "review sidecar preflight failed: upstream sk-secret"
-    ) == "review sidecar preflight failed"
-    assert sanitize_line(
-        "review sidecar discovery failed: https://provider.invalid/?key=sk-secret"
-    ) == "review sidecar discovery failed"
-    assert sanitize_line(
-        "review sidecar discovered no zero-cost models; orchestrator/free would fail closed"
-    ) == "review sidecar discovered no zero-cost models"
+    assert (
+        sanitize_line("review sidecar preflight failed: upstream sk-secret")
+        == "review sidecar preflight failed"
+    )
+    assert (
+        sanitize_line(
+            "review sidecar discovery failed: https://provider.invalid/?key=sk-secret"
+        )
+        == "review sidecar discovery failed"
+    )
+    assert (
+        sanitize_line(
+            "review sidecar discovered no zero-cost models; orchestrator/free would fail closed"
+        )
+        == "review sidecar discovered no zero-cost models"
+    )
     assert sanitize_line("provider response sk-secret") is None
 
 

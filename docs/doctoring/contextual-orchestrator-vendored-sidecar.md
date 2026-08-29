@@ -46,6 +46,10 @@ preflight tries a maximum of 24 discovered routes in concurrent batches of four
 and stops after the first batch with usable text. Every route still uses the
 ten-second timeout, zero retries, the same plain-chat payload, and sanitized
 evidence; exhausting the bounded batches remains a startup failure.
+Provider discovery must also be complete. If any configured provider reports a
+discovery error, the launcher records only sanitized provider and error
+identifiers with `complete: false`, omits the partial model list, and stops
+before serving traffic. A partial catalog is not availability evidence.
 The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
 incorrect 1024-character rejection. The same probe sends Strix-shaped function
 tools with 1025-, 1026-, and 2000-character descriptions and verifies that
