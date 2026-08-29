@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import runpy
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +14,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 _SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
+_SANITIZER = _REPO_ROOT / "scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
 
 
 class _ProbeClient:
@@ -35,6 +39,11 @@ class _ProbeClient:
 def _load_launcher() -> dict[str, object]:
     """Execute the dependency-lazy launcher and return its module namespace."""
     return runpy.run_path(str(_LAUNCHER))
+
+
+def _load_sanitizer() -> dict[str, object]:
+    """Execute the sidecar stream sanitizer and return its module namespace."""
+    return runpy.run_path(str(_SANITIZER))
 
 
 def _openai_text(content: str) -> dict[str, object]:
@@ -143,3 +152,79 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert 'Authorization: Bearer ${ORCHESTRATOR_TOKEN}' in sidecar
     assert '"model":"orchestrator/free"' in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
+    assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
+    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
+    assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
+    assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
+
+
+def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
+    """Provider bodies, exception messages, URLs, and secrets never reach artifacts."""
+    namespace = _load_sanitizer()
+    sanitize_line = namespace["sanitize_line"]
+
+    assert sanitize_line(
+        "request_failed status=500 code=internal_error upstream sk-secret"
+    ) == "request_failed status=500 code=internal_error"
+    assert sanitize_line("client_disconnected") == "client_disconnected"
+    assert sanitize_line(
+        "review sidecar preflight failed: upstream sk-secret"
+    ) == "review sidecar preflight failed"
+    assert sanitize_line(
+        "review sidecar discovery failed: https://provider.invalid/?key=sk-secret"
+    ) == "review sidecar discovery failed"
+    assert sanitize_line(
+        "review sidecar discovered no zero-cost models; orchestrator/free would fail closed"
+    ) == "review sidecar discovered no zero-cost models"
+    assert sanitize_line("provider response sk-secret") is None
+
+
+def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The streaming entrypoint flushes safe summaries without echoing raw input."""
+    namespace = _load_sanitizer()
+    main = namespace["main"]
+    secret = "sk-secret-must-not-enter-artifact"
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            "request_failed status=500 code=internal_error provider body "
+            f"{secret}\n"
+            "Traceback (most recent call last):\n"
+            f"  File provider.py, token={secret}\n"
+            "Traceback (nested):\n"
+            f"review sidecar preflight failed: {secret}\n"
+            "client_disconnected\n"
+        ),
+    )
+    output = io.StringIO()
+
+    with redirect_stdout(output):
+        assert main() == 0
+
+    rendered = output.getvalue()
+    assert rendered.splitlines() == [
+        "request_failed status=500 code=internal_error",
+        "sidecar emitted an unexpected exception",
+        "review sidecar preflight failed",
+        "client_disconnected",
+        "omitted_unstructured_lines=1",
+    ]
+    assert secret not in rendered
+
+
+def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully allowlisted stream does not manufacture an omission warning."""
+    namespace = _load_sanitizer()
+    main = namespace["main"]
+    monkeypatch.setattr(sys, "stdin", io.StringIO("client_disconnected\n"))
+    output = io.StringIO()
+
+    with redirect_stdout(output):
+        assert main() == 0
+
+    assert output.getvalue() == "client_disconnected\n"
