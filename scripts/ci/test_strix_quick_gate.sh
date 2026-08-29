@@ -520,7 +520,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
 	local bootstrap_conditions
-	bootstrap_conditions="$(awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep '^[[:space:]]*if:' || true)"
+	bootstrap_conditions="$(awk '/^  required-workflow-bootstrap:$/ { in_bootstrap = 1; next } in_bootstrap && /^  [^ ]/ { exit } in_bootstrap' "$bootstrap_file" | grep '^[[:space:]]*if:' || true)"
 	assert_equals \
 		"        if: \${{ github.event_name == 'pull_request_target' }}" \
 		"$bootstrap_conditions" \
