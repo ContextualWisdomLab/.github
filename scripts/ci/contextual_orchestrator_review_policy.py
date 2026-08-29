@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import re
@@ -100,6 +101,16 @@ class PolicyError(ValueError):
     """Raised when a discovery report cannot produce a usable catalog."""
 
 
+def _validated_price(value: object, *, route: str, field: str) -> float:
+    """Return a finite nonnegative published price or reject the route."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PolicyError(f"model {route} lacks numeric {field} evidence")
+    price = float(value)
+    if not math.isfinite(price) or price < 0:
+        raise PolicyError(f"model {route} has invalid {field} evidence")
+    return price
+
+
 def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate and extract the model rows from a ``discover-models`` report.
 
@@ -134,12 +145,30 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
         candidate_id = row.get("agent_id") or f"{provider}_{model}"
         if not _is_valid_is_free(row.get("is_free")):
             raise PolicyError(f"model {provider}/{model} lacks an explicit is_free marker")
+        is_free = is_free_route(row.get("is_free"))
+        route = f"{provider}/{model}"
+        prompt_price = row.get("prompt_price_per_1k")
+        completion_price = row.get("completion_price_per_1k")
+        currency_code = row.get("currency_code")
+        if not is_free:
+            prompt_price = _validated_price(
+                prompt_price, route=route, field="prompt_price_per_1k"
+            )
+            completion_price = _validated_price(
+                completion_price, route=route, field="completion_price_per_1k"
+            )
+            if not isinstance(currency_code, str) or not currency_code.strip():
+                raise PolicyError(f"model {route} lacks currency_code evidence")
+            currency_code = currency_code.strip().upper()
         normalized.append(
             {
                 "provider": provider,
                 "model": model,
                 "agent_id": str(candidate_id),
-                "is_free": is_free_route(row.get("is_free")),
+                "is_free": is_free,
+                "prompt_price_per_1k": prompt_price,
+                "completion_price_per_1k": completion_price,
+                "currency_code": currency_code,
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
                 "credential_key": row.get("credential_key") or PROVIDER_CREDENTIAL_NAMES[provider],
                 "auth_scheme": row.get("auth_scheme") or PROVIDER_AUTH_SCHEMES[provider],
@@ -155,8 +184,9 @@ def build_zdr_prioritized_catalog(
     family_cap: int = DEFAULT_FAMILY_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
+    pool: str = "free",
 ) -> dict[str, Any]:
-    """Select and rank free routes into a ZDR-first, family-diverse catalog.
+    """Select and rank governed routes into a ZDR-first, family-diverse catalog.
 
     Ranking is deterministic and evidence-based, never heuristic cost guesses:
     free (zero-cost, attested by discovery price metadata) routes always outrank
@@ -192,26 +222,33 @@ def build_zdr_prioritized_catalog(
         """Return whether a provider family still has catalog capacity."""
         return per_family[family] < family_cap
 
-    all_free_rows = [row for row in rows if row["is_free"]]
-    free_rows = [
+    if pool not in {"free", "auto"}:
+        raise PolicyError(f"unsupported review pool {pool!r}")
+    all_rows = list(rows)
+    all_free_rows = [row for row in all_rows if row["is_free"]]
+    candidate_rows = all_free_rows if pool == "free" else all_rows
+    eligible_rows = [
         row
-        for row in all_free_rows
+        for row in candidate_rows
         if not require_zdr
         or is_zdr_model(
             row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
         )
     ]
-    free_rows.sort(
+    eligible_rows.sort(
         key=lambda row: (
             0
             if is_zdr_model(
                 row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
             )
             else 1,
+            0 if row["is_free"] else 1,
+            row["provider"],
+            row["model"],
         )
     )
     picked: list[dict[str, Any]] = []
-    for _order, row in enumerate(free_rows):
+    for _order, row in enumerate(eligible_rows):
         family = provider_family(row["provider"])
         if not family_is_open(family):
             continue
@@ -221,10 +258,10 @@ def build_zdr_prioritized_catalog(
             break
 
     if not picked:
-        route_kind = "attested ZDR free" if require_zdr else "free (zero-cost)"
+        route_kind = "attested ZDR" if require_zdr else pool
         raise PolicyError(
             f"no {route_kind} model route is available with the ZDR policy; "
-            "orchestrator/free would fail closed"
+            f"orchestrator/{pool} would fail closed"
         )
 
     for rank, row in enumerate(picked):
@@ -240,7 +277,11 @@ def build_zdr_prioritized_catalog(
                 "base_url": row["base_url"],
                 "api_key_env": "",
                 "credential_key": row["credential_key"],
-                "tags": ["review", "cost:free", "zdr" if zdr else "non-zdr"],
+                "tags": [
+                    "review",
+                    "cost:free" if row["is_free"] else "cost:priced",
+                    "zdr" if zdr else "non-zdr",
+                ],
                 "priority": -rank,
                 "disabled": False,
                 "provider_name": row["provider"],
@@ -256,11 +297,13 @@ def build_zdr_prioritized_catalog(
     return {
         "agents": catalog_rows,
         "report": {
-            "pool": "orchestrator/free",
+            "pool": f"orchestrator/{pool}",
+            "total_routes": len(all_rows),
             "total_free_routes": len(all_free_rows),
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
-            "free_selected_count": len(picked),
+            "free_selected_count": sum(1 for row in picked if row["is_free"]),
+            "priced_selected_count": sum(1 for row in picked if not row["is_free"]),
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
                 {provider_zdr_scope(row["provider"]).source for row in picked if is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints)}
@@ -312,6 +355,7 @@ def build_catalog_from_paths(
     family_cap: int = DEFAULT_FAMILY_CAP,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
+    pool: str = "free",
 ) -> dict[str, Any]:
     """Build and persist the ZDR-prioritized ``orchestrator/free`` catalog.
 
@@ -336,6 +380,7 @@ def build_catalog_from_paths(
         family_cap=family_cap,
         zdr_endpoints=zdr_endpoints,
         require_zdr=require_zdr,
+        pool=pool,
     )
     Path(out_path).write_text(
         json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
@@ -356,6 +401,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--family-cap", type=int, default=DEFAULT_FAMILY_CAP)
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true", help="Fail closed unless every selected route has attested ZDR evidence")
+    parser.add_argument("--pool", choices=("free", "auto"), default="free")
     return parser
 
 
@@ -378,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
             family_cap=args.family_cap,
             zdr_endpoints_path=args.zdr_endpoints,
             require_zdr=args.require_zdr,
+            pool=args.pool,
         )
     except (PolicyError, OSError, json.JSONDecodeError) as exc:
         print(f"contextual-orchestrator review policy: {exc}", file=sys.stderr)
