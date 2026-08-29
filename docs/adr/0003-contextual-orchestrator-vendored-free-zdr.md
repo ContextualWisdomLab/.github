@@ -22,7 +22,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`5a5d6a4004a73ae5f981e48de45efdc6273b1cad` exact contextual-orchestrator revision) into `RUNNER_TEMP`. The
+   (`f47981a9bbcd212344afc38ff975f5cf275810b9` exact contextual-orchestrator revision) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
