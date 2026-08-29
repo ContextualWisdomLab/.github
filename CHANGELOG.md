@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Skip trusted base Python lock materialization for exact-head reviews with no
+  Python source or dependency-manifest changes, while preserving the
+  fail-closed wheel-only path when Python coverage is relevant.
 - Route required Strix scans through the contextual-orchestrator
   `orchestrator/auto` pool so the five configured provider credentials form
   real cross-provider failover. Priced routes require finite, nonnegative
