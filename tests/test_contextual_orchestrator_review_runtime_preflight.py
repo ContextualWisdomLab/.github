@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 import io
+import json
 import runpy
 from pathlib import Path
 import sys
@@ -120,6 +121,123 @@ def test_preflight_fails_closed_when_every_route_rejects() -> None:
         preflight([agent], client=client)
 
 
+def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> None:
+    """A live primary route wins; priced fallback is evidence-triggered only."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_with_fallback"]
+    primary = SimpleNamespace(
+        id="openrouter_free", provider_name="openrouter", model="free/model"
+    )
+    fallback = SimpleNamespace(
+        id="openrouter_priced", provider_name="openrouter", model="priced/model"
+    )
+    client = _ProbeClient(
+        {primary.id: TimeoutError("unavailable"), fallback.id: _openai_text("OK")}
+    )
+
+    viable, report, fallback_used = preflight(
+        [primary], [fallback], client=client
+    )
+
+    assert viable == [fallback]
+    assert fallback_used is True
+    assert report["fallback_reason"] == "primary_routes_unavailable"
+    assert report["primary_attempt"]["ready_count"] == 0
+    assert [call[0] for call in client.calls] == [primary, fallback]
+
+    ready_client = _ProbeClient(
+        {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
+    )
+    viable, report, fallback_used = preflight(
+        [primary], [fallback], client=ready_client
+    )
+    assert viable == [primary]
+    assert fallback_used is False
+    assert "fallback_reason" not in report
+    assert [call[0] for call in ready_client.calls] == [primary]
+
+    failing_client = _ProbeClient(
+        {primary.id: TimeoutError("unavailable"), fallback.id: RuntimeError("rejected")}
+    )
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([primary], [fallback], client=failing_client)
+    assert failure.value.report["ready_count"] == 0
+    assert failure.value.report["primary_attempt"]["ready_count"] == 0
+
+
+def test_preflight_stage_limits_share_one_startup_budget() -> None:
+    """Free-first and priced-fallback probes share one bounded route budget."""
+    namespace = _load_launcher()
+    primary = namespace["_bounded_primary_catalog_limit"](
+        99, pool="auto", has_free_rows=True
+    )
+    fallback = namespace["_bounded_fallback_catalog_limit"](
+        99, primary_count=primary
+    )
+    assert (primary, fallback) == (8, 4)
+    assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+
+
+def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
+    """Privacy admission precedes the free-first tier decision."""
+    namespace = _load_launcher()
+    admit = namespace["_zdr_admitted_rows"]
+    rows = [
+        {"provider": "openrouter", "model": "free/non-private"},
+        {"provider": "openrouter", "model": "priced/private"},
+    ]
+
+    def checker(provider: str, *, model: str, zdr_endpoints: frozenset[str]) -> bool:
+        return f"{provider}:{model}" in zdr_endpoints
+
+    admitted = admit(
+        rows,
+        require_zdr=True,
+        zdr_endpoints=frozenset({"openrouter:priced/private"}),
+        checker=checker,
+    )
+    assert admitted == [rows[1]]
+
+
+def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
+    """Fallback selection preserves full discovery cost-tier evidence."""
+    namespace = _load_launcher()
+    base = {"selected_count": 1, "selected": [{"model": "priced/model"}]}
+    rows = [
+        {"cost_evidence": "free"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "unknown"},
+    ]
+    enriched = namespace["_with_discovery_counts"](base, rows)
+    assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
+    assert [enriched[key] for key in (
+        "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
+    )] == [4, 1, 2, 1]
+
+
+def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:
+    """The price-only handoff file is removed after success and failure."""
+    helper = _load_launcher()["_load_temporary_agents"]
+    path = tmp_path / "review-catalog.json.priced"
+    agents = [{"id": "priced_route"}]
+
+    def loader(value: str) -> list[object]:
+        assert json.loads(Path(value).read_text(encoding="utf-8")) == {"agents": agents}
+        return [SimpleNamespace(id="priced_route")]
+
+    assert [agent.id for agent in helper(str(path), agents, loader=loader)] == ["priced_route"]
+    assert not path.exists()
+
+    def failing_loader(value: str) -> list[object]:
+        assert Path(value).exists()
+        raise RuntimeError("loader rejected catalog")
+
+    with pytest.raises(RuntimeError, match="loader rejected catalog"):
+        helper(str(path), agents, loader=failing_loader)
+    assert not path.exists()
+
+
 def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
     """Sequential route probes must fit inside the sidecar startup budget."""
     launcher = _LAUNCHER.read_text(encoding="utf-8")
@@ -137,7 +255,7 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    assert "_preflight_review_agents(agents, client=client)" in launcher
+    assert "_preflight_with_fallback(" in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
@@ -150,7 +268,11 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert 'gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"' in sidecar
     assert '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"' in sidecar
     assert 'Authorization: Bearer ${ORCHESTRATOR_TOKEN}' in sidecar
-    assert '"model":"orchestrator/free"' in sidecar
+    assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in sidecar
+    assert 'gateway_virtual_model="orchestrator/${orchestrator_pool}"' in sidecar
+    assert '"model":"%s"' in sidecar
+    assert '"$gateway_virtual_model" > "$gateway_preflight_request"' in sidecar
+    assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
     assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
     assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
