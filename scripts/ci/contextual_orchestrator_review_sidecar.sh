@@ -328,7 +328,8 @@ log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pi
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
-if ! gateway_http_status="$(
+set +e
+gateway_http_status="$(
   curl -sS --max-time 30 \
     -o "$gateway_preflight_response" \
     -w '%{http_code}' \
@@ -337,8 +338,15 @@ if ! gateway_http_status="$(
     -H 'Content-Type: application/json' \
     --data-binary "@$gateway_preflight_request" \
     "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"
-)"; then
-  fail "gateway preflight request could not reach the local sidecar"
+)"
+gateway_curl_status=$?
+set -e
+if [ "$gateway_curl_status" -ne 0 ]; then
+  gateway_transport_status="transport_error"
+  if [ "$gateway_curl_status" -eq 28 ]; then
+    gateway_transport_status="transport_timeout"
+  fi
+  fail "gateway preflight ${gateway_transport_status} (curl exit ${gateway_curl_status})"
 fi
 if [ "$gateway_http_status" != "200" ]; then
   "$sidecar_python" - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" <<'PY'

@@ -19,7 +19,11 @@ Checks, status contexts, review submissions, and merge authorization remain sepa
 ## Failure classification and remediation
 
 - Transport exit `0` plus HTTP `200`: proceed to the pinned dependency-review action.
-- Any other result: fail the job and retain exact repository/base/head/status and transport-exit evidence. An HTTP `200` emitted by a failed or partial transfer is unavailable evidence.
+- Any other result: emit `DEPENDENCY_REVIEW_EVIDENCE state=unavailable` with a
+  bounded reason (`transport`, `api_authorization`, or `api_response`), fail the
+  job, and retain exact repository/base/head/status and transport-exit evidence.
+  The classification is diagnostic evidence, never a vulnerability-free result.
+  An HTTP `200` emitted by a failed or partial transfer is unavailable evidence.
 - Public repository failure: verify dependency graph and security configuration, organization policy, token read access, and GitHub service health.
 - Private or internal exception: require a separately reviewed organization policy with explicit entitlement evidence and compensating controls. Never infer `not-applicable` from an unavailable response.
 

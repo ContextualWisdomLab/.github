@@ -378,6 +378,8 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '"complete": True' in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
+    assert launcher.count("timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS") == 2
+    assert launcher.count("max_retries=0") == 2
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 
     assert (
@@ -397,6 +399,10 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
         in sidecar
     )
     assert '--preflight-out "$preflight_report"' in sidecar
+    assert "gateway_curl_status=$?" in sidecar
+    assert 'gateway_transport_status="transport_timeout"' in sidecar
+    assert "gateway preflight ${gateway_transport_status}" in sidecar
+    assert "gateway preflight request could not reach the local sidecar" not in sidecar
     assert (
         'gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"'
         in sidecar

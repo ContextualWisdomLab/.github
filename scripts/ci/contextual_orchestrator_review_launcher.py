@@ -661,7 +661,9 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.preflight_out, preflight_report)
 
     client = ModelClient(
+        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        max_retries=0,
         temperature=REVIEW_TEMPERATURE,
     )
     orchestrator = TaskOrchestrator(agents, client=client)

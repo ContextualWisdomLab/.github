@@ -339,8 +339,22 @@ jobs:
 
           echo "DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} curl_exit=${curl_status}"
 
-          if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then
-            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
+          evidence_state="complete"
+          unavailable_reason="none"
+          if [ "$curl_status" -ne 0 ]; then
+            evidence_state="unavailable"
+            unavailable_reason="transport"
+          elif [ "$http_status" = "403" ]; then
+            evidence_state="unavailable"
+            unavailable_reason="api_authorization"
+          elif [ "$http_status" != "200" ]; then
+            evidence_state="unavailable"
+            unavailable_reason="api_response"
+          fi
+          echo "DEPENDENCY_REVIEW_EVIDENCE state=${evidence_state} reason=${unavailable_reason} repository=${REPOSITORY} visibility=${repository_visibility} http_status=${http_status} curl_exit=${curl_status}"
+
+          if [ "$evidence_state" != "complete" ]; then
+            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: classification ${unavailable_reason}; HTTP ${http_status}; curl exit ${curl_status}. This is not a vulnerability-free result. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
             exit 1
           fi
 

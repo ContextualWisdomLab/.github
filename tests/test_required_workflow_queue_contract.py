@@ -1358,7 +1358,8 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
     assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in workflow
     assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
-    assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
+    assert 'if [ "$curl_status" -ne 0 ]; then' in support_probe
+    assert 'elif [ "$http_status" != "200" ]; then' in support_probe
     assert "--connect-timeout 10" in workflow
     assert "--max-time 30" in workflow
     assert "-o /dev/null" in workflow
@@ -1380,6 +1381,10 @@ def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> N
     )
     assert "supported=false" not in workflow
     assert "skipping dependency-review hard gate" not in workflow
+    assert 'evidence_state="unavailable"' in support_probe
+    assert 'unavailable_reason="api_authorization"' in support_probe
+    assert "This is not a vulnerability-free result" in support_probe
+    assert 'if [ "$evidence_state" != "complete" ]; then' in support_probe
     assert (
         "steps.dependency_review_support.outputs.supported == 'true'" in workflow
     )
