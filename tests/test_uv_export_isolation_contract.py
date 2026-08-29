@@ -159,6 +159,18 @@ def test_uv_export_keeps_same_archive_url_for_distinct_markers() -> None:
     ]
 
 
+def test_uv_export_rejects_different_hashes_for_same_url_across_markers() -> None:
+    """Conditional alternatives cannot change the immutable archive payload."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} ; python_version < '3.10' --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} ; python_version >= '3.10' --hash=sha256:{'b' * 64}\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="conflicting hashes"):
+        materializer._partition_uv_export(content)
+
+
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
     """An immutable organization source pin is separated from pip hash locks."""
     content = (

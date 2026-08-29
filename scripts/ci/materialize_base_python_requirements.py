@@ -427,18 +427,17 @@ def _partition_uv_export(
     """Separate registry pins, VCS sources, and verified archive sources."""
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archive_hashes_by_url: dict[str, object] = {}
     archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for line in _requirement_lines(content):
         archive = _archive_from_uv_line(line)
         if archive is not None:
+            url = str(archive["url"])
+            previous_hashes = archive_hashes_by_url.get(url)
+            if previous_hashes is not None and previous_hashes != archive["hashes"]:
+                raise ValueError("uv export pins one archive URL to conflicting hashes")
+            archive_hashes_by_url[url] = archive["hashes"]
             identity = _archive_identity(archive)
-            previous = archives_by_identity.get(identity)
-            if previous is not None and (
-                previous["hashes"] != archive["hashes"]
-            ):
-                raise ValueError(
-                    "uv export pins one archive requirement to conflicting hashes"
-                )
             archives_by_identity[identity] = archive
             continue
         if _is_fully_hash_pinned_requirement(line):
@@ -780,6 +779,7 @@ def _base_python_inputs(
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archive_hashes_by_url: dict[str, object] = {}
     archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
@@ -808,15 +808,14 @@ def _base_python_inputs(
                         )
                     vcs_by_repository[repository_key] = dependency
                 for archive in archive_dependencies:
-                    identity = _archive_identity(archive)
-                    previous_archive = archives_by_identity.get(identity)
-                    if (
-                        previous_archive is not None
-                        and previous_archive["hashes"] != archive["hashes"]
-                    ):
+                    url = str(archive["url"])
+                    previous_hashes = archive_hashes_by_url.get(url)
+                    if previous_hashes is not None and previous_hashes != archive["hashes"]:
                         raise RuntimeError(
-                            "base uv locks pin one archive requirement to conflicting hashes"
+                            "base uv locks pin one archive URL to conflicting hashes"
                         )
+                    archive_hashes_by_url[url] = archive["hashes"]
+                    identity = _archive_identity(archive)
                     archives_by_identity[identity] = {
                         **archive,
                         "source": path,
