@@ -2100,6 +2100,15 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
+def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
+    stacked = inspect(make_pr(baseRefName="develop"), review_dispatch_allowed=False)
+
+    assert stacked.action == "wait"
+    assert stacked.reason == (
+        "stacked PR onto develop; OpenCode review absent; review dispatch limit reached"
+    )
+
+
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
