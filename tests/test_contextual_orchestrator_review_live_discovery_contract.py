@@ -134,3 +134,9 @@ def test_partial_price_vectors_still_fail_closed() -> None:
 
     with pytest.raises(policy.PolicyError, match="lacks numeric prompt_price_per_1k"):
         policy.parse_discovery_report(report)
+
+
+def test_legacy_normalized_rows_have_conservative_cost_fallbacks() -> None:
+    """Old normalized callers remain free-only or unknown, never inferred priced."""
+    assert policy._cost_evidence({"is_free": True}) == "free"
+    assert policy._cost_evidence({"is_free": False}) == "unknown"
