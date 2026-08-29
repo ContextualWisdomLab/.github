@@ -206,12 +206,28 @@ policy_report="$ORCHESTRATOR_WORK/policy-report.json"
 preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"
 sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"
 sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"
+gateway_preflight_request="$ORCHESTRATOR_WORK/gateway-preflight-request.json"
+gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"
 (
   umask 077
   : > "$preflight_report"
   : > "$sidecar_stdout"
   : > "$sidecar_stderr"
+  : > "$gateway_preflight_request"
+  : > "$gateway_preflight_response"
 )
+
+publish_sidecar_evidence() {
+  if [ -f "$discovery_report" ] && [ ! -L "$discovery_report" ]; then
+    cp -- "$discovery_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-discovery.json"
+  fi
+  if [ -f "$catalog_file" ] && [ ! -L "$catalog_file" ]; then
+    cp -- "$catalog_file" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-agents.json"
+  fi
+  if [ -f "$policy_report" ] && [ ! -L "$policy_report" ]; then
+    cp -- "$policy_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-policy.json"
+  fi
+}
 
 # Optional authoritative ZDR route feed. Failure is non-fatal: the policy falls
 # back to the dated static attestation table in scripts/ci/zdr_policy.py.
@@ -256,6 +272,7 @@ sidecar_pid=$!
 cleanup_sidecar_on_error() {
   status=$?
   if [ "$status" -ne 0 ]; then
+    publish_sidecar_evidence || true
     log "stopping failed sidecar (pid $sidecar_pid)"
     kill "$sidecar_pid" 2>/dev/null || true
     wait "$sidecar_pid" 2>/dev/null || true
@@ -271,7 +288,7 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
-  if [ "$i" -ge 60 ]; then
+  if [ "$i" -ge 180 ]; then
     fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   sleep 1
@@ -279,13 +296,91 @@ done
 if [ ! -s "$preflight_report" ]; then
   fail "sidecar became healthy without runtime preflight evidence"
 fi
+publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
 
-# These files contain route identities, prices/policy decisions, and sanitized
-# preflight status only; they never contain credential values or provider bodies.
-cp -- "$discovery_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-discovery.json"
-cp -- "$catalog_file" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-agents.json"
-cp -- "$policy_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-policy.json"
+# Exercise the exact OpenAI-compatible endpoint and model name Strix uses. A
+# process can be healthy while the coordinator/model-group path still raises an
+# internal error, which is the failure this contract prevents from reaching the
+# scanner step.
+printf '%s\n' '{"model":"orchestrator/free","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}' > "$gateway_preflight_request"
+if ! gateway_http_status="$(
+  curl -sS --max-time 30 \
+    -o "$gateway_preflight_response" \
+    -w '%{http_code}' \
+    -X POST \
+    -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$gateway_preflight_request" \
+    "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"
+)"; then
+  fail "gateway preflight request could not reach the local sidecar"
+fi
+if [ "$gateway_http_status" != "200" ]; then
+  python3 - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+report_path = Path(sys.argv[1])
+response_path = Path(sys.argv[2])
+status_text = sys.argv[3]
+try:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    report = {}
+try:
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    response = {}
+error = response.get("error") if isinstance(response, dict) else None
+code = error.get("code") if isinstance(error, dict) else None
+if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):
+    code = "unknown_error"
+status = int(status_text) if status_text.isdecimal() else 0
+report["gateway"] = {
+    "endpoint": "chat/completions",
+    "error_code": code,
+    "http_status": status,
+    "status": "rejected",
+}
+temporary = report_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+temporary.replace(report_path)
+PY
+  fail "gateway preflight returned HTTP ${gateway_http_status}"
+fi
+if ! python3 - "$gateway_preflight_response" "$preflight_report" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+response_path = Path(sys.argv[1])
+report_path = Path(sys.argv[2])
+try:
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    choices = response.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices else None
+    message = first.get("message") if isinstance(first, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("missing chat content")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+except (OSError, ValueError, json.JSONDecodeError, IndexError, TypeError):
+    raise SystemExit(1)
+report["gateway"] = {
+    "endpoint": "chat/completions",
+    "status": "ready",
+}
+temporary = report_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+temporary.replace(report_path)
+PY
+then
+  fail "gateway preflight returned unusable chat content"
+fi
+log "gateway chat/completions preflight confirmed"
 
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
@@ -302,4 +397,4 @@ fi
 log "policy evidence summary:"
 sed -n '1,80p' "$policy_report" || true
 log "runtime preflight summary:"
-sed -n '1,120p' "$preflight_report" || true
+sed -n '1,160p' "$preflight_report" || true
