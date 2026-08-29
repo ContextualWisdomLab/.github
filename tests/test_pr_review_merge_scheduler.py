@@ -1696,7 +1696,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6] == [
+    assert calls[8] == [
         "gh",
         "api",
         "-X",
@@ -1705,9 +1705,9 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--input",
         "-",
     ]
-    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[9] == [
+    assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[10][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[11] == [
         "gh",
         "api",
         "-X",
@@ -1733,8 +1733,14 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"],
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=queued", "-F", "per_page=100",
+        ],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=in_progress", "-F", "per_page=100",
+        ],
     ]
     assert calls[2:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
@@ -1945,7 +1951,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
     assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[3][0] == [
+    assert calls[5][0] == [
         "gh",
         "api",
         "-X",
@@ -1954,9 +1960,9 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
-    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6][0] == [
+    assert calls[6][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[7][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][0] == [
         "gh",
         "api",
         "-X",
@@ -2100,6 +2106,15 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
+def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
+    stacked = inspect(make_pr(baseRefName="develop"), review_dispatch_allowed=False)
+
+    assert stacked.action == "wait"
+    assert stacked.reason == (
+        "stacked PR onto develop; OpenCode review absent; review dispatch limit reached"
+    )
+
+
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
@@ -2174,6 +2189,29 @@ def test_run_github_dispatch_falls_back_to_actions_token(monkeypatch):
     assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "fallback"
 
 
+def test_active_workflow_runs_reads_every_paginated_page(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps(
+            [
+                {"workflow_runs": [{"id": 1}]},
+                {"workflow_runs": [{"id": 2}]},
+            ]
+        )
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    assert sched.active_workflow_runs("owner/repo", statuses=("queued",)) == [
+        {"id": 1},
+        {"id": 2},
+    ]
+    assert "--paginate" in calls[0]
+    assert "--slurp" in calls[0]
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -2223,7 +2261,19 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     )
 
     assert result == "already_running"
-    assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
+    assert [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "repos/owner/repo/actions/runs",
+        "--paginate",
+        "--slurp",
+        "-f",
+        "status=queued",
+        "-F",
+        "per_page=100",
+    ] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
@@ -2363,6 +2413,38 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
         "active same-head workflow run(s) ContextualWisdomLab/.github@9301"
         in capsys.readouterr().out
     )
+
+
+def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, capsys):
+    calls = []
+    active_run = {
+        "id": 9350,
+        "name": "Strix Security Scan",
+        "event": "repository_dispatch",
+        "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
+        "pull_requests": [],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [active_run],
+    )
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, stdin=None: calls.append(args))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+
+    result = sched.dispatch_strix_evidence(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(headRefOid="a" * 40),
+        dry_run=False,
+    )
+
+    assert result == "repository_busy"
+    assert calls == []
+    assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
 
 
 def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
@@ -3832,6 +3914,22 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check(), opencode_check()]}},
         )
     )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    assert "target repository already has active Strix evidence" in followup(
+        make_pr(headRefOid="new-head")
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert "same-head Strix evidence is already running" in followup(
+        make_pr(headRefOid="new-head")
+    )
 
     monkeypatch.setattr(
         sched,
@@ -4222,6 +4320,21 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert inspect(make_pr()).action == "security_dispatch"
     assert dispatched == ["Strix Security Scan"]
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    busy_strix = inspect(make_pr())
+    assert busy_strix.action == "wait"
+    assert "target repository already has active Strix evidence" in busy_strix.reason
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert inspect(make_pr()).reason == "same-head Strix evidence is still running"
+    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert (
         inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}})).reason
         == "same-head Strix evidence is still running"
@@ -4504,6 +4617,85 @@ def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch)
         ["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github-flow"]
     ) == 0
     assert seen == [2, 4, 1, 3]
+
+
+def test_main_uses_stacked_dispatch_budget_when_default_budget_is_exhausted(monkeypatch):
+    """A bounded stacked-review slot survives exhaustion of the normal slot."""
+    prs = [
+        make_pr(number=1, baseRefName="main"),
+        make_pr(number=2, baseRefName="feature-a"),
+    ]
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_allows_unlimited_stacked_dispatch_budget(monkeypatch):
+    """The stacked budget accepts the documented unlimited sentinel."""
+    stacked = make_pr(number=2, baseRefName="feature-a")
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [stacked])
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "-1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_rejects_invalid_stacked_review_dispatch_limit():
+    with pytest.raises(SystemExit, match="--stacked-review-dispatch-limit must be -1 or greater"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--stacked-review-dispatch-limit",
+                "-2",
+            ]
+        )
 
 
 def test_main_rejects_invalid_review_dispatch_limit():
