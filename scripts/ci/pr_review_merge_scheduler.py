@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import shlex
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -187,7 +188,13 @@ SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
     (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
     (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
-    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (
+        re.compile(
+            r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)'
+            r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\r\n,;}\]]+)'
+        ),
+        r'\1***',
+    ),
     (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
 )
 
@@ -206,6 +213,11 @@ def mutation_token_source() -> str:
     return (os.environ.get("SCHEDULER_MUTATION_TOKEN_SOURCE") or "github-token").strip() or "github-token"
 
 
+WORKFLOW_STARTING_MUTATION_SOURCES = frozenset(
+    {"PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"}
+)
+
+
 def mutation_token_label() -> str:
     """Return a non-secret label for the scheduler mutation credential."""
     source = mutation_token_source()
@@ -216,6 +228,59 @@ def mutation_token_label() -> str:
         "github-token": "workflow GITHUB_TOKEN",
     }
     return labels.get(source, "workflow GH_TOKEN")
+
+
+def head_mutation_credential_starts_workflows() -> bool:
+    """Return whether scheduler head mutations can start required workflow runs.
+
+    GitHub never creates a new workflow run for an event produced with the
+    workflow ``GITHUB_TOKEN``, so a PR head moved with that credential can never
+    collect the current-head required checks that protected branches demand
+    (GitHub, 2025).
+
+    References:
+        GitHub. (2025). *Automatic token authentication*.
+        https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication
+    """
+    return mutation_token_source() in WORKFLOW_STARTING_MUTATION_SOURCES
+
+
+def non_triggering_head_mutation_reason(action: str) -> str:
+    """Explain why a head mutation is withheld for a non-triggering credential."""
+    source = mutation_token_source()
+    if source == "github-token":
+        credential_reason = (
+            "the workflow GITHUB_TOKEN, whose head mutations never start new workflow runs"
+        )
+    else:
+        credential_reason = (
+            f"the {mutation_token_label()}, which is not allowlisted as workflow-starting"
+        )
+    return (
+        f"{action} withheld because the scheduler mutation credential is {credential_reason}, "
+        "so the moved head would stay permanently "
+        "BLOCKED without current-head required checks; configure PR_REVIEW_MERGE_TOKEN, "
+        "OPENCODE_APPROVE_TOKEN, or the OpenCode app token for the scheduler job"
+    )
+
+
+def require_workflow_starting_mutation_credential(action: str) -> None:
+    """Refuse head mutations that would leave the PR without current-head checks."""
+    if not head_mutation_credential_starts_workflows():
+        raise RuntimeError(non_triggering_head_mutation_reason(action))
+
+
+def head_mutation_credential_guidance_text() -> tuple[str, str]:
+    """Return operator-facing summary and limit text for a withheld head mutation."""
+    if mutation_token_source() == "github-token":
+        return (
+            "The scheduler withheld a head mutation because the workflow GITHUB_TOKEN cannot start the required current-head workflow runs.",
+            "Moving the head with the workflow GITHUB_TOKEN would leave the PR permanently BLOCKED, so the scheduler waits instead.",
+        )
+    return (
+        f"The scheduler withheld a head mutation because {mutation_token_label()} is not allowlisted as workflow-starting.",
+        "Moving the head is unsafe until the scheduler can prove that the selected credential starts the required current-head workflow runs.",
+    )
 
 
 def mutation_actor_label() -> str:
@@ -361,6 +426,25 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "required GitHub Checks success",
                 "zero active unresolved review threads",
                 "maintainer manual merge decision",
+            ],
+        }
+    if parse_non_triggering_head_mutation_reason(decision.reason):
+        summary, automation_limit = head_mutation_credential_guidance_text()
+        return {
+            "type": "head_mutation_credential_upgrade",
+            "token": mutation_token_label(),
+            "summary": summary,
+            "automation_limit": automation_limit,
+            "steps": [
+                "Configure PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app credential for the scheduler job.",
+                "Rerun PR Review Merge Scheduler so the head mutation runs with a workflow-starting credential.",
+                "Alternatively push the PR branch from its owning actor so required checks rerun on the new head.",
+            ],
+            "next_required_evidence": [
+                "scheduler mutation credential that is not the workflow GITHUB_TOKEN",
+                "new head SHA created by that credential",
+                "required GitHub Checks success on the new head",
+                "OpenCode approval on that exact new head",
             ],
         }
     if parse_last_push_approval_restamp_reason(decision.reason):
@@ -1554,6 +1638,7 @@ def update_branch(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     if dry_run:
         return
     require_github_actions_mutation_actor("update-branch")
+    require_workflow_starting_mutation_credential("update-branch")
     head = validate_git_sha(pr["headRefOid"])
     run(
         [
@@ -1619,6 +1704,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     if dry_run:
         return None
     require_github_actions_mutation_actor("last-push-approval-head-refresh")
+    require_workflow_starting_mutation_credential("last-push-approval-head-refresh")
     repo = validate_github_repository(repo)
     if not same_repository_head(repo, pr):
         raise RuntimeError("last-push approval head refresh only supports same-repository PR heads")
@@ -2353,6 +2439,11 @@ def inspect_pr(
                 f"branch update limit reached ({branch_update_limit} update/run); "
                 "defer outdated branch to the next scheduler run",
             )
+        if not head_mutation_credential_starts_workflows():
+            return decide(
+                "wait",
+                f"{freshness_reason}; {non_triggering_head_mutation_reason('branch update')}",
+            )
         update_branch(repo, pr, dry_run=dry_run)
         followup_note = post_update_branch_followup(
             repo,
@@ -2582,6 +2673,11 @@ def inspect_pr(
                 "wait",
                 f"branch update limit reached ({branch_update_limit} update/run); "
                 "defer last-push approval head refresh to the next scheduler run",
+            )
+        if not head_mutation_credential_starts_workflows():
+            return decide(
+                "wait",
+                f"{block_reason}; {non_triggering_head_mutation_reason('last-push approval head restamp')}",
             )
         new_head = restamp_pr_head_for_last_push_approval(repo, pr, dry_run=dry_run)
         notes = ()
@@ -2830,6 +2926,7 @@ def write_actions_summary(
     lines.extend(conflict_repair_summary(decisions))
     lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
+    lines.extend(head_mutation_credential_upgrade_summary(decisions))
     lines.extend(last_push_approval_restamp_summary(decisions))
     lines.extend(external_head_update_summary(decisions))
     lines.extend(external_head_merge_summary(decisions))
@@ -2977,6 +3074,33 @@ def update_branch_summary(decisions: list[Decision]) -> list[str]:
         lines.extend(["", "Follow-up evidence:"])
         lines.extend(f"- PR #{decision.pr}: {note}" for decision, note in followups)
     return lines
+
+
+def head_mutation_credential_upgrade_summary(decisions: list[Decision]) -> list[str]:
+    """Return a GitHub Actions Summary section for withheld head mutations."""
+    waits = [decision for decision in decisions if parse_non_triggering_head_mutation_reason(decision.reason)]
+    if not waits:
+        return []
+    summary, automation_limit = head_mutation_credential_guidance_text()
+    lines = ["", "### Head mutation withheld", "", summary, automation_limit]
+    lines.extend(
+        [
+            "Configure `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the OpenCode app credential, then rerun the scheduler.",
+            "Alternatively, let the PR author push the branch so required checks start from the owning actor.",
+            "",
+            "Withheld decisions:",
+        ]
+    )
+    lines.extend(f"- PR #{decision.pr}: {decision.reason}" for decision in waits)
+    return lines
+
+
+def parse_non_triggering_head_mutation_reason(reason: str) -> bool:
+    """Return whether a reason describes a withheld non-triggering head mutation."""
+    return (
+        "whose head mutations never start new workflow runs" in reason
+        or "which is not allowlisted as workflow-starting" in reason
+    )
 
 
 def parse_last_push_approval_restamp_reason(reason: str) -> bool:
@@ -3171,8 +3295,28 @@ def summarize_action_error(exc: RuntimeError) -> str:
     return bounded_error_summary(summary)
 
 
+@contextlib.contextmanager
+def declared_mutation_token_source(source: str) -> Iterator[None]:
+    """Declare a scheduler mutation credential source for the enclosed block."""
+    previous = os.environ.get("SCHEDULER_MUTATION_TOKEN_SOURCE")
+    os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = source
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SCHEDULER_MUTATION_TOKEN_SOURCE", None)
+        else:
+            os.environ["SCHEDULER_MUTATION_TOKEN_SOURCE"] = previous
+
+
 def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
+    with declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
+        self_test_scheduler_invariants()
+
+
+def self_test_scheduler_invariants() -> None:
+    """Exercise scheduler invariants with a workflow-starting mutation credential."""
     assert split_repo("owner/name") == ("owner", "name")
     assert split_repo("owner/name/extra") == ("owner", "name/extra")
     try:
@@ -3656,10 +3800,19 @@ def self_test() -> None:
         == "REQUEST_CHANGES"
     )
     assert contract_decision(Decision(1, "block", "merge conflict: DIRTY")) == "WAIT"
-    update_guidance = decision_guidance(Decision(1, "update_branch", "ok"))
-    assert update_guidance
-    assert update_guidance["actor"] == "github-actions[bot]"
-    assert update_guidance["head_guard"] == "expected_head_sha"
+    with declared_mutation_token_source("github-token"):
+        update_guidance = decision_guidance(Decision(1, "update_branch", "ok"))
+        assert update_guidance
+        assert update_guidance["actor"] == "github-actions[bot]"
+        assert update_guidance["head_guard"] == "expected_head_sha"
+        withheld_guidance = decision_guidance(
+            Decision(1, "wait", non_triggering_head_mutation_reason("branch update"))
+        )
+        assert withheld_guidance
+        assert withheld_guidance["type"] == "head_mutation_credential_upgrade"
+        assert withheld_guidance["token"] == "workflow GITHUB_TOKEN"
+        assert not head_mutation_credential_starts_workflows()
+    assert head_mutation_credential_starts_workflows()
     disable_guidance = decision_guidance(Decision(1, "disable_auto_merge", "ok"))
     assert disable_guidance
     assert disable_guidance["type"] == "unsafe_auto_merge_disabled"
@@ -3682,7 +3835,9 @@ def self_test() -> None:
     )
     assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
     assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
-    assert payload["decisions"][0]["guidance"]["actor"] == "github-actions[bot]"
+    with declared_mutation_token_source("github-token"):
+        entry = decision_contract_entry(Decision(1, "update_branch", "ok"))
+        assert entry["guidance"]["actor"] == "github-actions[bot]"
     payload = decision_payload(
         [Decision(1, "restamp_head", f"{last_push_approval_block_reason()}; last-push approval head refresh requested")],
         counts={"restamp_head": 1},
@@ -3763,6 +3918,10 @@ def main(argv: list[str]) -> int:
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if not args.pr_number:
+        # Stacked PRs have no injected required workflow and depend exclusively
+        # on this bounded sweep; default-base PRs also receive event-driven runs.
+        prs.sort(key=lambda pr: pr.get("baseRefName") == args.base_branch)
     decisions = []
     review_dispatches_used = 0
     branch_updates_used = 0
