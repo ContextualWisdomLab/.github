@@ -295,6 +295,18 @@ def test_changed_file_pagination_bound_is_fail_closed() -> None:
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 
 
+def test_changed_file_pagination_rejects_nonterminating_full_pages() -> None:
+    """A full-page response on every bounded request fails closed."""
+
+    class NonTerminatingPage(list[dict[str, object]]):
+        def __len__(self) -> int:
+            return 100
+
+    page = NonTerminatingPage()
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
+
+
 def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     """Exactly 3,000 changed files are accepted only after an empty next page."""
 

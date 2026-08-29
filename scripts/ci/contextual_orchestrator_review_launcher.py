@@ -372,6 +372,16 @@ def _bounded_fallback_catalog_limit(requested_limit: int, *, primary_count: int)
     return total_limit - primary_count
 
 
+def _catalog_family_cap() -> int:
+    """Return the configured family cap without narrowing the bounded default."""
+    return int(
+        os.environ.get(
+            "ORCHESTRATOR_CATALOG_FAMILY_CAP",
+            str(REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES),
+        )
+    )
+
+
 def _with_discovery_counts(
     report: dict[str, object], rows: list[dict[str, Any]]
 ) -> dict[str, object]:
@@ -577,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     result = build_zdr_prioritized_catalog(
         primary_rows,
         limit=primary_limit,
-        family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+        family_cap=_catalog_family_cap(),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
@@ -606,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
                 limit=fallback_limit,
-                family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+                family_cap=_catalog_family_cap(),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",

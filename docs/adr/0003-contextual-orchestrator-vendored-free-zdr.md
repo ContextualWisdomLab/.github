@@ -72,7 +72,10 @@ all five, and auto-optimize routing by cost.
    report into a free-first, cost-evidence-ranked, ZDR-prioritized,
    provider-family-diverse agents catalog (primary/secondary NVIDIA keys share
    one outage-domain family), capped in size, in the orchestrator's own
-   `ModelAgent` schema.
+   `ModelAgent` schema. The sidecar defaults the family cap to the same 24-route
+   total budget so a single configured provider's catalog is not silently
+   truncated before preflight; `ORCHESTRATOR_CATALOG_FAMILY_CAP` remains an
+   explicit operator override for a stricter cap.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
    provision the sidecar with the five secrets before OpenCode runs and point
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;

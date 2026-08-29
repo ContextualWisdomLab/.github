@@ -246,6 +246,25 @@ def test_production_defaults_expose_the_complete_bounded_catalog() -> None:
 
     assert 'ORCHESTRATOR_CATALOG_LIMIT", "24"' in launcher
     assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
+    assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24" in launcher
+    assert '"ORCHESTRATOR_CATALOG_FAMILY_CAP",' in launcher
+    assert "str(REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)" in launcher
+    assert 'CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-24}"' in sidecar
+
+
+def test_family_cap_default_covers_the_bounded_catalog_and_honors_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default does not truncate one provider, while an explicit cap remains binding."""
+    namespace = _load_launcher()
+    family_cap = namespace["_catalog_family_cap"]
+    assert callable(family_cap)
+
+    monkeypatch.delenv("ORCHESTRATOR_CATALOG_FAMILY_CAP", raising=False)
+    assert family_cap() == 24
+
+    monkeypatch.setenv("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")
+    assert family_cap() == 4
 
 
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:

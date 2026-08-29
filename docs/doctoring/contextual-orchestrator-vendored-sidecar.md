@@ -57,6 +57,16 @@ each reaches the provider payload byte-for-byte; arbitrary truncation is not
 used. Provider/model-specific context limits remain provider errors, not a
 reason for this gateway to rewrite the request.
 
+## 2026-08-30 Provider-family catalog bound
+
+The 24-route startup budget is a total bound, not a promise to stop after four
+routes from the first provider family. The sidecar now defaults
+`ORCHESTRATOR_CATALOG_FAMILY_CAP` to 24, allowing an OpenRouter-only discovery
+catalog to expose every route within the same bounded preflight budget. An
+operator may still set a lower explicit family cap when outage-domain diversity
+is more important than route breadth; the generic policy CLI retains its
+independent family-cap default.
+
 ## What changed
 
 `pr-review-autofix.yml` now provisions the sidecar
