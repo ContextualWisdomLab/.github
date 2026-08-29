@@ -48,10 +48,12 @@ all five, and auto-optimize routing by cost.
    route rejects the real runtime request contract does it rebuild once from
    fully price-attested routes and record the rejected primary attempt. This is
    evidence-triggered failover, not an arbitrary free/paid mixing ratio.
-   Both stages share one twelve-route startup budget: no more than eight routes
-   enter the free primary stage and only its remaining capacity may enter priced
-   fallback. Full discovery counts remain in policy evidence, and the transient
-   priced catalog is removed immediately after loading.
+   Both stages share one 24-route startup budget: no more than eight routes
+   enter the free primary stage and only the remaining capacity (at most sixteen
+   routes) may enter the price-attested fallback when the `auto` pool is in use.
+   The `free` pool never admits priced fallback. Full discovery counts remain in
+   policy evidence, and the transient priced catalog is removed immediately
+   after loading.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
    of time"; zero retention also implies no training) and is deliberately
