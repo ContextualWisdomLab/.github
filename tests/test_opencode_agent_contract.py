@@ -578,9 +578,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
-    assert "npm ci" in measure_step
+    assert "corepack npm ci" in measure_step
+    assert "has_exact_npm_package_manager() {" in measure_step
+    assert ".devEngines" in measure_step
+    assert "if has_exact_npm_package_manager; then" in measure_step
+    assert "then \\\n                          corepack npm ci" in measure_step
+    assert "else \\\n                          npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
-    assert "npm cache verify --cache /opt/npm-cache" in measure_step
+    assert "corepack npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm@*)" in measure_step
     assert "corepack pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
@@ -834,6 +839,56 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'pull_request_target'" not in target_condition
 
 
+def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
+    """The trusted image resolver selects only deterministic npm versions."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    resolver_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith("jq -e '(.packageManager // null)")
+    )
+    expression = resolver_line.split("jq -e '", 1)[1].rsplit(
+        "' package.json", 1
+    )[0]
+    cases = [
+        ({"packageManager": "npm@10.9.9"}, True),
+        (
+            {
+                "packageManager": "npm@10",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {
+                "packageManager": "yarn@1.22.22",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}}},
+            True,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10"}}},
+            False,
+        ),
+        ({}, False),
+    ]
+    for manifest, expected in cases:
+        result = subprocess.run(
+            ["jq", "-e", expression],
+            input=json.dumps(manifest) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is expected, manifest
+
+
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
     """Reject an untrusted dispatcher or a target outside the exact allowlist."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -988,6 +1043,7 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert "or fall back to npm" in measure_step
     assert "ensure_corepack_runner pnpm" in select_function
     assert "ensure_corepack_runner yarn" in select_function
+    assert "ensure_corepack_runner npm" in select_function
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
         "elif command -v npm"
     )
@@ -1017,7 +1073,7 @@ def test_opencode_coverage_uses_corepack_for_all_pnpm_package_scripts():
         'pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;'
         in measure_step
     )
-    assert 'npm) run_and_capture "$label" npm run "$script" ;;' in measure_step
+    assert 'npm) run_and_capture "$label" corepack npm run "$script" ;;' in measure_step
     assert 'yarn) run_and_capture "$label" yarn run "$script" ;;' in measure_step
     assert '"$package_runner" run' not in measure_step
 
@@ -1040,11 +1096,11 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     )
     assert "javascript_coverage_provider_declared" not in measure_step
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;'
         in measure_step
     )
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;'
         in measure_step
     )
     assert (
