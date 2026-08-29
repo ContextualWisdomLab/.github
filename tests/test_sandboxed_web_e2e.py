@@ -112,12 +112,8 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
-    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
-    assert sandboxed_web_e2e.wait_for_url("http://[::1]:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match="URL must start with http:// or https://"):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
-    with pytest.raises(ValueError, match="localhost or a loopback address"):
-        sandboxed_web_e2e.wait_for_url("https://example.com/health", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
@@ -231,6 +227,14 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert len(attempts) == 2
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
+    with pytest.raises(ValueError, match="URL hostname must be localhost or a loopback address"):
+        sandboxed_web_e2e.wait_for_url("http://example.com", 10, service)
+
+    with pytest.raises(ValueError, match="URL hostname must be localhost or a loopback address"):
+        sandboxed_web_e2e.wait_for_url("http://192.168.1.1", 10, service)
+
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:8000/health", 10, service) is True
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:8000/health", 10, service) is True
 
 def test_no_redirect_handler_raises_httperror_without_following():
     """Readiness checks must raise HTTPError on redirects to prevent attacker-controlled internal URLs."""
