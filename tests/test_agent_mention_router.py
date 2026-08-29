@@ -371,3 +371,35 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+def test_dispatched_agents_concurrent_path() -> None:
+    """The dispatched_agents function uses ThreadPoolExecutor for multiple agents."""
+    module = load_module()
+    request = module.parse_event(event("@cwl-noema-review @opencode-agent"))
+    assert request is not None
+    client = FakeClient()
+
+    # We want to force it to use ThreadPoolExecutor by providing multiple agents.
+    agents = ["cwl-noema-review", "opencode-agent"]
+
+    observed = module.dispatched_agents(
+        request,
+        dispatch_client=client,
+        agents=agents,
+    )
+    # The fake client returns an empty artifact array, so none are observed as dispatched.
+    assert observed == frozenset()
+
+    # Assert two artifact checks happened
+    artifact_calls = [c for c in client.calls if c[0][0].endswith("/actions/artifacts")]
+    assert len(artifact_calls) == 2
+
+    # Now verify the cache path
+    cache = {module.agent_ledger_artifact_name(request, "cwl-noema-review"): True}
+    observed = module.dispatched_agents(
+        request,
+        dispatch_client=client,
+        agents=["cwl-noema-review"],
+        ledger_artifact_cache=cache
+    )
+    assert observed == frozenset({"cwl-noema-review"})

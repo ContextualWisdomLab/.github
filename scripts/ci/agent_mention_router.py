@@ -386,6 +386,7 @@ def dispatched_agents(
     )
 
     def _fetch_agent(agent: str) -> None:
+        """Fetch and cache exact-name artifacts for a single agent."""
         artifact_name = agent_ledger_artifact_name(request, agent)
         response = dispatch_client.request(
             [
