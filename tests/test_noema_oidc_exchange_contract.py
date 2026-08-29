@@ -96,6 +96,8 @@ def test_oidc_exchange_consumes_noema_standard_success_envelope() -> None:
     assert ".data.workflow_ref == $workflow_ref" in exchange
     assert "(.data.token_expires_at | type == \"string\" and length > 0)" in exchange
     assert "fromdateiso8601" in exchange
+    assert '(?<fraction>\\\\.[0-9]{1,3})?Z$' in exchange
+    assert 'strftime("%Y-%m-%dT%H:%M:%S")' in exchange
     assert "$expires_at > now" in exchange
     assert "(.trace_id | type == \"string\" and length > 0)" in exchange
     assert 'app_token="$(jq -r \'.data.token\' <<<"$token_response")"' in exchange
@@ -136,13 +138,23 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
         "trace_id": "synthetic-trace-id",
     }
 
-    accepted = run_exchange_script(tmp_path, valid)
+    for fraction in ("", ".1", ".12", ".123"):
+        accepted = run_exchange_script(
+            tmp_path,
+            {
+                **valid,
+                "data": {
+                    **valid["data"],
+                    "token_expires_at": f"{future_expiry[:-1]}{fraction}Z",
+                },
+            },
+        )
 
-    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
-    assert "::add-mask::synthetic-app-token" in accepted.stdout
-    assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
-        "token=synthetic-app-token\n"
-    )
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        assert "::add-mask::synthetic-app-token" in accepted.stdout
+        assert (tmp_path / "github-output").read_text(encoding="utf-8") == (
+            "token=synthetic-app-token\n"
+        )
 
     invalid_responses = [
         {"ok": True, "token": "synthetic-app-token"},
@@ -156,6 +168,27 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
             "data": {
                 **valid["data"],
                 "token_expires_at": "2000-01-01T00:00:00Z",
+            },
+        },
+        {
+            **valid,
+            "data": {
+                **valid["data"],
+                "token_expires_at": "2099-02-30T00:00:00Z",
+            },
+        },
+        {
+            **valid,
+            "data": {
+                **valid["data"],
+                "token_expires_at": "2099-01-01T00:00:00.1234Z",
+            },
+        },
+        {
+            **valid,
+            "data": {
+                **valid["data"],
+                "token_expires_at": "2099-01-01T00:00:00+00:00",
             },
         },
         {**valid, "data": {**valid["data"], "token_expires_at": "not-a-time"}},
