@@ -626,7 +626,8 @@ def _base_python_inputs(
     regular_blobs = _regular_base_blob_paths(entries)
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
-    vcs_by_repository: dict[str, dict[str, str]] = {}
+    vcs_commits: dict[str, str] = {}
+    vcs_dependencies: list[dict[str, str]] = []
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
@@ -637,26 +638,26 @@ def _base_python_inputs(
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                registry_content, vcs_dependencies = exported
+                registry_content, exported_vcs_dependencies = exported
                 if registry_content:
                     locks.append((path, registry_content))
-                for dependency in vcs_dependencies:
+                for dependency in exported_vcs_dependencies:
                     dependency = {**dependency, "source": path}
                     repository_key = dependency["repository"].casefold()
-                    previous = vcs_by_repository.get(repository_key)
-                    if (
-                        previous is not None
-                        and previous["commit"] != dependency["commit"]
-                    ):
+                    previous_commit = vcs_commits.get(repository_key)
+                    if previous_commit is not None and previous_commit != dependency[
+                        "commit"
+                    ]:
                         raise RuntimeError(
                             "base uv locks pin one VCS repository "
                             "to conflicting commits"
                         )
-                    vcs_by_repository[repository_key] = dependency
+                    vcs_commits[repository_key] = dependency["commit"]
+                    vcs_dependencies.append(dependency)
     return (
         sorted(locks, key=lambda item: item[0]),
         sorted(
-            vcs_by_repository.values(),
+            vcs_dependencies,
             key=lambda dependency: dependency["repository"].casefold(),
         ),
     )

@@ -1307,6 +1307,82 @@ def test_changed_uv_lock_rejects_conflicting_replaced_vcs_revision(
         )
 
 
+@pytest.mark.parametrize(
+    ("head_dependencies", "expected_source", "expected_error"),
+    [
+        ([], "first/uv.lock", None),
+        (
+            [
+                {
+                    "package": "shared-source",
+                    "import_name": "shared_source",
+                    "repository": "shared-repository",
+                    "commit": "b" * 40,
+                }
+            ],
+            None,
+            "conflicting commits",
+        ),
+    ],
+)
+def test_changed_uv_project_preserves_unaffected_shared_vcs_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    head_dependencies: list[dict[str, str]],
+    expected_source: str | None,
+    expected_error: str | None,
+) -> None:
+    """A collapsed VCS repository entry cannot hide an unchanged project owner."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    for project in ("first", "second"):
+        project_root = repo / project
+        project_root.mkdir()
+        (project_root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+        (project_root / "pyproject.toml").write_text(
+            f"[project]\nname = '{project}'\nversion = '0'\n", encoding="utf-8"
+        )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "second" / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(repo, "add", "second/uv.lock")
+    git(repo, "commit", "-m", "change second uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    shared_dependency = {
+        "package": "shared-source",
+        "import_name": "shared_source",
+        "repository": "shared-repository",
+        "commit": "a" * 40,
+    }
+
+    def export(_repo: Path, revision: str, _lock_path: str):
+        return (
+            (b"", [shared_dependency])
+            if revision == base_sha
+            else (b"", head_dependencies)
+        )
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            materializer.materialize(
+                repo, base_sha, tmp_path / "output", head_sha=head_sha
+            )
+        return
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
+    assert json.loads((output / "vcs-manifest.json").read_text()) == [
+        {**shared_dependency, "source": expected_source}
+    ]
+
+
 def _trusted_uv_archive(
     binary: bytes = b"verified-uv",
     *,
