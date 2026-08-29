@@ -1513,7 +1513,13 @@ def test_stacked_check_gated_retry_does_not_bypass_auto_merge(monkeypatch):
         reviews={"nodes": [review]},
         statusCheckRollup={
             "contexts": {
-                "nodes": [opencode_check(status="COMPLETED"), strix_check()]
+                "nodes": [
+                    opencode_check(
+                        status="IN_PROGRESS",
+                        started_at="2026-06-25T07:00:00Z",
+                    ),
+                    strix_check(),
+                ]
             }
         },
     )
@@ -1524,7 +1530,7 @@ def test_stacked_check_gated_retry_does_not_bypass_auto_merge(monkeypatch):
         lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
     )
 
-    decision = inspect(pr)
+    decision = inspect(pr, stale_opencode_minutes=0)
 
     assert decision.action == "skip"
     assert dispatched == []

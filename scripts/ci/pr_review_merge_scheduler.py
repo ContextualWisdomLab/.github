@@ -2408,12 +2408,10 @@ def inspect_pr(
         # Merge automation stays default-branch-only; rulesets do not gate
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
-        if (
-            can_retry_check_gated_opencode_review(pr)
-            and trigger_reviews
-            and not pr.get("autoMergeRequest")
-            and opencode_state != "running"
-        ):
+        check_gated_retry = can_retry_check_gated_opencode_review(pr)
+        if check_gated_retry and pr.get("autoMergeRequest"):
+            opencode_state = "complete"
+        elif check_gated_retry and trigger_reviews and opencode_state != "running":
             opencode_state = "absent"
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
             wait_reason = repository_dispatch_wait_reason(repo, workflow)
