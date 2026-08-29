@@ -329,6 +329,9 @@ SENTINEL_PREFIX = "<!-- opencode-review-gate "
 
 def extract_model_prose(raw_output: str) -> str:
     """Return the human review body, stripping sentinel and control JSON."""
+    if "<!-- opencode-review-" not in raw_output:
+        return raw_output.strip()
+
     lines: list[str] = []
     skipping_control = False
     for line in raw_output.splitlines():

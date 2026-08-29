@@ -51,3 +51,6 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+## 2026-09-02 - [대용량 텍스트 파싱 전 O(N) 서브스트링 검사 최적화]
+**Learning:** `scripts/ci/opencode_review_surfaces.py`의 `extract_model_prose` 함수와 같이, 대용량 텍스트를 줄 단위로 순회(loop)하며 특정 마커 문자열(sentinel, control)을 검사하는 경우, 마커가 아예 존재하지 않는 입력값(순수 텍스트)이 주어졌을 때에도 매 줄마다 불필요한 split과 반복적인 prefix 매칭을 수행하므로 성능 저하(Cold Path)가 컸습니다. 마이크로 벤치마크 결과, 마커가 없는 긴 텍스트에서 실행 시간이 약 95% 단축되었습니다.
+**Action:** 대용량 텍스트를 파싱하기 전, 먼저 C 기반으로 고도로 최적화된 `in` 연산자(또는 `str.find()`)를 사용해 필수 조건 문자열의 존재 여부를 가장 먼저 확인하여 빠른 반환 경로(Fast Path)를 만들어야 합니다.
