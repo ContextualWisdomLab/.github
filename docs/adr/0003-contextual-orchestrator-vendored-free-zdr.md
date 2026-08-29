@@ -44,6 +44,10 @@ all five, and auto-optimize routing by cost.
    enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
    may admit priced routes only through this evidence-bearing
    policy, never through a direct-provider model identifier.
+   The auto pool probes the free catalog first. Only when every selected free
+   route rejects the real runtime request contract does it rebuild once from
+   fully price-attested routes and record the rejected primary attempt. This is
+   evidence-triggered failover, not an arbitrary free/paid mixing ratio.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
    of time"; zero retention also implies no training) and is deliberately

@@ -120,6 +120,50 @@ def test_preflight_fails_closed_when_every_route_rejects() -> None:
         preflight([agent], client=client)
 
 
+def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> None:
+    """A live primary route wins; priced fallback is evidence-triggered only."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_with_fallback"]
+    primary = SimpleNamespace(
+        id="openrouter_free", provider_name="openrouter", model="free/model"
+    )
+    fallback = SimpleNamespace(
+        id="openrouter_priced", provider_name="openrouter", model="priced/model"
+    )
+    client = _ProbeClient(
+        {primary.id: TimeoutError("unavailable"), fallback.id: _openai_text("OK")}
+    )
+
+    viable, report, fallback_used = preflight(
+        [primary], [fallback], client=client
+    )
+
+    assert viable == [fallback]
+    assert fallback_used is True
+    assert report["fallback_reason"] == "primary_routes_unavailable"
+    assert report["primary_attempt"]["ready_count"] == 0
+    assert [call[0] for call in client.calls] == [primary, fallback]
+
+    ready_client = _ProbeClient(
+        {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
+    )
+    viable, report, fallback_used = preflight(
+        [primary], [fallback], client=ready_client
+    )
+    assert viable == [primary]
+    assert fallback_used is False
+    assert "fallback_reason" not in report
+    assert [call[0] for call in ready_client.calls] == [primary]
+
+    failing_client = _ProbeClient(
+        {primary.id: TimeoutError("unavailable"), fallback.id: RuntimeError("rejected")}
+    )
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([primary], [fallback], client=failing_client)
+    assert failure.value.report["ready_count"] == 0
+    assert failure.value.report["primary_attempt"]["ready_count"] == 0
+
+
 def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
     """Sequential route probes must fit inside the sidecar startup budget."""
     launcher = _LAUNCHER.read_text(encoding="utf-8")
@@ -137,7 +181,7 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    assert "_preflight_review_agents(agents, client=client)" in launcher
+    assert "_preflight_with_fallback(" in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher

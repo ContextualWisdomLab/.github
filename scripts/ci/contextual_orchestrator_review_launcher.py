@@ -222,6 +222,26 @@ def _preflight_review_agents(
     return viable, report
 
 
+def _preflight_with_fallback(
+    primary_agents: list[object], fallback_agents: list[object], *, client: Any
+) -> tuple[list[object], dict[str, object], bool]:
+    """Use the priced catalog only after every primary route rejects."""
+    try:
+        viable, report = _preflight_review_agents(primary_agents, client=client)
+        return viable, report, False
+    except ReviewPreflightError as primary_error:
+        if not fallback_agents:
+            raise
+        try:
+            viable, report = _preflight_review_agents(fallback_agents, client=client)
+        except ReviewPreflightError as fallback_error:
+            fallback_error.report["primary_attempt"] = primary_error.report
+            raise
+        report["primary_attempt"] = primary_error.report
+        report["fallback_reason"] = "primary_routes_unavailable"
+        return viable, report, True
+
+
 def _write_json(path: str, payload: object) -> None:
     """Write one deterministic UTF-8 JSON evidence file."""
     Path(path).write_text(
@@ -269,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
+        PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
         parse_discovery_report,
@@ -306,8 +327,9 @@ def main(argv: list[str] | None = None) -> int:
     rows = _report_rows(selected_models, free_route_identities)
     _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
+    normalized_rows = parse_discovery_report({"models": rows})
     result = build_zdr_prioritized_catalog(
-        parse_discovery_report({"models": rows}),
+        normalized_rows,
         limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
@@ -321,6 +343,32 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
+    fallback_result = None
+    fallback_agents: list[object] = []
+    if args.pool == "auto":
+        priced_rows = [
+            row for row in normalized_rows if row.get("cost_evidence") == "priced"
+        ]
+        if priced_rows:
+            try:
+                fallback_result = build_zdr_prioritized_catalog(
+                    priced_rows,
+                    limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
+                    family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+                    zdr_endpoints=zdr_endpoints,
+                    require_zdr=args.require_zdr,
+                    pool="auto",
+                )
+            except PolicyError:
+                fallback_result = None
+        if fallback_result is not None:
+            fallback_catalog = f"{args.catalog_out}.priced"
+            Path(fallback_catalog).write_text(
+                json.dumps({"agents": fallback_result["agents"]}, indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            fallback_agents = load_agents(fallback_catalog)
     client = ModelClient(
         timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
@@ -328,10 +376,21 @@ def main(argv: list[str] | None = None) -> int:
         temperature=REVIEW_TEMPERATURE,
     )
     try:
-        agents, preflight_report = _preflight_review_agents(agents, client=client)
+        agents, preflight_report, fallback_used = _preflight_with_fallback(
+            agents, fallback_agents, client=client
+        )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
+    if fallback_used and fallback_result is not None:
+        Path(args.catalog_out).write_text(
+            json.dumps({"agents": fallback_result["agents"]}, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        result = fallback_result
+        result["report"]["fallback_reason"] = "primary_routes_unavailable"
+        _write_json(args.report_out, result["report"])
     _write_json(args.preflight_out, preflight_report)
 
     client = ModelClient(
