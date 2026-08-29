@@ -145,6 +145,43 @@ def _resolve_api_base(env: dict[str, str], model: str) -> tuple[int, str]:
     return completed.returncode, completed.stdout.strip()
 
 
+def _resolve_child_model(model: str, api_base: str) -> tuple[int, str]:
+    """Execute the production child-model qualifier for one gateway route."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    helper_sources = [
+        _function_block(gate_source, "is_contextual_orchestrator_model"),
+        _function_block(gate_source, "is_contextual_orchestrator_api_base"),
+        _function_block(gate_source, "is_github_models_api_base"),
+        _function_block(gate_source, "child_model_for_api_base"),
+    ]
+    with tempfile.TemporaryDirectory(prefix="strix-gateway-child-model-") as temp_dir:
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "\n".join(
+                    [
+                        "set -euo pipefail",
+                        *helper_sources,
+                        'child_model_for_api_base "$1" "$2"',
+                    ]
+                ),
+                "strix-child-model",
+                model,
+                api_base,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "HOME": temp_dir,
+            },
+        )
+    return completed.returncode, completed.stdout.strip()
+
+
 class ExplicitOpenAIFallbackRouting(unittest.TestCase):
     """Direct-OpenAI fallbacks must not inherit the primary provider base."""
 
@@ -269,20 +306,51 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
 
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
-        """The local sidecar is accepted without allowing arbitrary HTTP bases."""
+        """Both gateway pools accept only the pinned process-local HTTP base."""
 
-        rc, api_base = _resolve_api_base(
-            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+        for model in (
             "orchestrator/free",
-        )
-        self.assertEqual(rc, 0)
-        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+            "contextual-orchestrator/orchestrator/free",
+            "orchestrator/auto",
+            "contextual-orchestrator/orchestrator/auto",
+        ):
+            with self.subTest(model=model):
+                rc, api_base = _resolve_api_base(
+                    {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+                    model,
+                )
+                self.assertEqual(rc, 0)
+                self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
 
         rc, _ = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
-            "orchestrator/free",
+            "orchestrator/auto",
         )
         self.assertEqual(rc, 2)
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+            "orchestrator/unknown",
+        )
+        self.assertEqual(rc, 2)
+
+    def test_gateway_child_model_preserves_selected_virtual_pool(self) -> None:
+        """LiteLLM qualification must not rewrite auto back to free."""
+
+        expected_child_models = {
+            "orchestrator/free": "openai/orchestrator/free",
+            "contextual-orchestrator/orchestrator/free": "openai/orchestrator/free",
+            "orchestrator/auto": "openai/orchestrator/auto",
+            "contextual-orchestrator/orchestrator/auto": "openai/orchestrator/auto",
+        }
+        for model, expected_child_model in expected_child_models.items():
+            with self.subTest(model=model):
+                rc, child_model = _resolve_child_model(
+                    model,
+                    "http://127.0.0.1:18080/v1",
+                )
+                self.assertEqual(rc, 0)
+                self.assertEqual(child_model, expected_child_model)
 
     def test_manual_status_job_has_status_write_permission(self) -> None:
         """OIDC target-app exchange may request the target commit status scope."""
