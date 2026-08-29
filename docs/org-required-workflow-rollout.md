@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-22 KST
+Updated: 2026-08-28 KST
 
 ## Decision
 
@@ -36,6 +36,18 @@ base-ref agnostic. They therefore also run for stacked pull requests targeting a
 feature branch; the organization ruleset's protected-ref scope remains an
 independent administrative control and is not weakened by this trigger
 coverage.
+
+Stacked pull requests are audited by organization ruleset
+`CWL Stacked OpenCode required workflow` (`21732164`) in `evaluate` mode. It
+targets every non-default branch and references only
+`.github/workflows/opencode-review.yml` from `.github@refs/heads/main`.
+Its observed scope is `ref_name.include=["~ALL"]` with
+`ref_name.exclude=["~DEFAULT_BRANCH"]`.
+Active enforcement over every non-default ref is prohibited: GitHub evaluates
+the ref update before a `pull_request_target.synchronize` run can exist for the
+new commit, so it rejects both initial branch creation and later review fixes.
+Exact-head OpenCode evidence remains a merge requirement enforced by the
+normal PR procedure while a target-ref-scoped enforcement design is developed.
 
 ## OpenCode required workflow posture
 
@@ -225,6 +237,8 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 9. Same-repository approved PRs should merge immediately when GitHub reports `CLEAN`; fork or external-head PRs are excluded from scheduler merge and auto-merge.
 
 ## Evidence from this rollout
+
+- On 2026-08-28 21:43 KST, ruleset `21732164` was created with active enforcement for every non-default branch. Reproduction on an existing LineageWeave PR head and a new branch returned GH013 before either ref could emit the required workflow event. The ruleset was returned to `evaluate` mode at 21:49 KST; the audit now fails if this impossible all-ref contract is reactivated.
 
 - On 2026-06-30 08:33 KST, organization ruleset `18156473` was changed from an explicit repository-name list to `repository_name.include=["~ALL"]` while keeping `ref_name.include=["~DEFAULT_BRANCH"]` and the same three central required workflow paths from `.github@refs/heads/main`.
 - On 2026-07-01 02:52 KST, ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.

@@ -1696,7 +1696,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6] == [
+    assert calls[8] == [
         "gh",
         "api",
         "-X",
@@ -1705,9 +1705,9 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--input",
         "-",
     ]
-    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[9] == [
+    assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[10][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[11] == [
         "gh",
         "api",
         "-X",
@@ -1945,7 +1945,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
     assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[3][0] == [
+    assert calls[5][0] == [
         "gh",
         "api",
         "-X",
@@ -1954,9 +1954,9 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
-    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[6][0] == [
+    assert calls[6][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[7][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][0] == [
         "gh",
         "api",
         "-X",
@@ -2363,6 +2363,38 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
         "active same-head workflow run(s) ContextualWisdomLab/.github@9301"
         in capsys.readouterr().out
     )
+
+
+def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, capsys):
+    calls = []
+    active_run = {
+        "id": 9350,
+        "name": "Strix Security Scan",
+        "event": "repository_dispatch",
+        "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
+        "pull_requests": [],
+    }
+
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [active_run],
+    )
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, stdin=None: calls.append(args))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+
+    result = sched.dispatch_strix_evidence(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(headRefOid="a" * 40),
+        dry_run=False,
+    )
+
+    assert result == "repository_busy"
+    assert calls == []
+    assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
 
 
 def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
@@ -3832,6 +3864,22 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check(), opencode_check()]}},
         )
     )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    assert "target repository already has active Strix evidence" in followup(
+        make_pr(headRefOid="new-head")
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert "same-head Strix evidence is already running" in followup(
+        make_pr(headRefOid="new-head")
+    )
 
     monkeypatch.setattr(
         sched,
@@ -4222,6 +4270,21 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert inspect(make_pr()).action == "security_dispatch"
     assert dispatched == ["Strix Security Scan"]
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    busy_strix = inspect(make_pr())
+    assert busy_strix.action == "wait"
+    assert "target repository already has active Strix evidence" in busy_strix.reason
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    assert inspect(make_pr()).reason == "same-head Strix evidence is still running"
+    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
     assert (
         inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}})).reason
         == "same-head Strix evidence is still running"
