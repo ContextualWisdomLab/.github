@@ -2411,6 +2411,7 @@ def inspect_pr(
         if (
             can_retry_check_gated_opencode_review(pr)
             and trigger_reviews
+            and not pr.get("autoMergeRequest")
             and opencode_state != "running"
         ):
             opencode_state = "absent"

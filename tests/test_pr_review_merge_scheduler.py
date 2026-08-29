@@ -1497,6 +1497,39 @@ def test_retries_check_only_opencode_request_for_stacked_pr(monkeypatch):
     assert dispatched == [("owner/repo", "OpenCode Review")]
 
 
+def test_stacked_check_gated_retry_does_not_bypass_auto_merge(monkeypatch):
+    """An active auto-merge request prevents stacked retry dispatch."""
+    review = {
+        **opencode_review("CHANGES_REQUESTED", "head"),
+        "body": (
+            "OpenCode could not approve from deterministic current-head evidence "
+            "because GitHub Checks have failed.\n\n"
+            "Failed checks:\n- strix: FAILURE"
+        ),
+    }
+    pr = make_pr(
+        baseRefName="feature-base",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": [review]},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [opencode_check(status="COMPLETED"), strix_check()]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "skip"
+    assert dispatched == []
+
+
 def test_check_gated_opencode_retry_stays_blocked_until_checks_recover():
     """A gate-only request cannot bypass a still-failing check."""
     review = {
