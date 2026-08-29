@@ -38,7 +38,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "ea0f9a030536ceb56fbea1119dad38064fdbe14e"
+ORCH_PIN_SHA = "6dcfc077ef53b503176b1b2cecf0a54c9d1304f7"
 
 
 def _read(path: Path) -> str:
@@ -87,6 +87,7 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
         "--zdr-endpoints \"$zdr_feed\"",
     ):
         assert arg in text
+    assert 'Authorization: Bearer ${OPENROUTER_API_KEY}' in text
     assert "https://openrouter.ai/api/v1/endpoints/zdr" in text
 
 

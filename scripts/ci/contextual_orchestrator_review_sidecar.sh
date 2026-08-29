@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-ea0f9a030536ceb56fbea1119dad38064fdbe14e}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-6dcfc077ef53b503176b1b2cecf0a54c9d1304f7}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -199,7 +199,9 @@ policy_report="$ORCHESTRATOR_WORK/policy-report.json"
 
 # Optional authoritative ZDR route feed. Failure is non-fatal: the policy falls
 # back to the dated static attestation table in scripts/ci/zdr_policy.py.
-if curl -fsSL --max-time 15 "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
+if [ -n "${OPENROUTER_API_KEY:-}" ] && curl -fsSL --max-time 15 \
+  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+  "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
   log "using live OpenRouter ZDR endpoint feed"
   zdr_args=(--zdr-endpoints "$zdr_feed")
 else
