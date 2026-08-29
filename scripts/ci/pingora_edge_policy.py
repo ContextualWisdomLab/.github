@@ -61,7 +61,8 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_container_image",
         re.compile(
-            r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+(?:docker\.io/)?(?:library/)?nginx(?:[:@\s]|$)"
+            r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+"
+            r"(?:[A-Za-z0-9._-]+/)*nginx[A-Za-z0-9._-]*(?:[:@\s]|$)"
         ),
     ),
     (
@@ -76,6 +77,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_runtime_command",
         re.compile(
             r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
+            r"^\s*(?:sudo\s+)?nginx\b|"
             r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
@@ -90,7 +92,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_package_install",
         re.compile(
-            r"(?im)^\s*(?:RUN\s+)?(?:apk\s+add|apt(?:-get)?\s+install|"
+            r"(?im)^\s*(?:RUN\s+)?(?:sudo\s+)?(?:apk\s+add|apt(?:-get)?\s+install|"
             r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
         ),
     ),
@@ -142,7 +144,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     lower_name = pure.name.lower()
     stem = pure.stem.lower()
     is_known_documentation_path = pure.parts and (
-        pure.parts[0].lower() in DOCUMENTATION_DIRECTORIES
+        any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts)
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
     if lower_name in LICENSE_NAMES or (
@@ -151,10 +153,9 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
         return True
-    if (
-        any(part.lower() in SOURCE_FIXTURE_DIRECTORIES for part in pure.parts)
-        and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES
-    ):
+    lower_parts = tuple(part.lower() for part in pure.parts)
+    is_tests_fixture = len(lower_parts) >= 2 and lower_parts[:2] == ("tests", "fixtures")
+    if is_tests_fixture and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES:
         return True
     return False
 

@@ -63,6 +63,13 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
     assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
+    assert policy.scan_content("deploy/fixtures/runtime.yaml", sample)
+
+
+def test_nested_documentation_path_allows_prose_samples() -> None:
+    """Documentation directories remain exempt when nested below a package."""
+
+    assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
