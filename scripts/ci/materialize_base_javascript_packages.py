@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Materialize pnpm locks from a validated pull-request base commit.
+"""Materialize JavaScript locks from validated pull-request commits.
 
 A ``pnpm-lock.yaml`` whose sibling ``package.json`` does not pin an exact pnpm
 ``packageManager`` is treated as a genuine pnpm project only when no sibling
 ``package-lock.json`` exists; otherwise it is a vestigial second lockfile in an
 npm-managed project and is skipped so the downstream npm install path handles it
 instead of failing coverage evidence.
+
+An npm project whose package manifest changes without changing its lockfile is
+materialized for both revisions so Corepack can cache a newly declared npm
+version before the offline coverage phase.
 """
 
 from __future__ import annotations
@@ -521,6 +525,10 @@ def materialize(
     projects: list[tuple[str, str, dict[str, bytes], str, str]] = []
     base_npm = base_npm_projects(repo_root, base_sha)
     base_npm_paths = {source_path for source_path, _manager, _inputs in base_npm}
+    base_npm_manifests = {
+        source_path: base_inputs["package.json"]
+        for source_path, _manager, base_inputs in base_npm
+    }
     base_npm_blobs: dict[str, str] = {}
     base_pnpm_blobs: dict[str, str] = {}
     for source_path, package_manager, base_inputs in (
@@ -548,10 +556,16 @@ def materialize(
             repo_root, head_sha
         ):
             head_blob = _lock_blob_sha(repo_root, head_sha, source_path)
-            if base_npm_blobs.get(source_path) == head_blob:
+            lock_matches_base = base_npm_blobs.get(source_path) == head_blob
+            if (
+                lock_matches_base
+                and base_npm_manifests.get(source_path)
+                == head_inputs["package.json"]
+            ):
                 continue
             lock_name = pathlib.PurePosixPath(source_path).name
-            validate_head_npm_lock(source_path, head_inputs[lock_name])
+            if not lock_matches_base:
+                validate_head_npm_lock(source_path, head_inputs[lock_name])
             projects.append(
                 (
                     source_path,
