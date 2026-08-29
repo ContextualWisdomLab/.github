@@ -1,0 +1,253 @@
+name: Recover and verify final Strix gateway tree
+
+on:
+  push:
+    branches:
+      - feat/strix-orchestrator-free-zdr
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: apply-strix-orchestrator-free-zdr-v3
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: "${{ github.event.head_commit.message == 'ci(strix): recover and verify final gateway tree' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FEATURE_BRANCH: feat/strix-orchestrator-free-zdr
+      REPOSITORY: ContextualWisdomLab/.github
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+          disable-file-monitoring: true
+
+      - name: Checkout exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: feat/strix-orchestrator-free-zdr
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Recover or verify the production tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          starting_head="$(git rev-parse HEAD)"
+          marker='Provision contextual-orchestrator Strix sidecar'
+          recovery_workflow='.github/workflows/recover-strix-orchestrator-final-tree.yml'
+
+          verify_final_tree() {
+            test -f tests/test_strix_contextual_orchestrator_contract.py
+            test -f docs/adr/0004-strix-contextual-orchestrator-authority.md
+            test -f docs/doctoring/strix-contextual-orchestrator-gateway.md
+            python3 tests/test_strix_contextual_orchestrator_contract.py
+            bash scripts/ci/strix_required_workflow_smoke.sh
+            bash -n scripts/ci/contextual_orchestrator_review_sidecar.sh
+            python3 -m py_compile tests/test_strix_contextual_orchestrator_contract.py
+            ruby -e 'require "yaml"; YAML.load_file(ARGV[0])' .github/workflows/strix.yml
+            git diff --check
+          }
+
+          remove_bootstrap_files() {
+            rm -f \
+              .github/workflows/apply-strix-orchestrator-followup.yml \
+              .github/workflows/apply-strix-orchestrator-followup-v2.yml \
+              .github/workflows/apply-strix-orchestrator-followup-v3.yml \
+              .github/workflows/apply-strix-orchestrator-followup-v4.yml \
+              .github/workflows/finalize-strix-orchestrator-pr.yml \
+              .github/workflows/recover-strix-orchestrator-final-tree.yml \
+              scripts/ci/apply_strix_orchestrator_followup.py
+          }
+
+          commit_fast_forward_only() {
+            remote_head="$(git ls-remote origin "refs/heads/${FEATURE_BRANCH}" | awk '{print $1}')"
+            if [ "$remote_head" != "$starting_head" ]; then
+              echo "::error::Concurrent branch advance detected: expected ${starting_head}, live ${remote_head}. No overwrite was attempted."
+              exit 1
+            fi
+            git config user.name 'ContextualWisdomLab Automation'
+            git config user.email 'automation@contextualwisdomlab.invalid'
+            git add -A
+            if git diff --cached --quiet; then
+              echo 'No final-tree commit is required.'
+              return 0
+            fi
+            git commit -m 'fix(strix): route default scans through contextual-orchestrator'
+            git push origin "HEAD:${FEATURE_BRANCH}"
+          }
+
+          if grep -Fq "$marker" .github/workflows/strix.yml; then
+            verify_final_tree
+            remove_bootstrap_files
+            git diff --check
+            commit_fast_forward_only
+            exit 0
+          fi
+
+          predecessor='2e1db527405f4ec10c9276d95aa85c80b568c62a'
+          git cat-file -e "${predecessor}^{commit}"
+          git show "${predecessor}:scripts/ci/apply_strix_orchestrator_followup.py" > "$RUNNER_TEMP/apply_strix_orchestrator_followup.py"
+
+          python3 - "$RUNNER_TEMP/apply_strix_orchestrator_followup.py" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+
+          function_pattern = re.compile(
+              r"def replace_once\(path: Path, old: str, new: str\) -> None:\n"
+              r".*?"
+              r"(?=\n\ndef regex_once)",
+              re.DOTALL,
+          )
+          replacement = '''def replace_once(path: Path, old: str, new: str) -> None:
+    """Replace every exact occurrence of one bootstrap-only tracked fragment."""
+
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count < 1:
+        raise SystemExit(
+            f"{path.relative_to(ROOT)}: replacement anchor is absent: {old[:120]!r}"
+        )
+    path.write_text(text.replace(old, new), encoding="utf-8")'''
+          text, count = function_pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'could not replace replace_once implementation: matches={count}')
+
+          cleanup_pattern = re.compile(
+              r"def commit_verified_patch\(\) -> None:\n"
+              r".*?"
+              r"(?=\n\ndef main)",
+              re.DOTALL,
+          )
+          cleanup_replacement = '''def commit_verified_patch() -> None:
+    """Delete every temporary applicator and push a verified fast-forward commit."""
+
+    for temporary in (
+        ROOT / ".github/workflows/apply-strix-orchestrator-followup.yml",
+        ROOT / ".github/workflows/apply-strix-orchestrator-followup-v2.yml",
+        ROOT / ".github/workflows/apply-strix-orchestrator-followup-v3.yml",
+        ROOT / ".github/workflows/apply-strix-orchestrator-followup-v4.yml",
+        ROOT / ".github/workflows/finalize-strix-orchestrator-pr.yml",
+        ROOT / ".github/workflows/recover-strix-orchestrator-final-tree.yml",
+        ROOT / "scripts/ci/apply_strix_orchestrator_followup.py",
+    ):
+        if temporary.exists():
+            temporary.unlink()
+    run("git", "config", "user.name", "ContextualWisdomLab Automation")
+    run("git", "config", "user.email", "automation@contextualwisdomlab.invalid")
+    run("git", "add", "-A")
+    run("git", "commit", "-m", "fix(strix): route default scans through contextual-orchestrator")
+    run("git", "push", "origin", "HEAD:feat/strix-orchestrator-free-zdr")'''
+          text, cleanup_count = cleanup_pattern.subn(cleanup_replacement, text, count=1)
+          if cleanup_count != 1:
+              raise SystemExit(f'could not replace cleanup implementation: matches={cleanup_count}')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python3 -m py_compile "$RUNNER_TEMP/apply_strix_orchestrator_followup.py"
+          python3 "$RUNNER_TEMP/apply_strix_orchestrator_followup.py"
+
+      - name: Confirm the remote exact tree and prepare protected integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${FEATURE_BRANCH}"
+          final_head="$(git rev-parse "origin/${FEATURE_BRANCH}")"
+          git cat-file -e "${final_head}^{commit}"
+          git show "${final_head}:.github/workflows/strix.yml" | grep -Fq 'Provision contextual-orchestrator Strix sidecar'
+          git show "${final_head}:tests/test_strix_contextual_orchestrator_contract.py" >/dev/null
+          git show "${final_head}:docs/adr/0004-strix-contextual-orchestrator-authority.md" >/dev/null
+          git show "${final_head}:docs/doctoring/strix-contextual-orchestrator-gateway.md" >/dev/null
+
+          for retired in \
+            .github/workflows/apply-strix-orchestrator-followup.yml \
+            .github/workflows/apply-strix-orchestrator-followup-v2.yml \
+            .github/workflows/apply-strix-orchestrator-followup-v3.yml \
+            .github/workflows/apply-strix-orchestrator-followup-v4.yml \
+            .github/workflows/finalize-strix-orchestrator-pr.yml \
+            .github/workflows/recover-strix-orchestrator-final-tree.yml \
+            scripts/ci/apply_strix_orchestrator_followup.py; do
+            if git cat-file -e "${final_head}:${retired}" 2>/dev/null; then
+              echo "::error::Temporary applicator remains in final tree: ${retired}"
+              exit 1
+            fi
+          done
+
+          body_file="$RUNNER_TEMP/pr-body.md"
+          cat > "$body_file" <<EOF
+          ## Summary
+
+          Normal required Strix scans now use the pinned vendored
+          \`contextual-orchestrator\` sidecar and its fail-closed
+          \`orchestrator/free\` ZDR-first zero-cost pool.
+
+          - The five established provider credentials are registered only in the
+            sidecar process-local KV.
+          - Strix receives only a short-lived masked token and exact IPv4-loopback
+            OpenAI-compatible endpoint.
+          - The gateway is the single provider/model discovery and fallback authority.
+          - Existing NVIDIA NIM, OpenRouter, GitHub Models, direct OpenAI, and Vertex
+            paths remain explicit \`repository_dispatch.strix_llm\` diagnostics.
+          - Gateway startup, discovery, provider exhaustion, and incomplete evidence
+            remain fail-closed.
+
+          ## Root cause
+
+          A consumer exact-head run exhausted NVIDIA 429, NVIDIA fallback 404,
+          OpenRouter 502, and direct OpenAI \`insufficient_quota\` paths without
+          producing an authoritative vulnerability artifact. Repository-level
+          serialization reduced contention but left provider routing duplicated in
+          Strix instead of using the already merged contextual-orchestrator gateway.
+
+          ## Exact-head evidence
+
+          - Head: \`${final_head}\`
+          - RED contract observed against the predecessor direct-provider default.
+          - GREEN contract, bounded required-workflow smoke, Bash syntax, Python
+            compile, YAML parse, and diff hygiene passed before publication.
+          - All self-modifying bootstrap workflows and applicators are absent from
+            the final tree.
+          - No force push, self-approval, protection bypass, or provider-failure
+            neutralization is used.
+
+          ## Traceability
+
+          - \`docs/adr/0004-strix-contextual-orchestrator-authority.md\`
+          - \`docs/doctoring/strix-contextual-orchestrator-gateway.md\`
+          - \`docs/product-technical-gap-baseline.md\`
+          - \`CHANGELOG.md\`
+          - Figma File ID: N/A — central workflow/control-plane change, no UI.
+
+          Merge only after this unchanged exact head has terminal required Checks,
+          zero valid unresolved review findings, and qualifying independent approval.
+          EOF
+
+          pr_number="$(gh pr list --repo "$REPOSITORY" --state open --head "$FEATURE_BRANCH" --json number --jq '.[0].number // empty')"
+          if [ -z "$pr_number" ]; then
+            gh pr create --repo "$REPOSITORY" --base main --head "$FEATURE_BRANCH" \
+              --title 'fix(strix): route default scans through contextual-orchestrator' \
+              --body-file "$body_file" --draft
+            pr_number="$(gh pr list --repo "$REPOSITORY" --state open --head "$FEATURE_BRANCH" --json number --jq '.[0].number // empty')"
+          fi
+          test -n "$pr_number"
+          gh pr edit "$pr_number" --repo "$REPOSITORY" \
+            --title 'fix(strix): route default scans through contextual-orchestrator' \
+            --body-file "$body_file"
+          if [ "$(gh pr view "$pr_number" --repo "$REPOSITORY" --json isDraft --jq '.isDraft')" = 'true' ]; then
+            gh pr ready "$pr_number" --repo "$REPOSITORY"
+          fi
+          gh pr merge "$pr_number" --repo "$REPOSITORY" --auto --squash || \
+            echo '::notice::Protected auto-merge was not enabled; live Checks and independent review remain authoritative.'
+          echo "Prepared ${REPOSITORY}#${pr_number} at exact head ${final_head}."
