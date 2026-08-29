@@ -857,6 +857,81 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'pull_request_target'" not in target_condition
 
 
+def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Path):
+    """Run the workflow classifier against supported and unrelated path shapes."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    cases = [
+        ("module.py", "1"),
+        ("pyproject.toml", "1"),
+        ("services/analysis/pyproject.toml", "1"),
+        ("uv.lock", "1"),
+        ("services/analysis/uv.lock", "1"),
+        ("requirements.lock", "1"),
+        ("services/requirements-dev.txt", "1"),
+        ("requirements/ci.txt", "1"),
+        ("services/requirements/ci.txt", "1"),
+        ("README.md", "0"),
+        ("package-lock.json", "0"),
+    ]
+
+    for index, (relative_path, expected) in enumerate(cases):
+        repository = tmp_path / f"repo-{index}"
+        repository.mkdir()
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.name", "test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        (repository / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+        )
+        base_sha = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        changed_file = repository / relative_path
+        changed_file.parent.mkdir(parents=True, exist_ok=True)
+        changed_file.write_text("changed\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "COVERAGE_SOURCE_WORKDIR": str(repository),
+                "PR_BASE_SHA": base_sha,
+                "RUNNER_TEMP": str(tmp_path),
+            }
+        )
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", classifier],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected, relative_path
+
+
 def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
     """The trusted image resolver selects only deterministic npm versions."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
