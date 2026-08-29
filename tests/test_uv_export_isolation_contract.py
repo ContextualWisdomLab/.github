@@ -143,6 +143,22 @@ def test_uv_export_rejects_conflicting_hashes_for_one_archive_url() -> None:
         materializer._partition_uv_export(content)
 
 
+def test_uv_export_keeps_same_archive_url_for_distinct_markers() -> None:
+    """Conditional alternatives sharing a URL remain separate requirements."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} ; python_version < '3.10' --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} ; python_version >= '3.10' --hash=sha256:{'a' * 64}\n"
+    ).encode()
+
+    _registry, _vcs_sources, archive_sources = materializer._partition_uv_export(content)
+
+    assert [archive["marker"] for archive in archive_sources] == [
+        "python_version < '3.10'",
+        "python_version >= '3.10'",
+    ]
+
+
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
     """An immutable organization source pin is separated from pip hash locks."""
     content = (

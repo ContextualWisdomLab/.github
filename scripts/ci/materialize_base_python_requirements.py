@@ -416,26 +416,30 @@ def _archive_from_uv_line(line: str) -> dict[str, object] | None:
     return descriptor
 
 
+def _archive_identity(archive: dict[str, Any]) -> tuple[str, str, str | None]:
+    """Return the dependency identity used to deduplicate archive entries."""
+    return str(archive["package"]), str(archive["url"]), archive.get("marker")
+
+
 def _partition_uv_export(
     content: bytes,
 ) -> tuple[bytes, list[dict[str, str]], list[dict[str, object]]]:
     """Separate registry pins, VCS sources, and verified archive sources."""
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
-    archives_by_url: dict[str, dict[str, object]] = {}
+    archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for line in _requirement_lines(content):
         archive = _archive_from_uv_line(line)
         if archive is not None:
-            url = str(archive["url"])
-            previous = archives_by_url.get(url)
+            identity = _archive_identity(archive)
+            previous = archives_by_identity.get(identity)
             if previous is not None and (
                 previous["hashes"] != archive["hashes"]
-                or previous.get("marker") != archive.get("marker")
             ):
                 raise ValueError(
-                    "uv export pins one archive URL to conflicting hashes or markers"
+                    "uv export pins one archive requirement to conflicting hashes"
                 )
-            archives_by_url[url] = archive
+            archives_by_identity[identity] = archive
             continue
         if _is_fully_hash_pinned_requirement(line):
             registry_requirements.append(line)
@@ -468,7 +472,13 @@ def _partition_uv_export(
             vcs_by_repository.values(),
             key=lambda dependency: dependency["repository"].casefold(),
         ),
-        sorted(archives_by_url.values(), key=lambda dependency: str(dependency["url"])),
+        sorted(
+            archives_by_identity.values(),
+            key=lambda dependency: (
+                str(dependency["url"]),
+                str(dependency.get("marker", "")),
+            ),
+        ),
     )
 
 
@@ -770,7 +780,7 @@ def _base_python_inputs(
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
-    archives_by_url: dict[str, dict[str, object]] = {}
+    archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
@@ -798,19 +808,16 @@ def _base_python_inputs(
                         )
                     vcs_by_repository[repository_key] = dependency
                 for archive in archive_dependencies:
-                    url = str(archive["url"])
-                    previous_archive = archives_by_url.get(url)
+                    identity = _archive_identity(archive)
+                    previous_archive = archives_by_identity.get(identity)
                     if (
                         previous_archive is not None
-                        and (
-                            previous_archive["hashes"] != archive["hashes"]
-                            or previous_archive.get("marker") != archive.get("marker")
-                        )
+                        and previous_archive["hashes"] != archive["hashes"]
                     ):
                         raise RuntimeError(
-                            "base uv locks pin one archive URL to conflicting hashes or markers"
+                            "base uv locks pin one archive requirement to conflicting hashes"
                         )
-                    archives_by_url[url] = {
+                    archives_by_identity[identity] = {
                         **archive,
                         "source": path,
                     }
@@ -820,7 +827,13 @@ def _base_python_inputs(
             vcs_by_repository.values(),
             key=lambda dependency: dependency["repository"].casefold(),
         ),
-        sorted(archives_by_url.values(), key=lambda dependency: str(dependency["url"])),
+        sorted(
+            archives_by_identity.values(),
+            key=lambda dependency: (
+                str(dependency["url"]),
+                str(dependency.get("marker", "")),
+            ),
+        ),
     )
 
 

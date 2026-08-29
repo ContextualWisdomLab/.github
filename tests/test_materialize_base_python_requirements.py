@@ -456,6 +456,50 @@ def test_base_inputs_reject_conflicting_archive_hashes_across_locks(
         materializer._base_python_inputs(tmp_path, "a" * 40)
 
 
+def test_base_inputs_keeps_same_archive_url_for_distinct_markers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate uv projects may retain conditional alternatives for one URL."""
+    tree = b"".join(
+        b"100644 blob " + bytes(character, "ascii") * 40 + b"\t" + path + b"\0"
+        for character, path in (
+            ("a", b"first/pyproject.toml"),
+            ("b", b"first/uv.lock"),
+            ("c", b"second/pyproject.toml"),
+            ("d", b"second/uv.lock"),
+        )
+    )
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+
+    def export(_repo: Path, _sha: str, lock_path: str):
+        marker = (
+            "python_version < '3.10'"
+            if lock_path.startswith("first/")
+            else "python_version >= '3.10'"
+        )
+        return b"", [], [
+            {
+                "package": "demo",
+                "url": url,
+                "hashes": ["a" * 64],
+                "marker": marker,
+            }
+        ]
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    _locks, _vcs_sources, archive_sources = materializer._base_python_inputs(
+        tmp_path, "a" * 40
+    )
+
+    assert {archive["marker"] for archive in archive_sources} == {
+        "python_version < '3.10'",
+        "python_version >= '3.10'",
+    }
+
+
 def test_materializes_hash_pinned_locks_named_beyond_the_legacy_whitelist(
     tmp_path: Path,
 ) -> None:

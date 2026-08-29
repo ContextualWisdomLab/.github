@@ -702,6 +702,15 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "--no-archives" in measure_step
     assert "--archives-only" in measure_step
     assert "RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert "from packaging.markers import Marker, default_environment" in measure_step
+    assert "coverage_environment = default_environment()" in measure_step
+    assert "not Marker(marker).evaluate(coverage_environment)" in measure_step
+    assert measure_step.index("not Marker(marker).evaluate") < measure_step.index(
+        "archive = (requirements_root / relative_file).resolve()"
+    )
+    assert measure_step.index("not Marker(marker).evaluate") < measure_step.index(
+        "cargo fetch --locked"
+    )
     assert "import tomllib" in measure_step
     assert 'build_system.get("build-backend") != "maturin"' in measure_step
     assert 'r"maturin(?:\\[.*\\])?(?:\\s*[<>=!~].*)?"' in measure_step

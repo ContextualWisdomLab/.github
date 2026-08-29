@@ -85,9 +85,10 @@ verifies its exported SHA-256 digest, and writes it separately from regular
 `--require-hashes` locks. The coverage Dockerfile rejects unsafe tar/zip members,
 requires exactly one `pyproject.toml` with the installed `maturin` backend and
 requirement, fetches any Rust dependency manifests while networked, and invokes
-archive build hooks only in the subsequent `RUN --network=none` layer. A Python
-environment marker remains part of the direct-reference requirement, so pip
-evaluates it for the coverage interpreter before any archive build starts.
+archive build hooks only in the subsequent `RUN --network=none` layer. The image
+preparation evaluates each archive marker for the coverage interpreter before
+extraction or Cargo fetching, while the marker remains part of the later
+direct-reference requirement so pip evaluates it again before any build hook.
 
 Generic requirements discovery continues to accept a global
 `--require-hashes` directive because pip performs a later closure preflight.

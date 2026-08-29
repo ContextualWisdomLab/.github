@@ -813,13 +813,18 @@ jobs:
           import tarfile
           import tomllib
           import zipfile
+          from packaging.markers import Marker, default_environment
 
           requirements_root = pathlib.Path("/tmp/base-python-requirements")
           source_root = pathlib.Path("/opt/base-python-archive-sources").resolve()
           manifest = json.loads(
               (requirements_root / "archive-manifest.json").read_text(encoding="utf-8")
           )
+          coverage_environment = default_environment()
           for index, entry in enumerate(manifest):
+              marker = entry.get("marker")
+              if marker is not None and not Marker(marker).evaluate(coverage_environment):
+                  continue
               relative_file = entry["file"]
               archive = (requirements_root / relative_file).resolve()
               destination = (source_root / f"archive-{index:03d}").resolve()
