@@ -470,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "24"))
     primary_limit = _bounded_primary_catalog_limit(
         requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )

@@ -205,6 +205,15 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
 
+def test_production_defaults_expose_the_complete_bounded_catalog() -> None:
+    """Launcher and shell defaults must not silently restore the old 12-route cap."""
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    assert 'ORCHESTRATOR_CATALOG_LIMIT", "24"' in launcher
+    assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
+
+
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
     """Privacy admission precedes the free-first tier decision."""
     namespace = _load_launcher()
