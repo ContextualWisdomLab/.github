@@ -8,6 +8,12 @@ Semantic Versioning where the repository publishes a release.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover. Priced routes require finite, nonnegative
+  published prompt/completion prices and an explicit currency; unknown pricing
+  fails closed. Private-target ZDR enforcement and the no-external-fallback
+  contract remain unchanged.
 - Allow the protected Strix required-workflow smoke to recognize only the
   existing `orchestrator/free` route or the provider-diverse
   `orchestrator/auto` route. This provides a fail-closed two-phase migration
