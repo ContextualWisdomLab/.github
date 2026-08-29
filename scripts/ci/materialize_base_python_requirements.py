@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -44,14 +45,14 @@ UV_EXACT_ORG_VCS_RE = re.compile(
     r"(?P<commit>[0-9a-fA-F]{40})"
 )
 UV_EXACT_ORG_ARCHIVE_RE = re.compile(
-    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
-    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?\s+@\s+"
-    r"https://github\.com/ContextualWisdomLab/"
+    r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?)\s+@\s+"
+    r"(?P<url>https://github\.com/ContextualWisdomLab/"
     r"[A-Za-z0-9_.-]{1,100}/archive/"
     r"(?:refs/(?:tags|heads)/)?"
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*"
     r"\.(?:tar\.gz|zip)"
-    r"(?:\s*;\s*\S(?:.*\S)?)?"
+    r")(?:\s*;\s*\S(?:.*\S)?)?"
 )
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
@@ -80,6 +81,9 @@ TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
 TRUSTED_UV_ORIGIN_ERROR = (
     "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
 )
+TRUSTED_ORG_ARCHIVE_HOSTS = frozenset({"github.com", "codeload.github.com"})
+TRUSTED_ORG_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024
+TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS = 120
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
@@ -118,6 +122,76 @@ def _is_trusted_uv_asset_location(url: str) -> bool:
 def _is_trusted_uv_final_origin(url: str) -> bool:
     """Return whether the completed response stayed on a trusted HTTPS origin."""
     return _is_trusted_uv_https_host(url, TRUSTED_UV_FINAL_HOSTS)
+
+
+def _is_trusted_org_archive_url(url: str) -> bool:
+    """Return whether one archive URL stays on GitHub's HTTPS origins."""
+    parsed = urllib.parse.urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in TRUSTED_ORG_ARCHIVE_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and _https_default_port(parsed)
+    )
+
+
+class _TrustedOrgArchiveRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow GitHub archive redirects only onto GitHub's code-download host."""
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        response: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> urllib.request.Request:
+        """Reject archive redirects that leave the fixed GitHub origins."""
+        if not _is_trusted_org_archive_url(request.full_url) or not _is_trusted_org_archive_url(new_url):
+            raise RuntimeError("trusted organization archive redirected outside GitHub")
+        followed = super().redirect_request(
+            request,
+            response,
+            code,
+            message,
+            headers,
+            new_url,
+        )
+        if followed is None:
+            raise RuntimeError("trusted organization archive redirect was rejected")
+        return followed
+
+
+def _download_trusted_org_archive(url: str, hashes: list[str]) -> bytes:
+    """Download and verify one exact organization archive before image build."""
+    if not _is_trusted_org_archive_url(url):
+        raise RuntimeError("trusted organization archive URL is not GitHub HTTPS")
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _TrustedOrgArchiveRedirects(),
+    )
+    try:
+        with opener.open(url, timeout=TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS) as response:
+            if not _is_trusted_org_archive_url(response.geturl()):
+                raise RuntimeError("trusted organization archive left GitHub origins")
+            payload = bytearray()
+            while len(payload) <= TRUSTED_ORG_ARCHIVE_MAX_BYTES:
+                chunk = response.read(TRUSTED_ORG_ARCHIVE_MAX_BYTES + 1 - len(payload))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+    except (OSError, urllib.error.URLError) as exc:
+        raise RuntimeError(
+            f"trusted organization archive download failed: {type(exc).__name__}"
+        ) from exc
+    if len(payload) > TRUSTED_ORG_ARCHIVE_MAX_BYTES:
+        raise RuntimeError("trusted organization archive exceeded the bounded size")
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest not in hashes:
+        raise RuntimeError("trusted organization archive checksum verification failed")
+    return bytes(payload)
 
 
 class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
@@ -260,7 +334,7 @@ def _is_hash_pinned(content: bytes) -> bool:
     if not requirement_lines:
         return False
     return all(
-        _is_fully_hash_pinned_requirement(line)
+        _is_registry_hash_pinned_requirement(line)
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
@@ -278,7 +352,18 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
     lines = _requirement_lines(content)
     requirement_lines = [line for line in lines if line != "--require-hashes"]
     return bool(requirement_lines) and all(
-        _is_fully_hash_pinned_requirement(line) for line in requirement_lines
+        _is_registry_hash_pinned_requirement(line) for line in requirement_lines
+    )
+
+
+def _is_registry_hash_pinned_requirement(line: str) -> bool:
+    """Return whether one registry requirement is an exact SHA-256 pin."""
+    fields = re.split(r"\s+(?=--hash=)", line)
+    if len(fields) < 2:
+        return False
+    requirement, *hashes = fields
+    return UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is not None and all(
+        UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes
     )
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact hash-pinned package or archive."""
@@ -308,11 +393,41 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
-def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
-    """Separate hash pins from exact organization VCS source pins."""
+def _archive_from_uv_line(line: str) -> dict[str, object] | None:
+    """Return one validated organization archive descriptor from an export line."""
+    fields = re.split(r"\s+(?=--hash=)", line)
+    if len(fields) < 2:
+        return None
+    requirement, *hash_fields = fields
+    match = UV_EXACT_ORG_ARCHIVE_RE.fullmatch(requirement)
+    if match is None:
+        return None
+    hashes = [field.removeprefix("--hash=sha256:").lower() for field in hash_fields]
+    if not hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", value) for value in hashes):
+        raise ValueError("organization archive must carry complete SHA-256 hashes")
+    return {
+        "package": match.group("package"),
+        "url": match.group("url"),
+        "hashes": hashes,
+    }
+
+
+def _partition_uv_export(
+    content: bytes,
+) -> tuple[bytes, list[dict[str, str]], list[dict[str, object]]]:
+    """Separate registry pins, VCS sources, and verified archive sources."""
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archives_by_url: dict[str, dict[str, object]] = {}
     for line in _requirement_lines(content):
+        archive = _archive_from_uv_line(line)
+        if archive is not None:
+            url = str(archive["url"])
+            previous = archives_by_url.get(url)
+            if previous is not None and previous["hashes"] != archive["hashes"]:
+                raise ValueError("uv export pins one archive URL to conflicting hashes")
+            archives_by_url[url] = archive
+            continue
         if _is_fully_hash_pinned_requirement(line):
             registry_requirements.append(line)
             continue
@@ -338,9 +453,13 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
         if registry_requirements
         else b""
     )
-    return registry_content, sorted(
-        vcs_by_repository.values(),
-        key=lambda dependency: dependency["repository"].casefold(),
+    return (
+        registry_content,
+        sorted(
+            vcs_by_repository.values(),
+            key=lambda dependency: dependency["repository"].casefold(),
+        ),
+        sorted(archives_by_url.values(), key=lambda dependency: str(dependency["url"])),
     )
 
 
@@ -550,7 +669,7 @@ def _reject_unsupported_uv_workspace(
 
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
-) -> tuple[bytes, list[dict[str, str]]] | None:
+) -> tuple[bytes, list[dict[str, str]], list[dict[str, object]]] | None:
     """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
     The caller proves that the sibling ``pyproject.toml`` is a regular blob in
@@ -632,8 +751,8 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
 
 def _base_python_inputs(
     repo_root: pathlib.Path, base_sha: str
-) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
-    """Return hash locks and exact VCS sources from one validated base commit."""
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]], list[dict[str, object]]]:
+    """Return locks, exact VCS sources, and verified archive sources."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -642,6 +761,7 @@ def _base_python_inputs(
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archives_by_url: dict[str, dict[str, object]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
@@ -652,7 +772,7 @@ def _base_python_inputs(
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                registry_content, vcs_dependencies = exported
+                registry_content, vcs_dependencies, archive_dependencies = exported
                 if registry_content:
                     locks.append((path, registry_content))
                 for dependency in vcs_dependencies:
@@ -668,12 +788,27 @@ def _base_python_inputs(
                             "to conflicting commits"
                         )
                     vcs_by_repository[repository_key] = dependency
+                for archive in archive_dependencies:
+                    url = str(archive["url"])
+                    previous_archive = archives_by_url.get(url)
+                    if (
+                        previous_archive is not None
+                        and previous_archive["hashes"] != archive["hashes"]
+                    ):
+                        raise RuntimeError(
+                            "base uv locks pin one archive URL to conflicting hashes"
+                        )
+                    archives_by_url[url] = {
+                        **archive,
+                        "source": path,
+                    }
     return (
         sorted(locks, key=lambda item: item[0]),
         sorted(
             vcs_by_repository.values(),
             key=lambda dependency: dependency["repository"].casefold(),
         ),
+        sorted(archives_by_url.values(), key=lambda dependency: str(dependency["url"])),
     )
 
 
@@ -751,7 +886,7 @@ def materialize(
     regular_paths = {
         path for path, _candidate in _regular_base_blob_paths(entries)
     }
-    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    locks, vcs_manifest, archive_sources = _base_python_inputs(resolved_repo, base_sha)
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
@@ -783,6 +918,21 @@ def materialize(
     )
     (output_dir / "vcs-manifest.json").write_text(
         json.dumps(vcs_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    archive_directory = output_dir / "archives"
+    archive_manifest: list[dict[str, object]] = []
+    for index, archive in enumerate(archive_sources):
+        url = str(archive["url"])
+        suffix = ".tar.gz" if url.endswith(".tar.gz") else ".zip"
+        archive_file = f"archive-{index:03d}{suffix}"
+        archive_directory.mkdir(parents=True, exist_ok=True)
+        (archive_directory / archive_file).write_bytes(
+            _download_trusted_org_archive(url, list(archive["hashes"]))
+        )
+        archive_manifest.append({**archive, "file": f"archives/{archive_file}"})
+    (output_dir / "archive-manifest.json").write_text(
+        json.dumps(archive_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return manifest

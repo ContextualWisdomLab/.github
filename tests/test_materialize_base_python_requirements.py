@@ -131,7 +131,7 @@ def test_materializes_exact_vcs_sources_in_a_separate_manifest(
     monkeypatch.setattr(
         materializer,
         "_base_python_inputs",
-        lambda *_args: ([("uv.lock", hash_lock)], vcs_sources),
+        lambda *_args: ([("uv.lock", hash_lock)], vcs_sources, []),
     )
 
     output = tmp_path / "output"
@@ -142,6 +142,46 @@ def test_materializes_exact_vcs_sources_in_a_separate_manifest(
         json.loads((output / "vcs-manifest.json").read_text(encoding="utf-8"))
         == vcs_sources
     )
+
+
+def test_materializes_archive_sources_separately_from_pip_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive sources are verified before the image's no-network install step."""
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git(repository, "init")
+    git(repository, "config", "user.name", "Test")
+    git(repository, "config", "user.email", "test@example.invalid")
+    git(repository, "commit", "--allow-empty", "-m", "base")
+    base_sha = git(repository, "rev-parse", "HEAD")
+    archive = b"verified archive"
+    archive_source = {
+        "package": "demo",
+        "url": "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz",
+        "hashes": [hashlib.sha256(archive).hexdigest()],
+        "source": "uv.lock",
+    }
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([], [], [archive_source]),
+    )
+    monkeypatch.setattr(
+        materializer,
+        "_download_trusted_org_archive",
+        lambda _url, _hashes: archive,
+    )
+
+    output = tmp_path / "output"
+    materializer.materialize(repository, base_sha, output)
+
+    assert not list(output.glob("requirements-*.txt"))
+    assert json.loads((output / "archive-manifest.json").read_text()) == [
+        {**archive_source, "file": "archives/archive-000.tar.gz"}
+    ]
+    assert (output / "archives/archive-000.tar.gz").read_bytes() == archive
 
 
 def test_base_inputs_preserve_a_vcs_only_export(
@@ -163,13 +203,16 @@ def test_base_inputs_preserve_a_vcs_only_export(
     monkeypatch.setattr(
         materializer,
         "_export_uv_lock",
-        lambda *_args: (b"", [dependency]),
+        lambda *_args: (b"", [dependency], []),
     )
 
-    locks, vcs_sources = materializer._base_python_inputs(tmp_path, "a" * 40)
+    locks, vcs_sources, archive_sources = materializer._base_python_inputs(
+        tmp_path, "a" * 40
+    )
 
     assert locks == []
     assert vcs_sources == [{**dependency, "source": "uv.lock"}]
+    assert archive_sources == []
 
 
 def test_base_inputs_reject_conflicting_vcs_revisions_across_locks(
@@ -190,7 +233,7 @@ def test_base_inputs_reject_conflicting_vcs_revisions_across_locks(
 
     def export(_repo: Path, _sha: str, lock_path: str):
         commit = "a" * 40 if lock_path.startswith("first/") else "b" * 40
-        return b"", [{"package": "demo", "repository": "demo", "commit": commit}]
+        return b"", [{"package": "demo", "repository": "demo", "commit": commit}], []
 
     monkeypatch.setattr(materializer, "_export_uv_lock", export)
 

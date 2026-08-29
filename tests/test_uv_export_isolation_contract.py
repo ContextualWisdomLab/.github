@@ -105,20 +105,18 @@ def test_uv_export_accepts_hash_pinned_organization_archive_as_registry_lock() -
         b"    --hash=sha256:" + b"a" * 64 + b"\n"
     )
 
-    registry, vcs_sources = materializer._partition_uv_export(content)
+    registry, vcs_sources, archive_sources = materializer._partition_uv_export(content)
 
     assert materializer._is_fully_hash_pinned_export(content) is True
-    assert registry.split() == [
-        b"fast-mlsirm",
-        b"@",
-        b"https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz",
-        b";",
-        b"python_full_version",
-        b">=",
-        b"'3.12'",
-        b"--hash=sha256:" + b"a" * 64,
-    ]
+    assert registry == b""
     assert vcs_sources == []
+    assert archive_sources == [
+        {
+            "package": "fast-mlsirm",
+            "url": "https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz",
+            "hashes": ["a" * 64],
+        }
+    ]
 
 
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
@@ -129,7 +127,7 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
         b"61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6\n"
     )
 
-    registry, vcs_sources = materializer._partition_uv_export(content)
+    registry, vcs_sources, archive_sources = materializer._partition_uv_export(content)
 
     assert registry == b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
     assert vcs_sources == [
@@ -140,6 +138,7 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
             "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
         }
     ]
+    assert archive_sources == []
 
 
 @pytest.mark.parametrize(

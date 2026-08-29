@@ -725,6 +725,7 @@ jobs:
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
+          ENV CARGO_HOME=/opt/base-cargo
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \
               site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -802,6 +803,55 @@ jobs:
           COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \
+                --no-archives
+          RUN mkdir -p /opt/base-python-archive-sources \
+            && python3 - <<'PYTHON'
+          import json
+          import pathlib
+          import stat
+          import tarfile
+          import zipfile
+
+          requirements_root = pathlib.Path("/tmp/base-python-requirements")
+          source_root = pathlib.Path("/opt/base-python-archive-sources").resolve()
+          manifest = json.loads(
+              (requirements_root / "archive-manifest.json").read_text(encoding="utf-8")
+          )
+          for index, entry in enumerate(manifest):
+              relative_file = entry["file"]
+              archive = (requirements_root / relative_file).resolve()
+              destination = (source_root / f"archive-{index:03d}").resolve()
+              destination.mkdir(parents=True, exist_ok=True)
+              if not archive.is_file() or archive.is_symlink():
+                  raise SystemExit(f"archive input is not a regular file: {relative_file}")
+              if relative_file.endswith(".tar.gz"):
+                  with tarfile.open(archive, "r:gz") as bundle:
+                      members = bundle.getmembers()
+                      for member in members:
+                          target = (destination / member.name).resolve()
+                          if not target.is_relative_to(destination) or member.issym() or member.islnk() or member.isdev():
+                              raise SystemExit(f"archive contains an unsafe member: {relative_file}")
+                      bundle.extractall(destination)
+              elif relative_file.endswith(".zip"):
+                  with zipfile.ZipFile(archive) as bundle:
+                      for member in bundle.infolist():
+                          target = (destination / member.filename).resolve()
+                          mode = (member.external_attr >> 16) & 0o170000
+                          if not target.is_relative_to(destination) or mode == stat.S_IFLNK:
+                              raise SystemExit(f"archive contains an unsafe member: {relative_file}")
+                      bundle.extractall(destination)
+              else:
+                  raise SystemExit(f"unsupported archive suffix: {relative_file}")
+          PYTHON
+          RUN set -eu; \
+              find /opt/base-python-archive-sources -name Cargo.toml -print0 \
+                | sort -z -u \
+                | while IFS= read -r -d "" manifest_path; do \
+                    cargo fetch --locked --manifest-path "$manifest_path"; \
+                  done
+          RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py \
+                --requirements-root /tmp/base-python-requirements \
+                --archives-only \
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
           DOCKERFILE

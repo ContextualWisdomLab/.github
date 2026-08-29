@@ -14,6 +14,7 @@ repository.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -26,6 +27,8 @@ from typing import Any, TextIO
 
 
 GENERATED_LOCK_RE = re.compile(r"^requirements-[0-9]{3}\.txt$")
+GENERATED_ARCHIVE_RE = re.compile(r"^archives/archive-[0-9]{3}\.(?:tar\.gz|zip)$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DEFERABLE_PREFLIGHT_FAILURES = (
     re.compile(
         r"In --require-hashes mode, all requirements must have their versions "
@@ -55,6 +58,65 @@ class LockCandidate:
         """Return the source directory used for supplement recovery groups."""
         parent = str(pathlib.PurePosixPath(self.source).parent)
         return "" if parent == "." else parent
+
+
+@dataclass(frozen=True)
+class ArchiveCandidate:
+    """One materialized archive source with a verified content digest."""
+
+    package: str
+    file: pathlib.Path
+    hashes: tuple[str, ...]
+
+
+def _archive_entries(
+    requirements_root: pathlib.Path,
+) -> list[ArchiveCandidate]:
+    """Load and validate the archive files materialized from the base lock."""
+    manifest_path = requirements_root.resolve() / "archive-manifest.json"
+    if not manifest_path.exists():
+        return []
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise ValueError("base Python archive manifest must be a regular non-symlink file")
+    try:
+        manifest: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"base Python archive manifest is invalid: {exc}") from exc
+    if not isinstance(manifest, list):
+        raise ValueError("base Python archive manifest must be a JSON array")
+
+    entries: list[ArchiveCandidate] = []
+    seen_files: set[str] = set()
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            raise ValueError("base Python archive manifest entries must be objects")
+        package = entry.get("package")
+        relative_file = entry.get("file")
+        hashes = entry.get("hashes")
+        if (
+            not isinstance(package, str)
+            or not package
+            or not isinstance(relative_file, str)
+            or GENERATED_ARCHIVE_RE.fullmatch(relative_file) is None
+            or not isinstance(hashes, list)
+            or not hashes
+            or any(not isinstance(value, str) or not SHA256_RE.fullmatch(value) for value in hashes)
+        ):
+            raise ValueError("base Python archive manifest contains an invalid entry")
+        if relative_file in seen_files:
+            raise ValueError("base Python archive manifest contains duplicate files")
+        seen_files.add(relative_file)
+        archive = requirements_root.resolve() / relative_file
+        if not archive.is_file() or archive.is_symlink():
+            raise ValueError(f"materialized base Python archive {relative_file} must be a regular file")
+        digest = hashlib.sha256()
+        with archive.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() not in hashes:
+            raise ValueError(f"materialized base Python archive {relative_file} failed hash verification")
+        entries.append(ArchiveCandidate(package, archive, tuple(hashes)))
+    return entries
 
 
 def _manifest_entries(
@@ -129,6 +191,21 @@ def _pip_command(requirements: Sequence[pathlib.Path], *, preflight: bool) -> li
     return command
 
 
+def _archive_pip_command(archive: pathlib.Path) -> list[str]:
+    """Build a no-network source-install command for one verified archive."""
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--break-system-packages",
+        "--disable-pip-version-check",
+        "--no-deps",
+        "--no-build-isolation",
+        str(archive),
+    ]
+
+
 def _bounded_failure_output(output: str, *, maximum_lines: int = 120) -> str:
     """Keep the dependency root cause visible without flooding Actions logs."""
     lines = output.rstrip().splitlines()
@@ -183,16 +260,39 @@ def _report_fatal_preflight_failure(
 def install_materialized_locks(
     requirements_root: pathlib.Path,
     *,
+    install_archives: bool = True,
+    archives_only: bool = False,
     runner: Runner = subprocess.run,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
     """Preflight and install independent base lock closures."""
     try:
-        entries = _manifest_entries(requirements_root)
+        archive_entries = _archive_entries(requirements_root)
+        entries = [] if archives_only else _manifest_entries(requirements_root)
     except (OSError, ValueError) as exc:
-        print(f"::error::Could not validate base Python locks: {exc}", file=stderr)
+        print(f"::error::Could not validate base Python lock inputs: {exc}", file=stderr)
         return 2
+
+    if archives_only:
+        for archive in archive_entries:
+            print(
+                f"Installing verified trusted base Python archive {archive.package}.",
+                file=stdout,
+                flush=True,
+            )
+            installation = runner(_archive_pip_command(archive.file), check=False)
+            if installation.returncode != 0:
+                print(
+                    f"::error::Verified trusted base Python archive failed to install: {archive.package}.",
+                    file=stderr,
+                )
+                return installation.returncode or 1
+        print(
+            f"Trusted base Python archive installation summary: installed={len(archive_entries)}.",
+            file=stdout,
+        )
+        return 0
 
     installed = 0
     skipped = 0
@@ -312,6 +412,21 @@ def install_materialized_locks(
             return installation.returncode or 1
         installed += len(plan)
 
+    if install_archives:
+        for archive in archive_entries:
+            print(
+                f"Installing verified trusted base Python archive {archive.package}.",
+                file=stdout,
+                flush=True,
+            )
+            installation = runner(_archive_pip_command(archive.file), check=False)
+            if installation.returncode != 0:
+                print(
+                    f"::error::Verified trusted base Python archive failed to install: {archive.package}.",
+                    file=stderr,
+                )
+                return installation.returncode or 1
+
     print(
         "Trusted base Python lock installation summary: "
         f"candidates={len(entries)} installed={installed} skipped={skipped}.",
@@ -324,8 +439,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Install materialized lock candidates supplied by the trusted workflow."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--requirements-root", required=True, type=pathlib.Path)
+    parser.add_argument("--no-archives", action="store_true")
+    parser.add_argument("--archives-only", action="store_true")
     args = parser.parse_args(argv)
-    return install_materialized_locks(args.requirements_root)
+    return install_materialized_locks(
+        args.requirements_root,
+        install_archives=not args.no_archives,
+        archives_only=args.archives_only,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

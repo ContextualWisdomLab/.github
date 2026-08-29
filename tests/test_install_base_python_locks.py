@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -89,6 +90,49 @@ def test_recovers_partial_supplement_with_same_directory_lock(tmp_path) -> None:
     assert stderr.getvalue() == ""
     assert "Recovered trusted base Python supplement" in stdout.getvalue()
     assert "candidates=2 installed=2 skipped=0" in stdout.getvalue()
+
+
+def test_installs_verified_archives_without_network_or_dependency_resolution(tmp_path) -> None:
+    """Archive build hooks run only in the caller's network-isolated phase."""
+    archive = tmp_path / "archives" / "archive-000.tar.gz"
+    archive.parent.mkdir()
+    archive.write_bytes(b"verified archive")
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": [hashlib.sha256(archive.read_bytes()).hexdigest()],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    assert installer.install_materialized_locks(
+        tmp_path,
+        archives_only=True,
+        runner=fake_runner,
+    ) == 0
+    assert commands == [
+        [
+            installer.sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--break-system-packages",
+            "--disable-pip-version-check",
+            "--no-deps",
+            "--no-build-isolation",
+            str(archive),
+        ]
+    ]
 
 
 def test_skips_partial_candidate_without_completing_sibling(tmp_path) -> None:
@@ -443,7 +487,7 @@ def test_main_forwards_requirements_root(monkeypatch, tmp_path) -> None:
     """The CLI delegates the exact requirements root to the installer."""
     seen: list[pathlib.Path] = []
 
-    def fake_install(root: pathlib.Path) -> int:
+    def fake_install(root: pathlib.Path, **_kwargs) -> int:
         seen.append(root)
         return 7
 

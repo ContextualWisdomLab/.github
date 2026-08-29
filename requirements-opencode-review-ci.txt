@@ -1,4 +1,5 @@
 coverage==7.14.3
+maturin>=1.10,<2.0
 # hypothesis (MPL-2.0, permissive test tool) so the coverage-evidence sandbox can
 # run repos' always-on property tests (tests/fuzz/*) instead of ImportError-ing on
 # collection. Matches the >=6.100 floor used by consumer repos (e.g. contextual-orchestrator).

@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Materialize hash-pinned organization archive dependencies as verified local
+  inputs and install them in a separate Docker `--network=none` phase with the
+  pinned `maturin` build backend, so archive build hooks cannot use image-build
+  network access or alter the regular pip lock closure.
 - Preserve the private contextual-orchestrator bearer-file owner and mode gate
   across GNU, BusyBox, and BSD/macOS `stat` implementations without relaxing
   the required current-user ownership or exact mode `600` contract.

@@ -699,12 +699,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert "--no-archives" in measure_step
+    assert "--archives-only" in measure_step
+    assert "RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
     assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
     assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
     assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
     assert 'rev-parse HEAD)" = "$commit"' in measure_step
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
+    assert 'maturin>=1.10,<2.0' in Path(
+        "requirements-opencode-review-ci.txt"
+    ).read_text(encoding="utf-8")
     assert 'done <"$dependency_list"' in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step
