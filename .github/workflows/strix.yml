@@ -739,7 +739,9 @@ jobs:
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
           STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '__PR_SCOPE__' || './' }}
           STRIX_SOURCE_DIRS: ". backend frontend"
-          STRIX_REASONING_EFFORT: high
+          # The gateway free pool is capability-diverse. Strix function tools
+          # must not send a provider-specific reasoning setting to every route.
+          STRIX_REASONING_EFFORT: none
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60

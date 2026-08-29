@@ -1995,7 +1995,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "falling back to current-head REST check-runs" in workflow
 
     strix_workflow = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
-    assert "STRIX_REASONING_EFFORT: high" in strix_workflow
+    assert "STRIX_REASONING_EFFORT: none" in strix_workflow
 
     prompt_template = Path("scripts/ci/opencode_review_prompt_template.md").read_text(
         encoding="utf-8"
