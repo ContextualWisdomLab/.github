@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Skip trusted base Python lock materialization for exact-head reviews with no
+  Python source or dependency-manifest changes, while preserving the
+  fail-closed wheel-only path when Python coverage is relevant.
 - Allow the protected Strix required-workflow smoke to recognize only the
   existing `orchestrator/free` route or the provider-diverse
   `orchestrator/auto` route. This provides a fail-closed two-phase migration

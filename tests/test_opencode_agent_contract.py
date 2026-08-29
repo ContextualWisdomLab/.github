@@ -570,6 +570,24 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ENV COREPACK_HOME=/opt/corepack" in measure_step
     assert "corepack --version >/dev/null" in measure_step
     assert "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz" not in measure_step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" diff \\' in measure_step
+    assert "--name-only --diff-filter=ACMRTUXB -z \"$PR_BASE_SHA\" HEAD" in measure_step
+    assert "while IFS= read -r -d '' changed_path" in measure_step
+    assert "python_coverage_required=0" in measure_step
+    assert (
+        "No Python source or dependency-manifest changes on the exact current head"
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/manifest.json\""
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/vcs-manifest.json\""
+        in measure_step
+    )
+    assert "*.py|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock" in measure_step
+    assert "requirements*.txt|*/requirements*.txt" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
