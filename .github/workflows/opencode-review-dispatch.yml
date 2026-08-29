@@ -1060,6 +1060,11 @@ jobs:
             return "$rc"
           }
 
+          has_changed_rust_files() {
+            changed_files_for_coverage |
+              awk '$0 ~ /(^|\/)Cargo\.(toml|lock)$/ || $0 ~ /\.rs$/ { found=1 } END { exit found ? 0 : 1 }'
+          }
+
           tracked_python_projects_with_tests() {
             trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
               | while IFS= read -r pyproject_file; do
@@ -1980,7 +1985,7 @@ jobs:
             run_r_test_coverage
           fi
 
-          if has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*/Cargo.toml' '*/Cargo.lock' '*.rs'; then
+          if has_changed_rust_files; then
             measured_any=1
             run_rust_test_coverage
           fi

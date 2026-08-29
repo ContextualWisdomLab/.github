@@ -755,7 +755,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "workspace.metadata.opencode.coverage.minimum_lines" in measure_step
     assert "if changed_files_for_coverage" in measure_step
     assert '$0 == "Cargo.toml" || $0 == "Cargo.lock"' in measure_step
-    assert "has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*/Cargo.toml' '*/Cargo.lock' '*.rs'" in measure_step
+    assert "has_changed_rust_files" in measure_step
+    assert "Cargo\\.(toml|lock)" in measure_step
     assert "changed Rust package(s)" in measure_step
     assert 'candidate_dir="$(dirname "$changed_path")"' in measure_step
     assert "*/Cargo.toml|*/Cargo.lock|*.rs" in measure_step
@@ -1124,6 +1125,7 @@ def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
         "Cargo.toml": "[workspace]\nmembers = [\"crates/alpha\"]\n",
         "Cargo.lock": "# lock\n",
         "crates/alpha/Cargo.toml": "[package]\nname = \"alpha\"\n",
+        "crates/alpha/Cargo.lock": "# nested lock\n",
         "crates/alpha/src/lib.rs": "pub fn alpha() {}\n",
         "src/main.rs": "fn main() {}\n",
         "README.md": "unrelated\n",
@@ -1165,8 +1167,29 @@ def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
     assert select("src/main.rs\ncrates/alpha/src/lib.rs\n") == ["Cargo.toml"]
     assert select("README.md\n") == []
 
-    (repo / "crates" / "alpha" / "Cargo.toml").unlink()
+    nested_manifest = repo / "crates" / "alpha" / "Cargo.toml"
+    nested_manifest.unlink()
     assert select("crates/alpha/Cargo.toml\n") == ["Cargo.toml"]
+
+    subprocess.run(["git", "rm", "-q", "crates/alpha/Cargo.lock"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "delete nested rust manifests"], cwd=repo, check=True)
+    trigger_start = measure_step.index("          has_changed_rust_files() {\n")
+    trigger_end = measure_step.index(
+        "\n\n          tracked_python_projects_with_tests()", trigger_start
+    )
+    trigger_shell = "\n".join(
+        (
+            "set -euo pipefail",
+            "trusted_git() { git \"$@\"; }",
+            "changed_files_for_coverage() { git diff --name-only HEAD~1 HEAD; }",
+            textwrap.dedent(measure_step[trigger_start:trigger_end]),
+            "has_changed_rust_files",
+        )
+    )
+    trigger = subprocess.run(
+        [bash, "-c", trigger_shell], cwd=repo, capture_output=True, text=True, timeout=30
+    )
+    assert trigger.returncode == 0, trigger.stderr
 
     # Deleting the root lockfile still changes the whole workspace dependency graph.
     subprocess.run(["git", "rm", "-q", "Cargo.lock"], cwd=repo, check=True)
