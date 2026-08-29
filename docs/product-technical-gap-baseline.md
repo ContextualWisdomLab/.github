@@ -222,6 +222,180 @@ flowchart LR
   provider errors and vulnerability findings fail-closed and only aligns the
   executable model and its assertions.
 
+## 2026-08-27 contextual-orchestrator vendored sidecar (ZDR-first free pool)
+
+- **Gap G-ORCH-027 (closed by this increment):** central review pinned direct
+  provider endpoints and hard-coded model ids; no path used the org's five-key
+  auto model discovery, the `orchestrator/free` fail-closed zero-cost pool, or
+  ZDR-first selection. The 2026-08-18 org decision
+  (`ContextualWisdomLab/contextual-orchestrator` AGENTS.md) migrated
+  OpenCode/Noema/Strix to the gateway; this snapshot lands the org-repo half.
+- `pr-review-autofix.yml` now provisions
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (snapshot pinned SHA
+  `8d5924f8…`, same-process KV registration of `BYTEZ_API_KEY`,
+  `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`, live auto model discovery, ZDR-prioritized free catalog),
+  and the writer runs `--model contextual-orchestrator/orchestrator/free`.
+  `opencode.jsonc` default route changes identically. Companions:
+  `zdr_policy.py`, `contextual_orchestrator_review_policy.py`,
+  `contextual_orchestrator_review_launcher.py`; records
+  `docs/adr/0003-…`, `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`.
+- At the time of this 2026-08-27 snapshot, the remaining follow-up was the
+  read-only dispatch pool, `noema-review.yml`, and `strix.yml` migration. This
+  historical observation is superseded by the current-main evidence below.
+
+## 2026-08-28 current-main routing and runtime recheck
+
+- Current protected main is `8f84b661e468de451ba5c076dc938f342bf52d70`,
+  the merge commit for #1373 (following #1370 at
+  `24ee38b097dbfc1a895e1199ade48cff36431d05`). #1364 is merged at
+  `f8823a544c3c4c046977f8511f683e85f83eb496`; #1360 is merged at
+  `17052a7ca3c16db90932a4d6036b43165ddee418`.
+- The current Required OpenCode dispatch, `noema-review.yml`, `strix.yml`,
+  and write-capable `pr-review-autofix.yml` all provision the pinned
+  `contextual-orchestrator` sidecar. Their model route is the
+  `contextual-orchestrator/orchestrator/free` gateway, with the five provider
+  secrets entering the sidecar KV and model discovery performed there. No
+  `COPILOT_GITHUB_TOKEN` route is present.
+- #1364 was merged by `seonghobae` while its terminal review decision remained
+  `CHANGES_REQUESTED`; this is an observed merge event, not protected-main
+  governance evidence. The required branch checks still include
+  `noema-review` and `opencode-review`.
+- Post-merge Strix run `33139957477` exposed a real sidecar runtime defect:
+  `contextual_orchestrator.orchestrator.load_agents()` requires an
+  `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
+  Follow-up #1370 fixes the launcher and the standalone policy catalog writer.
+  Its exact head `0f40d415b112ca0055f5db5b2f434788b08f01f1` merged as
+  `24ee38b097dbfc1a895e1199ade48cff36431d05`.
+- #1370's earlier PR-target Noema run `33140830199` executed the pre-fix trusted
+  base launcher and is retained only as bootstrap reproduction evidence. A
+  fresh protected-main canary must start the corrected sidecar and reach the
+  scanner before the runtime gap is closed; queued or cancelled jobs do not
+  satisfy that acceptance boundary.
+- Protected-main Strix run `33141468804` crossed the corrected catalog and
+  sidecar boundary, then LiteLLM rejected the unqualified scanner child model
+  `orchestrator/free` because the provider was not explicit. The follow-up maps
+  only that child to `openai/orchestrator/free` when the API base is the pinned
+  loopback gateway; the public gateway model remains
+  `contextual-orchestrator/orchestrator/free`, and absent, empty, or non-pinned
+  bases fail closed. This is reproduction evidence, not operational acceptance.
+- #1370 merged with no `APPROVED` review; all recorded Reviews API verdicts are
+  `COMMENTED`. That governance contradiction is tracked in #1340 and is not
+  retrospective approval evidence for this runtime correction.
+- #1373 merged the model qualification as `8f84b661…` but retained the raw
+  bearer in `GITHUB_ENV`, so its log-exposure claim is contradicted by source.
+  #1369 preserves the merged model behavior while moving cross-step credential
+  transport to a validated mode-0600 file. Fresh protected-main Strix and Noema
+  evidence is still required after that stronger boundary integrates.
+
+## 2026-08-28 post-#1373 request-envelope recheck
+
+- #1373 was merged by `seonghobae` at `8f84b661e468de451ba5c076dc938f342bf52d70`
+  to exercise the post-merge runtime path. Main Strix run `33143805461`
+  reached the contextual-orchestrator sidecar and sent the qualified
+  `openai/orchestrator/free` request, then failed closed with HTTP 413
+  `request_too_large` from the pinned gateway. This proves the earlier model
+  qualification defect was repaired, but the review request envelope was
+  still smaller than the Strix/Noema tool-and-source context.
+- The fix is scoped to the review launcher: use an explicit bounded 8 MiB
+  `SecurityConfig.max_body_bytes` for the sidecar while preserving the
+  contextual-orchestrator library's generic 64 KiB default. Noema run
+  `33143860315` was a successful `workflow_run` event handler but skipped
+  because the push event had no associated pull request; it is not an LLM
+  verdict.
+
+## 2026-08-28 #1374 trusted-base runtime boundary
+
+- Follow-up PR #1374 merged at head
+  `3d7cf123ea7459b7f0082bb354280288866256db` with merge commit
+  `7c55295ff2dd863d983822d991e67ba037e8f186`; its launcher sets the bounded
+  8 MiB review envelope, and its sidecar boot check validates that keyword
+  against the exact pinned orchestrator SHA before discovery. Its terminal
+  review decision was not an independent `APPROVED`, so this remains an
+  observed merge event rather than protected-main governance proof.
+- PR-target Strix run `33145070402` used trusted workflow source SHA
+  `8f84b661e468de451ba5c076dc938f342bf52d70`, not the PR launcher. It reached
+  the pinned sidecar and then failed three bounded attempts with HTTP 413
+  `request_too_large`; this is evidence of the pre-merge trusted-base path,
+  not evidence that #1374's launcher setting failed.
+- PR-target Noema run `33145070347` also reached the pinned sidecar and set
+  `orchestrator/free`, then skipped before the LLM call because the current
+  head had no primary OpenCode approval. Required OpenCode run `33145070315`
+  failed closed for the same missing current-head verdict. Therefore the
+  PR-target result was not an LLM verdict.
+- Post-merge Strix run `33145807836` used trusted workflow source SHA
+  `7c55295ff2dd863d983822d991e67ba037e8f186`, reached
+  `openai/orchestrator/free`, and produced no HTTP 413 or
+  `request_too_large`. It failed closed after three bounded attempts because
+  the Strix Caido target was unavailable at `127.0.0.1:48080`, reported as
+  `STRIX_PROVIDER_UNAVAILABLE`; this proves the request-envelope fix on main,
+  but not a successful end-to-end vulnerability scan.
+
+## 2026-08-28 OpenAI request-envelope specification check
+
+- OpenAI's official API reference models a function-tool `description` as an
+  optional string and does not publish a universal 1024-character field limit.
+  The official OpenAPI document also contains no `413` or
+  `request_too_large` response definition for the inference operations. The
+  `413 Content Too Large` observed above is therefore the vendored gateway's
+  HTTP framing response, not evidence of an OpenAI tool-description rule.
+- OpenAI's current images-and-vision guide specifies up to 512 MB total payload
+  for an image-input request and accepts an image URL, Base64 data URL, or file
+  ID in ordinary model-input JSON. The Files API separately permits 512 MB per
+  uploaded file, and Batch separately permits 200 MB JSONL files. These are not
+  one universal limit for every JSON endpoint. The sidecar's 8 MiB limit is an
+  explicitly local, bounded policy for text/tool review envelopes and is not
+  claimed to provide general multimodal compatibility: a large inline Base64
+  image can fail locally even though a URL or file ID keeps the JSON small. A
+  future general multimodal proxy needs a separately governed streaming/spooling
+  and provider-capability contract; `/files` alone does not cover inline image
+  data URLs. The pinned-SHA probe accepts a body of 65,609 bytes and preserves
+  1,025-, 1,026-, and 2,000-character tool descriptions byte-for-byte;
+  provider/model context failures remain separate runtime evidence.
+- PR #1379 exact head `4a25c46dc2fe046368f304a589885ebffb757dfc`
+  reached the pinned sidecar in Strix run `33150437853`; sidecar provisioning
+  and the request-envelope preflight passed, but all three scanner attempts
+  received HTTP 500 `internal_error` (request IDs
+  `7ef2a6bfd7494f80adbf9109b2f5dea2`,
+  `193276c218884651a3940dd9a30bcf97`, and
+  `ff529b84b101458eae03287d3e8df52d`). No 413 or vulnerability report was
+  emitted, so this is an incomplete provider/backend result rather than proof
+  of either request-size rejection or scan success. The pinned server currently
+  collapses otherwise-unhandled provider exceptions into that generic 500.
+  Contextual-orchestrator PR #904 is the separately governed candidate that
+  classifies upstream request-size rejection, retries eligible members of the
+  virtual `orchestrator/free` pool, and returns `request_too_large` only after
+  eligible-provider exhaustion. The sidecar pin must remain on protected main
+  until that change is merged and then be reverified by a fresh exact-head
+  Strix run.
+
+## 2026-08-29 512 MiB review-envelope bootstrap
+
+- Contextual-orchestrator PR #904 head `6cd7d57c177d945f67ba3b86b699949584bc6b7e`
+  passed its full unit/contract suite, Required bootstrap, Noema, fuzz, and
+  security checks with zero unresolved review threads. Its Required Strix ran
+  the pre-change `.github` main sidecar pin and failed three times with generic
+  HTTP 500 responses and no vulnerability report; Required OpenCode failed
+  closed because no current-head formal verdict existed. The bootstrap cycle
+  was resolved by an explicitly authorized admin merge to protected-main commit
+  `b21645116b352967e50fc497b87eb745b9cc8c61`; this is an observed bootstrap
+  merge, not ordinary protected-governance proof.
+- `.github` PR #1379 then pinned that protected-main orchestrator commit and
+  changed only the loopback, bearer-authenticated, per-job review sidecar from
+  the prior 8 MiB local envelope to the OpenAI image-input ceiling of 512 MiB.
+  The generic orchestrator default remains 64 KiB; Files retains its separate
+  512 MB per-file and 200 MB Batch JSONL contracts. The branch passed 216
+  Required/Noema/Strix/OpenCode/autofix contract tests plus the Strix shell
+  smoke. Because pull-request-target loaded the old trusted base pin
+  `889b24f8547d059d1bf2b2f9a043aff15c9ea59d`, branch Noema success was not
+  runtime proof of the new pin. The same explicitly authorized bootstrap merge
+  produced `.github` main `e1b03eebc6dc5c85aed393e5928927c96376cf46`.
+- Acceptance remains open until a fresh post-merge PR run proves that Required
+  Noema and Strix provision `b2164511…`, route only through
+  `contextual-orchestrator/orchestrator/free`, and produce an actual LLM verdict
+  or typed provider result. A green event handler that skips the LLM call is not
+  acceptance evidence.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
