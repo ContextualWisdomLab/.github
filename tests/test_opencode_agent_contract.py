@@ -571,7 +571,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "corepack --version >/dev/null" in measure_step
     assert "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz" not in measure_step
     assert 'git -C "$COVERAGE_SOURCE_WORKDIR" diff \\' in measure_step
-    assert "--name-only --diff-filter=ACMRTUXB -z \"$PR_BASE_SHA\" HEAD" in measure_step
+    assert "--name-only --diff-filter=ACMRTUXBD -z \"$PR_BASE_SHA\" HEAD" in measure_step
     assert "while IFS= read -r -d '' changed_path" in measure_step
     assert "python_coverage_required=0" in measure_step
     assert (
@@ -870,20 +870,21 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
         '\nprintf \'%s\\n\' "$python_coverage_required"\n'
     )
     cases = [
-        ("module.py", "1"),
-        ("pyproject.toml", "1"),
-        ("services/analysis/pyproject.toml", "1"),
-        ("uv.lock", "1"),
-        ("services/analysis/uv.lock", "1"),
-        ("requirements.lock", "1"),
-        ("services/requirements-dev.txt", "1"),
-        ("requirements/ci.txt", "1"),
-        ("services/requirements/ci.txt", "1"),
-        ("README.md", "0"),
-        ("package-lock.json", "0"),
+        ("module.py", "1", False),
+        ("pyproject.toml", "1", False),
+        ("services/analysis/pyproject.toml", "1", False),
+        ("uv.lock", "1", False),
+        ("services/analysis/uv.lock", "1", False),
+        ("requirements.lock", "1", False),
+        ("services/requirements-dev.txt", "1", False),
+        ("requirements/ci.txt", "1", False),
+        ("services/requirements/ci.txt", "1", False),
+        ("deleted.py", "1", True),
+        ("README.md", "0", False),
+        ("package-lock.json", "0", False),
     ]
 
-    for index, (relative_path, expected) in enumerate(cases):
+    for index, (relative_path, expected, deleted) in enumerate(cases):
         repository = tmp_path / f"repo-{index}"
         repository.mkdir()
         subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
@@ -896,6 +897,10 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
             check=True,
         )
         (repository / "README.md").write_text("base\n", encoding="utf-8")
+        changed_file = repository / relative_path
+        if deleted:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("base\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
         subprocess.run(
             ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
@@ -906,9 +911,11 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
             capture_output=True,
             text=True,
         ).stdout.strip()
-        changed_file = repository / relative_path
-        changed_file.parent.mkdir(parents=True, exist_ok=True)
-        changed_file.write_text("changed\n", encoding="utf-8")
+        if deleted:
+            changed_file.unlink()
+        else:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("changed\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
         subprocess.run(
             ["git", "-C", str(repository), "commit", "-qm", "head"], check=True

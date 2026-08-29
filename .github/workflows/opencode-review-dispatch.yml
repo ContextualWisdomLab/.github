@@ -631,7 +631,7 @@ jobs:
               "$coverage_build_dir/install-base-python-locks.py"
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
-              --name-only --diff-filter=ACMRTUXB -z "$PR_BASE_SHA" HEAD \
+              --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
               >"$python_change_files"; then
               echo "::error::Could not classify exact current-head changed files for Python coverage." \
                 >&2
