@@ -22,7 +22,9 @@ jobs:
     with:
       target_repository: ContextualWisdomLab/bandscope
       base_branch: develop
-      max_prs: "50"
+      # The scheduler enumerates oldest-first; cover the current full queue so
+      # older draft PRs cannot hide newer non-draft work from the heartbeat.
+      max_prs: "200"
       max_dispatches: "1"
       # Music, browser, Rust, and NVIDIA-backed review work can exceed one hour.
       retry_hours: "2"

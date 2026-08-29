@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Raise the BandScope hourly review-repair scan bound to 200 so the
+  oldest-first scheduler covers the current open queue and does not hide newer
+  non-draft pull requests behind older drafts; the one-writer and retry bounds
+  remain unchanged.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge

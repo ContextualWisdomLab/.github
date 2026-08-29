@@ -24,7 +24,7 @@ def test_bandscope_caller_is_hourly_bounded_and_non_cancelling() -> None:
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
     assert "target_repository: ContextualWisdomLab/bandscope" in caller
     assert "base_branch: develop" in caller
-    assert 'max_prs: "50"' in caller
+    assert 'max_prs: "200"' in caller
     assert 'max_dispatches: "1"' in caller
     assert 'retry_hours: "2"' in caller
 
