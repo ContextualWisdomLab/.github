@@ -279,6 +279,24 @@ def test_changed_file_pagination_bound_is_fail_closed() -> None:
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 
 
+def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
+    """Exactly 3,000 changed files are accepted only after an empty next page."""
+
+    page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(100)
+    ]
+    calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        calls.append(url)
+        return page if "page=31" not in url else []
+
+    files = policy._load_changed_files("api", "a/b", 1, "x", opener)
+    assert len(files) == 3_000
+    assert calls[-1].endswith("page=31")
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

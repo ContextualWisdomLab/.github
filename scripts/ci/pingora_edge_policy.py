@@ -243,7 +243,7 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
-    for page in range(1, 31):
+    for page in range(1, 32):
         url = f"{api_url}/repos/{repository}/pulls/{pull_request}/files?per_page=100&page={page}"
         payload = opener(url, token)
         if not isinstance(payload, list):
@@ -270,6 +270,8 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                     patch_available=raw_patch is not None,
                 )
             )
+            if len(files) > 3_000:
+                raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
