@@ -955,10 +955,10 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
 
-    def label_starts(candidate: str) -> list[int]:
+    def label_starts(candidate: str, start_index: int = 0) -> list[int]:
         """Return exact verification-label starts without suffix collisions."""
         starts = []
-        index = text.find(candidate)
+        index = text.find(candidate, start_index)
         while index != -1:
             if (
                 candidate == "coverage:"
@@ -974,14 +974,15 @@ def label_section(text: str, label: str) -> str:
     if not starts:
         return ""
     start = starts[-1] + len(label)
-    next_starts = [
-        candidate_start
-        for candidate in APPROVAL_VERIFICATION_LABELS
-        if candidate != label
-        for candidate_start in label_starts(candidate)
-        if candidate_start >= start
-    ]
-    end = min(next_starts) if next_starts else len(text)
+
+    end = len(text)
+    for candidate in APPROVAL_VERIFICATION_LABELS:
+        if candidate == label:
+            continue
+        candidate_starts = label_starts(candidate, start)
+        if candidate_starts and candidate_starts[0] < end:
+            end = candidate_starts[0]
+
     return text[start:end]
 
 
