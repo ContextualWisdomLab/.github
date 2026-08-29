@@ -20,6 +20,7 @@ gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
 sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 token_loader_script="$repo_root/scripts/ci/load_contextual_orchestrator_token.sh"
+decision_record="$repo_root/docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
 
 failures=0
 
@@ -183,6 +184,9 @@ assert_file_contains_exactly_one_of \
 	"STRIX_MODEL: contextual-orchestrator/orchestrator/free" \
 	"STRIX_MODEL: contextual-orchestrator/orchestrator/auto" \
 	"Strix defaults every scan to an allowlisted contextual-orchestrator pool"
+assert_file_contains "$decision_record" "authoritative Strix security analysis uses the provider-diverse \`orchestrator/auto\` pool" "The binding ADR authorizes the Strix auto route"
+assert_file_contains "$decision_record" "Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets" "The binding ADR preserves private-target privacy"
+assert_file_contains "$decision_record" "Strix is intentionally correctness-first rather than zero-cost" "The binding ADR records the Strix cost boundary"
 assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
 assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
 assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"
