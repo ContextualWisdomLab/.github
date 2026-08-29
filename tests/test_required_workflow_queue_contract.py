@@ -1350,17 +1350,151 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
-    None
-):
-    """Treat unsupported dependency graphs as an explicit non-enforceable case."""
+def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
     workflow = workflow_text("security-scan.yml")
+    support_probe = workflow_step(workflow, "Check dependency review support")
 
     assert "id: dependency_review_support" in workflow
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
-    assert '"$status" = "403"' in workflow
-    assert '"$status" = "404"' in workflow
-    assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
+    assert "--connect-timeout 10" in workflow
+    assert "--max-time 30" in workflow
+    assert "-o /dev/null" in workflow
+    assert "curl_status=$?" in support_probe
+    assert "set +e" in support_probe
+    assert "set -e" in support_probe
+    assert "|| true" not in support_probe
+    assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
+    assert "REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}" in workflow
+    assert 'case "${REPOSITORY_VISIBILITY:-}" in' in support_probe
+    assert 'public | private | internal)' in support_probe
+    assert 'repository_visibility="$REPOSITORY_VISIBILITY"' in support_probe
+    assert 'repository_visibility="unknown"' in support_probe
+    assert (
+        'DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} '
+        'base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} '
+        'curl_exit=${curl_status}'
+        in support_probe
+    )
+    assert "supported=false" not in workflow
+    assert "skipping dependency-review hard gate" not in workflow
+    assert (
+        "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    )
+    dependency_review = workflow_step(workflow, "Dependency review")
+    assert "comment-summary-in-pr: never" in dependency_review
+    assert "comment-summary-in-pr: on-failure" not in dependency_review
+
+
+def test_security_scan_binds_every_scan_to_immutable_pr_revisions() -> None:
+    """Reject synthetic-merge evidence for head and dual-revision security scans."""
+    workflow = workflow_text("security-scan.yml")
+
+    for step_name, expected_sha, rev_parse in (
+        (
+            "Verify OSV base checkout",
+            "github.event.pull_request.base.sha",
+            'git -C source rev-parse HEAD',
+        ),
+        (
+            "Verify OSV head checkout",
+            "github.event.pull_request.head.sha",
+            'git -C source rev-parse HEAD',
+        ),
+        (
+            "Verify Dependency Review head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+        (
+            "Verify Trivy head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+        (
+            "Verify Scorecard head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+    ):
+        step = workflow_step(workflow, step_name)
+        assert f"EXPECTED_CHECKOUT_SHA: ${{{{ {expected_sha} }}}}" in step
+        assert f'actual_sha="$({rev_parse})"' in step
+        assert 'if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then' in step
+        assert "exit 1" in step
+
+    for checkout_name in (
+        "Checkout exact dependency-review head",
+        "Checkout exact Trivy head",
+        "Checkout exact Scorecard head",
+    ):
+        checkout = workflow_step(workflow, checkout_name)
+        assert (
+            "repository: ${{ github.event.pull_request.head.repo.full_name }}"
+            in checkout
+        )
+        assert "ref: ${{ github.event.pull_request.head.sha }}" in checkout
+        assert "persist-credentials: false" in checkout
+
+    dependency_review = workflow_step(workflow, "Dependency review")
+    assert "base-ref: ${{ github.event.pull_request.base.sha }}" in dependency_review
+    assert "head-ref: ${{ github.event.pull_request.head.sha }}" in dependency_review
+
+    for upload_name in (
+        "Upload OSV SARIF to code scanning",
+        "Upload Trivy SARIF to code scanning",
+        "Upload Scorecard SARIF to code scanning",
+    ):
+        upload = workflow_step(workflow, upload_name)
+        assert (
+            "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload
+        )
+        assert "sha: ${{ github.event.pull_request.head.sha }}" in upload
+
+
+def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
+    tmp_path: Path,
+) -> None:
+    """A failed curl transport must not make HTTP 200 acceptable evidence."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    github_output = tmp_path / "github-output"
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("security-scan.yml"),
+            "Check dependency review support",
+        ).split("        run: |\n", 1)[1]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_API_URL": "https://api.example.invalid",
+            "GITHUB_OUTPUT": str(github_output),
+            "GH_TOKEN": "synthetic-read-token",
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "REPOSITORY": "ContextualWisdomLab/.github",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "HTTP 200; curl exit 18" in result.stdout
+    assert not github_output.exists()
 
 
 def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
