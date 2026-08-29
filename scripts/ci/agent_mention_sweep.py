@@ -22,7 +22,7 @@ from agent_mention_router import (
 )
 from redact_sensitive_log import redact_text
 
-ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
