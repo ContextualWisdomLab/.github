@@ -3759,7 +3759,7 @@ REPORT
 					fi
 					echo "LLM CONNECTION FAILED"
 					echo "Could not establish connection to the language model."
-					echo "Error: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+					echo "Error: litellm.InternalServerError: upstream request failed"
 				else
 					echo "LLM CONNECTION FAILED"
 					echo "litellm.APIConnectionError: GeminiException - Server disconnected without sending a response."
@@ -6584,6 +6584,20 @@ run_filtered_gate_case_if_requested() {
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
+		;;
+	github-models-internal-server-connection-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+		"openai/openai/retry-api-connection-primary" \
+		"" \
+		"0" \
+		"scan ok after same-model api connection retry" \
+		"2" \
+		"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+		"https://models.github.ai/inference|https://models.github.ai/inference" \
+		"openai" \
+		"https://models.github.ai/inference" \
+		"" \
+		"1"
 		;;
 	internal-server-error-unrelated-output-nonretryable)
 		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \

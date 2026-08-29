@@ -2955,8 +2955,20 @@ is_llm_api_connection_error() {
 	fi
 
 	if awk '
-		/litellm(\.exceptions)?\.InternalServerError/ { block = $0; remaining = 5; next }
-		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
+		{
+			if (remaining > 0) {
+				block = block " " $0
+				remaining--
+				if (remaining == 0) print block
+			} else if ($0 ~ /litellm(\.exceptions)?\.InternalServerError/) {
+				# Strix prints provider context immediately before some generic
+				# LiteLLM internal-server errors. Keep that context bounded too.
+				block = previous_two " " previous_one " " $0
+				remaining = 5
+			}
+			previous_two = previous_one
+			previous_one = $0
+		}
 		END { if (remaining > 0) print block }
 	' "$STRIX_LOG" |
 		grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)'; then
