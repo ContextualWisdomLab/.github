@@ -1410,7 +1410,7 @@ jobs:
             case "$candidate_dir" in
               "$COVERAGE_SOURCE_WORKDIR"|"$COVERAGE_SOURCE_WORKDIR"/*) ;;
               *)
-                echo "::error::npm package directory escaped the validated coverage worktree."
+                echo "::error::npm package directory escaped the validated coverage worktree." >&2
                 return 1
                 ;;
             esac
@@ -1432,7 +1432,7 @@ jobs:
               candidate_dir="$(dirname "$candidate_dir")"
             done
 
-            echo "::error::No regular non-symlink npm lock was found at the package or validated workspace root."
+            echo "::error::No regular non-symlink npm lock was found at the package or validated workspace root." >&2
             return 1
           }
 

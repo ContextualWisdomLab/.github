@@ -1587,6 +1587,19 @@ def test_opencode_coverage_resolves_ancestor_npm_lock_for_workspace_package(tmp_
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [str(repo)]
 
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped = subprocess.run(
+        [bash, "-c", shell],
+        cwd=outside,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert escaped.returncode != 0
+    assert "escaped the validated coverage worktree" in escaped.stderr
+
 
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
