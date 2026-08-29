@@ -40,7 +40,21 @@ RUNTIME_PATH_NAMES = frozenset({
     "nginx.conf",
     "nginx.service",
 })
-RUNTIME_PATH_PARTS = frozenset({"deploy", "deployment", "docker", "infra", "k8s", "kubernetes", "ops"})
+RUNTIME_PATH_PARTS = frozenset(
+    {
+        "deploy",
+        "deployment",
+        "deployments",
+        "docker",
+        "dockerfiles",
+        "infra",
+        "infrastructure",
+        "k8s",
+        "k8s-manifests",
+        "kubernetes",
+        "ops",
+    }
+)
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (

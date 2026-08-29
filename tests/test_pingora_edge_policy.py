@@ -104,6 +104,8 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert policy._needs_content_scan(changed("kubernetes/ingress.yaml", "modified", "+metadata: edge"))
     assert policy._needs_content_scan(changed("ops/edge.yaml", "modified", "+metadata: edge"))
     assert policy._needs_content_scan(changed("infra/deployment.yaml", "modified", "+image: app"))
+    for directory in ("infrastructure", "deployments", "dockerfiles", "k8s-manifests"):
+        assert policy._needs_content_scan(changed(f"{directory}/ingress.yaml", "modified", "+metadata: edge"))
     assert policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream nginx"))
     assert policy._needs_content_scan(
         changed("config/runtime.conf", "modified", "", patch_available=False)
