@@ -570,6 +570,25 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ENV COREPACK_HOME=/opt/corepack" in measure_step
     assert "corepack --version >/dev/null" in measure_step
     assert "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz" not in measure_step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" diff \\' in measure_step
+    assert "--name-only --diff-filter=ACMRTUXBD -z \"$PR_BASE_SHA\" HEAD" in measure_step
+    assert "while IFS= read -r -d '' changed_path" in measure_step
+    assert "python_coverage_required=0" in measure_step
+    assert (
+        "No Python source or dependency-manifest changes on the exact current head"
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/manifest.json\""
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/vcs-manifest.json\""
+        in measure_step
+    )
+    assert "*.py|pyproject.toml|uv.lock|poetry.lock" in measure_step
+    assert "requirements.lock|requirements*.txt|requirements*.in" in measure_step
+    assert "*/requirements/*" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
@@ -837,6 +856,157 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     target_condition = target_job.split("    runs-on:", 1)[0]
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Path):
+    """Run the workflow classifier against supported and unrelated path shapes."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    cases = [
+        ("module.py", "1", False),
+        ("pyproject.toml", "1", False),
+        ("services/analysis/pyproject.toml", "1", False),
+        ("uv.lock", "1", False),
+        ("services/analysis/uv.lock", "1", False),
+        ("requirements.lock", "1", False),
+        ("services/requirements-dev.txt", "1", False),
+        ("requirements/ci.txt", "1", False),
+        ("services/requirements/ci.txt", "1", False),
+        ("requirements/docs/notes.txt", "1", False),
+        ("services/requirements/docs/notes.txt", "1", False),
+        ("services/requirements/requirements-extra.txt", "1", False),
+        ("deleted.py", "1", True),
+        ("README.md", "0", False),
+        ("package-lock.json", "0", False),
+    ]
+
+    for index, (relative_path, expected, deleted) in enumerate(cases):
+        repository = tmp_path / f"repo-{index}"
+        repository.mkdir()
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.name", "test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        (repository / "README.md").write_text("base\n", encoding="utf-8")
+        changed_file = repository / relative_path
+        if deleted:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+        )
+        base_sha = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if deleted:
+            changed_file.unlink()
+        else:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("changed\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "COVERAGE_SOURCE_WORKDIR": str(repository),
+                "PR_BASE_SHA": base_sha,
+                "RUNNER_TEMP": str(tmp_path),
+            }
+        )
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", classifier],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected, relative_path
+
+
+def test_opencode_python_lock_classifier_keeps_nested_include_targets(tmp_path: Path):
+    """A nested requirements include keeps trusted base materialization enabled."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    repository = tmp_path / "repo-with-nested-include"
+    repository.mkdir()
+    subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "test"], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "config",
+            "user.email",
+            "test@example.com",
+        ],
+        check=True,
+    )
+    nested = repository / "requirements/docs/notes.txt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("base dependency\n", encoding="utf-8")
+    (repository / "requirements.txt").write_text(
+        "-r requirements/docs/notes.txt\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+    )
+    base_sha = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    nested.write_text("changed dependency\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", classifier],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "COVERAGE_SOURCE_WORKDIR": str(repository),
+            "PR_BASE_SHA": base_sha,
+            "RUNNER_TEMP": str(tmp_path),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
 
 
 def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
