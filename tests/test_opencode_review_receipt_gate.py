@@ -272,6 +272,9 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     with pytest.raises(receipt.ReceiptGateError, match="lookup failed"):
         receipt.fetch_reviews("ContextualWisdomLab/aFIPC", 230)
 
+    with pytest.raises(receipt.ReceiptGateError, match="lookup failed"):
+        receipt.fetch_reviews("ContextualWisdomLab/.github", 1388)
+
     def fake_bad(args, **kwargs):
         return type("Completed", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
 
@@ -290,6 +293,8 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(receipt.subprocess, "run", unexpected_run)
     with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
         receipt.fetch_reviews("../evil", 230)
+    with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
+        receipt.fetch_reviews("ContextualWisdomLab/.evil", 230)
     monkeypatch.setattr(
         receipt.sys,
         "stdin",
