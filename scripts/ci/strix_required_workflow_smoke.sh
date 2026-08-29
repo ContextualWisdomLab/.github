@@ -38,15 +38,21 @@ assert_file_contains() {
 	fi
 }
 
-assert_file_contains_one_of() {
+assert_file_contains_exactly_one_of() {
 	local file_path="$1"
 	local first_needle="$2"
 	local second_needle="$3"
 	local message="$4"
+	local normalized
+	local match_count
 
-	if ! grep -Fq -- "$first_needle" "$file_path" &&
-		! grep -Fq -- "$second_needle" "$file_path"; then
-		record_failure "$message (missing both '$first_needle' and '$second_needle')"
+	normalized="$(sed -E 's/^[[:space:]]+//' "$file_path")"
+	match_count="$(
+		printf '%s\n' "$normalized" |
+			grep -Fxc -e "$first_needle" -e "$second_needle" || true
+	)"
+	if [ "$match_count" != "1" ]; then
+		record_failure "$message (expected exactly one allowlisted route, found $match_count)"
 	fi
 }
 
@@ -172,7 +178,7 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
-assert_file_contains_one_of \
+assert_file_contains_exactly_one_of \
 	"$workflow_file" \
 	"STRIX_MODEL: contextual-orchestrator/orchestrator/free" \
 	"STRIX_MODEL: contextual-orchestrator/orchestrator/auto" \
