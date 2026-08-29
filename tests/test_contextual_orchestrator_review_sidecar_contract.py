@@ -259,7 +259,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     mask_index = text.index(mask)
     for later_operation in (
         "git clone",
-        "python3 -m pip install",
+        '"$sidecar_python" -m pip install',
         '"$ORCHESTRATOR_WORK/launch_sidecar.py"',
         "healthz",
     ):
