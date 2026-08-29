@@ -30,6 +30,7 @@ GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
+SOURCE_FIXTURE_DIRECTORIES = frozenset({"fixture", "fixtures"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
@@ -60,21 +61,21 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_container_image",
         re.compile(
-            r"(?im)^\s*(?:FROM|image:)\s+(?:docker\.io/)?(?:library/)?nginx(?:[:@\s]|$)"
+            r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+(?:docker\.io/)?(?:library/)?nginx(?:[:@\s]|$)"
         ),
     ),
     (
         "nginx_ingress_controller",
         re.compile(
             r"(?im)(?:nginx\.ingress\.kubernetes\.io/|"
-            r"kubernetes\.io/ingress\.class\s*:\s*[\"']?nginx\b|"
-            r"ingressClassName\s*:\s*nginx\b)"
+            r"kubernetes\.io/ingress\.class\s*:\s*(?:[\"']nginx[\"']|nginx(?:\s|$))|"
+            r"ingressClassName\s*:\s*(?:[\"']nginx[\"']|nginx(?:\s|$)))"
         ),
     ),
     (
         "nginx_runtime_command",
         re.compile(
-            r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*nginx\b|"
+            r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
             r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
@@ -90,7 +91,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_package_install",
         re.compile(
             r"(?im)^\s*(?:RUN\s+)?(?:apk\s+add|apt(?:-get)?\s+install|"
-            r"dnf\s+install|yum\s+install)\b[^\n#]*\bnginx\b"
+            r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
         ),
     ),
 )
@@ -150,7 +151,10 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
         return True
-    if any(part.lower() in {"test", "tests"} for part in pure.parts) and pure.suffix.lower() in SOURCE_TEST_SUFFIXES:
+    if (
+        any(part.lower() in SOURCE_FIXTURE_DIRECTORIES for part in pure.parts)
+        and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES
+    ):
         return True
     return False
 
@@ -163,7 +167,7 @@ def _runtime_path_rule(path: str) -> str | None:
     lower_name = pure.name.lower()
     if lower_name in RUNTIME_PATH_NAMES and "nginx" in lower_name:
         return "nginx_runtime_artifact"
-    if "nginx" in lower_parts and any(part in RUNTIME_PATH_PARTS for part in lower_parts):
+    if "nginx" in lower_parts:
         return "nginx_runtime_artifact"
     if lower_name.startswith("nginx-") and pure.suffix.lower() in {".conf", ".service", ".sh", ".yaml", ".yml"}:
         return "nginx_runtime_artifact"

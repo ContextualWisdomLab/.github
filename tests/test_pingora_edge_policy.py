@@ -12,11 +12,17 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "ci" / "pingora_edge_policy.py"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "pingora_policy_samples.txt"
 SPEC = importlib.util.spec_from_file_location("pingora_edge_policy", MODULE_PATH)
 assert SPEC and SPEC.loader
 policy = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = policy
 SPEC.loader.exec_module(policy)
+
+
+def fixture_text() -> str:
+    """Return the dedicated source sample used to exercise denied runtime forms."""
+    return FIXTURE_PATH.read_text(encoding="utf-8")
 
 
 def encoded_file(content: str, *, size: int | None = None, kind: str = "file", encoding: str = "base64") -> dict[str, object]:
@@ -34,16 +40,7 @@ def encoded_file(content: str, *, size: int | None = None, kind: str = "file", e
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
-    content = """FROM nginx:1.27-alpine
-image: nginx@sha256:abc
-nginx.ingress.kubernetes.io/rewrite-target: /
-kubernetes.io/ingress.class: nginx
-ingressClassName: nginx
-CMD [\"nginx\", \"-g\", \"daemon off;\"]
-systemctl nginx restart
-COPY x /etc/nginx/conf.d/default.conf
-RUN apk add --no-cache nginx
-"""
+    content = fixture_text()
     violations = policy.scan_content("infra/nginx/nginx.conf", content)
     rules = {item.rule for item in violations}
     assert rules == {
@@ -60,12 +57,12 @@ RUN apk add --no-cache nginx
 def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> None:
     """Policy prose, license text, and scanner source fixtures can name Nginx."""
 
-    sample = "FROM nginx:latest\nnginx.ingress.kubernetes.io/foo: bar\n"
+    sample = fixture_text()
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
-    assert policy.scan_content("tests/test_policy.py", sample) == ()
-    assert policy.scan_content("tests/negative_fixture.rs", sample) == ()
+    assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
+    assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
@@ -88,6 +85,7 @@ def test_runtime_path_rule_covers_script_and_config_shapes() -> None:
     assert policy._runtime_path_rule("tests/live/nginx.conf") == "nginx_runtime_artifact"
     assert policy._runtime_path_rule("ops/nginx-backup.sh") == "nginx_runtime_artifact"
     assert policy._runtime_path_rule("infra/nginx/default.yaml") == "nginx_runtime_artifact"
+    assert policy._runtime_path_rule("config/nginx/default.conf") == "nginx_runtime_artifact"
     assert policy._runtime_path_rule("config/nginx.service") == "nginx_runtime_artifact"
     assert policy._runtime_path_rule("docs/nginx-history.md") is None
 
@@ -113,6 +111,13 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert not policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream app"))
     assert policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec nginx"))
     assert not policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec pingora"))
+
+
+def test_active_test_source_is_scanned_while_dedicated_fixtures_are_exempt() -> None:
+    """Executable test helpers remain candidates; only explicit fixtures are exempt."""
+
+    violations = policy.scan_content("tests/e2e/start_nginx.py", "systemctl restart nginx\n")
+    assert [item.rule for item in violations] == ["nginx_runtime_command"]
 
 
 def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:

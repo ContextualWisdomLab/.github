@@ -407,6 +407,24 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     )
 
 
+def test_required_workflow_validates_archive_members_before_extraction():
+    """Trusted source materialization rejects traversal and executable archive entries."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    start = workflow.index("      - name: Materialize trusted central policy source\n")
+    end = workflow.index("\n      - name:", start + 1)
+    step = workflow[start:end]
+
+    assert "tar -xzf \"$trusted_archive\"" not in step
+    assert "tarfile.open(archive_path, \"r:gz\")" in step
+    assert "PurePosixPath(name).parts" in step
+    assert "member.isdir()" in step
+    assert "member.isfile()" in step
+    assert "unsupported archive member type" in step
+    assert '".."' in step
+    assert '"\\\\"' in step
+    assert 'destination.open("xb")' in step
+
+
 def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
     """Avoid putting untrusted PR metadata directly into shell environment keys."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")

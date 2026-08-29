@@ -117,7 +117,68 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -o "$trusted_archive" \
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
-          tar -xzf "$trusted_archive" -C "$trusted_source_dir" --strip-components=1
+          python3 - "$trusted_archive" "$trusted_source_dir" <<'PY'
+          import shutil
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive_path = Path(sys.argv[1])
+          root = Path(sys.argv[2])
+          try:
+              if root.is_symlink():
+                  raise ValueError("trusted source directory must not be a symlink")
+              if root.exists():
+                  shutil.rmtree(root)
+              root.mkdir(parents=True)
+              with tarfile.open(archive_path, "r:gz") as archive:
+                  members = archive.getmembers()
+                  top_levels: set[str] = set()
+                  targets: set[str] = set()
+                  directories: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+                  files: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+                  for member in members:
+                      name = member.name
+                      if not name or name.startswith("/") or "\x00" in name or "\\" in name:
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      parts = PurePosixPath(name).parts
+                      if not parts or parts[0] in {".", ".."}:
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      top_levels.add(parts[0])
+                      relative_parts = parts[1:]
+                      if not relative_parts:
+                          if not member.isdir():
+                              raise ValueError("archive root must be a directory")
+                          continue
+                      if any(part in {"", ".", ".."} for part in relative_parts):
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      relative_key = "/".join(relative_parts)
+                      if relative_key in targets:
+                          raise ValueError(f"duplicate archive member path: {relative_key}")
+                      targets.add(relative_key)
+                      if member.isdir():
+                          directories.append((member, relative_parts))
+                      elif member.isfile():
+                          files.append((member, relative_parts))
+                      else:
+                          raise ValueError(f"unsupported archive member type: {name!r}")
+                  if len(top_levels) != 1:
+                      raise ValueError("archive must contain exactly one top-level directory")
+                  for _member, relative_parts in sorted(
+                      directories, key=lambda item: len(item[1])
+                  ):
+                      (root / Path(*relative_parts)).mkdir(parents=True, exist_ok=True)
+                  for member, relative_parts in files:
+                      destination = root / Path(*relative_parts)
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      source = archive.extractfile(member)
+                      if source is None:
+                          raise ValueError(f"archive member is not readable: {member.name!r}")
+                      with source, destination.open("xb") as output:
+                          shutil.copyfileobj(source, output)
+          except (OSError, tarfile.TarError, ValueError) as exc:
+              raise SystemExit(f"trusted source archive failed closed: {exc}") from exc
+          PY
 
       - name: Verify immutable central policy source
         env:
