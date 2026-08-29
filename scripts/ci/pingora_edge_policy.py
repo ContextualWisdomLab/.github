@@ -30,7 +30,6 @@ GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
-SOURCE_FIXTURE_DIRECTORIES = frozenset({"fixture", "fixtures"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
