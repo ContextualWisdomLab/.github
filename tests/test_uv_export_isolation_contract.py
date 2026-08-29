@@ -115,6 +115,7 @@ def test_uv_export_accepts_hash_pinned_organization_archive_as_registry_lock() -
             "package": "fast-mlsirm",
             "url": "https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz",
             "hashes": ["a" * 64],
+            "marker": "python_full_version >= '3.12'",
         }
     ]
 

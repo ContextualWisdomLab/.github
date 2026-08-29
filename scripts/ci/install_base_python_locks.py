@@ -67,6 +67,7 @@ class ArchiveCandidate:
     package: str
     file: pathlib.Path
     hashes: tuple[str, ...]
+    marker: str | None = None
 
 
 def _archive_entries(
@@ -93,6 +94,7 @@ def _archive_entries(
         package = entry.get("package")
         relative_file = entry.get("file")
         hashes = entry.get("hashes")
+        marker = entry.get("marker")
         if (
             not isinstance(package, str)
             or not package
@@ -101,6 +103,10 @@ def _archive_entries(
             or not isinstance(hashes, list)
             or not hashes
             or any(not isinstance(value, str) or not SHA256_RE.fullmatch(value) for value in hashes)
+            or (
+                marker is not None
+                and (not isinstance(marker, str) or not marker.strip())
+            )
         ):
             raise ValueError("base Python archive manifest contains an invalid entry")
         if relative_file in seen_files:
@@ -115,7 +121,7 @@ def _archive_entries(
                 digest.update(chunk)
         if digest.hexdigest() not in hashes:
             raise ValueError(f"materialized base Python archive {relative_file} failed hash verification")
-        entries.append(ArchiveCandidate(package, archive, tuple(hashes)))
+        entries.append(ArchiveCandidate(package, archive, tuple(hashes), marker))
     return entries
 
 
@@ -191,8 +197,11 @@ def _pip_command(requirements: Sequence[pathlib.Path], *, preflight: bool) -> li
     return command
 
 
-def _archive_pip_command(archive: pathlib.Path) -> list[str]:
+def _archive_pip_command(archive: ArchiveCandidate) -> list[str]:
     """Build a no-network source-install command for one verified archive."""
+    requirement = str(archive.file)
+    if archive.marker is not None:
+        requirement = f"{archive.package} @ {archive.file.as_uri()} ; {archive.marker}"
     return [
         sys.executable,
         "-m",
@@ -202,7 +211,7 @@ def _archive_pip_command(archive: pathlib.Path) -> list[str]:
         "--disable-pip-version-check",
         "--no-deps",
         "--no-build-isolation",
-        str(archive),
+        requirement,
     ]
 
 
@@ -281,7 +290,7 @@ def install_materialized_locks(
                 file=stdout,
                 flush=True,
             )
-            installation = runner(_archive_pip_command(archive.file), check=False)
+            installation = runner(_archive_pip_command(archive), check=False)
             if installation.returncode != 0:
                 print(
                     f"::error::Verified trusted base Python archive failed to install: {archive.package}.",
@@ -419,7 +428,7 @@ def install_materialized_locks(
                 file=stdout,
                 flush=True,
             )
-            installation = runner(_archive_pip_command(archive.file), check=False)
+            installation = runner(_archive_pip_command(archive), check=False)
             if installation.returncode != 0:
                 print(
                     f"::error::Verified trusted base Python archive failed to install: {archive.package}.",

@@ -135,6 +135,44 @@ def test_installs_verified_archives_without_network_or_dependency_resolution(tmp
     ]
 
 
+@pytest.mark.parametrize(
+    "marker",
+    ["python_version >= '3.12'", "python_version < '3.10'"],
+)
+def test_archive_marker_is_preserved_for_pip_to_evaluate(tmp_path, marker: str) -> None:
+    """Archive markers remain attached to the direct local requirement."""
+    archive = tmp_path / "archives" / "archive-000.tar.gz"
+    archive.parent.mkdir()
+    archive.write_bytes(b"verified archive")
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": [hashlib.sha256(archive.read_bytes()).hexdigest()],
+                    "marker": marker,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    assert installer.install_materialized_locks(
+        tmp_path,
+        archives_only=True,
+        runner=fake_runner,
+    ) == 0
+    assert commands[0][-1] == (
+        f"demo @ {archive.as_uri()} ; {marker}"
+    )
+
+
 def test_archive_only_install_failure_is_fatal(tmp_path) -> None:
     """A verified archive that fails to build must fail the isolated phase."""
     archive = tmp_path / "archives" / "archive-000.tar.gz"

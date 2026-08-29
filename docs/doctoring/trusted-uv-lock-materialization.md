@@ -41,10 +41,19 @@ The implementation therefore:
 10. keeps project metadata discovery enabled because the reconstructed
     `pyproject.toml` is an authoritative input; `--no-config` is deliberately not
     used because uv documents that it disables `pyproject.toml` discovery;
-11. rejects every nonempty export unless every logical line is an exact normalized
-    package `==` pin followed only by complete SHA-256 hashes; and
-12. exposes only generated requirements files and a source manifest to the later
-    networkless coverage environment.
+11. accepts a direct archive only when it is an exact HTTPS
+    `github.com/ContextualWisdomLab/<repo>/archive/...tar.gz|zip` reference with
+    a complete SHA-256 hash; its environment marker is preserved in the archive
+    manifest and later pip direct-reference command so false-marker archives are
+    skipped by pip rather than built unconditionally;
+12. rejects every nonempty export unless every logical line is an exact normalized
+    package `==` pin, an allowlisted organization archive, or an exact immutable
+    organization VCS source; and
+13. exposes generated requirements files, VCS metadata, and locally verified
+    archive inputs to the later networkless coverage environment. The coverage
+    image currently accepts only archives declaring the installed `maturin` build
+    backend and its `maturin` build requirement; unsupported PEP 517 backends
+    fail before extraction completes.
 
 ## Standards and current-tool rationale
 
@@ -69,6 +78,16 @@ instead isolates `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `TMPDIR`,
 sets `UV_NO_ENV_FILE=1` and `UV_PYTHON_DOWNLOADS=never`, and passes only a fixed
 `PATH`. This preserves the exact reconstructed project metadata while excluding
 user-level and runner-level configuration state.
+
+Organization archive entries are not installed from a networked pip build. The
+materializer downloads each archive from the fixed GitHub HTTPS origins,
+verifies its exported SHA-256 digest, and writes it separately from regular
+`--require-hashes` locks. The coverage Dockerfile rejects unsafe tar/zip members,
+requires exactly one `pyproject.toml` with the installed `maturin` backend and
+requirement, fetches any Rust dependency manifests while networked, and invokes
+archive build hooks only in the subsequent `RUN --network=none` layer. A Python
+environment marker remains part of the direct-reference requirement, so pip
+evaluates it for the coverage interpreter before any archive build starts.
 
 Generic requirements discovery continues to accept a global
 `--require-hashes` directive because pip performs a later closure preflight.

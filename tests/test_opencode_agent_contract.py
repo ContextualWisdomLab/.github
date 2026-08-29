@@ -702,6 +702,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "--no-archives" in measure_step
     assert "--archives-only" in measure_step
     assert "RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert "import tomllib" in measure_step
+    assert 'build_system.get("build-backend") != "maturin"' in measure_step
+    assert 'r"maturin(?:\\[.*\\])?(?:\\s*[<>=!~].*)?"' in measure_step
+    assert "archive must expose exactly one pyproject.toml" in measure_step
+    assert "archive build backend is not the installed maturin contract" in measure_step
     assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
     assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
     assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step

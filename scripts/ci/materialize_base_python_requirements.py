@@ -52,7 +52,7 @@ UV_EXACT_ORG_ARCHIVE_RE = re.compile(
     r"(?:refs/(?:tags|heads)/)?"
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*"
     r"\.(?:tar\.gz|zip)"
-    r")(?:\s*;\s*\S(?:.*\S)?)?"
+    r")(?:\s*;\s*(?P<marker>\S(?:.*\S)?))?"
 )
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
@@ -405,11 +405,15 @@ def _archive_from_uv_line(line: str) -> dict[str, object] | None:
     hashes = [field.removeprefix("--hash=sha256:").lower() for field in hash_fields]
     if not hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", value) for value in hashes):
         raise ValueError("organization archive must carry complete SHA-256 hashes")
-    return {
+    descriptor: dict[str, object] = {
         "package": match.group("package"),
         "url": match.group("url"),
         "hashes": hashes,
     }
+    marker = match.group("marker")
+    if marker is not None:
+        descriptor["marker"] = marker
+    return descriptor
 
 
 def _partition_uv_export(
@@ -424,8 +428,13 @@ def _partition_uv_export(
         if archive is not None:
             url = str(archive["url"])
             previous = archives_by_url.get(url)
-            if previous is not None and previous["hashes"] != archive["hashes"]:
-                raise ValueError("uv export pins one archive URL to conflicting hashes")
+            if previous is not None and (
+                previous["hashes"] != archive["hashes"]
+                or previous.get("marker") != archive.get("marker")
+            ):
+                raise ValueError(
+                    "uv export pins one archive URL to conflicting hashes or markers"
+                )
             archives_by_url[url] = archive
             continue
         if _is_fully_hash_pinned_requirement(line):
@@ -793,10 +802,13 @@ def _base_python_inputs(
                     previous_archive = archives_by_url.get(url)
                     if (
                         previous_archive is not None
-                        and previous_archive["hashes"] != archive["hashes"]
+                        and (
+                            previous_archive["hashes"] != archive["hashes"]
+                            or previous_archive.get("marker") != archive.get("marker")
+                        )
                     ):
                         raise RuntimeError(
-                            "base uv locks pin one archive URL to conflicting hashes"
+                            "base uv locks pin one archive URL to conflicting hashes or markers"
                         )
                     archives_by_url[url] = {
                         **archive,

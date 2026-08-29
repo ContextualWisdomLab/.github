@@ -808,8 +808,10 @@ jobs:
             && python3 - <<'PYTHON'
           import json
           import pathlib
+          import re
           import stat
           import tarfile
+          import tomllib
           import zipfile
 
           requirements_root = pathlib.Path("/tmp/base-python-requirements")
@@ -842,6 +844,36 @@ jobs:
                       bundle.extractall(destination)
               else:
                   raise SystemExit(f"unsupported archive suffix: {relative_file}")
+              pyprojects = [
+                  path for path in destination.rglob("pyproject.toml") if path.is_file()
+              ]
+              if len(pyprojects) != 1:
+                  raise SystemExit(
+                      f"archive must expose exactly one pyproject.toml: {relative_file}"
+                  )
+              project = tomllib.loads(pyprojects[0].read_text(encoding="utf-8"))
+              build_system = project.get("build-system")
+              build_requires = (
+                  build_system.get("requires")
+                  if isinstance(build_system, dict)
+                  else None
+              )
+              if (
+                  not isinstance(build_system, dict)
+                  or build_system.get("build-backend") != "maturin"
+                  or not isinstance(build_requires, list)
+                  or not any(
+                      isinstance(requirement, str)
+                      and re.fullmatch(
+                          r"maturin(?:\[.*\])?(?:\s*[<>=!~].*)?",
+                          requirement,
+                      )
+                      for requirement in build_requires
+                  )
+              ):
+                  raise SystemExit(
+                      f"archive build backend is not the installed maturin contract: {relative_file}"
+                  )
           PYTHON
           RUN set -eu; \
               find /opt/base-python-archive-sources -name Cargo.toml -print0 \
