@@ -18,19 +18,7 @@ are the same runner class as `python3`. `python -m coverage run … -m pytest`
 remains allowed because the first `-m` is `coverage` and `run` then invokes
 pytest. File operands, `-c`, `--`, and earlier modules fail closed.
 
-To prevent the argument-injection risk described by CWE-88, the parser binds
-execution to the first module target. A file operand before `-m pytest`
-therefore cannot become the test runner (MITRE, 2026).
-
-## References
-
-MITRE. (2026). *CWE-88: Improper neutralization of argument delimiters in
-a command ('argument injection')*.
-https://cwe.mitre.org/data/definitions/88.html
-
-MITRE. (n.d.). *CWE-78: Improper neutralization of special elements used in
-an OS command ('OS command injection')*.
-https://cwe.mitre.org/data/definitions/78.html
-
-OWASP Foundation. (2025). *Command injection prevention cheat sheet*.
-https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html
+The security boundary is the locally demonstrated `shell=False` execution,
+first-module-target binding, and the regression tests in
+`tests/test_safe_pytest_command.py`. A file operand before `-m pytest`
+therefore cannot become the test runner under this parser's contract.
