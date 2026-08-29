@@ -22,6 +22,10 @@ ORCHESTRATOR_PORT="18080"
 ORCHESTRATOR_HOST="127.0.0.1"
 ORCHESTRATOR_SOURCE="${RUNNER_TEMP:-/tmp}/contextual-orchestrator"
 ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
+# The Strix artifact collector uploads this workspace-relative directory. Other
+# review consumers retain the same safe evidence locally without changing their
+# model or credential contract.
+STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
@@ -58,8 +62,11 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   printf '::add-mask::%s\n' "$ORCHESTRATOR_TOKEN"
 fi
 
-mkdir -p "$ORCHESTRATOR_WORK"
-chmod 700 -- "$ORCHESTRATOR_WORK"
+if [ -L "$STRIX_EVIDENCE_DIR" ]; then
+  fail "Strix evidence directory must not be a symbolic link"
+fi
+mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
 token_file="$ORCHESTRATOR_WORK/bearer.token"
 (
   umask 077
@@ -196,6 +203,15 @@ discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
 catalog_file="$ORCHESTRATOR_WORK/agents.review.json"
 policy_report="$ORCHESTRATOR_WORK/policy-report.json"
+preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"
+sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"
+sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"
+(
+  umask 077
+  : > "$preflight_report"
+  : > "$sidecar_stdout"
+  : > "$sidecar_stderr"
+)
 
 # Optional authoritative ZDR route feed. Failure is non-fatal: the policy falls
 # back to the dated static attestation table in scripts/ci/zdr_policy.py.
@@ -232,9 +248,10 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --discovery-out "$discovery_report" \
     --catalog-out "$catalog_file" \
     --report-out "$policy_report" \
+    --preflight-out "$preflight_report" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
-> "$ORCHESTRATOR_WORK/sidecar.stdout" 2> "$ORCHESTRATOR_WORK/sidecar.stderr" &
+> "$sidecar_stdout" 2> "$sidecar_stderr" &
 sidecar_pid=$!
 cleanup_sidecar_on_error() {
   status=$?
@@ -248,19 +265,34 @@ trap cleanup_sidecar_on_error EXIT
 
 i=0
 until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
+  if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+    sidecar_status=0
+    wait "$sidecar_pid" || sidecar_status=$?
+    fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
+  fi
   i=$((i + 1))
   if [ "$i" -ge 60 ]; then
-    fail "sidecar did not become healthy; stderr: $(sed -n '1,10p' "$ORCHESTRATOR_WORK/sidecar.stderr")"
+    fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   sleep 1
 done
-log "healthz confirmed after ${i}s (pid $sidecar_pid)"
+if [ ! -s "$preflight_report" ]; then
+  fail "sidecar became healthy without runtime preflight evidence"
+fi
+log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+
+# These files contain route identities, prices/policy decisions, and sanitized
+# preflight status only; they never contain credential values or provider bodies.
+cp -- "$discovery_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-discovery.json"
+cp -- "$catalog_file" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-agents.json"
+cp -- "$policy_report" "$STRIX_EVIDENCE_DIR/contextual-orchestrator-policy.json"
 
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
     printf 'CONTEXTUAL_ORCHESTRATOR_BASE_URL=http://%s:%s\n' "$ORCHESTRATOR_HOST" "$ORCHESTRATOR_PORT"
     printf 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE=%s\n' "$token_file"
     printf 'CONTEXTUAL_ORCHESTRATOR_EVIDENCE=%s\n' "$policy_report"
+    printf 'CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE=%s\n' "$preflight_report"
   } >> "$ORCHESTRATOR_GITHUB_ENV"
   log "exported gateway env to $ORCHESTRATOR_GITHUB_ENV"
 else
@@ -269,3 +301,5 @@ fi
 
 log "policy evidence summary:"
 sed -n '1,80p' "$policy_report" || true
+log "runtime preflight summary:"
+sed -n '1,120p' "$preflight_report" || true
