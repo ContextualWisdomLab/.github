@@ -43,6 +43,16 @@ UV_EXACT_ORG_VCS_RE = re.compile(
     r"(?P<repository>[A-Za-z0-9_.-]{1,100})\.git@"
     r"(?P<commit>[0-9a-fA-F]{40})"
 )
+UV_EXACT_ORG_ARCHIVE_RE = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?\s+@\s+"
+    r"https://github\.com/ContextualWisdomLab/"
+    r"[A-Za-z0-9_.-]{1,100}/archive/"
+    r"(?:refs/(?:tags|heads)/)?"
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*"
+    r"\.(?:tar\.gz|zip)"
+    r"(?:\s*;\s*\S(?:.*\S)?)?"
+)
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
@@ -261,7 +271,8 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
 
     Selected sources are renamed to generated flat files. Relative ``-r`` and
     ``--requirement`` edges therefore lose the source directory that gives them
-    meaning. Only independent exact package pins cross this publication boundary
+    meaning. Only independent exact package pins or hash-pinned organization
+    archive URLs cross this publication boundary
     until a complete immutable include graph can be reconstructed and rewritten.
     """
     lines = _requirement_lines(content)
@@ -270,12 +281,15 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
         _is_fully_hash_pinned_requirement(line) for line in requirement_lines
     )
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
-    """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
+    """Return whether one uv-export line is an exact hash-pinned package or archive."""
     fields = re.split(r"\s+(?=--hash=)", line)
     if len(fields) < 2:
         return False
     requirement, *hashes = fields
-    if UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is None:
+    if (
+        UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is None
+        and UV_EXACT_ORG_ARCHIVE_RE.fullmatch(requirement) is None
+    ):
         return False
     return all(UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes)
 
@@ -285,16 +299,17 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
 
     The fixed exporter invocation does not request index, find-links, binary, or
     global hash directives. Every non-comment logical line must therefore be one
-    normalized package ``==`` pin with at least one complete SHA-256 hash. Option
-    lines, local/direct references, other algorithms, and truncated hashes are
-    rejected even when they contain a ``--hash=`` substring.
+    normalized package ``==`` pin or a hash-pinned archive URL from the trusted
+    organization, each with at least one complete SHA-256 hash. Option lines,
+    local/direct references, other origins, other algorithms, and truncated
+    hashes are rejected even when they contain a ``--hash=`` substring.
     """
     lines = _requirement_lines(content)
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
 def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
-    """Separate registry hash pins from exact organization VCS source pins."""
+    """Separate hash pins from exact organization VCS source pins."""
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
     for line in _requirement_lines(content):

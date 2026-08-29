@@ -97,6 +97,30 @@ def test_uv_export_accepts_exact_package_pins_with_markers_and_multiple_hashes()
     assert materializer._is_fully_hash_pinned_export(content) is True
 
 
+def test_uv_export_accepts_hash_pinned_organization_archive_as_registry_lock() -> None:
+    """A trusted HTTPS archive with a complete hash remains a pip lock entry."""
+    content = (
+        b"fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/"
+        b"archive/refs/tags/v0.9.1.tar.gz ; python_full_version >= '3.12' \\\n"
+        b"    --hash=sha256:" + b"a" * 64 + b"\n"
+    )
+
+    registry, vcs_sources = materializer._partition_uv_export(content)
+
+    assert materializer._is_fully_hash_pinned_export(content) is True
+    assert registry.split() == [
+        b"fast-mlsirm",
+        b"@",
+        b"https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz",
+        b";",
+        b"python_full_version",
+        b">=",
+        b"'3.12'",
+        b"--hash=sha256:" + b"a" * 64,
+    ]
+    assert vcs_sources == []
+
+
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
     """An immutable organization source pin is separated from pip hash locks."""
     content = (
@@ -133,6 +157,24 @@ def test_uv_export_rejects_unbounded_vcs_sources(requirement: str) -> None:
     """Only the exact organization HTTPS origin and a full commit are accepted."""
     with pytest.raises(ValueError, match="unsupported dependency"):
         materializer._partition_uv_export(f"{requirement}\n".encode())
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "demo @ http://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz",
+        "demo @ https://github.com/other/demo/archive/v1.tar.gz",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz?download=1",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz#fragment",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/../v1.tar.gz",
+    ],
+)
+def test_uv_export_rejects_unbounded_archive_sources(requirement: str) -> None:
+    """Only archive URLs from the exact organization origin are accepted."""
+    with pytest.raises(ValueError, match="unsupported dependency"):
+        materializer._partition_uv_export(
+            f"{requirement} --hash=sha256:{'a' * 64}\n".encode()
+        )
 
 
 def test_uv_export_rejects_conflicting_commits_for_one_repository() -> None:
