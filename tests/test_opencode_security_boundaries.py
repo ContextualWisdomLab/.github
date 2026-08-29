@@ -251,6 +251,38 @@ def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
     assert safe_pytest._repository_package_python_paths(project_dir) == []
 
 
+def test_safe_pytest_package_source_discovery_skips_empty_nested_root(
+    tmp_path: Path,
+) -> None:
+    """An empty nested package root does not hide sources from an outer monorepo."""
+    project_dir = tmp_path / "nested-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    (tmp_path / "nested-repository" / "packages").mkdir()
+    outer_source = tmp_path / "packages" / "shared-kernel" / "src"
+    outer_source.mkdir(parents=True)
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == [str(outer_source)]
+
+
+def test_safe_pytest_package_source_discovery_rejects_resolved_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A resolved package source outside the package root is fail-closed."""
+    project_dir = tmp_path / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    package_source = tmp_path / "packages" / "shared-kernel" / "src"
+    package_source.mkdir(parents=True)
+    original_is_relative_to = Path.is_relative_to
+
+    def pretend_escape(path: Path, other: Path) -> bool:
+        if path == package_source:
+            return False
+        return original_is_relative_to(path, other)
+
+    monkeypatch.setattr(Path, "is_relative_to", pretend_escape)
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:
     """Only supported one-line pytest argv are returned from a PR-controlled workflow file."""
     workflow_dir = tmp_path / ".github" / "workflows"

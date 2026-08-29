@@ -87,14 +87,19 @@ def _repository_package_python_paths(project_dir: pathlib.Path) -> list[str]:
         packages_dir = repository_root / "packages"
         if not packages_dir.is_dir() or packages_dir.is_symlink():
             continue
+        resolved_packages_dir = packages_dir.resolve()
         package_sources: list[str] = []
         for package_dir in sorted(packages_dir.iterdir()):
             if not package_dir.is_dir() or package_dir.is_symlink():
                 continue
             source_dir = package_dir / "src"
-            if source_dir.is_dir() and not source_dir.is_symlink():
-                package_sources.append(str(source_dir))
-        return package_sources
+            if not source_dir.is_dir() or source_dir.is_symlink():
+                continue
+            resolved_source_dir = source_dir.resolve()
+            if resolved_source_dir.is_relative_to(resolved_packages_dir):
+                package_sources.append(str(resolved_source_dir))
+        if package_sources:
+            return package_sources
     return []
 
 
