@@ -42,6 +42,8 @@ REVIEW_TEMPERATURE = 1.0
 # for a required CI gate. With at most twelve sequential candidates, startup is
 # bounded below the sidecar's three-minute readiness deadline.
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 
 
 class ReviewPreflightError(RuntimeError):
@@ -222,11 +224,104 @@ def _preflight_review_agents(
     return viable, report
 
 
+def _preflight_with_fallback(
+    primary_agents: list[object], fallback_agents: list[object], *, client: Any
+) -> tuple[list[object], dict[str, object], bool]:
+    """Use the priced catalog only after every primary route rejects."""
+    try:
+        viable, report = _preflight_review_agents(primary_agents, client=client)
+        return viable, report, False
+    except ReviewPreflightError as primary_error:
+        if not fallback_agents:
+            raise
+        try:
+            viable, report = _preflight_review_agents(fallback_agents, client=client)
+        except ReviewPreflightError as fallback_error:
+            fallback_error.report["primary_attempt"] = primary_error.report
+            raise
+        report["primary_attempt"] = primary_error.report
+        report["fallback_reason"] = "primary_routes_unavailable"
+        return viable, report, True
+
+
 def _write_json(path: str, payload: object) -> None:
     """Write one deterministic UTF-8 JSON evidence file."""
     Path(path).write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _bounded_primary_catalog_limit(
+    requested_limit: int, *, pool: str, has_free_rows: bool
+) -> int:
+    """Return the primary-stage route limit within one startup budget."""
+    if requested_limit < 1:
+        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
+    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
+    if pool == "auto" and has_free_rows:
+        return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
+    return total_limit
+
+
+def _bounded_fallback_catalog_limit(
+    requested_limit: int, *, primary_count: int
+) -> int:
+    """Return remaining priced-fallback capacity after primary selection."""
+    if requested_limit < 1:
+        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
+    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
+    if primary_count < 0 or primary_count > total_limit:
+        raise ValueError("primary route count exceeds the preflight budget")
+    return total_limit - primary_count
+
+
+def _with_discovery_counts(
+    report: dict[str, object], rows: list[dict[str, Any]]
+) -> dict[str, object]:
+    """Copy a stage report while restoring full discovery-tier counts."""
+    enriched = dict(report)
+    enriched.update(
+        {
+            "total_routes": len(rows),
+            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
+            "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
+            "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+        }
+    )
+    return enriched
+
+
+def _zdr_admitted_rows(
+    rows: list[dict[str, Any]],
+    *,
+    require_zdr: bool,
+    zdr_endpoints: frozenset[str],
+    checker: Any,
+) -> list[dict[str, Any]]:
+    """Return rows that can enter the selected privacy boundary."""
+    if not require_zdr:
+        return list(rows)
+    return [
+        row
+        for row in rows
+        if checker(
+            str(row["provider"]),
+            model=str(row["model"]),
+            zdr_endpoints=zdr_endpoints,
+        )
+    ]
+
+
+def _load_temporary_agents(
+    path: str, catalog_agents: list[dict[str, Any]], *, loader: Any
+) -> list[object]:
+    """Load one transient catalog and remove it on every exit path."""
+    catalog_path = Path(path)
+    _write_json(str(catalog_path), {"agents": catalog_agents})
+    try:
+        return list(loader(str(catalog_path)))
+    finally:
+        catalog_path.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -269,8 +364,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
+        PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
+        is_zdr_model,
         parse_discovery_report,
     )
 
@@ -306,14 +403,43 @@ def main(argv: list[str] | None = None) -> int:
     rows = _report_rows(selected_models, free_route_identities)
     _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
+    normalized_rows = parse_discovery_report({"models": rows})
+    free_rows = [
+        row for row in normalized_rows if row.get("cost_evidence") == "free"
+    ]
+    priced_rows = [
+        row for row in normalized_rows if row.get("cost_evidence") == "priced"
+    ]
+    admitted_free_rows = _zdr_admitted_rows(
+        free_rows,
+        require_zdr=args.require_zdr,
+        zdr_endpoints=zdr_endpoints,
+        checker=is_zdr_model,
+    )
+    admitted_priced_rows = _zdr_admitted_rows(
+        priced_rows,
+        require_zdr=args.require_zdr,
+        zdr_endpoints=zdr_endpoints,
+        checker=is_zdr_model,
+    )
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    primary_limit = _bounded_primary_catalog_limit(
+        requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
+    )
+    primary_rows = (
+        (admitted_free_rows or admitted_priced_rows)
+        if args.pool == "auto"
+        else normalized_rows
+    )
     result = build_zdr_prioritized_catalog(
-        parse_discovery_report({"models": rows}),
-        limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
+        primary_rows,
+        limit=primary_limit,
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
+    result["report"] = _with_discovery_counts(result["report"], normalized_rows)
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -321,6 +447,42 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
+    primary_report = result["report"]
+    fallback_result = None
+    fallback_agents: list[object] = []
+    fallback_limit = _bounded_fallback_catalog_limit(
+        requested_catalog_limit, primary_count=len(result["agents"])
+    )
+    if (
+        args.pool == "auto"
+        and admitted_free_rows
+        and admitted_priced_rows
+        and fallback_limit
+    ):
+        try:
+            fallback_result = build_zdr_prioritized_catalog(
+                admitted_priced_rows,
+                limit=fallback_limit,
+                family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+                zdr_endpoints=zdr_endpoints,
+                require_zdr=args.require_zdr,
+                pool="auto",
+            )
+        except PolicyError:
+            fallback_result = None
+        if fallback_result is not None:
+            fallback_result["report"] = _with_discovery_counts(
+                fallback_result["report"], normalized_rows
+            )
+            fallback_result["report"]["primary_selected_count"] = primary_report[
+                "selected_count"
+            ]
+            fallback_result["report"]["primary_selection"] = primary_report["selected"]
+            fallback_agents = _load_temporary_agents(
+                f"{args.catalog_out}.priced",
+                fallback_result["agents"],
+                loader=load_agents,
+            )
     client = ModelClient(
         timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
@@ -328,10 +490,21 @@ def main(argv: list[str] | None = None) -> int:
         temperature=REVIEW_TEMPERATURE,
     )
     try:
-        agents, preflight_report = _preflight_review_agents(agents, client=client)
+        agents, preflight_report, fallback_used = _preflight_with_fallback(
+            agents, fallback_agents, client=client
+        )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
+    if fallback_used and fallback_result is not None:
+        Path(args.catalog_out).write_text(
+            json.dumps({"agents": fallback_result["agents"]}, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        result = fallback_result
+        result["report"]["fallback_reason"] = "primary_routes_unavailable"
+        _write_json(args.report_out, result["report"])
     _write_json(args.preflight_out, preflight_report)
 
     client = ModelClient(
