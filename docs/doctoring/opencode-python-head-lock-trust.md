@@ -16,7 +16,10 @@ installing both revisions. For an unchanged base lock with a bounded relative
 include, the include blob is compared with the exact HEAD tree: a changed
 include is materialized only when it remains flat and fully SHA-256 pinned, while
 deleted or invalid content fails closed. A base lock that becomes unbounded
-fails closed.
+fails closed. A changed or newly added `uv.lock` project with a regular sibling
+`pyproject.toml` is re-exported from the exact HEAD through the existing frozen,
+offline, checksum-validating exporter; deleted projects remove their base
+registry and VCS inputs, and unchanged projects remain base-bound.
 
 ## Root cause
 
@@ -31,7 +34,10 @@ validating and recording changed HEAD locks; Python had no equivalent path.
 
 The central workflow still fetches and validates the base and head revisions
 before materialization. Only a regular candidate lock from the exact HEAD is
-read, and only a flat SHA-256-pinned file can replace a base lock. A bounded
+read, and only a flat SHA-256-pinned file can replace a base lock. Changed
+`uv.lock` projects reuse the same isolated exporter against exact HEAD
+`uv.lock` and sibling metadata, then apply the established registry hash and
+organization-owned full-commit VCS validation. A bounded
 include beneath an unchanged base lock is likewise read from HEAD only after
 its exact base/head blob comparison and regular-file check; its content must be
 flat and fully pinned. The image installer retains
@@ -47,11 +53,12 @@ and protected-branch rules remain independent gates.
 ## Verification contract
 
 Regression coverage proves that a changed exact-head lock replaces stale base
-content, and that a changed, deleted, or invalid include beneath an unchanged
-parent is handled from the exact HEAD before image build. Workflow contract
-coverage proves that the materializer receives both `PR_BASE_SHA` and
-`PR_HEAD_SHA`. The central quality gate must retain complete statement, branch,
-and docstring coverage.
+content; a changed, deleted, or invalid include beneath an unchanged parent is
+handled from the exact HEAD; and changed, deleted, registry-only, VCS-only, and
+mixed `uv.lock` projects replace or remove every base export component before
+image build. Workflow contract coverage proves that the materializer receives
+both `PR_BASE_SHA` and `PR_HEAD_SHA`. The central quality gate must retain
+complete statement, branch, and docstring coverage.
 
 ## APA 7th references
 

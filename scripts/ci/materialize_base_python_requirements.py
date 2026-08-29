@@ -662,6 +662,18 @@ def _base_python_inputs(
     )
 
 
+def _regular_uv_lock_paths(
+    regular_blobs: list[tuple[str, pathlib.PurePosixPath]],
+    regular_paths: set[str],
+) -> set[str]:
+    """Return regular uv projects whose sibling metadata is also regular."""
+    return {
+        path
+        for path, candidate in regular_blobs
+        if candidate.name == "uv.lock" and _uv_pyproject_path(path) in regular_paths
+    }
+
+
 def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
     """Return regular hash-lock blobs from the exact validated base commit."""
     return _base_python_inputs(repo_root, base_sha)[0]
@@ -679,12 +691,78 @@ def _candidate_lock_blobs(
         if not _is_candidate_lock_path(candidate):
             continue
         content = _git(repo_root, "show", f"{revision_sha}:{path}")
-        blob = _git(repo_root, "rev-parse", f"{revision_sha}:{path}")
-        blob_sha = blob.decode("ascii", errors="strict").strip().lower()
-        if not SHA_RE.fullmatch(blob_sha):
-            raise RuntimeError(f"git rev-parse returned an invalid blob SHA for {path}")
-        candidates[path] = (content, blob_sha)
+        candidates[path] = (content, _git_blob_sha(repo_root, revision_sha, path))
     return candidates
+
+
+def _git_blob_sha(repo_root: pathlib.Path, revision_sha: str, path: str) -> str:
+    """Return one exact validated Git blob identity."""
+    blob = _git(repo_root, "rev-parse", f"{revision_sha}:{path}")
+    blob_sha = blob.decode("ascii", errors="strict").strip().lower()
+    if not SHA_RE.fullmatch(blob_sha):
+        raise RuntimeError(f"git rev-parse returned an invalid blob SHA for {path}")
+    return blob_sha
+
+
+def _changed_uv_lock_paths(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    base_paths: set[str],
+    head_sha: str,
+    head_paths: set[str],
+) -> set[str]:
+    """Return uv projects whose lock or sibling metadata changed at HEAD."""
+    changed = base_paths ^ head_paths
+    for lock_path in sorted(base_paths & head_paths):
+        compared_paths = (lock_path, _uv_pyproject_path(lock_path))
+        if any(
+            _git_blob_sha(repo_root, base_sha, path)
+            != _git_blob_sha(repo_root, head_sha, path)
+            for path in compared_paths
+        ):
+            changed.add(lock_path)
+    return changed
+
+
+def _replace_changed_uv_inputs(
+    repo_root: pathlib.Path,
+    head_sha: str,
+    locks: list[tuple[str, bytes]],
+    vcs_manifest: list[dict[str, str]],
+    changed_paths: set[str],
+    head_paths: set[str],
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
+    """Replace changed uv exports with complete exact-head registry/VCS inputs."""
+    locks = [
+        (source_path, content)
+        for source_path, content in locks
+        if source_path not in changed_paths
+    ]
+    vcs_by_repository = {
+        str(dependency["repository"]).casefold(): dependency
+        for dependency in vcs_manifest
+        if dependency.get("source") not in changed_paths
+    }
+    for lock_path in sorted(changed_paths & head_paths):
+        exported = _export_uv_lock(repo_root, head_sha, lock_path)
+        if exported is None:
+            continue
+        registry_content, vcs_dependencies = exported
+        if registry_content:
+            locks.append((lock_path, registry_content))
+        for dependency in vcs_dependencies:
+            dependency = {**dependency, "source": lock_path}
+            repository_key = dependency["repository"].casefold()
+            previous = vcs_by_repository.get(repository_key)
+            if previous is not None and previous["commit"] != dependency["commit"]:
+                raise RuntimeError(
+                    "Python uv locks pin one VCS repository to conflicting commits"
+                )
+            vcs_by_repository[repository_key] = dependency
+    return sorted(locks, key=lambda item: item[0]), sorted(
+        vcs_by_repository.values(),
+        key=lambda dependency: dependency["repository"].casefold(),
+    )
 
 
 def _select_python_locks(
@@ -811,22 +889,39 @@ def materialize(
 
     resolved_repo = repo_root.resolve()
     entries = _git(resolved_repo, "ls-tree", "-r", "-z", "--full-tree", base_sha)
-    regular_paths = {
-        path for path, _candidate in _regular_base_blob_paths(entries)
-    }
+    regular_blobs = _regular_base_blob_paths(entries)
+    regular_paths = {path for path, _candidate in regular_blobs}
+    base_uv_paths = _regular_uv_lock_paths(regular_blobs, regular_paths)
     head_regular_paths: set[str] | None = None
+    head_uv_paths: set[str] = set()
     if head_sha is not None:
         head_entries = _git(
             resolved_repo, "ls-tree", "-r", "-z", "--full-tree", head_sha
         )
-        head_regular_paths = {
-            path for path, _candidate in _regular_base_blob_paths(head_entries)
-        }
+        head_regular_blobs = _regular_base_blob_paths(head_entries)
+        head_regular_paths = {path for path, _candidate in head_regular_blobs}
+        head_uv_paths = _regular_uv_lock_paths(head_regular_blobs, head_regular_paths)
     locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
     if head_sha is not None:
         locks = _select_python_locks(
             resolved_repo, base_sha, locks, head_sha
         )
+        changed_uv_paths = _changed_uv_lock_paths(
+            resolved_repo,
+            base_sha,
+            base_uv_paths,
+            head_sha,
+            head_uv_paths,
+        )
+        if changed_uv_paths:
+            locks, vcs_manifest = _replace_changed_uv_inputs(
+                resolved_repo,
+                head_sha,
+                locks,
+                vcs_manifest,
+                changed_uv_paths,
+                head_uv_paths,
+            )
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"

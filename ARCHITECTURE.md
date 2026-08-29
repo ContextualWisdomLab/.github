@@ -148,9 +148,11 @@ tests pin workflow structure and governance prose so drift fails closed. The
 trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
 An exact-base `uv.lock` may additionally expose source from an organization-owned
-GitHub repository pinned to a full commit: the secret-free image build verifies
-the fetched revision and makes its source importable without running package
-build or installation hooks. Pull-request execution remains networkless.
+GitHub repository pinned to a full commit. When a `uv.lock` project changes, the
+same export and source validation may use the exact current-head lock and sibling
+metadata; unchanged projects remain base-bound. The secret-free image build
+verifies the fetched revision and makes its source importable without running
+package build or installation hooks. Pull-request execution remains networkless.
 Root-level lock files are independent environments unless an explicit include
 relationship says otherwise; only one unambiguous two-file supplement pair may
 be recovered together, so unrelated toolchains cannot create a synthetic

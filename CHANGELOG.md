@@ -11,6 +11,9 @@ Semantic Versioning where the repository publishes a release.
   pinned, while deleted or invalid includes fail closed. This keeps Python
   dependency updates measurable without weakening `--require-hashes` or
   `--only-binary=:all:`.
+- Re-export changed or newly added `uv.lock` projects from the exact HEAD with
+  the existing frozen/offline exporter, while removing deleted projects' base
+  registry and VCS inputs and retaining unchanged projects at the base revision.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge

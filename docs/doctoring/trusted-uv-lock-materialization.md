@@ -4,9 +4,12 @@
 
 Central coverage automation may translate a tracked `uv.lock` from the exact
 validated pull-request base revision into a pip-compatible, hash-pinned
-requirements closure. The translation must not depend on a mutable runner tool,
-repository-head dependency metadata, ambient runner configuration, or network
-access during export.
+requirements closure. When current-head materialization is requested, a changed
+or newly added `uv.lock` project is translated from its exact HEAD lock and
+sibling metadata; deleted projects remove their base export, and unchanged
+projects stay base-bound. The translation must not depend on a mutable runner
+tool, repository-head dependency metadata outside the selected exact revision,
+ambient runner configuration, or network access during export.
 
 The implementation therefore:
 
@@ -16,9 +19,13 @@ The implementation therefore:
    same immutable revision; an absent sibling is an explicit orphan, while a
    read failure for an inventoried blob is fatal and cannot be misclassified as
    absence;
-3. installs one process-wide urllib opener with an empty proxy map and a redirect
+3. compares the base and current-head `uv.lock` plus sibling metadata blob IDs
+   before re-exporting a changed project; a deleted project removes its prior
+   registry and VCS entries, while a changed project uses the same isolated
+   exporter and exact registry/VCS validators against HEAD;
+4. installs one process-wide urllib opener with an empty proxy map and a redirect
    handler that rejects every redirect before urllib creates a target request;
-4. downloads one fixed official `uv` archive from the literal GitHub Releases
+5. downloads one fixed official `uv` archive from the literal GitHub Releases
    HTTPS URL and accepts a response only when its parsed origin remains HTTPS on
    `github.com`, `release-assets.githubusercontent.com`, or
    `objects.githubusercontent.com` with the absent or explicit default port 443;
@@ -28,22 +35,22 @@ The implementation therefore:
    because that vanity host now returns HTTP 403 for the pinned 0.12.1 archive
    (ContextualWisdomLab/.github#1109) while the GitHub Releases asset keeps the
    same SHA-256 digest;
-5. verifies the bounded archive with a pinned SHA-256 digest before extraction;
-6. accepts only the expected regular-file tar member within explicit size bounds;
-7. writes the executable with mode `0755` and verifies that it reports the exact
+6. verifies the bounded archive with a pinned SHA-256 digest before extraction;
+7. accepts only the expected regular-file tar member within explicit size bounds;
+8. writes the executable with mode `0755` and verifies that it reports the exact
    pinned `uv` version;
-8. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
+9. executes `uv export` with `--frozen`, `--offline`, `--no-cache`,
    `--no-progress`, `--color never`, `--no-emit-project`, and `--no-editable` in
    an isolated temporary project;
-9. supplies a minimal environment with isolated home, temporary, cache, and
+10. supplies a minimal environment with isolated home, temporary, cache, and
    configuration directories, disables dotenv loading and managed Python
    downloads, and does not inherit arbitrary runner variables;
-10. keeps project metadata discovery enabled because the reconstructed
+11. keeps project metadata discovery enabled because the reconstructed
     `pyproject.toml` is an authoritative input; `--no-config` is deliberately not
     used because uv documents that it disables `pyproject.toml` discovery;
-11. rejects every nonempty export unless every logical line is an exact normalized
+12. rejects every nonempty export unless every logical line is an exact normalized
     package `==` pin followed only by complete SHA-256 hashes; and
-12. exposes only generated requirements files and a source manifest to the later
+13. exposes only generated requirements files and a source manifest to the later
     networkless coverage environment.
 
 ## Standards and current-tool rationale
@@ -92,8 +99,9 @@ executable payload identity.
 Nested standalone services are supported: a repository may contain several
 independent directories, each with its own sibling `pyproject.toml` and
 `uv.lock`; each pair is read and exported independently from the immutable base
-revision. This fits the organization’s standalone-product plus reusable-module
-MSA contract without copying central review logic into product repositories.
+revision, or from the exact HEAD when its lock or metadata changed. This fits
+the organization’s standalone-product plus reusable-module MSA contract without
+copying central review logic into product repositories.
 
 A true uv workspace can require member `pyproject.toml` files in addition to the
 root lock and root project metadata. The current materializer does not
@@ -123,6 +131,8 @@ Regression coverage must prove:
 - continued project metadata discovery with no `--no-config` regression;
 - timeout, process, parse, and exporter failures fail closed;
 - orphan locks and empty third-party closures remain nonfatal and explicit;
+- changed, deleted, registry-only, VCS-only, and mixed current-head `uv.lock`
+  projects replace or remove their base registry and VCS manifests;
 - every nonempty line is a normalized exact package pin with one or more complete
   SHA-256 hashes; and
 - `pyproject.toml` enables branch measurement and the changed production module
