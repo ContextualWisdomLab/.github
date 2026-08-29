@@ -86,8 +86,8 @@ def test_live_catalog_keeps_complete_unknown_prices_as_unknown() -> None:
     assert evidence["Qwen/Qwen3-Coder-480B-A35B-Instruct"] == "unknown"
 
 
-def test_auto_pool_is_free_first_then_price_honest_and_provider_diverse() -> None:
-    """A ZDR-priced route cannot outrank free inference; unknown cost stays last."""
+def test_auto_pool_excludes_unknown_cost_and_remains_provider_diverse() -> None:
+    """A review route must be free or carry a complete published price vector."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_live_discovery_report()),
         limit=6,
@@ -103,15 +103,9 @@ def test_auto_pool_is_free_first_then_price_honest_and_provider_diverse() -> Non
         agent for agent in agents if agent["model"] == PRICED_MODEL
     )["tags"]
 
-    unknown_agents = [agent for agent in agents if "cost:unknown" in agent["tags"]]
-    assert {agent["provider_name"] for agent in unknown_agents} == {
-        "bytez",
-        "nvidia_nim",
-        "nvidia_nim_sub",
-        "openai",
-    }
+    assert all("cost:unknown" not in agent["tags"] for agent in agents)
     assert result["report"]["total_unknown_routes"] == 4
-    assert result["report"]["unknown_selected_count"] == 4
+    assert result["report"]["unknown_selected_count"] == 0
 
 
 def test_free_pool_never_admits_priced_or_unknown_routes() -> None:
@@ -133,6 +127,24 @@ def test_partial_price_vectors_still_fail_closed() -> None:
     openai["completion_price_per_1k"] = 0.01
 
     with pytest.raises(policy.PolicyError, match="lacks numeric prompt_price_per_1k"):
+        policy.parse_discovery_report(report)
+
+
+@pytest.mark.parametrize(
+    ("prompt_price", "completion_price", "currency_code"),
+    [(None, 0.0, "USD"), (-1.0, 0.0, "USD"), (0.0, 0.0, None), (0.1, 0.0, "USD")],
+)
+def test_free_marker_rejects_malformed_or_conflicting_price_vectors(
+    prompt_price: object, completion_price: object, currency_code: object
+) -> None:
+    """A free marker cannot bypass validation of provider-published prices."""
+    report = _live_discovery_report()
+    free = next(row for row in report["models"] if row["is_free"] is True)
+    free["prompt_price_per_1k"] = prompt_price
+    free["completion_price_per_1k"] = completion_price
+    free["currency_code"] = currency_code
+
+    with pytest.raises(policy.PolicyError):
         policy.parse_discovery_report(report)
 
 

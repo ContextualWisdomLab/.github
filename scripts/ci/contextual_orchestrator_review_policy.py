@@ -1,10 +1,9 @@
 """Build governed contextual-orchestrator review catalogs from discovery evidence.
 
 ``orchestrator/free`` remains strictly zero-priced. ``orchestrator/auto`` is
-free-first, then uses fully price-attested routes, and only then admits routes
-whose providers expose availability but no per-token price vector. Those
-unknown-cost routes are explicit bounded fallbacks; they are never relabeled as
-free or price-attested. Partial or malformed price vectors still fail closed.
+free-first and then uses fully price-attested routes. Models without a complete
+price vector remain visible in audit counts but are never admitted to CI review.
+Partial, malformed, or contradictory price vectors fail closed.
 """
 
 from __future__ import annotations
@@ -102,16 +101,18 @@ def _normalize_cost_evidence(
 ) -> tuple[str, float | None, float | None, str | None]:
     """Classify complete free, priced, or wholly unavailable price evidence.
 
-    A provider that publishes neither price component is retained only as an
-    explicit unknown-cost fallback. A partial vector is ambiguous and rejected.
-    Free markers remain authoritative discovery evidence and are never widened
-    by this helper.
+    A provider that publishes neither price component is retained for audit but
+    is not eligible for review routing. A partial vector is ambiguous and
+    rejected. Free markers remain authoritative only when any accompanying
+    published vector is complete, valid, and zero-priced.
     """
-    if is_free:
-        return COST_FREE, None, None, None
-
     if prompt_price is None and completion_price is None:
-        return COST_UNKNOWN, None, None, None
+        return (
+            (COST_FREE if is_free else COST_UNKNOWN),
+            None,
+            None,
+            None,
+        )
 
     normalized_prompt = _validated_price(
         prompt_price, route=route, field="prompt_price_per_1k"
@@ -121,8 +122,10 @@ def _normalize_cost_evidence(
     )
     if not isinstance(currency_code, str) or not currency_code.strip():
         raise PolicyError(f"model {route} lacks currency_code evidence")
+    if is_free and (normalized_prompt != 0 or normalized_completion != 0):
+        raise PolicyError(f"model {route} conflicts with its free price marker")
     return (
-        COST_PRICED,
+        COST_FREE if is_free else COST_PRICED,
         normalized_prompt,
         normalized_completion,
         currency_code.strip().upper(),
@@ -213,7 +216,9 @@ def build_zdr_prioritized_catalog(
     all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
-    candidate_rows = all_free_rows if pool == "free" else all_rows
+    candidate_rows = (
+        all_free_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
+    )
     eligible_rows = [
         row
         for row in candidate_rows
