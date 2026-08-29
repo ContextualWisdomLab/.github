@@ -35,8 +35,13 @@ REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024
 # Keep ordinary review turns portable across small zero-cost providers. The
 # failing Strix run used 32768 for every call, including its two-word warm-up.
 REVIEW_MAX_OUTPUT_TOKENS = 4096
-# Strix verifies connectivity with one tiny plain-chat request before scanning.
-REVIEW_PREFLIGHT_MAX_OUTPUT_TOKENS = 16
+# Provider-neutral sampling: several modern endpoints reject non-default
+# temperatures, while 1.0 is the OpenAI-compatible default.
+REVIEW_TEMPERATURE = 1.0
+# A selected route that cannot answer within ten seconds is not reliable enough
+# for a required CI gate. With at most twelve sequential candidates, startup is
+# bounded below the sidecar's three-minute readiness deadline.
+REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 
 
 class ReviewPreflightError(RuntimeError):
@@ -131,7 +136,7 @@ def _safe_http_status(exc: Exception) -> int | None:
 def _preflight_review_agents(
     agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object]]:
-    """Probe each route with Strix's plain-chat warm-up and keep ready routes.
+    """Probe each route with the runtime request contract and keep ready routes.
 
     The report deliberately records only stable route identity, a bounded
     exception class name, and an optional numeric HTTP status. Provider response
@@ -162,7 +167,8 @@ def _preflight_review_agents(
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Reply with just 'OK'."},
             ],
-            "max_tokens": REVIEW_PREFLIGHT_MAX_OUTPUT_TOKENS,
+            "temperature": REVIEW_TEMPERATURE,
+            "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
             "stream": False,
         }
         try:
@@ -289,7 +295,12 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
-    client = ModelClient(max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS)
+    client = ModelClient(
+        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
+        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        max_retries=0,
+        temperature=REVIEW_TEMPERATURE,
+    )
     try:
         agents, preflight_report = _preflight_review_agents(agents, client=client)
     except ReviewPreflightError as exc:
@@ -297,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
     _write_json(args.preflight_out, preflight_report)
 
+    client = ModelClient(
+        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        temperature=REVIEW_TEMPERATURE,
+    )
     orchestrator = TaskOrchestrator(agents, client=client)
     serve(
         orchestrator,
