@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Recognize both configured contextual-orchestrator virtual models when
+  validating the pinned loopback Strix gateway, keeping the HTTP exception
+  limited to the fixed local sidecar origin.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

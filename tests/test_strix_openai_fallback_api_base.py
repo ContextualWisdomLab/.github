@@ -271,12 +271,13 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
         """The local sidecar is accepted without allowing arbitrary HTTP bases."""
 
-        rc, api_base = _resolve_api_base(
-            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
-            "orchestrator/free",
-        )
-        self.assertEqual(rc, 0)
-        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+        for model in ("orchestrator/free", "orchestrator/auto"):
+            rc, api_base = _resolve_api_base(
+                {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+                model,
+            )
+            self.assertEqual(rc, 0)
+            self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
 
         rc, _ = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},

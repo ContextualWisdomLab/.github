@@ -322,7 +322,7 @@ is_vertex_model() {
 
 is_contextual_orchestrator_model() {
 	case "$1" in
-	orchestrator/free | contextual-orchestrator/orchestrator/free)
+	orchestrator/free | contextual-orchestrator/orchestrator/free | orchestrator/auto | contextual-orchestrator/orchestrator/auto)
 		return 0
 		;;
 	*)
