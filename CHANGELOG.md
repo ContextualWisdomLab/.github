@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover; keep private-target ZDR enforcement and the
+  fail-closed no-external-fallback contract unchanged.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge

@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar, using the fail-closed zero-cost virtual model id `orchestrator/free`, with **Zero Data Retention (ZDR)-compliant routes prioritized** inside that pool.
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema retain the fail-closed zero-cost virtual model id `orchestrator/free`; authoritative Strix security analysis uses the provider-diverse `orchestrator/auto` pool. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -55,9 +55,13 @@ all five, and auto-optimize routing by cost.
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
-   `noema-review.yml` and `strix.yml` provision the same sidecar and use the
-   loopback chat-completions/API-compatible URL with virtual model
-   `orchestrator/free`; Strix has no external fallback and private targets pass
+   `noema-review.yml` retains `orchestrator/free`. `strix.yml` provisions the
+   same sidecar and uses the loopback chat-completions/API-compatible URL with
+   `orchestrator/auto`: the 2026-08-29 exact-head DiskSage scan proved that four
+   discovered free routes all shared the OpenRouter outage domain, which the
+   gateway correctly collapsed to one provider attempt. Strix therefore uses
+   the provider-diverse pool supplied by all five configured credentials.
+   Strix has no external fallback and private targets pass
    visibility through to the gateway's ZDR requirement. Noema reviewer identity
    remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
    `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /

@@ -160,7 +160,7 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
-assert_file_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/free" "Strix defaults every scan to the contextual-orchestrator free pool"
+assert_file_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" "Strix defaults every scan to the contextual-orchestrator provider-diverse pool"
 assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
 assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
 assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"

@@ -26,7 +26,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_default_scan_provisions_the_existing_gateway_sidecar(self) -> None:
         """Every scan uses the five-provider gateway, never a direct pool."""
         self.assertIn("Provision contextual-orchestrator Strix sidecar", self.workflow)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.workflow)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/auto", self.workflow)
         self.assertIn("provider_mode=contextual_orchestrator", self.workflow)
         self.assertIn("STRIX_FALLBACK_MODELS: \"\"", self.workflow)
         self.assertNotIn(
@@ -48,7 +48,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         """A dispatch payload cannot select a direct provider route."""
         self.assertIn("github.event.client_payload.strix_llm", self.workflow)
         self.assertIn(
-            "Strix model overrides are limited to contextual-orchestrator/orchestrator/free",
+            "Strix model overrides are limited to contextual-orchestrator/orchestrator/auto",
             self.workflow,
         )
         for direct_route in ("nvidia_nim/*)", "openrouter/free", "openai-direct/gpt-5.4"):
@@ -73,7 +73,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_required_smoke_pins_the_gateway_default(self) -> None:
         """The bounded required-path smoke rejects a future direct-default regression."""
         self.assertIn("contextual-orchestrator Strix sidecar", self.smoke)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.smoke)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/auto", self.smoke)
         self.assertIn("Strix does not resolve a direct provider outside the gateway", self.smoke)
 
     def test_required_smoke_rejects_invalid_sidecar_syntax(self) -> None:
