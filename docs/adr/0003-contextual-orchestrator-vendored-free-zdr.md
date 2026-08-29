@@ -62,6 +62,10 @@ all five, and auto-optimize routing by cost.
    fetched when egress allows it and is authoritative for the `openrouter`
    scope; otherwise the dated static attestation table is used, never a
    fabricated policy.
+   For private targets, ZDR admission is applied before choosing the cost tier.
+   A discovered but non-ZDR free route therefore cannot suppress an attested
+   priced route; when an admitted free tier exists it remains the exclusive
+   primary, and the admitted priced tier remains fallback-only.
    `scripts/ci/contextual_orchestrator_review_policy.py` turns the discovery
    report into a free-first, cost-evidence-ranked, ZDR-prioritized,
    provider-family-diverse agents catalog (primary/secondary NVIDIA keys share

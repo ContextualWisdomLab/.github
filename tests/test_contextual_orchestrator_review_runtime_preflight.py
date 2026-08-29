@@ -178,6 +178,27 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
 
+def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
+    """Privacy admission precedes the free-first tier decision."""
+    namespace = _load_launcher()
+    admit = namespace["_zdr_admitted_rows"]
+    rows = [
+        {"provider": "openrouter", "model": "free/non-private"},
+        {"provider": "openrouter", "model": "priced/private"},
+    ]
+
+    def checker(provider: str, *, model: str, zdr_endpoints: frozenset[str]) -> bool:
+        return f"{provider}:{model}" in zdr_endpoints
+
+    admitted = admit(
+        rows,
+        require_zdr=True,
+        zdr_endpoints=frozenset({"openrouter:priced/private"}),
+        checker=checker,
+    )
+    assert admitted == [rows[1]]
+
+
 def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
     """Fallback selection preserves full discovery cost-tier evidence."""
     namespace = _load_launcher()

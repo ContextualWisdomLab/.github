@@ -291,6 +291,27 @@ def _with_discovery_counts(
     return enriched
 
 
+def _zdr_admitted_rows(
+    rows: list[dict[str, Any]],
+    *,
+    require_zdr: bool,
+    zdr_endpoints: frozenset[str],
+    checker: Any,
+) -> list[dict[str, Any]]:
+    """Return rows that can enter the selected privacy boundary."""
+    if not require_zdr:
+        return list(rows)
+    return [
+        row
+        for row in rows
+        if checker(
+            str(row["provider"]),
+            model=str(row["model"]),
+            zdr_endpoints=zdr_endpoints,
+        )
+    ]
+
+
 def _load_temporary_agents(
     path: str, catalog_agents: list[dict[str, Any]], *, loader: Any
 ) -> list[object]:
@@ -346,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
+        is_zdr_model,
         parse_discovery_report,
     )
 
@@ -388,12 +410,26 @@ def main(argv: list[str] | None = None) -> int:
     priced_rows = [
         row for row in normalized_rows if row.get("cost_evidence") == "priced"
     ]
+    admitted_free_rows = _zdr_admitted_rows(
+        free_rows,
+        require_zdr=args.require_zdr,
+        zdr_endpoints=zdr_endpoints,
+        checker=is_zdr_model,
+    )
+    admitted_priced_rows = _zdr_admitted_rows(
+        priced_rows,
+        require_zdr=args.require_zdr,
+        zdr_endpoints=zdr_endpoints,
+        checker=is_zdr_model,
+    )
     requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
     primary_limit = _bounded_primary_catalog_limit(
-        requested_catalog_limit, pool=args.pool, has_free_rows=bool(free_rows)
+        requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )
     primary_rows = (
-        (free_rows or priced_rows) if args.pool == "auto" else normalized_rows
+        (admitted_free_rows or admitted_priced_rows)
+        if args.pool == "auto"
+        else normalized_rows
     )
     result = build_zdr_prioritized_catalog(
         primary_rows,
@@ -417,10 +453,15 @@ def main(argv: list[str] | None = None) -> int:
     fallback_limit = _bounded_fallback_catalog_limit(
         requested_catalog_limit, primary_count=len(result["agents"])
     )
-    if args.pool == "auto" and free_rows and priced_rows and fallback_limit:
+    if (
+        args.pool == "auto"
+        and admitted_free_rows
+        and admitted_priced_rows
+        and fallback_limit
+    ):
         try:
             fallback_result = build_zdr_prioritized_catalog(
-                priced_rows,
+                admitted_priced_rows,
                 limit=fallback_limit,
                 family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
                 zdr_endpoints=zdr_endpoints,

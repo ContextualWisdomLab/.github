@@ -107,12 +107,7 @@ def _normalize_cost_evidence(
     published vector is complete, valid, and zero-priced.
     """
     if prompt_price is None and completion_price is None:
-        return (
-            (COST_FREE if is_free else COST_UNKNOWN),
-            None,
-            None,
-            None,
-        )
+        return (COST_UNKNOWN, None, None, None)
 
     normalized_prompt = _validated_price(
         prompt_price, route=route, field="prompt_price_per_1k"
