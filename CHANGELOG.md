@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Give stacked pull requests a separately bounded organization-sweep
+  OpenCode dispatch budget, so default-branch review traffic cannot leave a
+  stacked PR at `OpenCode review absent` without changing the protected merge
+  or exact-head evidence rules.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator

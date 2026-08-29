@@ -848,14 +848,19 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     # resetting the configured limit for every target can flood Actions with
     # long-running review dispatches.
     assert '"$ORG_SWEEP_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
+    assert '"$ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
     assert '"$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
     assert "org_review_dispatches_used=0" in workflow
+    assert "org_stacked_review_dispatches_used=0" in workflow
     assert "org_branch_updates_used=0" in workflow
     assert 'review_dispatch_limit=$((ORG_SWEEP_REVIEW_DISPATCH_LIMIT - org_review_dispatches_used))' in workflow
+    assert 'stacked_review_dispatch_limit=$((ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT - org_stacked_review_dispatches_used))' in workflow
     assert 'branch_update_limit=$((ORG_SWEEP_BRANCH_UPDATE_LIMIT - org_branch_updates_used))' in workflow
     assert '--review-dispatch-limit "$review_dispatch_limit"' in workflow
+    assert '--stacked-review-dispatch-limit "$stacked_review_dispatch_limit"' in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert 'grep -Ec \'^PR #[0-9]+: (review_dispatch|security_dispatch):\'' in workflow
+    assert 'grep -Ec \'^PR #[0-9]+: review_dispatch: stacked PR onto\'' in workflow
     assert 'grep -Ec \'^PR #[0-9]+: (update_branch|restamp_head):\'' in workflow
     # The scheduler requires --project-flow; the sweep must derive and pass it
     # per target repository (regression: the first sweep failed every repo with
@@ -1213,10 +1218,11 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
     # guarantee the fix is meant to provide (ContextualWisdomLab/.github#1220
     # review finding). The env-block default must not reintroduce it.
     assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
-    # The fix must not change the org-wide budget itself, only which
-    # repositories consume it — otherwise it reintroduces the exact
-    # cost/rate-limit risk #1219 explicitly declined to guess at.
+    # Keep ordinary and stacked review budgets independently configurable so
+    # ordinary work cannot starve the only review path for stacked PRs.
     assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "Stacked PRs have no" in workflow
 
 
 def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
@@ -1226,6 +1232,10 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert (
         "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || "
         "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
+    ) in workflow
+    assert (
+        "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || inputs.stacked_review_dispatch_limit || "
+        "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}"
     ) in workflow
     assert (
         "STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || "
