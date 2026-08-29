@@ -1,9 +1,9 @@
-# ADR-0003: Vendored contextual-orchestrator review sidecar with the ZDR-first `orchestrator/free` pool
+# ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
 - Status: accepted
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar, using the fail-closed zero-cost virtual model id `orchestrator/free`, with **Zero Data Retention (ZDR)-compliant routes prioritized** inside that pool.
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema retain the fail-closed zero-cost virtual model id `orchestrator/free`; authoritative Strix security analysis uses the provider-diverse `orchestrator/auto` pool. Strix is intentionally correctness-first rather than zero-cost. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -31,11 +31,16 @@ all five, and auto-optimize routing by cost.
    KV in the **same process** that performs model discovery and serves
    `/v1/chat/completions` and `/v1/responses` on loopback. Env is bootstrap
    transport only; request-time credential reads go through the KV.
-2. **Auto model discovery + `orchestrator/free`**: discovery runs with the
-   orchestrator's own `discover_all_models()` against the KV credentials; only
-   zero-priced ("free") routes enter the pool. The gateway's
+2. **Auto model discovery + governed virtual pools**: discovery runs with the
+   orchestrator's own `discover_all_models()` against the KV credentials.
+   OpenCode and Noema admit only zero-priced routes. Strix admits provider-
+   diverse priced routes only when discovery supplies finite, nonnegative
+   prompt and completion prices plus an explicit currency; missing or malformed
+   price evidence fails closed. The gateway's
    `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
-   enabled zero-cost agent exists, which our catalog guarantees.
+   enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
+   may admit priced routes only through the same evidence-bearing policy, never
+   through a direct-provider model identifier.
 3. **ZDR-first selection**: `scripts/ci/zdr_policy.py` defines ZDR the way
    OpenRouter does ("a provider will not store your data for any period of
    time"; zero retention also implies no training) and is deliberately
@@ -46,8 +51,8 @@ all five, and auto-optimize routing by cost.
    fetched when egress allows it and is authoritative for the `openrouter`
    scope; otherwise the dated static attestation table is used, never a
    fabricated policy.
-   `scripts/ci/contextual_orchestrator_review_policy.py` turns the free-tier
-   discovery report into a ZDR-prioritized, provider-family-diverse agents
+   `scripts/ci/contextual_orchestrator_review_policy.py` turns the price-
+   evidenced discovery report into a ZDR-prioritized, provider-family-diverse agents
    catalog (primary/secondary NVIDIA keys share one outage-domain family),
    capped in size, in the orchestrator's own `ModelAgent` schema.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
@@ -55,9 +60,15 @@ all five, and auto-optimize routing by cost.
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
-   `noema-review.yml` and `strix.yml` provision the same sidecar and use the
-   loopback chat-completions/API-compatible URL with virtual model
-   `orchestrator/free`; Strix has no external fallback and private targets pass
+   `noema-review.yml` retains `orchestrator/free`. `strix.yml` provisions the
+   same sidecar and uses the loopback chat-completions/API-compatible URL with
+   `orchestrator/auto`: the 2026-08-29 exact-head DiskSage scan proved that four
+   discovered free routes all shared the OpenRouter outage domain, which the
+   gateway correctly collapsed to one provider attempt. Strix therefore uses
+   the provider-diverse pool supplied by all five configured credentials.
+   Provider diversity and provider cost evidence remain delegated to the
+   gateway rather than embedding a second routing policy in GitHub Actions.
+   Strix has no external fallback and private targets pass
    visibility through to the gateway's ZDR requirement. Noema reviewer identity
    remains `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never
    `github.token`; Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
@@ -79,7 +90,11 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery + cost routing, under the zero-cost pool, with ZDR routes first.
+  discovery under the zero-cost pool. Strix uses the separately governed auto
+  pool without treating absent price metadata as paid-route evidence.
+- Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
+  remains distinct from the zero-cost OpenCode/Noema pool, while private-target
+  ZDR admission remains fail-closed.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
@@ -106,4 +121,5 @@ all five, and auto-optimize routing by cost.
 - **Private-target boundary (2026-08-27):** Noema resolves target visibility with
   the selected repository-scoped reviewer token. Private/internal repositories
   set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
-  every non-ZDR route and fails closed when no attested free ZDR route exists.
+  every non-ZDR route and fails closed when no attested ZDR route exists in the
+  selected workflow pool.

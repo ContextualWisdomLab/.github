@@ -129,6 +129,9 @@ sequenceDiagram
   invents a hypothesis, observed result, or verdict.
 - Sandbox helpers copy the workspace, drop secret environment values unless
   explicitly allowlisted by **name**, and run subprocesses with `shell=False`.
+  Web E2E readiness URLs are loopback-only; see
+  [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
+  and [`docs/adr/0004-sandboxed-web-readiness-loopback-boundary.md`](docs/adr/0004-sandboxed-web-readiness-loopback-boundary.md).
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
@@ -180,3 +183,5 @@ resolver conflict.
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
+- [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
+  — loopback-only web E2E readiness polling and APA 7th citations.

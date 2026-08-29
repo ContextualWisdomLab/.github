@@ -14,6 +14,16 @@ Semantic Versioning where the repository publishes a release.
 - Re-export changed or newly added `uv.lock` projects from the exact HEAD with
   the existing frozen/offline exporter, while removing deleted projects' base
   registry and VCS inputs and retaining unchanged projects at the base revision.
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover. Priced routes require finite, nonnegative
+  published prompt/completion prices and an explicit currency; unknown pricing
+  fails closed. Private-target ZDR enforcement and the no-external-fallback
+  contract remain unchanged.
+- Allow the protected Strix required-workflow smoke to recognize only the
+  existing `orchestrator/free` route or the provider-diverse
+  `orchestrator/auto` route. This provides a fail-closed two-phase migration
+  path without admitting direct-provider model identifiers.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge
@@ -157,6 +167,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Web verification now checks services through local readiness addresses only.
+  Start the backend and frontend on this computer and use their local health
+  URLs when running the check.
+- Review results now separate cosmetic notices from blocking failures. Open the
+  failure details and correct the requested issue before running the check
+  again.
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
   dispatches whose workflow token may not see the target repository.
