@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 import io
+import json
 import runpy
 from pathlib import Path
 import sys
@@ -162,6 +163,58 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
         preflight([primary], [fallback], client=failing_client)
     assert failure.value.report["ready_count"] == 0
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
+
+
+def test_preflight_stage_limits_share_one_startup_budget() -> None:
+    """Free-first and priced-fallback probes share one bounded route budget."""
+    namespace = _load_launcher()
+    primary = namespace["_bounded_primary_catalog_limit"](
+        99, pool="auto", has_free_rows=True
+    )
+    fallback = namespace["_bounded_fallback_catalog_limit"](
+        99, primary_count=primary
+    )
+    assert (primary, fallback) == (8, 4)
+    assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+
+
+def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
+    """Fallback selection preserves full discovery cost-tier evidence."""
+    namespace = _load_launcher()
+    base = {"selected_count": 1, "selected": [{"model": "priced/model"}]}
+    rows = [
+        {"cost_evidence": "free"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "unknown"},
+    ]
+    enriched = namespace["_with_discovery_counts"](base, rows)
+    assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
+    assert [enriched[key] for key in (
+        "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
+    )] == [4, 1, 2, 1]
+
+
+def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:
+    """The price-only handoff file is removed after success and failure."""
+    helper = _load_launcher()["_load_temporary_agents"]
+    path = tmp_path / "review-catalog.json.priced"
+    agents = [{"id": "priced_route"}]
+
+    def loader(value: str) -> list[object]:
+        assert json.loads(Path(value).read_text(encoding="utf-8")) == {"agents": agents}
+        return [SimpleNamespace(id="priced_route")]
+
+    assert [agent.id for agent in helper(str(path), agents, loader=loader)] == ["priced_route"]
+    assert not path.exists()
+
+    def failing_loader(value: str) -> list[object]:
+        assert Path(value).exists()
+        raise RuntimeError("loader rejected catalog")
+
+    with pytest.raises(RuntimeError, match="loader rejected catalog"):
+        helper(str(path), agents, loader=failing_loader)
+    assert not path.exists()
 
 
 def test_preflight_transport_is_bounded_and_provider_neutral() -> None:

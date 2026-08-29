@@ -42,6 +42,8 @@ REVIEW_TEMPERATURE = 1.0
 # for a required CI gate. With at most twelve sequential candidates, startup is
 # bounded below the sidecar's three-minute readiness deadline.
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 
 
 class ReviewPreflightError(RuntimeError):
@@ -249,6 +251,58 @@ def _write_json(path: str, payload: object) -> None:
     )
 
 
+def _bounded_primary_catalog_limit(
+    requested_limit: int, *, pool: str, has_free_rows: bool
+) -> int:
+    """Return the primary-stage route limit within one startup budget."""
+    if requested_limit < 1:
+        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
+    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
+    if pool == "auto" and has_free_rows:
+        return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
+    return total_limit
+
+
+def _bounded_fallback_catalog_limit(
+    requested_limit: int, *, primary_count: int
+) -> int:
+    """Return remaining priced-fallback capacity after primary selection."""
+    if requested_limit < 1:
+        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
+    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
+    if primary_count < 0 or primary_count > total_limit:
+        raise ValueError("primary route count exceeds the preflight budget")
+    return total_limit - primary_count
+
+
+def _with_discovery_counts(
+    report: dict[str, object], rows: list[dict[str, Any]]
+) -> dict[str, object]:
+    """Copy a stage report while restoring full discovery-tier counts."""
+    enriched = dict(report)
+    enriched.update(
+        {
+            "total_routes": len(rows),
+            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
+            "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
+            "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+        }
+    )
+    return enriched
+
+
+def _load_temporary_agents(
+    path: str, catalog_agents: list[dict[str, Any]], *, loader: Any
+) -> list[object]:
+    """Load one transient catalog and remove it on every exit path."""
+    catalog_path = Path(path)
+    _write_json(str(catalog_path), {"agents": catalog_agents})
+    try:
+        return list(loader(str(catalog_path)))
+    finally:
+        catalog_path.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Bootstrap the KV, discover and preflight free models, then serve.
 
@@ -334,17 +388,22 @@ def main(argv: list[str] | None = None) -> int:
     priced_rows = [
         row for row in normalized_rows if row.get("cost_evidence") == "priced"
     ]
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    primary_limit = _bounded_primary_catalog_limit(
+        requested_catalog_limit, pool=args.pool, has_free_rows=bool(free_rows)
+    )
     primary_rows = (
         (free_rows or priced_rows) if args.pool == "auto" else normalized_rows
     )
     result = build_zdr_prioritized_catalog(
         primary_rows,
-        limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
+        limit=primary_limit,
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
+    result["report"] = _with_discovery_counts(result["report"], normalized_rows)
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -352,29 +411,37 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
+    primary_report = result["report"]
     fallback_result = None
     fallback_agents: list[object] = []
-    if args.pool == "auto" and free_rows:
-        if priced_rows:
-            try:
-                fallback_result = build_zdr_prioritized_catalog(
-                    priced_rows,
-                    limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
-                    family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
-                    zdr_endpoints=zdr_endpoints,
-                    require_zdr=args.require_zdr,
-                    pool="auto",
-                )
-            except PolicyError:
-                fallback_result = None
-        if fallback_result is not None:
-            fallback_catalog = f"{args.catalog_out}.priced"
-            Path(fallback_catalog).write_text(
-                json.dumps({"agents": fallback_result["agents"]}, indent=2, sort_keys=True)
-                + "\n",
-                encoding="utf-8",
+    fallback_limit = _bounded_fallback_catalog_limit(
+        requested_catalog_limit, primary_count=len(result["agents"])
+    )
+    if args.pool == "auto" and free_rows and priced_rows and fallback_limit:
+        try:
+            fallback_result = build_zdr_prioritized_catalog(
+                priced_rows,
+                limit=fallback_limit,
+                family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+                zdr_endpoints=zdr_endpoints,
+                require_zdr=args.require_zdr,
+                pool="auto",
             )
-            fallback_agents = load_agents(fallback_catalog)
+        except PolicyError:
+            fallback_result = None
+        if fallback_result is not None:
+            fallback_result["report"] = _with_discovery_counts(
+                fallback_result["report"], normalized_rows
+            )
+            fallback_result["report"]["primary_selected_count"] = primary_report[
+                "selected_count"
+            ]
+            fallback_result["report"]["primary_selection"] = primary_report["selected"]
+            fallback_agents = _load_temporary_agents(
+                f"{args.catalog_out}.priced",
+                fallback_result["agents"],
+                loader=load_agents,
+            )
     client = ModelClient(
         timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
