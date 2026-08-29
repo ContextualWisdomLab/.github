@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Run npm workspace coverage installs from the nearest validated ancestor lock
+  while keeping tests scoped to the changed package; regular non-symlink lock
+  files remain hash-bounded by the existing materialization manifest.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

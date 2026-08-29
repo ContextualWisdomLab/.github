@@ -627,6 +627,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "corepack pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
     assert "chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store" in measure_step
+    assert "npm_lock_project_dir() {" in measure_step
+    assert 'pushd "$npm_project_dir" >/dev/null' in measure_step
+    assert "No regular non-symlink npm lock was found at the package or validated workspace root." in measure_step
     assert "trusted_npm_lock_is_materialized()" in measure_step
     assert (
         'head_blob="$(trusted_git rev-parse "${PR_HEAD_SHA}:${relative_lock}"'
@@ -1538,6 +1541,51 @@ def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["ADFS 연동 라이브러리/Node.JS/Node App"]
+
+
+def test_opencode_coverage_resolves_ancestor_npm_lock_for_workspace_package(tmp_path):
+    """Workspace coverage installs from the root lock while testing the nested package."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required for the extracted workflow function regression test")
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_start = workflow.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow.index("\n      - name:", measure_start + 1)
+    measure_step = workflow[measure_start:measure_end]
+    helper_start = measure_step.index("          npm_lock_project_dir() {\n")
+    helper_end = measure_step.index(
+        "\n\n          trusted_npm_lock_is_materialized()", helper_start
+    )
+    shell = "\n".join(
+        (
+            "set -euo pipefail",
+            textwrap.dedent(measure_step[helper_start:helper_end]),
+            "npm_lock_project_dir",
+        )
+    )
+
+    repo = tmp_path / "repo"
+    package = repo / "apps" / "desktop"
+    package.mkdir(parents=True)
+    (repo / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["COVERAGE_SOURCE_WORKDIR"] = str(repo)
+    result = subprocess.run(
+        [bash, "-c", shell],
+        cwd=package,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(repo)]
 
 
 def test_opencode_runtime_pin_supports_reasoning_options():

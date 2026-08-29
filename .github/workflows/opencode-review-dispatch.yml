@@ -1404,6 +1404,38 @@ jobs:
 
           writable_npm_cache_dir=""
           writable_pnpm_store_dir=""
+          npm_lock_project_dir() {
+            local candidate_dir="$PWD"
+
+            case "$candidate_dir" in
+              "$COVERAGE_SOURCE_WORKDIR"|"$COVERAGE_SOURCE_WORKDIR"/*) ;;
+              *)
+                echo "::error::npm package directory escaped the validated coverage worktree."
+                return 1
+                ;;
+            esac
+
+            while true; do
+              if [ -f "$candidate_dir/npm-shrinkwrap.json" ] \
+                && [ ! -L "$candidate_dir/npm-shrinkwrap.json" ]; then
+                printf '%s\n' "$candidate_dir"
+                return 0
+              fi
+              if [ -f "$candidate_dir/package-lock.json" ] \
+                && [ ! -L "$candidate_dir/package-lock.json" ]; then
+                printf '%s\n' "$candidate_dir"
+                return 0
+              fi
+              if [ "$candidate_dir" = "$COVERAGE_SOURCE_WORKDIR" ]; then
+                break
+              fi
+              candidate_dir="$(dirname "$candidate_dir")"
+            done
+
+            echo "::error::No regular non-symlink npm lock was found at the package or validated workspace root."
+            return 1
+          }
+
           trusted_npm_lock_is_materialized() {
             local relative_dir
             local lock_name
@@ -1613,9 +1645,11 @@ jobs:
 
           install_package_dependencies() {
             local package_runner="$1"
+            local npm_project_dir
             case "$package_runner" in
               npm)
-                if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                if npm_project_dir="$(npm_lock_project_dir)"; then
+                  pushd "$npm_project_dir" >/dev/null
                   if ! trusted_npm_lock_is_materialized || ! prepare_writable_npm_cache; then
                     append "### JavaScript/TypeScript dependencies (npm)"
                     append ""
@@ -1623,6 +1657,7 @@ jobs:
                     append "- Reason: the current npm lock is not hash-bounded to the validated base or HEAD, or the trusted npm cache is unavailable."
                     append ""
                     failures=$((failures + 1))
+                    popd >/dev/null
                     return 0
                   fi
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
@@ -1632,6 +1667,7 @@ jobs:
                       --cache "$writable_npm_cache_dir" \
                       --no-audit \
                       --no-fund
+                  popd >/dev/null
                 else
                   append "### JavaScript/TypeScript dependencies (npm)"
                   append ""
