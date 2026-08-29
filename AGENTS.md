@@ -20,8 +20,9 @@ sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
-OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`;
-Strix uses the provider-diverse `orchestrator/auto` pool. Non-free Strix routes
+OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`.
+Authoritative Strix analysis uses the correctness-first `orchestrator/auto`
+provider-diverse pool. Non-free Strix routes
 are admitted only with complete published prompt/completion price and currency
 evidence, and private targets still require ZDR-compliant routes under
 [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).

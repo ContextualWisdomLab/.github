@@ -25,12 +25,32 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
 # This loopback, bearer-authenticated review sidecar accepts OpenAI's image-input
 # request ceiling so repository context can include inline image inputs.
 REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024
+# Keep ordinary review turns portable across small zero-cost providers. The
+# failing Strix run used 32768 for every call, including its two-word warm-up.
+REVIEW_MAX_OUTPUT_TOKENS = 4096
+# Provider-neutral sampling: several modern endpoints reject non-default
+# temperatures, while 1.0 is the OpenAI-compatible default.
+REVIEW_TEMPERATURE = 1.0
+# A selected route that cannot answer within ten seconds is not reliable enough
+# for a required CI gate. With at most twelve sequential candidates, startup is
+# bounded below the sidecar's three-minute readiness deadline.
+REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
+
+
+class ReviewPreflightError(RuntimeError):
+    """Raised when no selected free provider route is ready for review traffic."""
+
+    def __init__(self, message: str, report: dict[str, object]) -> None:
+        """Store the sanitized route report alongside the bounded error message."""
+        super().__init__(message)
+        self.report = report
 
 
 def _has_text_output(model: object) -> bool:
@@ -103,22 +123,128 @@ def _report_rows(
     return rows
 
 
+def _chat_response_has_text(response: object) -> bool:
+    """Return whether an OpenAI-compatible response contains non-empty text."""
+    if not isinstance(response, dict):
+        return False
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    return isinstance(content, str) and bool(content.strip())
+
+
+def _safe_http_status(exc: Exception) -> int | None:
+    """Return one bounded HTTP status without persisting an exception message."""
+    status = getattr(exc, "code", None)
+    if type(status) is int and 100 <= status <= 599:
+        return status
+    return None
+
+
+def _preflight_review_agents(
+    agents: list[object], *, client: Any
+) -> tuple[list[object], dict[str, object]]:
+    """Probe each route with the runtime request contract and keep ready routes.
+
+    The report deliberately records only stable route identity, a bounded
+    exception class name, and an optional numeric HTTP status. Provider response
+    bodies, exception messages, URLs, prompts, and credentials are never copied
+    into evidence.
+
+    Args:
+        agents: Selected zero-cost model agents.
+        client: Vendored ``ModelClient``-compatible transport.
+
+    Returns:
+        A pair of viable agents and a sanitized preflight report.
+
+    Raises:
+        ReviewPreflightError: If no provider route returns usable text.
+    """
+    viable: list[object] = []
+    routes: list[dict[str, object]] = []
+    for agent in agents:
+        row: dict[str, object] = {
+            "agent_id": str(getattr(agent, "id", "")),
+            "provider": str(getattr(agent, "provider_name", "") or "unknown"),
+            "model": str(getattr(agent, "model", "")),
+        }
+        payload: dict[str, object] = {
+            "model": getattr(agent, "model", ""),
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Reply with just 'OK'."},
+            ],
+            "temperature": REVIEW_TEMPERATURE,
+            "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
+            "stream": False,
+        }
+        try:
+            response = client.proxy_send_once(agent, "chat/completions", payload)
+        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+            row["status"] = "rejected"
+            error_type = type(exc).__name__
+            row["error_type"] = (
+                error_type if error_type.isidentifier() and len(error_type) <= 64 else "ProviderError"
+            )
+            http_status = _safe_http_status(exc)
+            if http_status is not None:
+                row["http_status"] = http_status
+            routes.append(row)
+            continue
+        if not _chat_response_has_text(response):
+            row["status"] = "rejected"
+            row["error_type"] = "InvalidChatResponse"
+            routes.append(row)
+            continue
+        row["status"] = "ready"
+        routes.append(row)
+        viable.append(agent)
+
+    report: dict[str, object] = {
+        "contract": "strix-plain-chat-preflight-v1",
+        "probed_count": len(agents),
+        "ready_count": len(viable),
+        "rejected_count": len(agents) - len(viable),
+        "routes": routes,
+    }
+    if not viable:
+        raise ReviewPreflightError(
+            "no provider route passed the Strix plain-chat preflight", report
+        )
+    return viable, report
+
+
+def _write_json(path: str, payload: object) -> None:
+    """Write one deterministic UTF-8 JSON evidence file."""
+    Path(path).write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Bootstrap the KV, discover free models, build the ZDR catalog, and serve.
+    """Bootstrap the KV, discover and preflight free models, then serve.
 
     Args:
         argv: CLI arguments (``--host``, ``--port``, ``--auth-token``,
-            ``--catalog-out``, ``--report-out``, ``--discovery-out``,
-            ``--zdr-endpoints``).
+            ``--catalog-out``, ``--report-out``, ``--preflight-out``,
+            ``--discovery-out``, ``--zdr-endpoints``).
 
     Returns:
         0 when the server exits cleanly; 1 on any configuration error.
 
     Raises:
         SystemExit: If the vendored library is missing, no provider credential
-            is in the KV, no free model was discovered, or no auth token is
-            available — the sidecar must fail closed rather than boot a mock or
-            unaudited pool.
+            is in the KV, no free model was discovered, no route passes runtime
+            preflight, or no auth token is available — the sidecar must fail
+            closed rather than boot a mock or unaudited pool.
     """
     parser = argparse.ArgumentParser(description="Serve the contextual-orchestrator review sidecar.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -127,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--discovery-out", required=True, help="Path to write the free-only discovery report JSON")
     parser.add_argument("--catalog-out", required=True, help="Path to write the agents catalog JSON")
     parser.add_argument("--report-out", required=True, help="Path to write the policy evidence JSON")
+    parser.add_argument("--preflight-out", required=True, help="Path to write sanitized runtime preflight JSON")
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
@@ -177,9 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     rows = _report_rows(selected_models, free_route_identities)
-    Path(args.discovery_out).write_text(
-        json.dumps({"models": rows}, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     result = build_zdr_prioritized_catalog(
         parse_discovery_report({"models": rows}),
@@ -190,14 +315,30 @@ def main(argv: list[str] | None = None) -> int:
         pool=args.pool,
     )
     Path(args.catalog_out).write_text(
-        json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
+        json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
-    Path(args.report_out).write_text(
-        json.dumps(result["report"], indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
-    orchestrator = TaskOrchestrator(agents, client=ModelClient(max_output_tokens=32768))
+    client = ModelClient(
+        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
+        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        max_retries=0,
+        temperature=REVIEW_TEMPERATURE,
+    )
+    try:
+        agents, preflight_report = _preflight_review_agents(agents, client=client)
+    except ReviewPreflightError as exc:
+        _write_json(args.preflight_out, exc.report)
+        raise SystemExit(f"review sidecar preflight failed: {exc}") from None
+    _write_json(args.preflight_out, preflight_report)
+
+    client = ModelClient(
+        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        temperature=REVIEW_TEMPERATURE,
+    )
+    orchestrator = TaskOrchestrator(agents, client=client)
     serve(
         orchestrator,
         host=args.host,
