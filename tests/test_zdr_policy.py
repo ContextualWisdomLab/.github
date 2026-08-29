@@ -164,6 +164,26 @@ def test_is_zdr_model_rejects_noncanonical_feed_provider_keys() -> None:
 
 
 @pytest.mark.parametrize(
+    "feed_key",
+    [
+        "openrouter//deepseek/deepseek-r1:free",
+        "openrouter/deepseek/deepseek-r1:free/",
+        "openrouter/",
+    ],
+)
+def test_is_zdr_model_rejects_feed_keys_with_empty_segments(feed_key: str) -> None:
+    """Malformed feed paths cannot grant suffix-based ZDR evidence."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=frozenset({feed_key}),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [
         (True, True),

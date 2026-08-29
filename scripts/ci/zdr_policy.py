@@ -219,7 +219,8 @@ def zdr_evidence_source(
     feed = {
         endpoint
         for endpoint in (str(value).strip().casefold() for value in zdr_endpoints)
-        if endpoint.startswith("openrouter/") and endpoint.removeprefix("openrouter/")
+        if endpoint.startswith("openrouter/")
+        and all(segment for segment in endpoint.split("/"))
     }
     if scope.openrouter_endpoints_feed:
         return (
