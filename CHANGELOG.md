@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Retry a current-head OpenCode review that requested changes solely because
+  GitHub Checks had failed once those checks recover. The scheduler requires
+  the exact check-gate review marker and an empty failed-check rollup before
+  dispatching a fresh review; ordinary review findings, disabled review
+  dispatch, and auto-merge requests remain blocked.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge

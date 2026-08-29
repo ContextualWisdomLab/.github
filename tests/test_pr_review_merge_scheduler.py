@@ -1428,6 +1428,74 @@ def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
     assert dispatched == [("owner/repo", "OpenCode Review", head, True)]
 
 
+def test_retries_check_only_opencode_request_after_failed_checks_recover(monkeypatch):
+    """A recovered external check gate must receive a fresh model review."""
+    review = {
+        **opencode_review("CHANGES_REQUESTED", "head"),
+        "body": (
+            "OpenCode could not approve from deterministic current-head evidence "
+            "because GitHub Checks have failed.\n\n"
+            "Failed checks:\n- strix: FAILURE"
+        ),
+    }
+    pr = make_pr(
+        reviews={"nodes": [review]},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [opencode_check(status="COMPLETED"), strix_check()]
+            }
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "review_dispatch"
+    assert decision.reason == (
+        "current head has completed Strix evidence; same-head OpenCode dispatched"
+    )
+    assert dispatched == [("owner/repo", "OpenCode Review")]
+
+
+def test_check_gated_opencode_retry_stays_blocked_until_checks_recover():
+    """A gate-only request cannot bypass a still-failing check."""
+    review = {
+        **opencode_review("CHANGES_REQUESTED", "head"),
+        "body": (
+            "OpenCode could not approve from deterministic current-head evidence "
+            "because GitHub Checks have failed.\n\n"
+            "Failed checks:\n- strix: FAILURE"
+        ),
+    }
+    pr = make_pr(
+        reviews={"nodes": [review]},
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(status="COMPLETED"),
+                    strix_check(conclusion="FAILURE"),
+                ]
+            }
+        },
+    )
+
+    assert not sched.can_retry_check_gated_opencode_review(pr)
+    assert not sched.can_retry_check_gated_opencode_review(make_pr())
+    assert not sched.can_retry_check_gated_opencode_review(
+        make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "old")]})
+    )
+    assert inspect(pr).action == "block"
+    assert inspect(pr, trigger_reviews=False).action == "block"
+    assert inspect(pr, review_dispatch_allowed=False).action == "block"
+    auto_merge_pr = {**pr, "autoMergeRequest": {"enabledAt": "now"}}
+    assert inspect(auto_merge_pr).action == "disable_auto_merge"
+
+
 def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
     head = "a" * 40
     pr = make_pr(
