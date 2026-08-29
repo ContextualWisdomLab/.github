@@ -31,11 +31,13 @@ all five, and auto-optimize routing by cost.
    KV in the **same process** that performs model discovery and serves
    `/v1/chat/completions` and `/v1/responses` on loopback. Env is bootstrap
    transport only; request-time credential reads go through the KV.
-2. **Auto model discovery + `orchestrator/free`**: discovery runs with the
-   orchestrator's own `discover_all_models()` against the KV credentials; only
-   zero-priced ("free") routes enter the pool. The gateway's
+2. **Auto model discovery + governed virtual pools**: discovery runs with the
+   orchestrator's own `discover_all_models()` against the KV credentials.
+   OpenCode and Noema admit only zero-priced routes. The gateway's
    `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
-   enabled zero-cost agent exists, which our catalog guarantees.
+   enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
+   may admit priced routes only through the same evidence-bearing policy, never
+   through a direct-provider model identifier.
 3. **ZDR-first selection**: `scripts/ci/zdr_policy.py` defines ZDR the way
    OpenRouter does ("a provider will not store your data for any period of
    time"; zero retention also implies no training) and is deliberately
@@ -82,6 +84,9 @@ all five, and auto-optimize routing by cost.
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
   discovery + cost routing, under the zero-cost pool, with ZDR routes first.
+- Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
+  is distinct from the zero-cost OpenCode/Noema pool, while private-target ZDR
+  admission remains fail-closed.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
@@ -108,4 +113,5 @@ all five, and auto-optimize routing by cost.
 - **Private-target boundary (2026-08-27):** Noema resolves target visibility with
   the selected repository-scoped reviewer token. Private/internal repositories
   set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
-  every non-ZDR route and fails closed when no attested free ZDR route exists.
+  every non-ZDR route and fails closed when no attested ZDR route exists in the
+  selected workflow pool.
