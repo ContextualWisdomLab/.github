@@ -291,7 +291,10 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
     )
-    _write_json(args.catalog_out, {"agents": result["agents"]})
+    Path(args.catalog_out).write_text(
+        json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
