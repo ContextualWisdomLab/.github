@@ -1,21 +1,10 @@
-"""Turn an orchestrator discovery report into a ZDR-prioritized ``orchestrator/free`` catalog.
+"""Build governed contextual-orchestrator review catalogs from discovery evidence.
 
-The contextual-orchestrator server exposes the fail-closed zero-cost pool under
-the virtual model id ``orchestrator/free``; it only resolves when at least one
-enabled agent is an explicitly zero-priced (``cost:free``) model
-(``contextual_orchestrator/orchestrator.py`` ``_is_free_agent``). This module,
-
-1. reads the same ``discover-models`` report the orchestrator prints,
-2. keeps only free (zero-cost), known-provider chat routes,
-3. orders them ZDR-compliant first, then non-ZDR free, with a provider-family
-   cap so a single outage domain cannot monopolize the pool, and
-4. writes an ``agents`` JSON catalog in the orchestrator's own
-   ``ModelAgent.to_config()`` schema so the vendored sidecar can
-   ``load_agents()`` it unchanged.
-
-Everything is stdlib-only and offline-testable; the live OpenRouter ZDR feed is
-an optional input file so CI either attests real ZDR endpoints or falls back to
-the static ``scripts/ci/zdr_policy.py`` table (never fabricated).
+``orchestrator/free`` remains strictly zero-priced. ``orchestrator/auto`` is
+free-first, then uses fully price-attested routes, and only then admits routes
+whose providers expose availability but no per-token price vector. Those
+unknown-cost routes are explicit bounded fallbacks; they are never relabeled as
+free or price-attested. Partial or malformed price vectors still fail closed.
 """
 
 from __future__ import annotations
@@ -23,9 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
-import sys
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -40,8 +28,6 @@ from scripts.ci.zdr_policy import (
     route_key,
 )
 
-# NVIDIA primary and secondary keys share one outage domain for provider-family
-# diversity, mirroring contextual_orchestrator ``_provider_family``.
 PROVIDER_FAMILIES: Mapping[str, str] = {
     "nvidia_nim": "nvidia_nim",
     "nvidia_nim_sub": "nvidia_nim",
@@ -50,30 +36,29 @@ PROVIDER_FAMILIES: Mapping[str, str] = {
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_FAMILY_CAP = 4
 
+COST_FREE = "free"
+COST_PRICED = "priced"
+COST_UNKNOWN = "unknown"
+_COST_EVIDENCE_RANK: Mapping[str, int] = {
+    COST_FREE: 0,
+    COST_PRICED: 1,
+    COST_UNKNOWN: 2,
+}
+
 _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9]*_[a-z0-9]+(?:_[a-z0-9]+)*$")
 
 
+class PolicyError(ValueError):
+    """Raised when discovery evidence cannot produce a governed catalog."""
+
+
 def provider_family(provider_name: str) -> str:
-    """Return the outage-domain family for a provider (itself when ungrouped)."""
+    """Return the outage-domain family for a provider."""
     return PROVIDER_FAMILIES.get(provider_name, provider_name)
 
 
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
-    """Return a valid two-or-more-word snake_case agent id.
-
-    The orchestrator requires agent ids to match the org naming convention
-    (``[tool.contextual_orchestrator] object_name_pattern =
-    two_or_more_words_snake_case``). Discovery emits ids like
-    ``openrouter_deepseek_deepseek_r1_free``; this normalizes any provider/model
-    string that does not already comply.
-
-    Args:
-        candidate: Candidate agent id from the discovery report.
-        provider_name: Provider identifier used as the first segment fallback.
-
-    Returns:
-        A naming-compliant snake_case id.
-    """
+    """Return a two-or-more-word snake_case agent identifier."""
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", candidate).strip("_").lower()
     parts = [part for part in slug.split("_") if part]
     if len(parts) == 1:
@@ -82,12 +67,12 @@ def _normalize_agent_id(candidate: str, provider_name: str) -> str:
 
 
 def _route_key(provider_name: str, model: str) -> str:
-    """Return the ``provider/model`` key used by the ZDR endpoints feed."""
+    """Return the provider/model key used by the ZDR feed."""
     return route_key(provider_name, model)
 
 
 def _is_valid_is_free(value: object) -> bool:
-    """Return whether a report row carries an explicit free marker."""
+    """Return whether a row carries an explicit scalar free marker."""
     if isinstance(value, str):
         return value.strip() != ""
     if isinstance(value, bool):
@@ -97,12 +82,8 @@ def _is_valid_is_free(value: object) -> bool:
     return False
 
 
-class PolicyError(ValueError):
-    """Raised when a discovery report cannot produce a usable catalog."""
-
-
 def _validated_price(value: object, *, route: str, field: str) -> float:
-    """Return a finite nonnegative published price or reject the route."""
+    """Return a finite nonnegative published price or reject it."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PolicyError(f"model {route} lacks numeric {field} evidence")
     price = float(value)
@@ -111,25 +92,49 @@ def _validated_price(value: object, *, route: str, field: str) -> float:
     return price
 
 
-def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Validate and extract the model rows from a ``discover-models`` report.
+def _normalize_cost_evidence(
+    *,
+    route: str,
+    is_free: bool,
+    prompt_price: object,
+    completion_price: object,
+    currency_code: object,
+) -> tuple[str, float | None, float | None, str | None]:
+    """Classify complete free, priced, or wholly unavailable price evidence.
 
-    Args:
-        report: Parsed JSON report with a top-level ``models`` list; each row
-            must carry ``provider``, ``model``, and ``is_free``.
-
-    Returns:
-        A list of normalized row dicts with ``provider``, ``model``, ``agent_id``
-        (fallback to provider_model), and an explicit boolean ``is_free``.
-
-    Raises:
-        PolicyError: If the report has no ``models`` list, or any row lacks a
-            provider/model, or names a provider outside the ZDR policy table so
-            routing cannot silently bypass the policy.
+    A provider that publishes neither price component is retained only as an
+    explicit unknown-cost fallback. A partial vector is ambiguous and rejected.
+    Free markers remain authoritative discovery evidence and are never widened
+    by this helper.
     """
+    if is_free:
+        return COST_FREE, None, None, None
+
+    if prompt_price is None and completion_price is None:
+        return COST_UNKNOWN, None, None, None
+
+    normalized_prompt = _validated_price(
+        prompt_price, route=route, field="prompt_price_per_1k"
+    )
+    normalized_completion = _validated_price(
+        completion_price, route=route, field="completion_price_per_1k"
+    )
+    if not isinstance(currency_code, str) or not currency_code.strip():
+        raise PolicyError(f"model {route} lacks currency_code evidence")
+    return (
+        COST_PRICED,
+        normalized_prompt,
+        normalized_completion,
+        currency_code.strip().upper(),
+    )
+
+
+def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Validate and normalize a contextual-orchestrator discovery report."""
     rows = report.get("models")
     if not isinstance(rows, list):
         raise PolicyError("discovery report must contain a 'models' list")
+
     normalized: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -141,40 +146,54 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not model or not isinstance(model, str):
             raise PolicyError("discovery model row is missing 'model'")
         if provider not in PROVIDER_CREDENTIAL_NAMES:
-            raise PolicyError(f"provider {provider!r} is not registered in the ZDR policy table")
-        candidate_id = row.get("agent_id") or f"{provider}_{model}"
+            raise PolicyError(
+                f"provider {provider!r} is not registered in the ZDR policy table"
+            )
         if not _is_valid_is_free(row.get("is_free")):
-            raise PolicyError(f"model {provider}/{model} lacks an explicit is_free marker")
+            raise PolicyError(
+                f"model {provider}/{model} lacks an explicit is_free marker"
+            )
+
         is_free = is_free_route(row.get("is_free"))
         route = f"{provider}/{model}"
-        prompt_price = row.get("prompt_price_per_1k")
-        completion_price = row.get("completion_price_per_1k")
-        currency_code = row.get("currency_code")
-        if not is_free:
-            prompt_price = _validated_price(
-                prompt_price, route=route, field="prompt_price_per_1k"
+        cost_evidence, prompt_price, completion_price, currency_code = (
+            _normalize_cost_evidence(
+                route=route,
+                is_free=is_free,
+                prompt_price=row.get("prompt_price_per_1k"),
+                completion_price=row.get("completion_price_per_1k"),
+                currency_code=row.get("currency_code"),
             )
-            completion_price = _validated_price(
-                completion_price, route=route, field="completion_price_per_1k"
-            )
-            if not isinstance(currency_code, str) or not currency_code.strip():
-                raise PolicyError(f"model {route} lacks currency_code evidence")
-            currency_code = currency_code.strip().upper()
+        )
+        candidate_id = row.get("agent_id") or f"{provider}_{model}"
         normalized.append(
             {
                 "provider": provider,
                 "model": model,
                 "agent_id": str(candidate_id),
                 "is_free": is_free,
+                "cost_evidence": cost_evidence,
                 "prompt_price_per_1k": prompt_price,
                 "completion_price_per_1k": completion_price,
                 "currency_code": currency_code,
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
-                "credential_key": row.get("credential_key") or PROVIDER_CREDENTIAL_NAMES[provider],
-                "auth_scheme": row.get("auth_scheme") or PROVIDER_AUTH_SCHEMES[provider],
+                "credential_key": row.get("credential_key")
+                or PROVIDER_CREDENTIAL_NAMES[provider],
+                "auth_scheme": row.get("auth_scheme")
+                or PROVIDER_AUTH_SCHEMES[provider],
             }
         )
     return normalized
+
+
+def _cost_evidence(row: Mapping[str, Any]) -> str:
+    """Return a validated cost-evidence tier from a normalized row."""
+    evidence = row.get("cost_evidence")
+    if evidence in _COST_EVIDENCE_RANK:
+        return str(evidence)
+    # Backward compatibility for callers that build normalized-like rows by
+    # hand rather than using parse_discovery_report().
+    return COST_FREE if row.get("is_free") is True else COST_UNKNOWN
 
 
 def build_zdr_prioritized_catalog(
@@ -186,71 +205,45 @@ def build_zdr_prioritized_catalog(
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select and rank governed routes into a ZDR-first, family-diverse catalog.
-
-    Ranking is deterministic and evidence-based, never heuristic cost guesses:
-    free (zero-cost, attested by discovery price metadata) routes always outrank
-    any priced route; among free routes ZDR-compliant routes outrank the rest;
-    within a tier the provider/model order is stable. A provider-family cap
-    prevents the primary and secondary NVIDIA keys from absorbing the whole
-    pool. Priced routes are excluded because the org's CI review path is pinned
-    to the ``orchestrator/free`` pool.
-
-    Args:
-        rows: Normalized discovery rows (see ``parse_discovery_report``).
-        limit: Maximum number of catalog agents (orchestrator default 12).
-        family_cap: Maximum agents per provider outage-domain family.
-        zdr_endpoints: ``provider/model`` route keys from the OpenRouter ZDR
-            feed; authoritative when non-empty for the openrouter scope.
-        require_zdr: Admit only routes with attested ZDR evidence. Intended for
-            private/internal target repositories; an empty ZDR pool fails closed.
-
-    Returns:
-        A dict with ``agents`` (orchestrator ``ModelAgent.to_config()`` rows,
-        ZDR-first) and ``report`` (counts + evidence for audit).
-
-    Raises:
-        PolicyError: If no free, known-provider route remains (the catalog
-            would fail closed at serve time anyway, but this makes the failure
-            early and explainable).
-    """
-    catalog_rows: list[dict[str, Any]] = []
-    per_family: Counter[str] = Counter()
-    zdr_count = 0
-
-    def family_is_open(family: str) -> bool:
-        """Return whether a provider family still has catalog capacity."""
-        return per_family[family] < family_cap
-
+    """Select a free-first, ZDR-aware, provider-family-diverse catalog."""
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
+
     all_rows = list(rows)
-    all_free_rows = [row for row in all_rows if row["is_free"]]
+    all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
+    all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
+    all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
     candidate_rows = all_free_rows if pool == "free" else all_rows
     eligible_rows = [
         row
         for row in candidate_rows
         if not require_zdr
         or is_zdr_model(
-            row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+            str(row["provider"]),
+            model=str(row["model"]),
+            zdr_endpoints=zdr_endpoints,
         )
     ]
     eligible_rows.sort(
         key=lambda row: (
+            _COST_EVIDENCE_RANK[_cost_evidence(row)],
             0
             if is_zdr_model(
-                row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+                str(row["provider"]),
+                model=str(row["model"]),
+                zdr_endpoints=zdr_endpoints,
             )
             else 1,
-            0 if row["is_free"] else 1,
-            row["provider"],
-            row["model"],
+            str(row["provider"]),
+            str(row["model"]),
         )
     )
-    picked: list[dict[str, Any]] = []
-    for _order, row in enumerate(eligible_rows):
-        family = provider_family(row["provider"])
-        if not family_is_open(family):
+
+    per_family: Counter[str] = Counter()
+    picked: list[Mapping[str, Any]] = []
+    for row in eligible_rows:
+        family = provider_family(str(row["provider"]))
+        if per_family[family] >= family_cap:
             continue
         per_family[family] += 1
         picked.append(row)
@@ -264,27 +257,32 @@ def build_zdr_prioritized_catalog(
             f"orchestrator/{pool} would fail closed"
         )
 
+    catalog_rows: list[dict[str, Any]] = []
+    zdr_count = 0
     for rank, row in enumerate(picked):
+        provider = str(row["provider"])
+        model = str(row["model"])
+        evidence = _cost_evidence(row)
         zdr = is_zdr_model(
-            row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints
+            provider, model=model, zdr_endpoints=zdr_endpoints
         )
         if zdr:
             zdr_count += 1
         catalog_rows.append(
             {
-                "id": _normalize_agent_id(row["agent_id"], row["provider"]),
-                "model": row["model"],
+                "id": _normalize_agent_id(str(row["agent_id"]), provider),
+                "model": model,
                 "base_url": row["base_url"],
                 "api_key_env": "",
                 "credential_key": row["credential_key"],
                 "tags": [
                     "review",
-                    "cost:free" if row["is_free"] else "cost:priced",
+                    f"cost:{evidence}",
                     "zdr" if zdr else "non-zdr",
                 ],
                 "priority": -rank,
                 "disabled": False,
-                "provider_name": row["provider"],
+                "provider_name": provider,
                 "provider_exclusions": [],
                 "local_credential_key": "",
                 "auth_scheme": row["auth_scheme"],
@@ -294,19 +292,31 @@ def build_zdr_prioritized_catalog(
             }
         )
 
+    selected_evidence = [_cost_evidence(row) for row in picked]
     return {
         "agents": catalog_rows,
         "report": {
             "pool": f"orchestrator/{pool}",
             "total_routes": len(all_rows),
             "total_free_routes": len(all_free_rows),
+            "total_priced_routes": len(all_priced_rows),
+            "total_unknown_routes": len(all_unknown_rows),
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
-            "free_selected_count": sum(1 for row in picked if row["is_free"]),
-            "priced_selected_count": sum(1 for row in picked if not row["is_free"]),
+            "free_selected_count": selected_evidence.count(COST_FREE),
+            "priced_selected_count": selected_evidence.count(COST_PRICED),
+            "unknown_selected_count": selected_evidence.count(COST_UNKNOWN),
             "zdr_selected_count": zdr_count,
             "zdr_sources": sorted(
-                {provider_zdr_scope(row["provider"]).source for row in picked if is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints)}
+                {
+                    provider_zdr_scope(str(row["provider"])).source
+                    for row in picked
+                    if is_zdr_model(
+                        str(row["provider"]),
+                        model=str(row["model"]),
+                        zdr_endpoints=zdr_endpoints,
+                    )
+                }
             ),
             "zdr_endpoints_feed_used": bool(zdr_endpoints),
             "selected": [
@@ -314,7 +324,12 @@ def build_zdr_prioritized_catalog(
                     "provider": row["provider"],
                     "model": row["model"],
                     "agent_id": entry["id"],
-                    "zdr": is_zdr_model(row["provider"], model=row["model"], zdr_endpoints=zdr_endpoints),
+                    "cost_evidence": _cost_evidence(row),
+                    "zdr": is_zdr_model(
+                        str(row["provider"]),
+                        model=str(row["model"]),
+                        zdr_endpoints=zdr_endpoints,
+                    ),
                 }
                 for row, entry in zip(picked, catalog_rows)
             ],
@@ -323,16 +338,7 @@ def build_zdr_prioritized_catalog(
 
 
 def _load_zdr_endpoints(path: str | None) -> frozenset[str]:
-    """Load ``provider/model`` ZDR route keys from the OpenRouter ZDR feed.
-
-    Args:
-        path: Path to the feed JSON (shape ``{\"data\": [{\"name\", \"model_name\",
-            \"provider_name\", \"supports_implicit_caching\"}]}``); None yields no
-            feed evidence.
-
-    Returns:
-        A frozen set of ``f\"{provider_name}/{model_name}\"`` keys.
-    """
+    """Load exact provider/model keys from an OpenRouter ZDR feed file."""
     if not path:
         return frozenset()
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -357,63 +363,47 @@ def build_catalog_from_paths(
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Build and persist the ZDR-prioritized ``orchestrator/free`` catalog.
-
-    Args:
-        discovery_path: Path to the ``discover-models`` JSON report.
-        out_path: Where to write the agents catalog JSON.
-        report_path: Where to write the audit/evidence JSON report.
-        limit: Maximum number of catalog agents.
-        family_cap: Maximum agents per provider outage-domain family.
-        zdr_endpoints_path: Optional OpenRouter ZDR feed JSON path.
-        require_zdr: Admit only attested ZDR routes and fail closed otherwise.
-
-    Returns:
-        The return value of ``build_zdr_prioritized_catalog`` (both files were
-        also written).
-    """
+    """Build and persist an agents catalog and its audit report."""
     report = json.loads(Path(discovery_path).read_text(encoding="utf-8"))
-    zdr_endpoints = _load_zdr_endpoints(zdr_endpoints_path)
     result = build_zdr_prioritized_catalog(
         parse_discovery_report(report),
         limit=limit,
         family_cap=family_cap,
-        zdr_endpoints=zdr_endpoints,
+        zdr_endpoints=_load_zdr_endpoints(zdr_endpoints_path),
         require_zdr=require_zdr,
         pool=pool,
     )
     Path(out_path).write_text(
-        json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
+        json.dumps({"agents": result["agents"]}, indent=2) + "\n",
+        encoding="utf-8",
     )
-    Path(report_path).write_text(json.dumps(result["report"], indent=2) + "\n", encoding="utf-8")
+    Path(report_path).write_text(
+        json.dumps(result["report"], indent=2) + "\n",
+        encoding="utf-8",
+    )
     return result
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser with the required catalog and report paths."""
+    """Build the command-line parser for catalog generation."""
     parser = argparse.ArgumentParser(
-        description="Build a ZDR-prioritized orchestrator/free agents catalog from a discovery report."
+        description="Build a governed contextual-orchestrator review catalog."
     )
-    parser.add_argument("--discovery-report", required=True, help="Path to the discover-models JSON report")
-    parser.add_argument("--out", required=True, help="Path to write the agents catalog JSON")
-    parser.add_argument("--report", required=True, help="Path to write the audit evidence JSON")
+    parser.add_argument(
+        "--discovery-report", required=True, help="Path to the discovery JSON"
+    )
+    parser.add_argument("--out", required=True, help="Path to write agents JSON")
+    parser.add_argument("--report", required=True, help="Path to write audit JSON")
     parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
     parser.add_argument("--family-cap", type=int, default=DEFAULT_FAMILY_CAP)
-    parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
-    parser.add_argument("--require-zdr", action="store_true", help="Fail closed unless every selected route has attested ZDR evidence")
+    parser.add_argument("--zdr-endpoints", default=None)
+    parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point; returns 1 on PolicyError/unusable catalog (fail closed).
-
-    Args:
-        argv: CLI arguments (defaults to ``sys.argv[1:]``).
-
-    Returns:
-        0 on success; 1 when the catalog cannot be built.
-    """
+    """Run the catalog CLI and return one on policy or input failure."""
     args = _build_parser().parse_args(argv)
     try:
         build_catalog_from_paths(
