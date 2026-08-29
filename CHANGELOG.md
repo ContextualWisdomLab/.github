@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Probe contextual-orchestrator review routes in bounded concurrent batches so
+  a rejected first discovery slice can advance to later routes, and capture the
+  intentional oversized-body 413 self-test without mislabeling it as provider
+  discovery failure.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

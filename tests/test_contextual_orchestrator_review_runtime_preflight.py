@@ -165,6 +165,33 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
 
 
+def test_preflight_advances_to_next_bounded_batch() -> None:
+    """Rejected first-batch routes do not hide a later discovered live route."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agent_batches"]
+    batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
+    agents = [
+        SimpleNamespace(id=f"route_{index}", provider_name="openrouter", model=f"model/{index}")
+        for index in range(batch_size + 1)
+    ]
+    outcomes = {
+        agent.id: TimeoutError("unavailable") for agent in agents[:-1]
+    }
+    outcomes[agents[-1].id] = _openai_text("OK")
+    client = _ProbeClient(outcomes)
+
+    viable, report = preflight(agents, client=client)
+
+    assert viable == [agents[-1]]
+    assert report["probed_count"] == batch_size + 1
+    assert report["ready_count"] == 1
+    assert report["batch_size"] == batch_size
+    assert {call[0].id for call in client.calls[:batch_size]} == {
+        agent.id for agent in agents[:batch_size]
+    }
+    assert client.calls[-1][0] == agents[-1]
+
+
 def test_preflight_stage_limits_share_one_startup_budget() -> None:
     """Free-first and priced-fallback probes share one bounded route budget."""
     namespace = _load_launcher()
@@ -174,7 +201,7 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     fallback = namespace["_bounded_fallback_catalog_limit"](
         99, primary_count=primary
     )
-    assert (primary, fallback) == (8, 4)
+    assert (primary, fallback) == (8, 16)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
 
@@ -275,6 +302,7 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
     assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
+    assert "contextlib.redirect_stderr(expected_rejection_log)" in sidecar
     assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
     assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr"' in sidecar
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar

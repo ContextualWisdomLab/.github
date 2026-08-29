@@ -105,6 +105,14 @@ all five, and auto-optimize routing by cost.
 
 ## Consequences
 
+- **Bounded discovery preflight (2026-08-29):** the sidecar probes at most 24
+  selected routes in concurrent batches of four and stops after the first batch
+  with a usable text route. This preserves a finite startup budget while
+  allowing a rejected first catalog slice to fall through to later discovered
+  routes. The intentional oversized-body contract probe captures its expected
+  413 diagnostic locally so it cannot be mistaken for provider discovery
+  failure. Exhausting every bounded batch still fails closed before healthz.
+
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
   discovery under the zero-cost pool. Strix uses the separately governed auto

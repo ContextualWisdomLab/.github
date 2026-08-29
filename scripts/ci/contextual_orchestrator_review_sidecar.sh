@@ -99,6 +99,8 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
 import http.client
+import contextlib
+import io
 import json
 import threading
 
@@ -135,19 +137,22 @@ thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    connection.request(
-        "POST",
-        "/v1/chat/completions",
-        body=b"",
-        headers={
-            "Authorization": "Bearer contract",
-            "Content-Type": "application/json",
-            "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
-        },
-    )
-    response = connection.getresponse()
-    assert response.status == 413, response.status
-    response.read()
+    expected_rejection_log = io.StringIO()
+    with contextlib.redirect_stderr(expected_rejection_log):
+        connection.request(
+            "POST",
+            "/v1/chat/completions",
+            body=b"",
+            headers={
+                "Authorization": "Bearer contract",
+                "Content-Type": "application/json",
+                "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 413, response.status
+        response.read()
+    assert "request_failed status=413 code=request_too_large" in expected_rejection_log.getvalue()
     connection.close()
 
     def post_payload(payload):

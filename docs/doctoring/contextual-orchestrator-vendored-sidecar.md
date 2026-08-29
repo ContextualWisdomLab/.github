@@ -33,6 +33,19 @@ streaming/spooling path and provider capability checks; adding `/files` alone
 would not handle an inline Base64 image in an ordinary JSON request.
 The sidecar must measure representative Strix envelopes and keep provider/model
 context failures distinct from its own HTTP framing failure.
+
+## 2026-08-29 Noema preflight batching
+
+DiskSage Noema jobs `99111099730` and `99110885279` logged
+`request_failed status=413 code=request_too_large` before startup. That line was
+the sidecar's intentional oversized `Content-Length` contract test, not model
+discovery or a provider response. The actual terminal condition was exhaustion
+of the initially selected provider routes before healthz. The contract probe now
+captures and asserts its expected diagnostic without emitting it, while runtime
+preflight tries a maximum of 24 discovered routes in concurrent batches of four
+and stops after the first batch with usable text. Every route still uses the
+ten-second timeout, zero retries, the same plain-chat payload, and sanitized
+evidence; exhausting the bounded batches remains a startup failure.
 The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
 incorrect 1024-character rejection. The same probe sends Strix-shaped function
 tools with 1025-, 1026-, and 2000-character descriptions and verifies that

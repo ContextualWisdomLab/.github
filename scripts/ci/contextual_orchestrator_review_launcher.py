@@ -22,6 +22,7 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -39,10 +40,12 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
 # A selected route that cannot answer within ten seconds is not reliable enough
-# for a required CI gate. With at most twelve sequential candidates, startup is
-# bounded below the sidecar's three-minute readiness deadline.
+# for a required CI gate. Four-route batches let discovery try a broader but
+# still finite catalog while keeping the worst-case provider wait below the
+# sidecar's three-minute readiness deadline.
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
+REVIEW_PREFLIGHT_BATCH_SIZE = 4
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 
 
@@ -229,19 +232,64 @@ def _preflight_with_fallback(
 ) -> tuple[list[object], dict[str, object], bool]:
     """Use the priced catalog only after every primary route rejects."""
     try:
-        viable, report = _preflight_review_agents(primary_agents, client=client)
+        viable, report = _preflight_review_agent_batches(primary_agents, client=client)
         return viable, report, False
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
             raise
         try:
-            viable, report = _preflight_review_agents(fallback_agents, client=client)
+            viable, report = _preflight_review_agent_batches(fallback_agents, client=client)
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report
             raise
         report["primary_attempt"] = primary_error.report
         report["fallback_reason"] = "primary_routes_unavailable"
         return viable, report, True
+
+
+def _preflight_review_agent_batches(
+    agents: list[object], *, client: Any
+) -> tuple[list[object], dict[str, object]]:
+    """Probe bounded concurrent batches until one batch contains a ready route."""
+    attempted_routes: list[dict[str, object]] = []
+    attempted_count = 0
+    for offset in range(0, len(agents), REVIEW_PREFLIGHT_BATCH_SIZE):
+        batch = agents[offset : offset + REVIEW_PREFLIGHT_BATCH_SIZE]
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            futures = [
+                executor.submit(_preflight_review_agents, [agent], client=client)
+                for agent in batch
+            ]
+            viable: list[object] = []
+            for future in futures:
+                try:
+                    route_viable, route_report = future.result()
+                except ReviewPreflightError as exc:
+                    route_viable = []
+                    route_report = exc.report
+                viable.extend(route_viable)
+                attempted_routes.extend(route_report["routes"])
+                attempted_count += int(route_report["probed_count"])
+        if viable:
+            return viable, {
+                "contract": "strix-plain-chat-preflight-v1",
+                "probed_count": attempted_count,
+                "ready_count": len(viable),
+                "rejected_count": attempted_count - len(viable),
+                "routes": attempted_routes,
+                "batch_size": REVIEW_PREFLIGHT_BATCH_SIZE,
+            }
+    report: dict[str, object] = {
+        "contract": "strix-plain-chat-preflight-v1",
+        "probed_count": attempted_count,
+        "ready_count": 0,
+        "rejected_count": attempted_count,
+        "routes": attempted_routes,
+        "batch_size": REVIEW_PREFLIGHT_BATCH_SIZE,
+    }
+    raise ReviewPreflightError(
+        "no provider route passed the Strix plain-chat preflight", report
+    )
 
 
 def _write_json(path: str, payload: object) -> None:
