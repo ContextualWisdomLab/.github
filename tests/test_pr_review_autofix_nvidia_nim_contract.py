@@ -1,5 +1,6 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
+from collections import Counter
 import hashlib
 from pathlib import Path
 import re
@@ -157,20 +158,51 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
 def test_independent_review_agent_key_system_is_unchanged() -> None:
     """Keep review-write credentials separate while allowing gateway wiring."""
     workflow = _workflow_text(REVIEW_DISPATCH_WORKFLOW)
-    for expression in (
-        "GH_TOKEN: $" + "{{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-        "GH_TOKEN: $" + "{{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-        "GH_TOKEN: $" + "{{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-    ):
-        assert expression in workflow
+    approved_gh_token_assignments = (
+        "${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}",
+        "${{ steps.opencode_app_token.outputs.token }}",
+        "${{ steps.opencode_app_token.outputs.token }}",
+        "${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+    )
+    assignments = re.findall(r"^ {10}GH_TOKEN:\s*(.+)$", workflow, flags=re.MULTILINE)
+    assert Counter(assignments) == Counter(approved_gh_token_assignments)
+    assert not re.search(r"^ {2,9}(?:GH_TOKEN|GITHUB_TOKEN):", workflow, flags=re.MULTILINE)
     assert "pr-review-autofix" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
     model_step_start = workflow.index("      - name: Run OpenCode PR Review model pool")
-    model_step_end = workflow.index("      - name: Publish OpenCode review outcome", model_step_start)
+    model_step_end = workflow.index("\n      - name:", model_step_start + 1)
     model_step = workflow[model_step_start:model_step_end]
-    assert "PR_REVIEW_MERGE_TOKEN" not in model_step
-    assert "OPENCODE_APPROVE_TOKEN" not in model_step
+    for provider_credential in (
+        "STRIX_GITHUB_MODELS_TOKEN:",
+        "OPENCODE_API_KEY:",
+        "OPENAI_API_KEY:",
+        "NVIDIA_API_KEY:",
+        "OPENROUTER_API_KEY:",
+        "NVIDIA_NIM_API_KEY:",
+    ):
+        assert provider_credential in model_step
+    for forbidden_credential in (
+        "GH_TOKEN:",
+        "GITHUB_TOKEN:",
+        "CHECK_LOOKUP_GH_TOKEN:",
+        "CODE_SCANNING_GH_TOKEN:",
+        "OPENCODE_APP_TOKEN:",
+        "PR_REVIEW_MERGE_TOKEN",
+        "OPENCODE_APPROVE_TOKEN",
+        "COPILOT_GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+    ):
+        assert forbidden_credential not in model_step
 
 
 def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -> None:

@@ -1980,7 +1980,7 @@ jobs:
             run_r_test_coverage
           fi
 
-          if has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*.rs'; then
+          if has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*/Cargo.toml' '*/Cargo.lock' '*.rs'; then
             measured_any=1
             run_rust_test_coverage
           fi

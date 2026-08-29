@@ -77,7 +77,7 @@ def test_nested_package_rejects_invalid_workspace_baseline(tmp_path: Path) -> No
     manifest.parent.mkdir(parents=True)
     manifest.write_text('[package]\nname = "core"\nversion = "0.1.0"\n', encoding="utf-8")
 
-    with pytest.raises(ValueError, match="workspace.metadata.opencode.coverage.minimum_lines"):
+    with pytest.raises(ValueError, match=r"workspace\.metadata\.opencode\.coverage\.minimum_lines"):
         threshold.read_minimum_lines(manifest)
 
 
@@ -88,7 +88,7 @@ def test_invalid_thresholds_fail_closed(value: object) -> None:
         "workspace": {"metadata": {"opencode": {"coverage": {"minimum_lines": value}}}}
     }
 
-    with pytest.raises(ValueError, match="workspace.metadata.opencode.coverage.minimum_lines"):
+    with pytest.raises(ValueError, match=r"workspace\.metadata\.opencode\.coverage\.minimum_lines"):
         threshold.resolve_minimum_lines(document)
 
 
