@@ -1,6 +1,6 @@
 # Noema OIDC exchange response-envelope contract
 
-검토 기준일: **2026-08-24**
+검토 기준일: **2026-08-29**
 
 ## 문제
 
