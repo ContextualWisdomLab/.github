@@ -256,12 +256,32 @@ def test_family_cap_default_covers_the_bounded_catalog_and_honors_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The default does not truncate one provider, while an explicit cap remains binding."""
+    from scripts.ci import contextual_orchestrator_review_policy as policy
+
     namespace = _load_launcher()
     family_cap = namespace["_catalog_family_cap"]
     assert callable(family_cap)
 
     monkeypatch.delenv("ORCHESTRATOR_CATALOG_FAMILY_CAP", raising=False)
     assert family_cap() == 24
+    rows = [
+        {
+            "provider": "openrouter",
+            "model": f"model/{index}",
+            "agent_id": f"openrouter_model_{index}",
+            "is_free": True,
+            "prompt_price_per_1k": 0.0,
+            "completion_price_per_1k": 0.0,
+            "currency_code": "USD",
+        }
+        for index in range(24)
+    ]
+    catalog = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report({"models": rows}),
+        limit=24,
+        family_cap=family_cap(),
+    )
+    assert len(catalog["agents"]) == 24
 
     monkeypatch.setenv("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")
     assert family_cap() == 4
