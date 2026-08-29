@@ -3749,6 +3749,14 @@ REPORT
 			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
 			if [ "$attempt" -eq 1 ]; then
 				if [ "${STRIX_LLM:-}" = "openai/openai/retry-api-connection-primary" ]; then
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-unrelated-output-nonretryable" ]; then
+						echo "Error: litellm.InternalServerError: upstream request failed"
+						for filler in 1 2 3 4 5 6; do
+							echo "target application diagnostic $filler"
+						done
+						echo "Internal Server Error"
+						exit 1
+					fi
 					echo "LLM CONNECTION FAILED"
 					echo "Could not establish connection to the language model."
 					echo "Error: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
@@ -6576,6 +6584,20 @@ run_filtered_gate_case_if_requested() {
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 			"1"
+		;;
+	internal-server-error-unrelated-output-nonretryable)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0"
 		;;
 	endpoint-in-excluded-dir)
 		run_gate_case "endpoint-in-excluded-dir" \
@@ -10080,6 +10102,19 @@ run_gate_case_allow_provider_signal "github-models-internal-server-connection-re
 	"https://models.github.ai/inference" \
 	"" \
 	"1"
+
+run_gate_case_allow_provider_signal "internal-server-error-unrelated-output-nonretryable" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0"
 
 run_gate_case "openrouter-502-fallback-retry-same-model-success" \
 	"vertex_ai/missing-primary" \

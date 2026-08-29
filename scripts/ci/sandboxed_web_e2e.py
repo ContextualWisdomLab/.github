@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -12,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import ipaddress
 import urllib.error
 import urllib.parse
 import urllib.request
