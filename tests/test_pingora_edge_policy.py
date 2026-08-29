@@ -64,6 +64,9 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
     assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
     assert policy.scan_content("deploy/fixtures/runtime.yaml", sample)
+    assert policy.scan_content(
+        "deploy/monitoring.yaml", "image: nginx/nginx-prometheus-exporter:1.0\n"
+    ) == ()
 
 
 def test_nested_documentation_path_allows_prose_samples() -> None:
@@ -125,6 +128,24 @@ def test_active_test_source_is_scanned_while_dedicated_fixtures_are_exempt() -> 
 
     violations = policy.scan_content("tests/e2e/start_nginx.py", "systemctl restart nginx\n")
     assert [item.rule for item in violations] == ["nginx_runtime_command"]
+
+
+def test_source_identifier_is_not_an_nginx_command() -> None:
+    """A source-language function name is not an executable shell launch."""
+
+    assert policy.scan_content("src/runtime.py", "nginx()\n") == ()
+
+
+def test_sudo_options_are_supported_for_runtime_commands_and_packages() -> None:
+    """Bounded sudo flags cannot hide prohibited Nginx operations."""
+
+    violations = policy.scan_content(
+        "src/runtime.sh", "sudo -n nginx -s reload\nsudo -n apt-get install nginx\n"
+    )
+    assert {item.rule for item in violations} == {
+        "nginx_runtime_command",
+        "nginx_package_install",
+    }
 
 
 def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:

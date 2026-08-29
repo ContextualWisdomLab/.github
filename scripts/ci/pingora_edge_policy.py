@@ -61,7 +61,8 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_container_image",
         re.compile(
             r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+"
-            r"(?:[A-Za-z0-9._-]+/)*nginx[A-Za-z0-9._-]*(?:[:@\s]|$)"
+            r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*(?:nginx|nginx-unprivileged)"
+            r"(?:[:@]\S+|\s|$)"
         ),
     ),
     (
@@ -76,7 +77,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_runtime_command",
         re.compile(
             r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
-            r"^\s*(?:sudo\s+)?nginx\b|"
+            r"^\s*(?:sudo\s+(?:-\S+\s+)*)?nginx(?=\s|$|[;&|])|"
             r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
@@ -91,7 +92,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_package_install",
         re.compile(
-            r"(?im)^\s*(?:RUN\s+)?(?:sudo\s+)?(?:apk\s+add|apt(?:-get)?\s+install|"
+            r"(?im)^\s*(?:RUN\s+)?(?:sudo\s+(?:-\S+\s+)*)?(?:apk\s+add|apt(?:-get)?\s+install|"
             r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
         ),
     ),
