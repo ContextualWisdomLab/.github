@@ -1733,8 +1733,14 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"],
-        ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=in_progress", "-F", "per_page=100"],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=queued", "-F", "per_page=100",
+        ],
+        [
+            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
+            "--paginate", "--slurp", "-f", "status=in_progress", "-F", "per_page=100",
+        ],
     ]
     assert calls[2:] == [
         ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
@@ -2100,6 +2106,15 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
+def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
+    stacked = inspect(make_pr(baseRefName="develop"), review_dispatch_allowed=False)
+
+    assert stacked.action == "wait"
+    assert stacked.reason == (
+        "stacked PR onto develop; OpenCode review absent; review dispatch limit reached"
+    )
+
+
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
@@ -2174,6 +2189,29 @@ def test_run_github_dispatch_falls_back_to_actions_token(monkeypatch):
     assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "fallback"
 
 
+def test_active_workflow_runs_reads_every_paginated_page(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps(
+            [
+                {"workflow_runs": [{"id": 1}]},
+                {"workflow_runs": [{"id": 2}]},
+            ]
+        )
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    assert sched.active_workflow_runs("owner/repo", statuses=("queued",)) == [
+        {"id": 1},
+        {"id": 2},
+    ]
+    assert "--paginate" in calls[0]
+    assert "--slurp" in calls[0]
+
+
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -2223,7 +2261,19 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     )
 
     assert result == "already_running"
-    assert ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs", "-f", "status=queued", "-F", "per_page=100"] in calls
+    assert [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "repos/owner/repo/actions/runs",
+        "--paginate",
+        "--slurp",
+        "-f",
+        "status=queued",
+        "-F",
+        "per_page=100",
+    ] in calls
     assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
@@ -4567,6 +4617,85 @@ def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch)
         ["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github-flow"]
     ) == 0
     assert seen == [2, 4, 1, 3]
+
+
+def test_main_uses_stacked_dispatch_budget_when_default_budget_is_exhausted(monkeypatch):
+    """A bounded stacked-review slot survives exhaustion of the normal slot."""
+    prs = [
+        make_pr(number=1, baseRefName="main"),
+        make_pr(number=2, baseRefName="feature-a"),
+    ]
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_allows_unlimited_stacked_dispatch_budget(monkeypatch):
+    """The stacked budget accepts the documented unlimited sentinel."""
+    stacked = make_pr(number=2, baseRefName="feature-a")
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [stacked])
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "-1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_rejects_invalid_stacked_review_dispatch_limit():
+    with pytest.raises(SystemExit, match="--stacked-review-dispatch-limit must be -1 or greater"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--stacked-review-dispatch-limit",
+                "-2",
+            ]
+        )
 
 
 def test_main_rejects_invalid_review_dispatch_limit():

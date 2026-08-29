@@ -1937,6 +1937,8 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                     "--method",
                     "GET",
                     f"repos/{repo}/actions/runs",
+                    "--paginate",
+                    "--slurp",
                     "-f",
                     f"status={status}",
                     "-F",
@@ -1944,7 +1946,9 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                 ]
             )
         )
-        runs.extend(payload.get("workflow_runs") or [])
+        pages = payload if isinstance(payload, list) else [payload]
+        for page in pages:
+            runs.extend(page.get("workflow_runs") or [])
     return runs
 
 
@@ -2401,6 +2405,13 @@ def inspect_pr(
                 number,
                 "review_dispatch",
                 f"stacked PR onto {base_ref}; OpenCode review dispatched",
+            )
+        if opencode_state in {"absent", "stale"} and trigger_reviews and not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                f"stacked PR onto {base_ref}; OpenCode review {opencode_state}; "
+                "review dispatch limit reached",
             )
         return Decision(
             number,
@@ -3905,6 +3916,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument(
+        "--stacked-review-dispatch-limit",
+        type=int,
+        default=None,
+        help="Optional separate OpenCode review dispatch limit for stacked PRs; -1 means unlimited",
+    )
+    parser.add_argument(
         "--branch-update-limit",
         type=int,
         default=int(os.environ.get("BRANCH_UPDATE_LIMIT", "1")),
@@ -3944,6 +3961,8 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
+    if args.stacked_review_dispatch_limit is not None and args.stacked_review_dispatch_limit < -1:
+        raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
@@ -3953,11 +3972,19 @@ def main(argv: list[str]) -> int:
         prs.sort(key=lambda pr: pr.get("baseRefName") == args.base_branch)
     decisions = []
     review_dispatches_used = 0
+    stacked_review_dispatches_used = 0
     branch_updates_used = 0
     for pr in prs:
-        review_dispatch_allowed = (
-            args.review_dispatch_limit < 0 or review_dispatches_used < args.review_dispatch_limit
-        )
+        stacked_pr = pr.get("baseRefName") != args.base_branch
+        if stacked_pr and args.stacked_review_dispatch_limit is not None:
+            review_dispatch_allowed = (
+                args.stacked_review_dispatch_limit < 0
+                or stacked_review_dispatches_used < args.stacked_review_dispatch_limit
+            )
+        else:
+            review_dispatch_allowed = (
+                args.review_dispatch_limit < 0 or review_dispatches_used < args.review_dispatch_limit
+            )
         branch_update_allowed = args.branch_update_limit < 0 or branch_updates_used < args.branch_update_limit
         try:
             decision = inspect_pr(
@@ -3984,7 +4011,10 @@ def main(argv: list[str]) -> int:
             )
         decisions.append(decision)
         if decision.action in {"review_dispatch", "security_dispatch"}:
-            review_dispatches_used += 1
+            if stacked_pr and args.stacked_review_dispatch_limit is not None:
+                stacked_review_dispatches_used += 1
+            else:
+                review_dispatches_used += 1
         if decision.action in {"update_branch", "restamp_head"}:
             branch_updates_used += 1
     print_summary(
