@@ -215,10 +215,14 @@ def _preflight_review_agents(
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agents), 10)) as executor:
             results = list(executor.map(probe_agent, agents))
 
-    for agent, row in results:
-        routes.append(row)
-        if row["status"] == "ready":
-            viable.append(agent)
+    results_dict = {str(getattr(a, "id", "")): (a, r) for a, r in results}
+    for agent in agents:
+        agent_id = str(getattr(agent, "id", ""))
+        if agent_id in results_dict:
+            _, row = results_dict[agent_id]
+            routes.append(row)
+            if row["status"] == "ready":
+                viable.append(agent)
 
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v1",
