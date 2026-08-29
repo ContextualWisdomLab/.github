@@ -209,6 +209,48 @@ def test_safe_pytest_executor_adds_src_layout_to_pythonpath(
     assert observed["env"]["PYTHONPATH"] == os.pathsep.join(("src", "."))
 
 
+def test_safe_pytest_executor_adds_trusted_monorepo_package_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A service can import non-symlinked package sources from its repository."""
+    observed: dict[str, object] = {}
+    project_dir = tmp_path / "services" / "people-api"
+    (project_dir / "src").mkdir(parents=True)
+    package_root = tmp_path / "packages"
+    hris_source = package_root / "hris-kernel" / "src"
+    keyverse_source = package_root / "keyverse-adapter" / "src"
+    hris_source.mkdir(parents=True)
+    keyverse_source.mkdir(parents=True)
+    (package_root / "not-a-package").write_text("fixture", encoding="utf-8")
+    (package_root / "empty-package").mkdir()
+    (package_root / "linked-package").symlink_to(package_root / "hris-kernel")
+    (package_root / "linked-source").mkdir()
+    (package_root / "linked-source" / "src").symlink_to(hris_source)
+
+    def fake_run(argv, *, cwd, env, shell, check):
+        observed.update(env=env)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
+    assert safe_pytest.execute_command(project_dir, ["pytest", "tests"]) == 0
+    assert observed["env"]["PYTHONPATH"] == os.pathsep.join(
+        ("src", ".", str(hris_source), str(keyverse_source))
+    )
+
+
+def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
+    tmp_path: Path,
+) -> None:
+    """Symlinked ``packages`` roots are ignored during monorepo discovery."""
+    project_dir = tmp_path / "linked-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    package_source = tmp_path / "real-packages" / "example" / "src"
+    package_source.mkdir(parents=True)
+    (tmp_path / "linked-repository" / "packages").symlink_to(tmp_path / "real-packages")
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:
     """Only supported one-line pytest argv are returned from a PR-controlled workflow file."""
     workflow_dir = tmp_path / ".github" / "workflows"

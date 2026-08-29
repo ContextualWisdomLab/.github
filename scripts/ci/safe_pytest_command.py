@@ -72,21 +72,47 @@ def discover_commands(workflow_dir: pathlib.Path) -> list[list[str]]:
     return commands
 
 
+def _repository_package_python_paths(project_dir: pathlib.Path) -> list[str]:
+    """Return trusted sibling package ``src`` paths from the nearest monorepo.
+
+    The coverage sandbox intentionally replaces, rather than extends, the
+    inherited ``PYTHONPATH``. A project such as ``services/people-api`` can
+    still import its repository-owned packages when their ``src`` directories
+    are discovered beneath the nearest ancestor ``packages`` directory.
+    Symlinked package paths are excluded so this discovery cannot widen the
+    sandbox through a path controlled by a checkout link.
+    """
+    resolved_project = project_dir.resolve()
+    for repository_root in (resolved_project, *resolved_project.parents):
+        packages_dir = repository_root / "packages"
+        if not packages_dir.is_dir() or packages_dir.is_symlink():
+            continue
+        package_sources: list[str] = []
+        for package_dir in sorted(packages_dir.iterdir()):
+            if not package_dir.is_dir() or package_dir.is_symlink():
+                continue
+            source_dir = package_dir / "src"
+            if source_dir.is_dir() and not source_dir.is_symlink():
+                package_sources.append(str(source_dir))
+        return package_sources
+    return []
+
+
 def _project_python_path(project_dir: pathlib.Path) -> str:
-    """Return the ``PYTHONPATH`` for a project, honoring a ``src`` package layout.
+    """Return local and trusted sibling package paths for a project.
 
     Repositories that keep their importable package under ``src/`` (a
     ``src``-layout such as ``src/<package>``) cannot import it with the project
     root alone on the path, so an offline coverage run started from the project
     root fails at collection with ``ModuleNotFoundError``. When a ``src``
-    directory exists it is prepended to the path so both ``src``-layout and
-    flat-layout suites import correctly; otherwise the path is just the project
-    root, preserving the previous behavior.
+    directory exists it is prepended to the path. Repository-owned sibling
+    package ``src`` directories are then added for monorepo projects; otherwise
+    the path remains the local project root, preserving the previous behavior.
     """
     entries = ["."]
     if (project_dir / "src").is_dir():
         entries.insert(0, "src")
-    return os.pathsep.join(entries)
+    return os.pathsep.join((*entries, *_repository_package_python_paths(project_dir)))
 
 
 def execute_command(project_dir: pathlib.Path, argv: Sequence[str]) -> int:
