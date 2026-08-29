@@ -40,21 +40,6 @@ RUNTIME_PATH_NAMES = frozenset({
     "nginx.conf",
     "nginx.service",
 })
-RUNTIME_PATH_PARTS = frozenset(
-    {
-        "deploy",
-        "deployment",
-        "deployments",
-        "docker",
-        "dockerfiles",
-        "infra",
-        "infrastructure",
-        "k8s",
-        "k8s-manifests",
-        "kubernetes",
-        "ops",
-    }
-)
 SUDO_ARGUMENT_OPTION_RE = (
     r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
 )
@@ -328,9 +313,7 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     if PurePosixPath(lower_path).name in {"dockerfile", "containerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
         return True
     if PurePosixPath(lower_path).suffix in {".conf", ".service", ".yaml", ".yml", ".sh"}:
-        return "nginx" in changed.patch.lower() or any(
-            part in RUNTIME_PATH_PARTS for part in PurePosixPath(lower_path).parts
-        )
+        return True
     return "nginx" in changed.patch.lower()
 
 
