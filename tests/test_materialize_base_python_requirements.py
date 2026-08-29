@@ -184,6 +184,194 @@ def test_materializes_archive_sources_separately_from_pip_locks(
     assert (output / "archives/archive-000.tar.gz").read_bytes() == archive
 
 
+def test_download_trusted_org_archive_uses_bounded_verified_https_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted archive is read in bounded chunks and checksum-verified."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    payload = b"verified archive"
+
+    class FakeOpener:
+        def open(self, request_url: str, *, timeout: int) -> FakeHttpResponse:
+            assert request_url == url
+            assert timeout == materializer.TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS
+            return FakeHttpResponse(url, payload, maximum_chunk_size=3)
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    assert materializer._download_trusted_org_archive(
+        url, [hashlib.sha256(payload).hexdigest()]
+    ) == payload
+
+
+@pytest.mark.parametrize(
+    ("source_url", "target_url"),
+    [
+        (
+            "https://not-github.invalid/demo.tar.gz",
+            "https://codeload.github.com/ContextualWisdomLab/demo/legacy.tar.gz",
+        ),
+        (
+            "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz",
+            "https://not-github.invalid/demo.tar.gz",
+        ),
+    ],
+)
+def test_trusted_org_archive_redirects_reject_non_github_origins(
+    source_url: str,
+    target_url: str,
+) -> None:
+    """Archive redirects must remain on the two explicit GitHub origins."""
+    with pytest.raises(RuntimeError, match="redirected outside GitHub"):
+        materializer._TrustedOrgArchiveRedirects().redirect_request(
+            materializer.urllib.request.Request(source_url),
+            object(),
+            302,
+            "Found",
+            {},
+            target_url,
+        )
+
+
+def test_trusted_org_archive_redirects_follow_codeload() -> None:
+    """A valid archive redirect is passed through unchanged as a GET request."""
+    followed = materializer._TrustedOrgArchiveRedirects().redirect_request(
+        materializer.urllib.request.Request(
+            "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+        ),
+        object(),
+        302,
+        "Found",
+        {},
+        "https://codeload.github.com/ContextualWisdomLab/demo/legacy.tar.gz",
+    )
+
+    assert followed.full_url == (
+        "https://codeload.github.com/ContextualWisdomLab/demo/legacy.tar.gz"
+    )
+
+
+def test_trusted_org_archive_redirects_fail_when_parent_rejects_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A redirect rejected by urllib remains a hard failure."""
+    monkeypatch.setattr(
+        materializer.urllib.request.HTTPRedirectHandler,
+        "redirect_request",
+        lambda *_args: None,
+    )
+
+    with pytest.raises(RuntimeError, match="redirect was rejected"):
+        materializer._TrustedOrgArchiveRedirects().redirect_request(
+            materializer.urllib.request.Request(
+                "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+            ),
+            object(),
+            302,
+            "Found",
+            {},
+            "https://codeload.github.com/ContextualWisdomLab/demo/legacy.tar.gz",
+        )
+
+
+def test_download_trusted_org_archive_rejects_invalid_source_url() -> None:
+    """The initial archive URL must be an allowlisted GitHub HTTPS URL."""
+    with pytest.raises(RuntimeError, match="URL is not GitHub HTTPS"):
+        materializer._download_trusted_org_archive(
+            "https://example.invalid/demo.tar.gz", ["a" * 64]
+        )
+
+
+def test_download_trusted_org_archive_rejects_untrusted_final_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that leaves GitHub is rejected before its bytes are trusted."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+
+    class FakeOpener:
+        def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
+            del timeout
+            return FakeHttpResponse("https://example.invalid/demo.tar.gz")
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    with pytest.raises(RuntimeError, match="left GitHub origins"):
+        materializer._download_trusted_org_archive(url, ["a" * 64])
+
+
+def test_download_trusted_org_archive_wraps_network_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network failures do not escape as ambiguous low-level exceptions."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+
+    class FakeOpener:
+        def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
+            del timeout
+            raise OSError("offline")
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    with pytest.raises(RuntimeError, match="download failed: OSError"):
+        materializer._download_trusted_org_archive(url, ["a" * 64])
+
+
+def test_download_trusted_org_archive_rejects_oversized_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive downloads remain bounded before checksum processing."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    monkeypatch.setattr(materializer, "TRUSTED_ORG_ARCHIVE_MAX_BYTES", 3)
+
+    class FakeOpener:
+        def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
+            del timeout
+            return FakeHttpResponse(url, b"1234")
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    with pytest.raises(RuntimeError, match="bounded size"):
+        materializer._download_trusted_org_archive(url, ["a" * 64])
+
+
+def test_download_trusted_org_archive_rejects_checksum_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted origin is insufficient without the exact exported hash."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    payload = b"archive"
+
+    class FakeOpener:
+        def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
+            del timeout
+            return FakeHttpResponse(url, payload)
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    with pytest.raises(RuntimeError, match="checksum verification failed"):
+        materializer._download_trusted_org_archive(url, ["a" * 64])
+
+
 def test_base_inputs_preserve_a_vcs_only_export(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -238,6 +426,33 @@ def test_base_inputs_reject_conflicting_vcs_revisions_across_locks(
     monkeypatch.setattr(materializer, "_export_uv_lock", export)
 
     with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._base_python_inputs(tmp_path, "a" * 40)
+
+
+def test_base_inputs_reject_conflicting_archive_hashes_across_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate uv projects cannot select conflicting hashes for one archive."""
+    tree = b"".join(
+        b"100644 blob " + bytes(character, "ascii") * 40 + b"\t" + path + b"\0"
+        for character, path in (
+            ("a", b"first/pyproject.toml"),
+            ("b", b"first/uv.lock"),
+            ("c", b"second/pyproject.toml"),
+            ("d", b"second/uv.lock"),
+        )
+    )
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    monkeypatch.setattr(materializer, "_git", lambda *_args: tree)
+
+    def export(_repo: Path, _sha: str, lock_path: str):
+        digest = "a" * 64 if lock_path.startswith("first/") else "b" * 64
+        return b"", [], [{"package": "demo", "url": url, "hashes": [digest]}]
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    with pytest.raises(RuntimeError, match="conflicting hashes"):
         materializer._base_python_inputs(tmp_path, "a" * 40)
 
 

@@ -119,6 +119,29 @@ def test_uv_export_accepts_hash_pinned_organization_archive_as_registry_lock() -
     ]
 
 
+def test_uv_export_rejects_organization_archive_without_complete_sha256_hash() -> None:
+    """Organization archives must carry a complete SHA-256 hash before partitioning."""
+    content = (
+        b"demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz "
+        b"--hash=sha256:abcd\n"
+    )
+
+    with pytest.raises(ValueError, match="complete SHA-256 hashes"):
+        materializer._partition_uv_export(content)
+
+
+def test_uv_export_rejects_conflicting_hashes_for_one_archive_url() -> None:
+    """One archive URL cannot be admitted with two different digests."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} --hash=sha256:{'b' * 64}\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="conflicting hashes"):
+        materializer._partition_uv_export(content)
+
+
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
     """An immutable organization source pin is separated from pip hash locks."""
     content = (
