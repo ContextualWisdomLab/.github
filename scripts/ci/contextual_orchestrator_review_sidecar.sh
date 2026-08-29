@@ -28,9 +28,11 @@ ORCHESTRATOR_WORK="${RUNNER_TEMP:-/tmp}/contextual-orchestrator-review"
 STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-4}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
+sidecar_python="$(command -v python3)"
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
@@ -50,7 +52,7 @@ if [ "$provider_secret_count" -lt 1 ]; then
 fi
 log "provider secrets present: $provider_secret_count of 5"
 
-ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in
   *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
 esac
@@ -64,6 +66,9 @@ fi
 
 if [ -L "$STRIX_EVIDENCE_DIR" ]; then
   fail "Strix evidence directory must not be a symbolic link"
+fi
+if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
+  fail "sidecar log sanitizer must be a regular, non-symlink file"
 fi
 mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
 chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
@@ -86,13 +91,13 @@ if [ ! -f "$requirements_lock" ]; then
   fail "vendored orchestrator is missing its hash-pinned requirements.lock"
 fi
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
-python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir \
+"$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   --require-hashes \
   --no-deps \
   -r "$requirements_lock"
-PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" -c \
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
-PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$(command -v python3)" - <<'PY'
+PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
 import http.client
 import json
 import threading
@@ -258,7 +263,7 @@ export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
-  "$(command -v python3)" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
+  "$sidecar_python" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
     --host "$ORCHESTRATOR_HOST" \
     --port "$ORCHESTRATOR_PORT" \
     --discovery-out "$discovery_report" \
@@ -267,7 +272,8 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --preflight-out "$preflight_report" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
-> "$sidecar_stdout" 2> "$sidecar_stderr" &
+> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \
+2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &
 sidecar_pid=$!
 cleanup_sidecar_on_error() {
   status=$?
@@ -317,7 +323,7 @@ if ! gateway_http_status="$(
   fail "gateway preflight request could not reach the local sidecar"
 fi
 if [ "$gateway_http_status" != "200" ]; then
-  python3 - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" <<'PY'
+  "$sidecar_python" - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" <<'PY'
 import json
 from pathlib import Path
 import re
@@ -351,7 +357,7 @@ temporary.replace(report_path)
 PY
   fail "gateway preflight returned HTTP ${gateway_http_status}"
 fi
-if ! python3 - "$gateway_preflight_response" "$preflight_report" <<'PY'
+if ! "$sidecar_python" - "$gateway_preflight_response" "$preflight_report" <<'PY'
 import json
 from pathlib import Path
 import sys
