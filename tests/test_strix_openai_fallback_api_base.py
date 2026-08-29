@@ -145,6 +145,34 @@ def _resolve_api_base(env: dict[str, str], model: str) -> tuple[int, str]:
     return completed.returncode, completed.stdout.strip()
 
 
+def _child_model_for_api_base(model: str, api_base: str) -> str:
+    """Execute the production child-model qualification for one gateway route."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    helper_sources = [
+        _function_block(gate_source, "is_contextual_orchestrator_model"),
+        _function_block(gate_source, "is_contextual_orchestrator_api_base"),
+        _function_block(gate_source, "child_model_for_api_base"),
+    ]
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join([*helper_sources, 'child_model_for_api_base "$1" "$2"']),
+            "strix-child-model",
+            model,
+            api_base,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin"},
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+    return completed.stdout.strip()
+
+
 class ExplicitOpenAIFallbackRouting(unittest.TestCase):
     """Direct-OpenAI fallbacks must not inherit the primary provider base."""
 
@@ -284,6 +312,21 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
             "orchestrator/free",
         )
         self.assertEqual(rc, 2)
+
+    def test_gateway_child_model_preserves_virtual_pool(self) -> None:
+        """Child qualification must preserve auto versus free gateway routing."""
+
+        for model, expected in (
+            ("orchestrator/free", "openai/orchestrator/free"),
+            ("contextual-orchestrator/orchestrator/free", "openai/orchestrator/free"),
+            ("orchestrator/auto", "openai/orchestrator/auto"),
+            ("contextual-orchestrator/orchestrator/auto", "openai/orchestrator/auto"),
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    _child_model_for_api_base(model, "http://127.0.0.1:18080/v1"),
+                    expected,
+                )
 
     def test_manual_status_job_has_status_write_permission(self) -> None:
         """OIDC target-app exchange may request the target commit status scope."""
