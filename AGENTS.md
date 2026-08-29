@@ -22,7 +22,9 @@ provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 as bootstrap transport in the same process that discovers models and serves;
 OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`.
 Authoritative Strix analysis uses the correctness-first `orchestrator/auto`
-pool. Private targets require ZDR-compliant routes in either pool, enforced by
+provider-diverse pool. Non-free Strix routes
+are admitted only with complete published prompt/completion price and currency
+evidence, and private targets still require ZDR-compliant routes under
 [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
 See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md).
 

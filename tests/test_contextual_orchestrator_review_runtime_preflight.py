@@ -150,7 +150,11 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert 'gateway_preflight_response="$ORCHESTRATOR_WORK/gateway-preflight.json"' in sidecar
     assert '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"' in sidecar
     assert 'Authorization: Bearer ${ORCHESTRATOR_TOKEN}' in sidecar
-    assert '"model":"orchestrator/free"' in sidecar
+    assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in sidecar
+    assert 'gateway_virtual_model="orchestrator/${orchestrator_pool}"' in sidecar
+    assert '"model":"%s"' in sidecar
+    assert '"$gateway_virtual_model" > "$gateway_preflight_request"' in sidecar
+    assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
     assert 'SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"' in sidecar
     assert '"$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout"' in sidecar
