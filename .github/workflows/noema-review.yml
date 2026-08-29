@@ -277,26 +277,55 @@ jobs:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
         run: |
           set -euo pipefail
-          is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq '.private')"
-          case "$is_private" in
-            true | false) ;;
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema target visibility cannot be resolved without the selected repository-scoped reviewer token."
+            exit 1
+          fi
+          visibility=""
+          for target_visibility_attempt in 1 2 3 4 5 6; do
+            if visibility="$(
+              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
+            )"; then
+              break
+            fi
+            visibility=""
+            if [ "$target_visibility_attempt" -lt 6 ]; then
+              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
+              sleep "$(( target_visibility_attempt * 5 ))"
+            fi
+          done
+          case "$visibility" in
+            private|internal)
+              echo "require_zdr=true" >>"$GITHUB_OUTPUT"
+              echo "::notice::Private/internal target requires an attested ZDR-only review pool."
+              ;;
+            public)
+              echo "require_zdr=false" >>"$GITHUB_OUTPUT"
+              ;;
             *)
-              echo "::error::Noema target repository visibility did not resolve to true or false."
+              echo "::error::Noema target repository visibility is missing or unsupported: ${visibility:-<empty>}."
               exit 1
               ;;
           esac
-          echo "is_private=$is_private" >>"$GITHUB_OUTPUT"
+
+      - name: Provision contextual-orchestrator review sidecar
+        if: env.PR_NUMBER != ''
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Run Noema LLM review and submit verdict
         if: env.PR_NUMBER != ''
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
-          NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
-          NOEMA_LLM_MODEL: ${{ vars.NOEMA_LLM_MODEL || '' }}
-          NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          TARGET_REPOSITORY_PRIVATE: ${{ steps.target_visibility.outputs.is_private }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -307,15 +336,15 @@ jobs:
             echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
             exit 1
           fi
-          if [ "$TARGET_REPOSITORY_PRIVATE" = "false" ] && [ -n "${NVIDIA_NIM_API_KEY:-}" ] && [ -z "${NOEMA_LLM_API_URL:-}" ] && [ -z "${NOEMA_LLM_MODEL:-}" ]; then
-            export NOEMA_LLM_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
-            export NOEMA_LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
-            export NOEMA_LLM_API_KEY="${NVIDIA_NIM_API_KEY:-}"
-          fi
-          if [ -z "${NOEMA_LLM_API_URL:-}" ] || [ -z "${NOEMA_LLM_MODEL:-}" ] || [ -z "${NOEMA_LLM_API_KEY:-}" ]; then
-            echo "::error::Noema LLM is unconfigured: NOEMA_LLM_API_URL, NOEMA_LLM_MODEL, and NOEMA_LLM_API_KEY (or OPENAI_API_KEY) are required."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
+            echo "::error::contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
             exit 1
           fi
+          source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+          export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
+          export NOEMA_LLM_MODEL="orchestrator/free"
+          export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+          export NOEMA_LLM_VIA_ORCHESTRATOR=1
           python3 scripts/ci/noema_review_gate.py \
             --repo "$TARGET_REPOSITORY" \
             --pr-number "$PR_NUMBER"
