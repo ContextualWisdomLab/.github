@@ -632,6 +632,7 @@ jobs:
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
+              --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-python-requirements"
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \

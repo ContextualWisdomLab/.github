@@ -2407,6 +2407,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "materialize_base_python_requirements.py" in measure
     assert "install_base_python_locks.py" in measure
     assert "base-python-requirements" in measure
+    assert '--head-sha "$PR_HEAD_SHA"' in measure
     assert "strictly registry/hash-bounded npm inputs from the live-validated" in measure
     assert 'chmod 0444 "$implementation_changed_files"' in measure
     assert "npm ci \\" in coverage_job

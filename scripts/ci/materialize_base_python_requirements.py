@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize hash-pinned Python locks from a validated pull-request base commit."""
+"""Materialize hash-pinned Python locks from validated pull-request revisions."""
 
 from __future__ import annotations
 
@@ -667,6 +667,65 @@ def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, b
     return _base_python_inputs(repo_root, base_sha)[0]
 
 
+def _candidate_lock_blobs(
+    repo_root: pathlib.Path, revision_sha: str
+) -> dict[str, tuple[bytes, str]]:
+    """Return candidate lock content and blob IDs from one exact revision."""
+    if not SHA_RE.fullmatch(revision_sha):
+        raise ValueError("revision SHA must be exactly 40 hexadecimal characters")
+    entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", revision_sha)
+    candidates: dict[str, tuple[bytes, str]] = {}
+    for path, candidate in _regular_base_blob_paths(entries):
+        if not _is_candidate_lock_path(candidate):
+            continue
+        content = _git(repo_root, "show", f"{revision_sha}:{path}")
+        blob = _git(repo_root, "rev-parse", f"{revision_sha}:{path}")
+        blob_sha = blob.decode("ascii", errors="strict").strip().lower()
+        if not SHA_RE.fullmatch(blob_sha):
+            raise RuntimeError(f"git rev-parse returned an invalid blob SHA for {path}")
+        candidates[path] = (content, blob_sha)
+    return candidates
+
+
+def _select_python_locks(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    base_locks: list[tuple[str, bytes]],
+    head_sha: str,
+) -> list[tuple[str, bytes]]:
+    """Replace changed base locks with complete, exact-head flat locks."""
+    base_candidates = {
+        source_path: content
+        for source_path, content in base_locks
+        if _is_candidate_lock_path(pathlib.PurePosixPath(source_path))
+    }
+    selected = dict(base_locks)
+    head_candidates = _candidate_lock_blobs(repo_root, head_sha)
+
+    for source_path in base_candidates:
+        if source_path not in head_candidates:
+            selected.pop(source_path, None)
+
+    for source_path, (content, head_blob) in head_candidates.items():
+        if source_path not in base_candidates:
+            if _is_flat_materializable_lock(content):
+                selected[source_path] = content
+            continue
+        base_blob = _git(repo_root, "rev-parse", f"{base_sha}:{source_path}")
+        base_blob_sha = base_blob.decode("ascii", errors="strict").strip().lower()
+        if base_blob_sha == head_blob:
+            continue
+        if _is_flat_materializable_lock(content):
+            selected[source_path] = content
+            continue
+        raise ValueError(
+            f"current-head Python lock {source_path} is not a complete "
+            "SHA-256-pinned flat lock"
+        )
+
+    return sorted(selected.items(), key=lambda item: item[0])
+
+
 def _included_base_lock_blobs(
     repo_root: pathlib.Path,
     base_sha: str,
@@ -725,8 +784,9 @@ def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
+    head_sha: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write trusted base locks and safe exact-head lock replacements."""
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -737,6 +797,10 @@ def materialize(
         path for path, _candidate in _regular_base_blob_paths(entries)
     }
     locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    if head_sha is not None:
+        locks = _select_python_locks(
+            resolved_repo, base_sha, locks, head_sha
+        )
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
@@ -774,15 +838,24 @@ def materialize(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Materialize base locks and report exactly which trusted paths were selected."""
+    """Materialize trusted locks and report exactly which paths were selected."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--head-sha")
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
 
     try:
-        manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        if args.head_sha is None:
+            manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        else:
+            manifest = materialize(
+                args.repo_root,
+                args.base_sha,
+                args.output_dir,
+                head_sha=args.head_sha,
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr
@@ -792,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
     if manifest:
         for entry in manifest:
             print(
-                "Materialized trusted base Python lock "
+                "Materialized trusted Python lock "
                 f"{entry['source']} as {entry['file']}."
             )
     else:

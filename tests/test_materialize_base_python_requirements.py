@@ -104,6 +104,180 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
     assert (output / "vcs-manifest.json").read_text(encoding="utf-8") == "[]\n"
 
 
+def test_materializes_changed_head_hash_lock_instead_of_stale_base(
+    tmp_path: Path,
+) -> None:
+    """A changed exact-head lock replaces the stale base lock in the image context."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n"
+        "demo-platform==2 --hash=sha256:" + ("b" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    manifest = materializer.materialize(
+        repo, base_sha, tmp_path / "output", head_sha=head_sha
+    )
+
+    assert manifest == [
+        {"file": "requirements-000.txt", "source": "requirements-quality.txt"}
+    ]
+    assert (
+        (tmp_path / "output" / "requirements-000.txt").read_text(encoding="utf-8")
+        == (repo / "requirements-quality.txt").read_text(encoding="utf-8")
+    )
+
+
+def test_rejects_changed_head_lock_without_complete_hash_pins(tmp_path: Path) -> None:
+    """An unbounded current-head lock cannot enter the networked image context."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "requirements-quality.txt").write_text("untrusted==9\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "unbounded head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="current-head Python lock"):
+        materializer.materialize(
+            repo, base_sha, tmp_path / "output", head_sha=head_sha
+        )
+
+
+def test_candidate_lock_blobs_rejects_invalid_revision_sha(tmp_path: Path) -> None:
+    """Current-head discovery refuses symbolic or abbreviated revisions."""
+    with pytest.raises(ValueError, match="revision SHA must be exactly 40"):
+        materializer._candidate_lock_blobs(tmp_path, "HEAD")
+
+
+def test_candidate_lock_blobs_skips_non_lock_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HEAD discovery considers only eligible regular lock paths."""
+    tree = (
+        b"100644 blob "
+        + b"a" * 40
+        + b"\tREADME.md\0"
+        + b"100644 blob "
+        + b"b" * 40
+        + b"\trequirements.txt\0"
+    )
+    monkeypatch.setattr(
+        materializer,
+        "_git",
+        lambda _repo, *args: (
+            tree
+            if args[0] == "ls-tree"
+            else b"demo==1 --hash=sha256:" + b"a" * 64
+            if args[0] == "show"
+            else b"b" * 40
+        ),
+    )
+
+    assert list(materializer._candidate_lock_blobs(tmp_path, "c" * 40)) == [
+        "requirements.txt"
+    ]
+
+
+def test_candidate_lock_blobs_rejects_invalid_blob_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed Git blob identity cannot authenticate a HEAD lock."""
+    tree = b"100644 blob " + b"a" * 40 + b"\trequirements.txt\0"
+
+    def fake_git(_repo: Path, *args: str) -> bytes:
+        if args[0] == "ls-tree":
+            return tree
+        if args[0] == "show":
+            return b"demo==1 --hash=sha256:" + b"a" * 64
+        return b"not-a-sha"
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+
+    with pytest.raises(RuntimeError, match="invalid blob SHA"):
+        materializer._candidate_lock_blobs(tmp_path, "c" * 40)
+
+
+def test_select_python_locks_handles_new_removed_and_unchanged_head_locks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selection adds new locks, removes deleted locks, and preserves equal blobs."""
+    new_content = b"new==1 --hash=sha256:" + b"b" * 64
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {"requirements-new.txt": (new_content, "b" * 40)},
+    )
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [],
+        "c" * 40,
+    ) == [("requirements-new.txt", new_content)]
+
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {
+            "requirements-unpinned.txt": (b"untrusted==9\n", "f" * 40)
+        },
+    )
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [],
+        "c" * 40,
+    ) == []
+
+    monkeypatch.setattr(materializer, "_candidate_lock_blobs", lambda *_args: {})
+    old_content = b"old==1 --hash=sha256:" + b"c" * 64
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [("requirements-old.txt", old_content)],
+        "c" * 40,
+    ) == []
+
+    same_content = b"same==1 --hash=sha256:" + b"d" * 64
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda *_args: {"requirements-same.txt": (same_content, "e" * 40)},
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"e" * 40)
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [("requirements-same.txt", same_content)],
+        "c" * 40,
+    ) == [("requirements-same.txt", same_content)]
+
+
 def test_materializes_exact_vcs_sources_in_a_separate_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -589,9 +763,45 @@ def test_main_reports_each_materialized_lock(
         == 0
     )
     assert (
-        "Materialized trusted base Python lock backend/requirements-hashes.txt "
+        "Materialized trusted Python lock backend/requirements-hashes.txt "
         "as requirements-000.txt." in capsys.readouterr().out
     )
+
+
+def test_main_forwards_optional_head_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI passes an explicitly supplied HEAD revision to materialization."""
+    captured: dict[str, str] = {}
+
+    def fake_materialize(
+        _repo_root: Path,
+        _base_sha: str,
+        _output_dir: Path,
+        *,
+        head_sha: str,
+    ) -> list[dict[str, str]]:
+        captured["head_sha"] = head_sha
+        return []
+
+    monkeypatch.setattr(materializer, "materialize", fake_materialize)
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--head-sha",
+                "b" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 0
+    )
+    assert captured == {"head_sha": "b" * 40}
 
 
 def test_main_reports_when_no_locks_exist(
