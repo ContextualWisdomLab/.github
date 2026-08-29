@@ -38,7 +38,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "ef68a3353823e74a1b33cf90a241bfbfe8a2e0c9"
+ORCH_PIN_SHA = "69f825655f5af4bac5b39210bafb5f99b8471127"
 
 
 def _read(path: Path) -> str:
@@ -371,6 +371,10 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "assert status == 200" in text
     assert "proxy_payloads[-1]" in text
     assert '"utf-8"' in text
+    assert '"stream_options": {"include_usage": True}' in text
+    assert '"stream": True' in text
+    assert "post_stream_payload" in text
+    assert 'text/event-stream' in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:

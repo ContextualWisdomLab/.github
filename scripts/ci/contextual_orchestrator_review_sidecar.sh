@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-ef68a3353823e74a1b33cf90a241bfbfe8a2e0c9}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-69f825655f5af4bac5b39210bafb5f99b8471127}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -169,6 +169,31 @@ try:
         finally:
             connection.close()
 
+    def post_stream_payload(payload):
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=5
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                body=encoded,
+                headers={
+                    "Authorization": "Bearer contract",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(encoded)),
+                },
+            )
+            response = connection.getresponse()
+            return (
+                response.status,
+                response.getheader("Content-Type", ""),
+                response.read().decode("utf-8"),
+            )
+        finally:
+            connection.close()
+
     large_status, large_body, encoded_size = post_payload({
         "model": "openai/gpt-5",
         "messages": [{"role": "user", "content": "x" * accepted_size}],
@@ -195,6 +220,23 @@ try:
         assert len(description) == description_length
         forwarded = client.proxy_payloads[-1]["tools"][0]["function"]["description"]
         assert forwarded.encode("utf-8") == description.encode("utf-8")
+
+    stream_status, content_type, stream_body = post_stream_payload({
+        "model": "openai/gpt-5",
+        "messages": [{"role": "user", "content": "tool stream probe"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "scan_target",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }],
+    })
+    assert stream_status == 200, stream_body
+    assert content_type.startswith("text/event-stream")
+    assert "usage_source" in stream_body
 finally:
     server.shutdown()
     server.server_close()
