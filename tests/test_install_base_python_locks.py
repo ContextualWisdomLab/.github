@@ -135,6 +135,244 @@ def test_installs_verified_archives_without_network_or_dependency_resolution(tmp
     ]
 
 
+def test_archive_only_install_failure_is_fatal(tmp_path) -> None:
+    """A verified archive that fails to build must fail the isolated phase."""
+    archive = tmp_path / "archives" / "archive-000.tar.gz"
+    archive.parent.mkdir()
+    archive.write_bytes(b"verified archive")
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": [hashlib.sha256(archive.read_bytes()).hexdigest()],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_runner(command: list[str], **kwargs):
+        return subprocess.CompletedProcess(command, 23, stdout="")
+
+    stderr = io.StringIO()
+    assert installer.install_materialized_locks(
+        tmp_path,
+        archives_only=True,
+        runner=fake_runner,
+        stderr=stderr,
+    ) == 23
+    assert "failed to install: demo" in stderr.getvalue()
+
+
+def _write_valid_archive_manifest(root: pathlib.Path) -> pathlib.Path:
+    """Create one valid archive manifest and return its materialized file."""
+    archive = root / "archives" / "archive-000.tar.gz"
+    archive.parent.mkdir()
+    archive.write_bytes(b"verified archive")
+    (root / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": [hashlib.sha256(archive.read_bytes()).hexdigest()],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return archive
+
+
+def test_installs_verified_archives_after_validated_locks(tmp_path) -> None:
+    """Normal lock installation includes verified archives by default."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="requirements-hashes.txt",
+    )
+    archive = _write_valid_archive_manifest(tmp_path)
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    assert installer.install_materialized_locks(tmp_path, runner=fake_runner) == 0
+    assert commands[-1][-1] == str(archive)
+
+
+def test_can_skip_verified_archives_after_validated_locks(tmp_path) -> None:
+    """The normal phase can explicitly defer archive installation."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="requirements-hashes.txt",
+    )
+    archive = _write_valid_archive_manifest(tmp_path)
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    assert installer.install_materialized_locks(
+        tmp_path,
+        install_archives=False,
+        runner=fake_runner,
+    ) == 0
+    assert commands[-1][-1] != str(archive)
+
+
+def test_archive_install_failure_after_validated_locks_is_fatal(tmp_path) -> None:
+    """A normal install cannot hide a verified archive build failure."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="requirements-hashes.txt",
+    )
+    archive = _write_valid_archive_manifest(tmp_path)
+    call_count = 0
+
+    def fake_runner(command: list[str], **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return subprocess.CompletedProcess(
+            command,
+            17 if call_count == 3 else 0,
+            stdout="",
+        )
+
+    stderr = io.StringIO()
+    assert installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stderr=stderr,
+    ) == 17
+    assert str(archive) in stderr.getvalue() or "demo" in stderr.getvalue()
+
+
+def test_archive_manifest_directory_is_rejected(tmp_path) -> None:
+    """The archive manifest itself must be a regular file."""
+    (tmp_path / "archive-manifest.json").mkdir()
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        installer._archive_entries(tmp_path)
+
+
+@pytest.mark.parametrize("manifest_text", ["{not-json", "{}", "[1]"])
+def test_archive_manifest_json_shape_is_validated(tmp_path, manifest_text: str) -> None:
+    """Archive manifest syntax and top-level shape are fail-closed."""
+    (tmp_path / "archive-manifest.json").write_text(manifest_text, encoding="utf-8")
+
+    error = "invalid" if manifest_text == "{not-json" else (
+        "JSON array" if manifest_text == "{}" else "entries must be objects"
+    )
+    with pytest.raises(ValueError, match=error):
+        installer._archive_entries(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {
+            "package": "",
+            "file": "archives/archive-000.tar.gz",
+            "hashes": ["a" * 64],
+        },
+        {
+            "package": "demo",
+            "file": "archive-000.tar.gz",
+            "hashes": ["a" * 64],
+        },
+        {
+            "package": "demo",
+            "file": "archives/archive-000.tar.gz",
+            "hashes": ["not-a-sha256"],
+        },
+    ],
+)
+def test_archive_manifest_entry_fields_are_validated(tmp_path, entry) -> None:
+    """Package, generated path, and digest fields must be exact types and shapes."""
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps([entry]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid entry"):
+        installer._archive_entries(tmp_path)
+
+
+def test_archive_manifest_rejects_duplicate_files(tmp_path) -> None:
+    """One generated archive path cannot represent two source entries."""
+    archive = _write_valid_archive_manifest(tmp_path)
+    entry = {
+        "package": "demo",
+        "file": "archives/archive-000.tar.gz",
+        "hashes": [hashlib.sha256(archive.read_bytes()).hexdigest()],
+    }
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps([entry, entry]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate files"):
+        installer._archive_entries(tmp_path)
+
+
+def test_archive_manifest_rejects_missing_archive_file(tmp_path) -> None:
+    """Every manifest entry must resolve to a regular materialized file."""
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": ["a" * 64],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        installer._archive_entries(tmp_path)
+
+
+def test_archive_manifest_rejects_symlink_archive_file(tmp_path) -> None:
+    """Archive entries cannot escape the materialized root through a symlink."""
+    archive = _write_valid_archive_manifest(tmp_path)
+    target = tmp_path / "real-archive.tar.gz"
+    target.write_bytes(archive.read_bytes())
+    archive.unlink()
+    archive.symlink_to(target)
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        installer._archive_entries(tmp_path)
+
+
+def test_archive_manifest_rejects_hash_mismatch(tmp_path) -> None:
+    """The local archive bytes must match the digest exported by the base lock."""
+    _write_valid_archive_manifest(tmp_path)
+    (tmp_path / "archive-manifest.json").write_text(
+        json.dumps(
+            [
+                {
+                    "package": "demo",
+                    "file": "archives/archive-000.tar.gz",
+                    "hashes": ["a" * 64],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="failed hash verification"):
+        installer._archive_entries(tmp_path)
+
+
 def test_skips_partial_candidate_without_completing_sibling(tmp_path) -> None:
     """An unrecoverable hash-bearing supplement remains visible and non-fatal."""
     write_candidate(
