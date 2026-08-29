@@ -122,6 +122,19 @@ def test_folded_block_scalar_header_is_recognized(tmp_path):
     assert sc.discover_commands(workflow_dir) == [["pytest", "-q"]]
 
 
+@pytest.mark.parametrize("header", ["|2", ">-2"])
+def test_explicit_block_scalar_indentation_headers_are_recognized(tmp_path, header):
+    """Literal and folded headers may carry YAML chomping and indentation indicators."""
+    workflow_dir = tmp_path / ".github" / "workflows"
+    write(
+        workflow_dir,
+        "ci.yml",
+        "jobs:\n  test:\n    steps:\n      - run: " + header + "\n"
+        "          pytest -q\n",
+    )
+    assert sc.discover_commands(workflow_dir) == [["pytest", "-q"]]
+
+
 # ---------------------------------------------------------------------------
 # Adversarial: these must keep failing to discover (or discover nothing
 # dangerous) after this change, proving the recognized-program set is

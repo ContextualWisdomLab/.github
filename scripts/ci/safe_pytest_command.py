@@ -13,7 +13,9 @@ import subprocess
 from collections.abc import Sequence
 
 RUN_KEY_RE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<rest>.*)$")
-BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\s*(?:#.*)?$")
+BLOCK_SCALAR_HEADER_RE = re.compile(
+    r"^[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)\s*(?:#.*)?$"
+)
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
 PYTHON_VERSIONED_RE = re.compile(r"^python3\.\d+$")

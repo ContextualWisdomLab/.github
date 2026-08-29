@@ -110,7 +110,8 @@ existing, unmodified `parse_safe_pytest_command` gate.
 
 Add `_iter_run_command_lines(text)`, replacing the single-regex scan in
 `discover_commands`. For a block-scalar `run:` step (header line matches
-`run:\s*[|>][+-]?\s*(?:#.*)?$`, i.e. nothing but a block indicator and
+`run:\s*[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)\s*(?:#.*)?$`, i.e. a literal or
+folded block indicator with optional YAML chomping/indentation indicators and
 optionally a comment after `run:`), every subsequent line indented **more**
 than the `run:` key is offered, one at a time, to
 `parse_safe_pytest_command` — the identical function used for single-line
