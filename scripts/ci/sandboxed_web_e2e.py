@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -124,8 +125,12 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     parsed = urllib.parse.urlparse(url)
-    if parsed.hostname not in {"localhost", "127.0.0.1"}:
-        raise ValueError(f"URL hostname must be localhost or 127.0.0.1, got: {parsed.hostname}")  # pragma: no cover
+    try:
+        is_loopback = parsed.hostname == "localhost" or ipaddress.ip_address(parsed.hostname or "").is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise ValueError(f"URL hostname must be localhost or a loopback address, got: {parsed.hostname}")
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:
