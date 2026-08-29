@@ -1,0 +1,141 @@
+name: Apply Strix contextual-orchestrator follow-up v3
+
+on:
+  push:
+    branches:
+      - feat/strix-orchestrator-free-zdr
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-strix-orchestrator-free-zdr-v3
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: "${{ github.event.head_commit.message == 'ci(strix): self-heal gateway patch application' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+          disable-file-monitoring: true
+
+      - name: Checkout exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: feat/strix-orchestrator-free-zdr
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply or verify the gateway patch and remove all bootstrap files
+        shell: bash
+        run: |
+          set -euo pipefail
+          starting_head="$(git rev-parse HEAD)"
+          production_marker='Provision contextual-orchestrator Strix sidecar'
+          bootstrap='scripts/ci/apply_strix_orchestrator_followup.py'
+
+          if grep -Fq "$production_marker" .github/workflows/strix.yml; then
+            echo 'Gateway production marker is already present; verifying the current tree before bootstrap cleanup.'
+            python3 tests/test_strix_contextual_orchestrator_contract.py
+            bash scripts/ci/strix_required_workflow_smoke.sh
+            bash -n scripts/ci/contextual_orchestrator_review_sidecar.sh
+            ruby -e 'require "yaml"; YAML.load_file(ARGV[0])' .github/workflows/strix.yml
+            rm -f \
+              .github/workflows/apply-strix-orchestrator-followup.yml \
+              .github/workflows/apply-strix-orchestrator-followup-v2.yml \
+              .github/workflows/apply-strix-orchestrator-followup-v3.yml \
+              scripts/ci/apply_strix_orchestrator_followup.py
+            git diff --check
+            remote_head="$(git ls-remote origin refs/heads/feat/strix-orchestrator-free-zdr | awk '{print $1}')"
+            if [ "$remote_head" != "$starting_head" ]; then
+              echo "::error::Branch advanced concurrently from ${starting_head} to ${remote_head}; refusing to overwrite it."
+              exit 1
+            fi
+            git config user.name 'ContextualWisdomLab Automation'
+            git config user.email 'automation@contextualwisdomlab.invalid'
+            git add -A
+            if git diff --cached --quiet; then
+              echo 'No bootstrap cleanup commit is needed.'
+              exit 0
+            fi
+            git commit -m 'chore(ci): remove completed Strix gateway bootstrap'
+            git push origin HEAD:feat/strix-orchestrator-free-zdr
+            exit 0
+          fi
+
+          if [ ! -f "$bootstrap" ]; then
+            echo '::error::The gateway production marker and the tracked patch applicator are both absent.'
+            exit 1
+          fi
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('scripts/ci/apply_strix_orchestrator_followup.py')
+          text = path.read_text(encoding='utf-8')
+
+          function_pattern = re.compile(
+              r"def replace_once\(path: Path, old: str, new: str\) -> None:\n"
+              r".*?"
+              r"(?=\n\ndef regex_once)",
+              re.DOTALL,
+          )
+          replacement = '''def replace_once(path: Path, old: str, new: str) -> None:
+              """Replace every exact occurrence of one bootstrap-only tracked fragment."""
+
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count < 1:
+                  raise SystemExit(
+                      f"{path.relative_to(ROOT)}: replacement anchor is absent: {old[:120]!r}"
+                  )
+              path.write_text(text.replace(old, new), encoding="utf-8")'''
+          text, count = function_pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'could not replace replace_once implementation: matches={count}')
+
+          cleanup_pattern = re.compile(
+              r"    BOOTSTRAP_WORKFLOW\.unlink\(\)\n"
+              r"    BOOTSTRAP_SCRIPT\.unlink\(\)\n"
+              r"(?:    followup_v2.*?\n    run\(\"git\", \"config\")|"
+              r"    run\(\"git\", \"config\")",
+              re.DOTALL,
+          )
+          cleanup_replacement = '''    BOOTSTRAP_WORKFLOW.unlink()
+              BOOTSTRAP_SCRIPT.unlink()
+              for completed_bootstrap in (
+                  ROOT / ".github/workflows/apply-strix-orchestrator-followup-v2.yml",
+                  ROOT / ".github/workflows/apply-strix-orchestrator-followup-v3.yml",
+              ):
+                  if completed_bootstrap.exists():
+                      completed_bootstrap.unlink()
+              run("git", "config")'''
+          text, cleanup_count = cleanup_pattern.subn(cleanup_replacement, text, count=1)
+          if cleanup_count != 1:
+              simple_anchor = '    BOOTSTRAP_SCRIPT.unlink()\n'
+              if simple_anchor not in text:
+                  raise SystemExit('could not locate bootstrap cleanup anchor')
+              text = text.replace(
+                  simple_anchor,
+                  '''    BOOTSTRAP_SCRIPT.unlink()
+              for completed_bootstrap in (
+                  ROOT / ".github/workflows/apply-strix-orchestrator-followup-v2.yml",
+                  ROOT / ".github/workflows/apply-strix-orchestrator-followup-v3.yml",
+              ):
+                  if completed_bootstrap.exists():
+                      completed_bootstrap.unlink()
+              ''',
+                  1,
+              )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python3 -m py_compile "$bootstrap"
+          python3 "$bootstrap"
