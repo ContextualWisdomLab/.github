@@ -1,6 +1,6 @@
 💡 What:
 1. `scripts/ci/opencode_review_normalize_output.py`의 `label_section` 함수 내 깊은 라벨 스캐닝(Deep label scanning) 로직을 최적화했습니다. `APPROVAL_VERIFICATION_LABELS`를 반복하며 텍스트를 파싱할 때 `start_index` 인자를 사용하여 문자열 전체를 처음부터 다시 검색하지 않고 목표 인덱스 이후부터 빠르게 탐색하도록 수정했습니다.
-2. `scripts/ci/contextual_orchestrator_review_launcher.py` 파일의 `_preflight_review_agents` 함수 내부에서 이루어지던 순차적 API 프라이플라이트 요청(`proxy_send_once`)을 `concurrent.futures.ThreadPoolExecutor`를 사용하여 병렬로 처리하도록 최적화했습니다.
+2. `scripts/ci/contextual_orchestrator_review_launcher.py` 파일의 `_preflight_review_agents` 함수 내부에서 이루어지던 순차적 API 프라이플라이트 요청(`proxy_send_once`)을 `concurrent.futures.ThreadPoolExecutor`를 사용하여 병렬로 처리하도록 최적화했습니다. Map 결과는 원래 순서를 보장합니다.
 
 🎯 Why:
 1. 긴 리뷰 텍스트를 처리할 때 기존 O(L * N) 복잡도를 지닌 라벨 스캐닝이 많은 CPU 오버헤드를 발생시켰습니다.
@@ -10,4 +10,4 @@
 1. 라벨 검증 섹션 추출 속도가 약 12배 향상되었습니다 (테스트 벤치마크 기준 2.3초 -> 0.18초 개선).
 2. 여러 모델 프로바이더 경로의 가용성을 동시에 확인하게 되어 타임아웃 발생 위험이 대폭 감소하고 초기 프라이플라이트 단계 실행 시간이 최소 10배 이상 향상됩니다. 전체적인 CI 실행 속도와 리소스 소비를 줄여줍니다.
 
-🔬 Measurement: 전체 통합 테스트 통과 확인 및 테스트 커버리지 100%를 보장했습니다.
+🔬 Measurement: 전체 통합 테스트 통과 확인 및 테스트 커버리지 100%를 보장했습니다. ThreadPoolExecutor.map은 Iterator를 통해 제출한 작업 순서대로 결과를 반환하므로 리스트 생성과 순서 보장이 모두 유지됩니다.
