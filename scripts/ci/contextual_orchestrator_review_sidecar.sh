@@ -257,9 +257,10 @@ case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
     ;;
 esac
 
-case "${CONTEXTUAL_ORCHESTRATOR_POOL:-free}" in
+orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
+case "$orchestrator_pool" in
   free|auto)
-    pool_args=(--pool "${CONTEXTUAL_ORCHESTRATOR_POOL:-free}")
+    pool_args=(--pool "$orchestrator_pool")
     ;;
   *)
     fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
@@ -319,7 +320,9 @@ log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pi
 # process can be healthy while the coordinator/model-group path still raises an
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
-printf '%s\n' '{"model":"orchestrator/free","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}' > "$gateway_preflight_request"
+gateway_virtual_model="orchestrator/${orchestrator_pool}"
+printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
+  "$gateway_virtual_model" > "$gateway_preflight_request"
 if ! gateway_http_status="$(
   curl -sS --max-time 30 \
     -o "$gateway_preflight_response" \
