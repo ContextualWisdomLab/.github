@@ -16,6 +16,9 @@ Semantic Versioning where the repository publishes a release.
   registry and VCS inputs and retaining unchanged projects at the base revision;
   changed or deleted projects are inventoried before any base export so a stale
   base project cannot block its exact-head repair.
+- Keep exact-head Python coverage materialization enabled for every tracked
+  `.txt` change because a bounded include cannot be identified safely from its
+  path, and reject malformed base or HEAD SHAs before any Git read.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

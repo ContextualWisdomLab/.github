@@ -649,9 +649,17 @@ jobs:
                   break
                   ;;
               esac
-              # Any text file below a requirements directory may be a bounded
-              # include target of a base lock, so retain materialization
-              # conservatively instead of relying on path depth alone.
+              # Any tracked .txt file may be a bounded include target of a base
+              # lock, so retain materialization conservatively instead of
+              # relying on path depth alone.
+              case "$changed_basename" in
+                *.txt)
+                  python_coverage_required=1
+                  break
+                  ;;
+              esac
+              # Includes with the other supported suffix remain recognized
+              # below requirements directories.
               case "/$changed_path/" in
                 */requirements/*)
                   case "$changed_basename" in

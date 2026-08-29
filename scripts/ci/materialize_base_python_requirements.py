@@ -890,6 +890,10 @@ def materialize(
     head_sha: str | None = None,
 ) -> list[dict[str, str]]:
     """Write trusted base locks and safe exact-head lock replacements."""
+    if not SHA_RE.fullmatch(base_sha):
+        raise ValueError("base SHA must be exactly 40 hexadecimal characters")
+    if head_sha is not None and not SHA_RE.fullmatch(head_sha):
+        raise ValueError("head SHA must be exactly 40 hexadecimal characters")
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)

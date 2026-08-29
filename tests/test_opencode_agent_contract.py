@@ -608,7 +608,11 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "requirements.lock|requirements*.txt|requirements*.in" in measure_step
     assert "*/requirements/*" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
-    assert '--head-sha "$PR_HEAD_SHA"' in measure_step
+    python_materializer = measure_step.split(
+        "materialize_base_python_requirements.py", 1
+    )[1].split("--output-dir", 1)[0]
+    assert '--base-sha "$PR_BASE_SHA"' in python_materializer
+    assert '--head-sha "$PR_HEAD_SHA"' in python_materializer
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
     assert (
         "install -m 0444 /tmp/base-javascript-packages/manifest.json"
@@ -901,6 +905,7 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
         ("requirements/docs/notes.txt", "1", False),
         ("services/requirements/docs/notes.txt", "1", False),
         ("services/requirements/requirements-extra.txt", "1", False),
+        ("locks/child.txt", "1", False),
         ("deleted.py", "1", True),
         ("README.md", "0", False),
         ("package-lock.json", "0", False),

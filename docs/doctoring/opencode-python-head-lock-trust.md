@@ -23,6 +23,10 @@ registry and VCS inputs, and unchanged projects remain base-bound. Base and HEAD
 `uv.lock` inventories are completed before export, so a changed or deleted HEAD
 project never requires its stale base export to succeed first.
 
+The workflow keeps this materialization enabled for every tracked `.txt` change:
+the path alone cannot prove that a file is not a bounded include target. Content
+validation still decides whether that candidate can enter the trusted image.
+
 ## Root cause
 
 The coverage image was built only from `PR_BASE_SHA` Python locks. A legitimate
@@ -34,8 +38,8 @@ validating and recording changed HEAD locks; Python had no equivalent path.
 
 ## Security boundary
 
-The central workflow still fetches and validates the base and head revisions
-before materialization. Only a regular candidate lock from the exact HEAD is
+The central workflow and materializer validate the exact base and head revisions
+before any Git tree read. Only a regular candidate lock from the exact HEAD is
 read, and only a flat SHA-256-pinned file can replace a base lock. Changed
 `uv.lock` projects reuse the same isolated exporter against exact HEAD
 `uv.lock` and sibling metadata, then apply the established registry hash and

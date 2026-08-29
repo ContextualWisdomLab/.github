@@ -175,6 +175,22 @@ def test_candidate_lock_blobs_rejects_invalid_revision_sha(tmp_path: Path) -> No
         materializer._candidate_lock_blobs(tmp_path, "HEAD")
 
 
+def test_materialize_rejects_invalid_head_sha_before_git_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Materialization validates the exact HEAD revision before reading Git."""
+    monkeypatch.setattr(
+        materializer,
+        "_git",
+        lambda *_args: pytest.fail("invalid HEAD must be rejected before Git access"),
+    )
+
+    with pytest.raises(ValueError, match="head SHA must be exactly 40"):
+        materializer.materialize(
+            tmp_path, "a" * 40, tmp_path / "output", head_sha="HEAD"
+        )
+
+
 def test_candidate_lock_blobs_skips_non_lock_blobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
