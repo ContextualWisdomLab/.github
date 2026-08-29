@@ -10,6 +10,11 @@ from scripts.ci import contextual_orchestrator_review_policy as policy
 from scripts.ci import zdr_policy
 
 ZDR_FEED = frozenset({"openrouter/deepseek/deepseek-r1:free"})
+FREE_PRICE = {
+    "prompt_price_per_1k": 0.0,
+    "completion_price_per_1k": 0.0,
+    "currency_code": "USD",
+}
 
 
 def _report() -> dict[str, object]:
@@ -20,30 +25,35 @@ def _report() -> dict[str, object]:
                 "model": "deepseek/deepseek-r1:free",
                 "agent_id": "or_ds_r1",
                 "is_free": True,
+                **FREE_PRICE,
             },
             {
                 "provider": "nvidia_nim",
                 "model": "nvidia/nemotron-3-nano-30b-a3b",
                 "agent_id": "nim_nano_free",
                 "is_free": True,
+                **FREE_PRICE,
             },
             {
                 "provider": "nvidia_nim_sub",
                 "model": "meta/llama-3.3-70b-instruct",
                 "agent_id": "nimsec_70b",
                 "is_free": True,
+                **FREE_PRICE,
             },
             {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
                 "agent_id": "openai_gpt_4o_mini",
                 "is_free": True,
+                **FREE_PRICE,
             },
             {
                 "provider": "bytez",
                 "model": "qwen2.5-coder",
                 "agent_id": "bytez_qwen25_coder",
                 "is_free": True,
+                **FREE_PRICE,
             },
             {
                 "provider": "openai",
@@ -86,6 +96,17 @@ def test_is_valid_is_free_rejects_non_scalar_markers() -> None:
     assert policy._is_valid_is_free(None) is False
     assert policy._is_valid_is_free("") is False
     assert policy._is_valid_is_free(0) is True
+
+
+def test_free_marker_without_a_price_vector_remains_unknown() -> None:
+    """A provider label cannot replace missing prompt/completion price evidence."""
+    assert policy._normalize_cost_evidence(
+        route="openrouter/example",
+        is_free=True,
+        prompt_price=None,
+        completion_price=None,
+        currency_code=None,
+    ) == (policy.COST_UNKNOWN, None, None, None)
 
 
 def test_load_zdr_endpoints_skips_rows_without_provider_or_model(tmp_path) -> None:
@@ -280,20 +301,21 @@ def test_build_catalog_applies_family_cap() -> None:
     """A family cap keeps one outage domain from absorbing the pool."""
     report = {
         "models": [
-            {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True}
+                {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
             for i in range(6)
         ]
         + [
             {
                 "provider": "nvidia_nim_sub",
                 "model": f"s{i}",
-                "agent_id": f"nim_b{i}",
-                "is_free": True,
+                    "agent_id": f"nim_b{i}",
+                    "is_free": True,
+                    **FREE_PRICE,
             }
             for i in range(6)
         ]
         + [
-            {"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True}
+                {"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
             for i in range(3)
         ]
     }
@@ -312,7 +334,7 @@ def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {
         "models": [
-            {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True}
+                {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
             for i in range(20)
         ]
     }
