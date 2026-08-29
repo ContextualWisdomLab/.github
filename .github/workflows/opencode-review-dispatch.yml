@@ -629,11 +629,53 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
-            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
-              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
-              --base-sha "$PR_BASE_SHA" \
-              --head-sha "$PR_HEAD_SHA" \
-              --output-dir "$coverage_build_dir/base-python-requirements"
+            python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
+            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
+              --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
+              >"$python_change_files"; then
+              echo "::error::Could not classify exact current-head changed files for Python coverage." \
+                >&2
+              exit 1
+            fi
+            python_coverage_required=0
+            while IFS= read -r -d '' changed_path; do
+              changed_basename="${changed_path##*/}"
+              case "$changed_basename" in
+                *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
+                setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
+                requirements.lock|requirements*.txt|requirements*.in|\
+                environment.yml|environment.yaml)
+                  python_coverage_required=1
+                  break
+                  ;;
+              esac
+              # Any text file below a requirements directory may be a bounded
+              # include target of a base lock, so retain materialization
+              # conservatively instead of relying on path depth alone.
+              case "/$changed_path/" in
+                */requirements/*)
+                  case "$changed_basename" in
+                    *.txt|*.in)
+                      python_coverage_required=1
+                      break
+                      ;;
+                  esac
+                  ;;
+              esac
+            done <"$python_change_files"
+            if [ "$python_coverage_required" -eq 1 ]; then
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --base-sha "$PR_BASE_SHA" \
+                --head-sha "$PR_HEAD_SHA" \
+                --output-dir "$coverage_build_dir/base-python-requirements"
+            else
+              mkdir -p "$coverage_build_dir/base-python-requirements"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/manifest.json"
+              : >"$coverage_build_dir/base-python-requirements/manifest.txt"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/vcs-manifest.json"
+              echo "No Python source or dependency-manifest changes on the exact current head; skipped base Python lock materialization."
+            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
