@@ -328,8 +328,17 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     normalized_rows = parse_discovery_report({"models": rows})
+    free_rows = [
+        row for row in normalized_rows if row.get("cost_evidence") == "free"
+    ]
+    priced_rows = [
+        row for row in normalized_rows if row.get("cost_evidence") == "priced"
+    ]
+    primary_rows = (
+        (free_rows or priced_rows) if args.pool == "auto" else normalized_rows
+    )
     result = build_zdr_prioritized_catalog(
-        normalized_rows,
+        primary_rows,
         limit=int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12")),
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
@@ -345,10 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     agents = load_agents(args.catalog_out)
     fallback_result = None
     fallback_agents: list[object] = []
-    if args.pool == "auto":
-        priced_rows = [
-            row for row in normalized_rows if row.get("cost_evidence") == "priced"
-        ]
+    if args.pool == "auto" and free_rows:
         if priced_rows:
             try:
                 fallback_result = build_zdr_prioritized_catalog(
