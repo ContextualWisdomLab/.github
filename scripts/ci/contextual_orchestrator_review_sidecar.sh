@@ -324,7 +324,7 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
 if ! gateway_http_status="$(
-  curl -sS --max-time 30 \
+  curl -sS --max-time 60 \
     -o "$gateway_preflight_response" \
     -w '%{http_code}' \
     -X POST \

@@ -57,3 +57,6 @@
 ## 2026-09-02 - [Reduce max_tokens in Preflight requests]
 **Learning:** In `scripts/ci/contextual_orchestrator_review_launcher.py`, sending `max_tokens: 4096` during the sidecar preflight check (which only asks the model to "Reply with just 'OK'.") causes HTTP 413 `request_too_large` errors on providers or models that have smaller output context windows (e.g., 2048).
 **Action:** Always set `max_tokens` to a very small number (like `16`) when sending dummy/preflight requests to external model providers to prevent 413 limit violations.
+## 2026-09-02 - [Increase preflight timeout to 60s]
+**Learning:** In `scripts/ci/contextual_orchestrator_review_sidecar.sh`, the local sidecar gateway preflight request occasionally times out when using multiple large fallback LLM providers (e.g., OpenRouter, OpenAI, Nvidia NIM) due to latency spikes or complex internal fallback routing. A 30s timeout is too tight and can cause `curl: (28) Operation timed out after 30002 milliseconds`.
+**Action:** When making local HTTP preflight health checks to a sidecar that performs deep upstream validations or routing, set `curl --max-time` to at least 60 seconds to accommodate worst-case cold starts and upstream latency spikes.
