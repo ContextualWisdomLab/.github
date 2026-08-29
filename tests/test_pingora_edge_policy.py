@@ -101,6 +101,8 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert policy._needs_content_scan(changed("Dockerfile", "modified", "-FROM nginx\n+FROM scratch"))
     assert policy._needs_content_scan(changed("config/runtime.txt", "modified", "+FROM nginx"))
     assert policy._needs_content_scan(changed("infra/nginx/default.yaml", "modified", "+server: edge"))
+    assert policy._needs_content_scan(changed("kubernetes/ingress.yaml", "modified", "+metadata: edge"))
+    assert policy._needs_content_scan(changed("ops/edge.yaml", "modified", "+metadata: edge"))
     assert policy._needs_content_scan(changed("infra/deployment.yaml", "modified", "+image: app"))
     assert policy._needs_content_scan(changed("config/runtime.conf", "modified", "+upstream nginx"))
     assert policy._needs_content_scan(
