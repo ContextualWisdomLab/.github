@@ -586,8 +586,9 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/vcs-manifest.json\""
         in measure_step
     )
-    assert "*.py|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock" in measure_step
-    assert "requirements*.txt|*/requirements*.txt" in measure_step
+    assert "*.py|pyproject.toml|uv.lock|poetry.lock" in measure_step
+    assert "requirements.lock|requirements*.txt|requirements*.in" in measure_step
+    assert "requirements|*/requirements" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
@@ -879,6 +880,9 @@ def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Pat
         ("services/requirements-dev.txt", "1", False),
         ("requirements/ci.txt", "1", False),
         ("services/requirements/ci.txt", "1", False),
+        ("requirements/docs/notes.txt", "0", False),
+        ("services/requirements/docs/notes.txt", "0", False),
+        ("services/requirements/requirements-extra.txt", "1", False),
         ("deleted.py", "1", True),
         ("README.md", "0", False),
         ("package-lock.json", "0", False),

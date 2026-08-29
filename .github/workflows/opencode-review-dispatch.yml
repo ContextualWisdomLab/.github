@@ -639,17 +639,25 @@ jobs:
             fi
             python_coverage_required=0
             while IFS= read -r -d '' changed_path; do
-              case "$changed_path" in
-                *.py|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|\
-                poetry.lock|*/poetry.lock|Pipfile|*/Pipfile|Pipfile.lock|*/Pipfile.lock|\
-                setup.py|*/setup.py|setup.cfg|*/setup.cfg|tox.ini|*/tox.ini|\
-                pytest.ini|*/pytest.ini|.pytest.ini|*/.pytest.ini|\
-                requirements.lock|*/requirements.lock|requirements*.txt|*/requirements*.txt|\
-                requirements/*.txt|*/requirements/*.txt|\
-                requirements*.in|*/requirements*.in|environment.yml|*/environment.yml|\
-                environment.yaml|*/environment.yaml)
+              changed_basename="${changed_path##*/}"
+              changed_parent="${changed_path%/*}"
+              case "$changed_basename" in
+                *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
+                setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
+                requirements.lock|requirements*.txt|requirements*.in|\
+                environment.yml|environment.yaml)
                   python_coverage_required=1
                   break
+                  ;;
+              esac
+              case "$changed_parent" in
+                requirements|*/requirements)
+                  case "$changed_basename" in
+                    *.txt|*.in)
+                      python_coverage_required=1
+                      break
+                      ;;
+                  esac
                   ;;
               esac
             done <"$python_change_files"
