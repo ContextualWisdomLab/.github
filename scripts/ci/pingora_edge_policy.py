@@ -29,6 +29,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
+DOCUMENT_ASSET_SUFFIXES = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -145,7 +146,8 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
     if lower_name in LICENSE_NAMES or (
-        is_known_documentation_path and pure.suffix.lower() in DOCUMENT_SUFFIXES
+        is_known_documentation_path
+        and pure.suffix.lower() in DOCUMENT_SUFFIXES | DOCUMENT_ASSET_SUFFIXES
     ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":

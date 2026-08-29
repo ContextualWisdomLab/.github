@@ -78,6 +78,22 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
+def test_documentation_image_assets_are_not_runtime_candidates() -> None:
+    """Binary screenshots under documentation cannot execute an edge runtime."""
+
+    changed = policy.ChangedFile(
+        "docs/screenshots/acceptance.png",
+        "added",
+        "",
+        patch_available=False,
+    )
+
+    assert not policy._needs_content_scan(changed)
+    assert policy._needs_content_scan(
+        policy.ChangedFile("public/acceptance.png", "added", "", patch_available=False)
+    )
+
+
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
 def test_scan_content_does_not_treat_test_name_substrings_as_fixtures(
     directory: str,

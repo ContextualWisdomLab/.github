@@ -6,12 +6,13 @@ ContextualWisdomLab production and test edge runtimes use **Cloudflare Pingora**
 Active Nginx containers, packages, commands, configuration files, Kubernetes
 Nginx ingress annotations/classes, and host-service units are prohibited.
 
-This is a runtime boundary, not a vocabulary ban. Documentation, license notices,
-dedicated source fixtures under `tests/fixtures/`, the scanner source itself, and
-migration histories may name Nginx. Executable integration and end-to-end test
-helpers remain runtime candidates. Pull requests that modify a runtime candidate
-are evaluated against the final exact head file, so deleting a legacy artifact is
-allowed while preserving it or introducing a new one fails closed.
+This is a runtime boundary, not a vocabulary ban. Documentation, non-executable
+image evidence beneath a documentation directory, license notices, dedicated
+source fixtures under `tests/fixtures/`, the scanner source itself, and migration
+histories may name Nginx. Executable integration and end-to-end test helpers remain
+runtime candidates. Pull requests that modify a runtime candidate are evaluated
+against the final exact head file, so deleting a legacy artifact is allowed while
+preserving it or introducing a new one fails closed.
 
 ## Why this is not a search-and-replace
 
