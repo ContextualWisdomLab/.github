@@ -54,3 +54,6 @@
 ## 2026-09-02 - [대용량 텍스트 파싱 전 O(N) 서브스트링 검사 최적화]
 **Learning:** `scripts/ci/opencode_review_surfaces.py`의 `extract_model_prose` 함수와 같이, 대용량 텍스트를 줄 단위로 순회(loop)하며 특정 마커 문자열(sentinel, control)을 검사하는 경우, 마커가 아예 존재하지 않는 입력값(순수 텍스트)이 주어졌을 때에도 매 줄마다 불필요한 split과 반복적인 prefix 매칭을 수행하므로 성능 저하(Cold Path)가 컸습니다. 마이크로 벤치마크 결과, 마커가 없는 긴 텍스트에서 실행 시간이 약 95% 단축되었습니다.
 **Action:** 대용량 텍스트를 파싱하기 전, 먼저 C 기반으로 고도로 최적화된 `in` 연산자(또는 `str.find()`)를 사용해 필수 조건 문자열의 존재 여부를 가장 먼저 확인하여 빠른 반환 경로(Fast Path)를 만들어야 합니다.
+## 2026-09-02 - [Reduce max_tokens in Preflight requests]
+**Learning:** In `scripts/ci/contextual_orchestrator_review_launcher.py`, sending `max_tokens: 4096` during the sidecar preflight check (which only asks the model to "Reply with just 'OK'.") causes HTTP 413 `request_too_large` errors on providers or models that have smaller output context windows (e.g., 2048).
+**Action:** Always set `max_tokens` to a very small number (like `16`) when sending dummy/preflight requests to external model providers to prevent 413 limit violations.

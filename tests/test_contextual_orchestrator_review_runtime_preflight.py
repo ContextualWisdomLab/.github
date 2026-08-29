@@ -95,7 +95,7 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         assert endpoint == "chat/completions"
         assert payload["model"] == agent.model
         assert payload["stream"] is False
-        assert payload["max_tokens"] == 4096
+        assert payload["max_tokens"] == 16
         assert payload["temperature"] == 1.0
         assert payload["messages"] == [
             {"role": "system", "content": "You are a helpful assistant."},

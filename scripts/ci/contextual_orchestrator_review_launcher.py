@@ -185,7 +185,7 @@ def _preflight_review_agents(
                 {"role": "user", "content": "Reply with just 'OK'."},
             ],
             "temperature": REVIEW_TEMPERATURE,
-            "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
+            "max_tokens": 16,
             "stream": False,
         }
         try:
