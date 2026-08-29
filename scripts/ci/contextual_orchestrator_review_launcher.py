@@ -22,6 +22,7 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -170,9 +171,7 @@ def _preflight_review_agents(
     Raises:
         ReviewPreflightError: If no provider route returns usable text.
     """
-    viable: list[object] = []
-    routes: list[dict[str, object]] = []
-    for agent in agents:
+    def probe_agent(agent: object) -> tuple[object, dict[str, object]]:
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
@@ -199,16 +198,27 @@ def _preflight_review_agents(
             http_status = _safe_http_status(exc)
             if http_status is not None:
                 row["http_status"] = http_status
-            routes.append(row)
-            continue
+            return agent, row
         if not _chat_response_has_text(response):
             row["status"] = "rejected"
             row["error_type"] = "InvalidChatResponse"
-            routes.append(row)
-            continue
+            return agent, row
         row["status"] = "ready"
+        return agent, row
+
+    viable: list[object] = []
+    routes: list[dict[str, object]] = []
+
+    if len(agents) <= 1:
+        results = [probe_agent(agent) for agent in agents]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agents), 10)) as executor:
+            results = list(executor.map(probe_agent, agents))
+
+    for agent, row in results:
         routes.append(row)
-        viable.append(agent)
+        if row["status"] == "ready":
+            viable.append(agent)
 
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v1",
