@@ -91,7 +91,7 @@ def test_oidc_exchange_consumes_noema_standard_success_envelope() -> None:
     assert '--arg workflow_ref "$GITHUB_WORKFLOW_REF"' in exchange
     assert ".ok == true" in exchange
     assert "(.data | type == \"object\")" in exchange
-    assert "(.data.token | type == \"string\" and length > 0)" in exchange
+    assert '(.data.token | type == "string" and test("^[!-~]+\\\\z"))' in exchange
     assert ".data.repository == $target_repository" in exchange
     assert ".data.workflow_ref == $workflow_ref" in exchange
     assert "(.data.token_expires_at | type == \"string\" and length > 0)" in exchange
@@ -161,6 +161,20 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
         {**valid, "data": {**valid["data"], "token_expires_at": "not-a-time"}},
         {key: value for key, value in valid.items() if key != "trace_id"},
     ]
+    invalid_responses.extend(
+        {
+            **valid,
+            "data": {**valid["data"], "token": invalid_token},
+        }
+        for invalid_token in (
+            " synthetic-app-token",
+            "synthetic-app-token ",
+            "synthetic-app-token\r",
+            "synthetic-app-token\n",
+            "synthetic-app-token\u00a0",
+            "synthetic-app-token\u0001",
+        )
+    )
 
     for invalid in invalid_responses:
         rejected = run_exchange_script(tmp_path, invalid)

@@ -250,7 +250,7 @@ jobs:
             --arg workflow_ref "$GITHUB_WORKFLOW_REF" '
             .ok == true
             and (.data | type == "object")
-            and (.data.token | type == "string" and length > 0)
+            and (.data.token | type == "string" and test("^[!-~]+\\z"))
             and .data.repository == $target_repository
             and .data.workflow_ref == $workflow_ref
             and (.data.token_expires_at | type == "string" and length > 0)
