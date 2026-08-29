@@ -15,7 +15,9 @@ from typing import Any
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+REPO_RE = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?:\.github|[A-Za-z0-9_][A-Za-z0-9_.-]*)$"
+)
 HEAD_SHA_IN_BODY_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 FORMAL_AUTHORS = frozenset(
     {"opencode-agent", "opencode-agent[bot]", "github-actions[bot]"}
