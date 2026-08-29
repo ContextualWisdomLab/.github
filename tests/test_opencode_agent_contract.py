@@ -865,7 +865,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in normalized_compile_script
     )
     assert (
-        "1bb93c2aa61d2a5b38f1526546d95cf4132cb681e541a337bf8dfd092be816e5"
+        "ff97a14362eef486483ed44042ca2027ea257df6ff768e62358ee0c9776925ac"
         in trusted_requirements
     )
 
