@@ -5,6 +5,12 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover. Priced routes require finite, nonnegative
+  published prompt/completion prices and an explicit currency; unknown pricing
+  fails closed. Private-target ZDR enforcement and the no-external-fallback
+  contract remain unchanged.
 - Allow the protected Strix required-workflow smoke to recognize only the
   existing `orchestrator/free` route or the provider-diverse
   `orchestrator/auto` route. This provides a fail-closed two-phase migration
