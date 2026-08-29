@@ -3,27 +3,32 @@
 ## Problem
 
 `org-queue-sweep` in `pr-review-merge-scheduler.yml` walks every organization
-repository once per 15-minute tick and consumes one shared, organization-wide
-review-dispatch budget (`ORG_SWEEP_REVIEW_DISPATCH_LIMIT`, default `1`) across
-that entire walk. The walk order came from a single `gh api
+repository once per 15-minute tick and consumes bounded, organization-wide
+review-dispatch budgets across that entire walk. Default-base work uses
+`ORG_SWEEP_REVIEW_DISPATCH_LIMIT` (default `1`); stacked work uses the separate
+`ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT` (default `1`) because stacked PRs do
+not receive injected required workflows. The walk order came from a single `gh api
 /orgs/{org}/repos` call with no explicit sort, so it was effectively fixed
 across ticks. A repository early in that fixed order always consumed the
-single available dispatch, so every later repository's ready, all-green,
+single available ordinary dispatch, so every later repository's ready, all-green,
 zero-open-thread pull requests never reached the OpenCode review dispatch
 through the sweep fallback path — indefinitely, not just for one tick.
 
 `ContextualWisdomLab/.github#1219` recorded this with direct evidence from a
 RankWeave sweep run: PRs #36, #40, and #41 all reported `review dispatch limit
-reached` in the same run where the org-wide budget was already `1/1` before
-RankWeave's own turn.
+reached` in the same run where the ordinary org-wide budget was already `1/1`
+before RankWeave's own turn. The same ordinary budget could also leave stacked
+PRs at `OpenCode review absent` even though they are the only path to their
+required review.
 
 ## Decision
 
 Rotate the sweep's repository walk order by a rotation index before applying
-the unchanged organization-wide budget. `rotation_offset = rotation_index %
-repository_count`; the walk starts at that offset and wraps. This spreads the
-exact same total per-tick dispatch budget across repositories over successive
-sweep executions instead of raising it.
+the unchanged organization-wide budgets. `rotation_offset = rotation_index %
+repository_count`; the walk starts at that offset and wraps. This spreads each
+bounded dispatch budget across repositories over successive sweep executions;
+the stacked budget is tracked independently so normal default-base work cannot
+starve stacked review dispatches.
 
 `ORG_SWEEP_ROTATION_INDEX`'s primary source is a persistent
 `ORG_SWEEP_ROTATION_COUNTER` repository variable on `ContextualWisdomLab/.github`
@@ -66,17 +71,19 @@ resolved here. Raising the shared number without that context risks the
 exact provider budget/rate-limit incident already documented in
 `PR_GOVERNANCE_AUDIT.md` (2026-07-13 KST GitHub Models org budget cap
 starvation). Rotation fixes starvation-by-fixed-order without touching that
-open cost question; whoever has organization Billing/Budgets visibility can
-still raise `vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT` independently later if the
-ceiling turns out to be conservative.
+open cost question. The stacked queue has the same explicit cost/rate control
+through `vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`; whoever has
+organization Billing/Budgets visibility can tune either limit independently.
 
 ## Consequences
 
 - Every repository with ready work eventually reaches the front of the walk
-  order and receives the shared dispatch, bounded by `repository_count`
-  actual sweep executions in the worst case, instead of never.
-- Total review dispatches per tick, and therefore LLM-provider call volume
-  per tick, are unchanged.
+  order and receives its queue's bounded dispatch, bounded by
+  `repository_count` actual sweep executions in the worst case, instead of
+  never.
+- Each queue remains bounded per tick. The default configuration permits one
+  ordinary and one stacked review dispatch, so provider call volume increases
+  from one to two only when both queues are eligible.
 - `rotation_offset` is logged (`Sweeping N repositories starting at rotation
   offset O (rotation tick T).`) so a specific execution's walk order is
   reconstructable from the run log alone.
@@ -111,8 +118,8 @@ ceiling turns out to be conservative.
   test-injection and fail-closed-validation paths.
 - `test_org_queue_sweep_documents_rotation_leverage_and_validates_input`
   locks the `#1219` cross-reference, confirms `github.run_number` is not
-  reintroduced as the source, and confirms the shared budget constant itself
-  is untouched.
+  reintroduced as the source, and confirms the ordinary budget remains
+  independently configurable from the stacked budget.
 - `actionlint` (with `shellcheck` on `PATH`) reports no findings against the
   modified workflow.
 

@@ -4506,6 +4506,85 @@ def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch)
     assert seen == [2, 4, 1, 3]
 
 
+def test_main_uses_stacked_dispatch_budget_when_default_budget_is_exhausted(monkeypatch):
+    """A bounded stacked-review slot survives exhaustion of the normal slot."""
+    prs = [
+        make_pr(number=1, baseRefName="main"),
+        make_pr(number=2, baseRefName="feature-a"),
+    ]
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_allows_unlimited_stacked_dispatch_budget(monkeypatch):
+    """The stacked budget accepts the documented unlimited sentinel."""
+    stacked = make_pr(number=2, baseRefName="feature-a")
+    dispatched = []
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [stacked])
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--dry-run",
+            "--review-dispatch-limit",
+            "0",
+            "--stacked-review-dispatch-limit",
+            "-1",
+        ]
+    ) == 0
+    assert dispatched == [2]
+
+
+def test_main_rejects_invalid_stacked_review_dispatch_limit():
+    with pytest.raises(SystemExit, match="--stacked-review-dispatch-limit must be -1 or greater"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--stacked-review-dispatch-limit",
+                "-2",
+            ]
+        )
+
+
 def test_main_rejects_invalid_review_dispatch_limit():
     with pytest.raises(SystemExit, match="--review-dispatch-limit must be -1 or greater"):
         sched.main(
