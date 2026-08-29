@@ -276,8 +276,8 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
     assert "get_credential(REVIEW_AUTH_CREDENTIAL_NAME)" in text
 
 
-def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
-    """Discovery, free filtering, and serving come from the vendored library."""
+def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
+    """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
@@ -294,9 +294,29 @@ def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
     assert has_text_output(SimpleNamespace(output_modalities=("text", "image")))
     assert not has_text_output(SimpleNamespace(output_modalities=("video",)))
     assert not has_text_output(SimpleNamespace())
+    report_rows = launcher["_report_rows"]
+    free = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="free/model",
+        agent_id="openrouter_free_model",
+        output_modalities=("text",),
+    )
+    priced = SimpleNamespace(
+        provider_name="openai",
+        model_id="priced-model",
+        agent_id="openai_priced_model",
+        output_modalities=("text",),
+        prompt_price_per_1k=0.002,
+        completion_price_per_1k=0.008,
+        currency_code="USD",
+    )
+    rows = report_rows([free, priced], frozenset({("openrouter", "free/model")}))
+    assert [row["is_free"] for row in rows] == [True, False]
+    assert rows[1]["prompt_price_per_1k"] == 0.002
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
-    assert "orchestrator/free would fail closed" in text
+    assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
+    assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text
 
@@ -326,6 +346,7 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
     """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:

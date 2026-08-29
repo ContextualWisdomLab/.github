@@ -31,9 +31,12 @@ all five, and auto-optimize routing by cost.
    KV in the **same process** that performs model discovery and serves
    `/v1/chat/completions` and `/v1/responses` on loopback. Env is bootstrap
    transport only; request-time credential reads go through the KV.
-2. **Auto model discovery + `orchestrator/free`**: discovery runs with the
-   orchestrator's own `discover_all_models()` against the KV credentials; only
-   zero-priced ("free") routes enter the pool. The gateway's
+2. **Auto model discovery + governed pools**: discovery runs with the
+   orchestrator's own `discover_all_models()` against the KV credentials.
+   OpenCode and Noema admit only zero-priced routes. Strix admits provider-
+   diverse priced routes only when discovery supplies finite, nonnegative
+   prompt and completion prices plus an explicit currency; missing or malformed
+   price evidence fails closed. The gateway's
    `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
    enabled zero-cost agent exists, which our catalog guarantees.
 3. **ZDR-first selection**: `scripts/ci/zdr_policy.py` defines ZDR the way
@@ -46,8 +49,8 @@ all five, and auto-optimize routing by cost.
    fetched when egress allows it and is authoritative for the `openrouter`
    scope; otherwise the dated static attestation table is used, never a
    fabricated policy.
-   `scripts/ci/contextual_orchestrator_review_policy.py` turns the free-tier
-   discovery report into a ZDR-prioritized, provider-family-diverse agents
+   `scripts/ci/contextual_orchestrator_review_policy.py` turns the price-
+   evidenced discovery report into a ZDR-prioritized, provider-family-diverse agents
    catalog (primary/secondary NVIDIA keys share one outage-domain family),
    capped in size, in the orchestrator's own `ModelAgent` schema.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
@@ -83,7 +86,8 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery + cost routing, under the zero-cost pool, with ZDR routes first.
+  discovery under the zero-cost pool. Strix uses the separately governed auto
+  pool without treating absent price metadata as paid-route evidence.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).

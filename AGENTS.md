@@ -20,8 +20,11 @@ sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
-the review model is the fail-closed zero-cost pool `orchestrator/free` with
-ZDR-compliant routes prioritized by [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
+OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`;
+Strix uses the provider-diverse `orchestrator/auto` pool. Non-free Strix routes
+are admitted only with complete published prompt/completion price and currency
+evidence, and private targets still require ZDR-compliant routes under
+[`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
 See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md).
 
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).

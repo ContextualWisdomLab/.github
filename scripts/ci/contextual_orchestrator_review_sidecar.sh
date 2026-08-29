@@ -220,6 +220,15 @@ case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
     ;;
 esac
 
+case "${CONTEXTUAL_ORCHESTRATOR_POOL:-free}" in
+  free|auto)
+    pool_args=(--pool "${CONTEXTUAL_ORCHESTRATOR_POOL:-free}")
+    ;;
+  *)
+    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
+    ;;
+esac
+
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
@@ -234,6 +243,7 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --report-out "$policy_report" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
+    "${pool_args[@]}" \
 > "$ORCHESTRATOR_WORK/sidecar.stdout" 2> "$ORCHESTRATOR_WORK/sidecar.stderr" &
 sidecar_pid=$!
 cleanup_sidecar_on_error() {

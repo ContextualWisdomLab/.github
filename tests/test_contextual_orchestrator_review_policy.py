@@ -50,6 +50,9 @@ def _report() -> dict[str, object]:
                 "model": "gpt-4.1",
                 "agent_id": "openai_gpt_41",
                 "is_free": False,
+                "prompt_price_per_1k": 0.002,
+                "completion_price_per_1k": 0.008,
+                "currency_code": "USD",
             },
         ]
     }
@@ -159,8 +162,9 @@ def test_parse_discovery_report_rejects_invalid_rows(report: dict[str, object]) 
 
 def test_build_catalog_is_zdr_first_and_free_only() -> None:
     """ZDR-compliant routes outrank non-ZDR free routes; priced routes stay out."""
+    parsed = policy.parse_discovery_report(_report())
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(_report()),
+        parsed,
         limit=12,
         family_cap=4,
         zdr_endpoints=ZDR_FEED,
@@ -178,6 +182,75 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
         assert agent["disabled"] is False
         assert "cost:free" in agent["tags"]
         assert agent["credential_key"]
+
+
+def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
+    """The Strix auto pool can use priced routes without weakening the free pool."""
+    parsed = policy.parse_discovery_report(_report())
+    result = policy.build_zdr_prioritized_catalog(
+        parsed,
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+        pool="auto",
+    )
+
+    agents = result["agents"]
+    priced = next(agent for agent in agents if agent["model"] == "gpt-4.1")
+    assert "cost:priced" in priced["tags"]
+    priced_evidence = next(row for row in parsed if row["model"] == "gpt-4.1")
+    assert priced_evidence["prompt_price_per_1k"] == 0.002
+    assert priced_evidence["completion_price_per_1k"] == 0.008
+    assert priced_evidence["currency_code"] == "USD"
+    assert result["report"]["pool"] == "orchestrator/auto"
+    assert result["report"]["total_routes"] == 6
+    assert result["report"]["free_selected_count"] == 5
+    assert result["report"]["priced_selected_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("prompt_price_per_1k", None, "lacks numeric prompt_price_per_1k"),
+        ("completion_price_per_1k", -1, "invalid completion_price_per_1k"),
+        ("prompt_price_per_1k", float("inf"), "invalid prompt_price_per_1k"),
+        ("currency_code", "", "lacks currency_code"),
+    ],
+)
+def test_priced_routes_require_complete_published_price_evidence(
+    field: str, value: object, message: str
+) -> None:
+    """Auto routing rejects routes whose published cost evidence is incomplete."""
+    report = _report()
+    priced = report["models"][-1]
+    priced[field] = value
+    with pytest.raises(policy.PolicyError, match=message):
+        policy.parse_discovery_report(report)
+
+
+def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
+    """Private Strix auto routing still excludes every unattested route."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()),
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+        require_zdr=True,
+        pool="auto",
+    )
+
+    assert [agent["model"] for agent in result["agents"]] == [
+        "deepseek/deepseek-r1:free"
+    ]
+    assert result["report"]["priced_selected_count"] == 0
+
+
+def test_build_catalog_rejects_unknown_pool() -> None:
+    """An unrecognized virtual pool cannot silently widen model admission."""
+    with pytest.raises(policy.PolicyError, match="unsupported review pool"):
+        policy.build_zdr_prioritized_catalog(
+            policy.parse_discovery_report(_report()), pool="direct"
+        )
 
 
 def test_build_catalog_assigns_unique_priorities() -> None:
@@ -245,7 +318,15 @@ def test_build_catalog_fails_closed_without_free_models() -> None:
     """An empty free pool cannot serve orchestrator/free and must fail loudly."""
     report = {
         "models": [
-            {"provider": "openai", "model": "gpt-4.1", "agent_id": "oa_41", "is_free": False}
+            {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "agent_id": "oa_41",
+                "is_free": False,
+                "prompt_price_per_1k": 0.002,
+                "completion_price_per_1k": 0.008,
+                "currency_code": "USD",
+            }
         ]
     }
     with pytest.raises(policy.PolicyError, match="no free"):

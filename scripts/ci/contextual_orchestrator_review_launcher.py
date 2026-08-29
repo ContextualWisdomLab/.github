@@ -43,8 +43,19 @@ def _has_text_output(model: object) -> bool:
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
-def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
-    """Convert in-process discovered models into free-only report rows.
+def _route_identity(model: object) -> tuple[str, str]:
+    """Return the provider/model identity used to bind price evidence."""
+
+    return (
+        str(getattr(model, "provider_name", None) or ""),
+        str(getattr(model, "model_id", None) or ""),
+    )
+
+
+def _report_rows(
+    discovered: list[object], free_route_identities: frozenset[tuple[str, str]]
+) -> list[dict[str, object]]:
+    """Convert in-process discovered models into price-evidenced report rows.
 
     Only routes the orchestrator itself marks zero-priced (whole-prompt and
     whole-completion published price equal to zero; never name-implied) are
@@ -53,10 +64,11 @@ def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
     org ZDR policy table (``scripts/ci/zdr_policy.py``).
 
     Args:
-        discovered: ``discover_all_models()`` result (the free subset).
+        discovered: Selected ``discover_all_models()`` result.
+        free_route_identities: Routes the orchestrator attested as zero-priced.
 
     Returns:
-        Free-only rows shaped for
+        Price-evidenced rows shaped for
         ``contextual_orchestrator_review_policy.parse_discovery_report``.
     """
     from scripts.ci import zdr_policy
@@ -79,7 +91,10 @@ def _free_report_rows(discovered: list[object]) -> list[dict[str, object]]:
                 "provider": provider,
                 "model": model_id,
                 "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
-                "is_free": True,
+                "is_free": (provider, model_id) in free_route_identities,
+                "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
+                "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
+                "currency_code": getattr(model, "currency_code", None),
                 "base_url": base_url,
                 "credential_key": credential_key,
                 "auth_scheme": auth_scheme,
@@ -114,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-out", required=True, help="Path to write the policy evidence JSON")
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
+    parser.add_argument("--pool", choices=("free", "auto"), default="free")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
@@ -145,16 +161,22 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    free_models = []
-    for model in free_discovered_models(discovered) if discovered else []:
+    free_models = list(free_discovered_models(discovered)) if discovered else []
+    free_route_identities = frozenset(_route_identity(model) for model in free_models)
+    selected_models = []
+    for model in discovered or []:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
             continue
-        free_models.append(model)
-    if not free_models:
-        raise SystemExit("review sidecar discovered no zero-cost models; orchestrator/free would fail closed")
+        if args.pool == "free" and _route_identity(model) not in free_route_identities:
+            continue
+        selected_models.append(model)
+    if not selected_models:
+        raise SystemExit(
+            f"review sidecar discovered no eligible models; orchestrator/{args.pool} would fail closed"
+        )
 
-    rows = _free_report_rows(free_models)
+    rows = _report_rows(selected_models, free_route_identities)
     Path(args.discovery_out).write_text(
         json.dumps({"models": rows}, indent=2) + "\n", encoding="utf-8"
     )
@@ -165,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
+        pool=args.pool,
     )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2) + "\n", encoding="utf-8"
