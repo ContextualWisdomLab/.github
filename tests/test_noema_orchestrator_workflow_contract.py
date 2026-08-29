@@ -1,4 +1,4 @@
-"""Noema review now uses the vendored orchestrator sidecar, not NVIDIA NIM."""
+"""Noema review uses the vendored orchestrator auto pool with free-first fallback."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pathlib import Path
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
-def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
-    """Require reviewer credentials and the sidecar; the public NIM hardcode is gone."""
+def test_noema_review_credentials_and_llm_use_orchestrator_auto() -> None:
+    """Require reviewer credentials and the auto sidecar; direct NIM stays absent."""
     workflow = workflow_text("noema-review.yml")
 
     assert "fail_unavailable()" in workflow
@@ -32,6 +32,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Resolve Noema target repository visibility" in workflow
     assert "target_visibility.outputs.require_zdr" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in workflow
     assert (
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
         not in workflow
@@ -42,7 +43,8 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}" in workflow
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/auto"' in workflow
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
