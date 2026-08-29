@@ -6,13 +6,17 @@
 
 OpenCode coverage may use a pull request's changed Python requirements lock when
 the lock is read from the authenticated, validated HEAD SHA and every logical
-requirement is an exact `==` pin with one or more complete SHA-256 hashes. The
-lock must be flat: relative includes, URLs, VCS sources, and unpinned lines do
-not cross into the networked coverage-image build context.
+requirement is an exact `==` pin with one or more complete SHA-256 hashes. A
+changed HEAD lock must be flat: URLs, VCS sources, relative includes, and
+unpinned lines do not cross into the networked coverage-image build context.
 
 An unchanged lock remains materialized from the validated base SHA. When a
 tracked base lock changes, the validated flat HEAD lock replaces it rather than
-installing both revisions. A base lock that becomes unbounded fails closed.
+installing both revisions. For an unchanged base lock with a bounded relative
+include, the include blob is compared with the exact HEAD tree: a changed
+include is materialized only when it remains flat and fully SHA-256 pinned, while
+deleted or invalid content fails closed. A base lock that becomes unbounded
+fails closed.
 
 ## Root cause
 
@@ -27,10 +31,13 @@ validating and recording changed HEAD locks; Python had no equivalent path.
 
 The central workflow still fetches and validates the base and head revisions
 before materialization. Only a regular candidate lock from the exact HEAD is
-read, and only a flat SHA-256-pinned file can replace a base lock. The image
-installer retains `pip install --require-hashes --only-binary=:all:`; source
-distributions, build backends, VCS dependencies, relative include graphs, and
-unbounded requirements remain rejected or outside this path. The later PR
+read, and only a flat SHA-256-pinned file can replace a base lock. A bounded
+include beneath an unchanged base lock is likewise read from HEAD only after
+its exact base/head blob comparison and regular-file check; its content must be
+flat and fully pinned. The image installer retains
+`pip install --require-hashes --only-binary=:all:`; source distributions, build
+backends, VCS dependencies, unbounded requirements, deleted includes, and
+invalid include content remain rejected or outside this path. The later PR
 sandbox remains networkless and credential-free.
 
 This is a provenance and compatibility repair, not an approval or merge
@@ -40,10 +47,11 @@ and protected-branch rules remain independent gates.
 ## Verification contract
 
 Regression coverage proves that a changed exact-head lock replaces stale base
-content and that an unbounded changed lock is rejected before image build.
-Workflow contract coverage proves that the materializer receives both
-`PR_BASE_SHA` and `PR_HEAD_SHA`. The central quality gate must retain complete
-statement, branch, and docstring coverage.
+content, and that a changed, deleted, or invalid include beneath an unchanged
+parent is handled from the exact HEAD before image build. Workflow contract
+coverage proves that the materializer receives both `PR_BASE_SHA` and
+`PR_HEAD_SHA`. The central quality gate must retain complete statement, branch,
+and docstring coverage.
 
 ## APA 7th references
 

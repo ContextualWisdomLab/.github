@@ -732,8 +732,11 @@ def _included_base_lock_blobs(
     source_path: str,
     content: bytes,
     regular_paths: set[str],
+    *,
+    head_sha: str | None = None,
+    head_regular_paths: set[str] | None = None,
 ) -> list[tuple[pathlib.PurePosixPath, bytes]]:
-    """Load direct bounded includes from the exact base as complete closures."""
+    """Load direct bounded includes from the selected revision as closures."""
     source_parent = pathlib.PurePosixPath(source_path).parent
     included: dict[pathlib.PurePosixPath, bytes] = {}
     for line in _requirement_lines(content):
@@ -742,14 +745,29 @@ def _included_base_lock_blobs(
             continue
         resolved = source_parent / target
         resolved_path = resolved.as_posix()
-        if resolved_path not in regular_paths:
+        selected_sha = base_sha
+        selected_paths = regular_paths
+        revision_label = "base"
+        if head_sha is not None:
+            if head_regular_paths is None:
+                raise ValueError("current-head regular paths are required")
+            selected_paths = head_regular_paths
+            revision_label = "current-head"
+        if resolved_path not in selected_paths:
             raise RuntimeError(
-                f"bounded include {target} from {source_path} is not a regular base blob"
+                f"bounded include {target} from {source_path} is not a regular "
+                f"{revision_label} blob"
             )
-        included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
+        if head_sha is not None:
+            base_blob = _git(repo_root, "rev-parse", f"{base_sha}:{resolved_path}")
+            head_blob = _git(repo_root, "rev-parse", f"{head_sha}:{resolved_path}")
+            if base_blob != head_blob:
+                selected_sha = head_sha
+        included_content = _git(repo_root, "show", f"{selected_sha}:{resolved_path}")
         if not _is_flat_materializable_lock(included_content):
             raise RuntimeError(
-                f"bounded include {resolved_path} must contain only exact SHA-256 pins"
+                f"{revision_label} bounded include {resolved_path} must contain "
+                "only exact SHA-256 pins"
             )
         included[target] = included_content
     return sorted(included.items(), key=lambda item: item[0].as_posix())
@@ -796,6 +814,14 @@ def materialize(
     regular_paths = {
         path for path, _candidate in _regular_base_blob_paths(entries)
     }
+    head_regular_paths: set[str] | None = None
+    if head_sha is not None:
+        head_entries = _git(
+            resolved_repo, "ls-tree", "-r", "-z", "--full-tree", head_sha
+        )
+        head_regular_paths = {
+            path for path, _candidate in _regular_base_blob_paths(head_entries)
+        }
     locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
     if head_sha is not None:
         locks = _select_python_locks(
@@ -811,6 +837,8 @@ def materialize(
             source_path,
             content,
             regular_paths,
+            head_sha=head_sha,
+            head_regular_paths=head_regular_paths,
         )
         for relative_target, included_content in included:
             destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)

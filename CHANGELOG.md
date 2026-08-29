@@ -6,9 +6,11 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - Let OpenCode coverage replace a changed base Python lock with the validated
-  current-head flat lock, while rejecting unbounded or include-based HEAD locks;
-  this keeps Python dependency updates measurable without weakening
-  `--require-hashes` or `--only-binary=:all:`.
+  current-head flat lock, and revalidate bounded includes beneath unchanged
+  parents against the exact HEAD tree; changed includes must remain flat and
+  pinned, while deleted or invalid includes fail closed. This keeps Python
+  dependency updates measurable without weakening `--require-hashes` or
+  `--only-binary=:all:`.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge

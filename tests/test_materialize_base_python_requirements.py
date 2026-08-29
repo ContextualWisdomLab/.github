@@ -572,6 +572,80 @@ def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> No
         )
 
 
+@pytest.mark.parametrize(
+    ("head_child", "expected_child", "expected_error"),
+    [
+        (
+            "demo==2 --hash=sha256:" + ("e" * 64) + "\n",
+            "demo==2 --hash=sha256:" + ("e" * 64) + "\n",
+            None,
+        ),
+        (
+            "demo==1 --hash=sha256:" + ("d" * 64) + "\n",
+            "demo==1 --hash=sha256:" + ("d" * 64) + "\n",
+            None,
+        ),
+        (None, None, "not a regular current-head blob"),
+        ("untrusted==2\n", None, "current-head bounded include"),
+    ],
+)
+def test_materialization_revalidates_includes_at_current_head(
+    tmp_path: Path,
+    head_child: str | None,
+    expected_child: str | None,
+    expected_error: str | None,
+) -> None:
+    """An unchanged parent cannot retain stale or unsafe HEAD include content."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements.txt").write_text("-r child.txt\n", encoding="utf-8")
+    (repo / "child.txt").write_text(
+        "demo==1 --hash=sha256:" + ("d" * 64) + "\n", encoding="utf-8"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    child = repo / "child.txt"
+    if head_child is None:
+        child.unlink()
+    else:
+        child.write_text(head_child, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "--allow-empty", "-m", "head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            materializer.materialize(
+                repo, base_sha, tmp_path / "output", head_sha=head_sha
+            )
+        return
+
+    materializer.materialize(
+        repo, base_sha, tmp_path / "output", head_sha=head_sha
+    )
+    assert (tmp_path / "output" / "includes-000" / "child.txt").read_text(
+        encoding="utf-8"
+    ) == expected_child
+
+
+def test_included_head_lock_requires_head_tree_paths(tmp_path: Path) -> None:
+    """Current-head include validation cannot run without its exact tree paths."""
+    with pytest.raises(ValueError, match="current-head regular paths are required"):
+        materializer._included_base_lock_blobs(
+            tmp_path,
+            "a" * 40,
+            "requirements.txt",
+            b"-r child.txt\n",
+            {"child.txt"},
+            head_sha="b" * 40,
+        )
+
+
 def test_bounded_repair_driver_runs_against_a_staged_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
