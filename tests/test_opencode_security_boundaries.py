@@ -216,6 +216,7 @@ def test_safe_pytest_executor_adds_trusted_monorepo_package_sources(
     observed: dict[str, object] = {}
     project_dir = tmp_path / "services" / "people-api"
     (project_dir / "src").mkdir(parents=True)
+    (tmp_path / ".git").write_text("gitdir: fixture", encoding="utf-8")
     package_root = tmp_path / "packages"
     hris_source = package_root / "hris-kernel" / "src"
     keyverse_source = package_root / "keyverse-adapter" / "src"
@@ -251,17 +252,40 @@ def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
     assert safe_pytest._repository_package_python_paths(project_dir) == []
 
 
-def test_safe_pytest_package_source_discovery_skips_empty_nested_root(
+def test_safe_pytest_package_source_discovery_stops_at_checkout_root(
     tmp_path: Path,
 ) -> None:
-    """An empty nested package root does not hide sources from an outer monorepo."""
+    """An empty checkout package root cannot expose sources from its parent workspace."""
     project_dir = tmp_path / "nested-repository" / "services" / "people-api"
     project_dir.mkdir(parents=True)
     (tmp_path / "nested-repository" / "packages").mkdir()
-    outer_source = tmp_path / "packages" / "shared-kernel" / "src"
+    (tmp_path / "nested-repository" / ".git").mkdir()
+    outer_source = tmp_path / "packages" / "outside-checkout" / "src"
     outer_source.mkdir(parents=True)
 
-    assert safe_pytest._repository_package_python_paths(project_dir) == [str(outer_source)]
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
+def test_safe_pytest_package_source_discovery_handles_checkout_without_packages(
+    tmp_path: Path,
+) -> None:
+    """A checked-out repository without packages keeps the local path only."""
+    project_dir = tmp_path / "repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    (tmp_path / "repository" / ".git").mkdir()
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
+def test_safe_pytest_repository_root_rejects_symlinked_git_marker(tmp_path: Path) -> None:
+    """A symlinked checkout marker cannot redirect source discovery to another root."""
+    project_dir = tmp_path / "linked-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    external_git = tmp_path / "external-git"
+    external_git.mkdir()
+    (tmp_path / "linked-repository" / ".git").symlink_to(external_git, target_is_directory=True)
+
+    assert safe_pytest._repository_root(project_dir) is None
 
 
 def test_safe_pytest_package_source_discovery_rejects_resolved_escape(
@@ -270,6 +294,7 @@ def test_safe_pytest_package_source_discovery_rejects_resolved_escape(
     """A resolved package source outside the package root is fail-closed."""
     project_dir = tmp_path / "services" / "people-api"
     project_dir.mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
     package_source = tmp_path / "packages" / "shared-kernel" / "src"
     package_source.mkdir(parents=True)
     original_is_relative_to = Path.is_relative_to

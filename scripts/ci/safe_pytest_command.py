@@ -72,35 +72,46 @@ def discover_commands(workflow_dir: pathlib.Path) -> list[list[str]]:
     return commands
 
 
+def _repository_root(project_dir: pathlib.Path) -> pathlib.Path | None:
+    """Return the checked-out repository root without following a ``.git`` link."""
+    resolved_project = project_dir.resolve()
+    for candidate in (resolved_project, *resolved_project.parents):
+        git_marker = candidate / ".git"
+        if git_marker.is_symlink():
+            return None
+        if git_marker.is_dir() or git_marker.is_file():
+            return candidate
+    return None
+
+
 def _repository_package_python_paths(project_dir: pathlib.Path) -> list[str]:
-    """Return trusted sibling package ``src`` paths from the nearest monorepo.
+    """Return trusted package ``src`` paths from the checked-out repository.
 
     The coverage sandbox intentionally replaces, rather than extends, the
     inherited ``PYTHONPATH``. A project such as ``services/people-api`` can
     still import its repository-owned packages when their ``src`` directories
-    are discovered beneath the nearest ancestor ``packages`` directory.
+    are discovered beneath the checked-out repository's ``packages`` directory.
     Symlinked package paths are excluded so this discovery cannot widen the
     sandbox through a path controlled by a checkout link.
     """
-    resolved_project = project_dir.resolve()
-    for repository_root in (resolved_project, *resolved_project.parents):
-        packages_dir = repository_root / "packages"
-        if not packages_dir.is_dir() or packages_dir.is_symlink():
+    repository_root = _repository_root(project_dir)
+    if repository_root is None:
+        return []
+    packages_dir = repository_root / "packages"
+    if not packages_dir.is_dir() or packages_dir.is_symlink():
+        return []
+    resolved_packages_dir = packages_dir.resolve()
+    package_sources: list[str] = []
+    for package_dir in sorted(packages_dir.iterdir()):
+        if not package_dir.is_dir() or package_dir.is_symlink():
             continue
-        resolved_packages_dir = packages_dir.resolve()
-        package_sources: list[str] = []
-        for package_dir in sorted(packages_dir.iterdir()):
-            if not package_dir.is_dir() or package_dir.is_symlink():
-                continue
-            source_dir = package_dir / "src"
-            if not source_dir.is_dir() or source_dir.is_symlink():
-                continue
-            resolved_source_dir = source_dir.resolve()
-            if resolved_source_dir.is_relative_to(resolved_packages_dir):
-                package_sources.append(str(resolved_source_dir))
-        if package_sources:
-            return package_sources
-    return []
+        source_dir = package_dir / "src"
+        if not source_dir.is_dir() or source_dir.is_symlink():
+            continue
+        resolved_source_dir = source_dir.resolve()
+        if resolved_source_dir.is_relative_to(resolved_packages_dir):
+            package_sources.append(str(resolved_source_dir))
+    return package_sources
 
 
 def _project_python_path(project_dir: pathlib.Path) -> str:
