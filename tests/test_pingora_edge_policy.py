@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import inspect
+import re
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -489,6 +491,35 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     files = policy._load_changed_files("api", "a/b", 1, "x", opener)
     assert len(files) == 3_000
     assert calls[-1].endswith("page=31")
+
+
+def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
+    """Pin the arithmetic invariant that makes the loop's trailing raise dead code.
+
+    ``_load_changed_files`` raises inside its item loop the moment
+    ``len(files) > 3_000`` (checked after every appended item, not only at
+    page boundaries) and returns early the moment one page has fewer than
+    100 items -- so the ``# pragma: no cover``-marked ``raise`` after the
+    ``for page in range(...)`` loop can only execute if every one of that
+    many pages returns at least 100 items while the cumulative total never
+    exceeds 3,000. That requires ``page_count * per_page <= 3_000``, which
+    the real page count (31) and per_page (100) violate (3,100 > 3,000) --
+    the in-loop raise always fires first. This test reads those literals
+    from the actual source rather than duplicating them, so it fails loudly
+    if a future edit to any of the three breaks the inequality -- exactly
+    when the trailing raise becomes reachable again and needs a real
+    covering test instead of the pragma.
+    """
+    source = inspect.getsource(policy._load_changed_files)
+    start, stop = (int(n) for n in re.search(r"range\((\d+),\s*(\d+)\)", source).groups())
+    page_count = len(range(start, stop))
+    per_page = int(re.search(r"per_page=(\d+)", source).group(1))
+    cap = int(re.search(r"len\(files\) > (\d[\d_]*)", source).group(1).replace("_", ""))
+    assert page_count * per_page > cap, (
+        "the trailing pagination raise in _load_changed_files is no longer "
+        "provably unreachable; remove its '# pragma: no cover' and add a "
+        "test that actually covers it"
+    )
 
 
 @pytest.mark.parametrize(
