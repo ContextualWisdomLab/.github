@@ -884,6 +884,74 @@ recurrence" section below out of the file entirely; both are restored here.)
   a new defect. Commented on both PRs distinguishing the two failure classes; no code change made in
   either PR for either failure, since neither is caused by their own diffs.
 
+## 2026-08-30 correction: Bytez was never free-eligible; the fix is elsewhere
+
+Triggered directly by explicit user feedback that a single external provider erroring should never be
+able to fail-close org-wide PR review CI. A 7-agent investigation (3 independent code readers, one
+synthesis, 3 adversarial skeptics who each independently re-read the cited source rather than trusting
+the synthesis) found the entry immediately above, and two earlier ones, misdiagnosed the mechanism.
+
+**What was wrong:**
+
+1. **Bytez can never populate `orchestrator/free`, regardless of its HTTP status.**
+   `contextual_orchestrator/model_discovery.py`'s `_parse_bytez` never sets `is_free` on any row it
+   builds, and `DiscoveredModel.is_free` defaults to `False`; `free_discovered_models()` is a flat
+   `is_free` filter. So the entry immediately above's claim that Bytez's HTTP 500 "removes what may
+   have been the last remaining candidate free-pool contributor" is false — Bytez was never a
+   candidate in the first place, whether its discovery call succeeds or fails. This is not new
+   information: `docs/planning/adrs/0041-generalize-models-dev-cost-classification.md` in
+   `contextual-orchestrator` already documents that Bytez has zero Models.dev coverage; the two
+   documents had simply never been cross-checked against each other on this point.
+2. **The `request_failed status=413 code=request_too_large` line is the sidecar's own offline
+   self-test, not a live ZDR-catalog prefetch that "fell back" to anything.**
+   `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s embedded self-test heredoc deliberately
+   spins up a throwaway local server and asserts `response.status == 413` on every single sidecar
+   boot, unconditionally, before any discovery or ZDR fetch starts. The immediately-following "using
+   live OpenRouter ZDR endpoint feed" line is printed only on that *unrelated* step's curl success, never
+   as a fallback from the 413. This misattribution — reading two adjacent, unrelated, always-emitted
+   log lines as a causal pair — appears not just in the entry immediately above but also in "2026-08-30
+   sidecar pin staleness recurrence" (`gateway preflight returned HTTP 502 (and, on a differently-shaped
+   request, request_failed status=413...) before the model pool can run`) and in "2026-08-30
+   post-#1413/#1422 backlog refresh cycle"'s #1420 bullet (`failed with request_failed status=413 ...
+   during model discovery, fell back to the OpenRouter ZDR feed`). Those two entries are left as
+   historical record rather than hand-edited (the first is explicitly marked superseded/kept-unedited
+   already; both predate this correction) — this note is the authoritative correction for all three.
+3. **The naruon#1486/.github#1438 incident's actual terminating message was `"review sidecar preflight
+   failed"`, a distinct, separately-sanitized string from `"review sidecar discovered no eligible
+   models"`** (confirmed in `contextual_orchestrator_review_launcher.py`'s two separate `SystemExit`
+   sites and `sanitize_contextual_orchestrator_sidecar_stream.py`'s two separate allowlist entries).
+   That proves discovery *did* find at least one genuinely free-eligible candidate (necessarily from
+   `nvidia_nim`/`nvidia_nim_sub`/`openai` — the only sources with real Models.dev-sourced zero pricing)
+   and every one of those candidates then failed the live chat-completion warm-up probe in
+   `_preflight_review_agents`. The entry immediately above's claim that this "match[es]" the
+   no-eligible-models path is wrong.
+
+**The actual, confirmed root cause:** two call sites make exactly one HTTP attempt with zero retry —
+`discover_provider_models`'s primary model-list fetch, and `_preflight_review_agents`'s live
+`client.proxy_send_once(...)` warm-up probe (which hardcodes `allow_transient_retries=False`,
+independent of `ModelClient.max_retries`). Either one hitting a single transient failure (5xx, timeout,
+connection reset) is architecturally sufficient to fail the whole sidecar closed, unrelated to whether
+any specific provider is structurally free-eligible.
+
+**What shipped this pass**, after adversarial review rejected the first draft fix (retrying both call
+sites) as unsafe — it would stack added latency past the sidecar's own ~180s healthz-wait budget and
+reintroduce exactly the request amplification `proxy_send_once`'s single-shot design exists to
+prevent, especially risky during a genuine partial provider outage:
+
+- `ContextualWisdomLab/contextual-orchestrator#923` — one bounded retry (short delay, shortened
+  timeout, gated on the existing `is_transient_error` classifier reused as-is) on the discovery-side
+  fetch only. Full suite: 2765 passed, 1 skipped.
+- `ContextualWisdomLab/.github#1438` — surfaces `_preflight_review_agents`'s already-recorded
+  per-route `error_type`/`http_status` to the CI job's visible console log (previously JSON-artifact
+  only), and widens the failure-path stderr tail (`SIDECAR_STDERR_TAIL_LINES`, 20→60 lines) so the new
+  diagnostics and existing discovery errors can no longer be silently truncated together. The
+  completion-warm-up-probe call site itself is deliberately left single-shot — retrying it needs
+  confirmed transience evidence from a real incident first, which this visibility fix now makes
+  possible to obtain, rather than a blind retry now. Full suite: 1884 passed, 1 skipped, 25 subtests;
+  coverage 100% (pre-existing `pingora_edge_policy.py:274` gap, owned by #1398, unaffected);
+  interrogate 100%.
+- §5.1 below is updated to track these two PRs to merge.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
@@ -902,15 +970,21 @@ recurrence" section below out of the file entirely; both are restored here.)
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1347 — web-E2E isolation/SSRF 수정을 current `main`으로 merge-conflict
+1. ContextualWisdomLab/contextual-orchestrator#923 — discovery-side transient-retry 수정의 required
+   Checks·독립 승인을 재확인하고, 조건 충족 시 merge한다. 병합 후 `.github`의 `ORCHESTRATOR_PIN_SHA`를
+   해당 커밋으로 갱신하는 후속 PR이 필요하다(#1422/#1426이 이미 확립한 패턴과 동일).
+2. ContextualWisdomLab/.github#1438 — preflight-rejection 가시성 개선 + stderr tail 확장 + 이번
+   correction 문서 갱신의 required Checks·독립 승인을 재확인하고, 조건 충족 시 merge한다.
+3. ContextualWisdomLab/.github#1347 — web-E2E isolation/SSRF 수정을 current `main`으로 merge-conflict
    해소(ordinary merge commit, no rebase) 후 terminal Checks·독립 승인을 재확인한다. (#1297은 이미
    병합됨; #1345/#1326은 closed·unmerged로 확인되어 더 이상 후보가 아니다 — 위 2026-08-30 항목 참고.)
-2. ContextualWisdomLab/naruon#1486 — 새로 추가된 Noema `check_calendar_conflict` 도구의 naruon 자체
+4. ContextualWisdomLab/naruon#1486 — 새로 추가된 Noema `check_calendar_conflict` 도구의 naruon 자체
    required Checks(OpenCode/Strix/merge-scheduler)를 current head에서 재확인하고, 조건 충족 시
    merge한다.
-3. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon
+5. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon
    ecosystem 소비 증거(부분적으로 #1486이 G-06/PRD-02에 기여), G-15는 대용량·미지원 첨부파일 parser
-   registry의 소유 저장소 PR로 연결한다.
+   registry의 소유 저장소 PR로 연결한다. 완료된 discovery-side retry 이후에도 preflight warm-up probe
+   재시도 여부는 실제 transience 증거(이번 pass의 가시성 개선으로 확보 가능)가 나오기 전까지 보류한다.
 
 ## 6. Compliance and data boundary
 

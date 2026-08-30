@@ -5,6 +5,13 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Correct `docs/product-technical-gap-baseline.md`'s "2026-08-30 post-#1486/#1438 wake" entry (and flag
+  two earlier ones with the same error): Bytez can never populate `orchestrator/free` regardless of its
+  HTTP status (`_parse_bytez` never sets `is_free`), the `request_failed status=413` line is the
+  sidecar's own unconditional self-test rather than a live ZDR-prefetch fallback, and the incident's
+  actual terminating message was `"review sidecar preflight failed"` — a live warm-up-probe rejection,
+  not the `"no eligible models"` path those entries claimed. See `ContextualWisdomLab/contextual-orchestrator#923`
+  and this repo's #1438 for the fix that follows from the corrected diagnosis.
 - Surface the review sidecar's preflight-rejection detail (`error_type`,
   `http_status` per rejected route) to the CI job's visible console log
   (`_log_preflight_rejections` in `contextual_orchestrator_review_launcher.py`,
