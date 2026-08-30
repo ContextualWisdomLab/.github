@@ -267,6 +267,14 @@ def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path)
     sandboxed_web_e2e.stop_service(exited_service)
 
 
+def test_require_loopback_readiness_url_rejects_malformed_port():
+    """A nonnumeric or out-of-range port fails closed instead of an uncaught exception."""
+    with pytest.raises(ValueError, match="URL has a malformed port"):
+        sandboxed_web_e2e.require_loopback_readiness_url("http://127.0.0.1:abc/health")
+    with pytest.raises(ValueError, match="URL has a malformed port"):
+        sandboxed_web_e2e.require_loopback_readiness_url("http://127.0.0.1:99999/health")
+
+
 def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
     """Literal localhost is allowed only when every resolved address is loopback."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
@@ -655,6 +663,47 @@ def test_main_reports_invalid_readiness_url(monkeypatch, tmp_path, capsys):
     assert payload["exit_code"] == 125
 
 
+def test_main_reports_malformed_readiness_port(monkeypatch, tmp_path, capsys):
+    """A nonnumeric readiness port exits 125 before any service starts."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+
+    def fake_start(label, command, cwd, env, logs_dir):
+        started.append(label)
+        raise AssertionError("services must not start before readiness URLs are validated")
+
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--backend-ready-url",
+            "http://127.0.0.1:abc/health",
+            "--frontend-ready-url",
+            "http://127.0.0.1:3000/",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert not started
+    assert "invalid readiness URL: URL has a malformed port" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
+
+
 def test_main_reports_readiness_exception_after_start(monkeypatch, tmp_path, capsys):
     """Unexpected readiness errors after launch still clean up services."""
     repo = tmp_path / "repo"
@@ -884,7 +933,70 @@ def test_isolation_backend_returns_bwrap_path_on_linux(monkeypatch):
     """Linux isolation returns the resolved bubblewrap executable."""
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_isolation_capability", lambda backend: None)
     assert sandboxed_web_e2e.isolation_backend("required") == "/usr/bin/bwrap"
+
+
+def test_isolation_backend_fails_closed_when_namespaces_denied(monkeypatch):
+    """A discovered bwrap binary that cannot create namespaces is unavailable."""
+    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "_probe_isolation_capability",
+        lambda backend: (_ for _ in ()).throw(RuntimeError("bubblewrap cannot create required namespaces: denied")),
+    )
+    with pytest.raises(RuntimeError, match="cannot create required namespaces"):
+        sandboxed_web_e2e.isolation_backend("required")
+
+
+def test_probe_isolation_capability_accepts_working_bwrap(monkeypatch):
+    """A probe that exits zero proves bubblewrap can build the sandbox."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+    monkeypatch.setattr(
+        sandboxed_web_e2e.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+    sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+
+def test_probe_isolation_capability_rejects_denied_namespaces(monkeypatch):
+    """A nonzero probe exit is classified as bubblewrap being unable to isolate."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+    monkeypatch.setattr(
+        sandboxed_web_e2e.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 1, stdout="", stderr="bwrap: Creating new namespace failed: Operation not permitted"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="Operation not permitted"):
+        sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+
+def test_probe_isolation_capability_rejects_when_probe_cannot_run(monkeypatch):
+    """A probe that cannot even start is classified as unavailable isolation."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+
+    def _raise(*args, **kwargs):
+        raise OSError("no such file or directory")
+
+    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _raise)
+    with pytest.raises(RuntimeError, match="could not run"):
+        sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+
+def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
+    """A probe that hangs past its bounded timeout is classified as unavailable."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: None)
+
+    def _raise(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="bwrap", timeout=10)
+
+    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _raise)
+    with pytest.raises(RuntimeError, match="could not run"):
+        sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
 
 def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
@@ -953,20 +1065,20 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
         )
 
 
-def test_isolated_command_allows_unresolved_executable_for_bwrap(monkeypatch, tmp_path):
-    """Commands with shell-resolved executables still receive the isolated wrapper."""
+def test_isolated_command_rejects_unresolved_executable(monkeypatch, tmp_path):
+    """An executable shutil.which cannot find is rejected, not silently unwrapped."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
-    command = sandboxed_web_e2e.isolated_command(
-        "tool",
-        backend="/usr/bin/bwrap",
-        cwd=repo,
-        sandbox_root=sandbox,
-        env={"PATH": "/usr/bin"},
-    )
-    assert command.startswith("/usr/bin/bwrap")
+    with pytest.raises(RuntimeError, match="could not be resolved"):
+        sandboxed_web_e2e.isolated_command(
+            "tool",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
 
 
 def test_isolated_command_skips_unavailable_optional_mount(monkeypatch, tmp_path):

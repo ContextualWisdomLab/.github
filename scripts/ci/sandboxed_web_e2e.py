@@ -112,6 +112,61 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+BIND_ROOTS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt")
+
+
+def _bind_roots() -> list[Path]:
+    """Return the read-only host runtime roots bubblewrap mounts, if present."""
+    return [Path(path) for path in BIND_ROOTS if Path(path).exists()]
+
+
+def _probe_isolation_capability(backend: str) -> None:
+    """Prove bubblewrap can create the sandbox namespaces before any service starts.
+
+    A discovered ``bwrap`` binary on PATH only proves the tool is installed;
+    it does not prove the host actually permits creating the unprivileged
+    user, PID, and mount namespaces bubblewrap depends on. A restricted Linux
+    host (for example one with unprivileged user namespaces disabled, or a
+    seccomp policy that denies ``unshare``/``clone``) can have a working
+    ``bwrap`` binary that still fails on every real invocation. This runs the
+    same essential namespace and mount operations ``isolated_command`` relies
+    on against a harmless no-op executable, so that kind of failure is
+    classified as unavailable isolation (exit code 126) instead of surfacing
+    later as a confusing service-readiness or test failure.
+    """
+    probe_executable = shutil.which("true") or "/bin/true"
+    bind_args: list[str] = []
+    for root in _bind_roots():
+        bind_args.extend(("--ro-bind", str(root), str(root)))
+    probe_command = [
+        backend,
+        "--die-with-parent",
+        "--unshare-pid",
+        "--tmpfs",
+        "/",
+        *bind_args,
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--",
+        probe_executable,
+    ]
+    try:
+        result = subprocess.run(
+            probe_command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"bubblewrap cannot create required namespaces: {detail}")
+
+
 def isolation_backend(mode: str) -> str | None:
     """Resolve the requested OS isolation backend without silently downgrading."""
     if mode == "disabled":
@@ -121,6 +176,7 @@ def isolation_backend(mode: str) -> str | None:
     backend = shutil.which("bwrap")
     if backend is None:
         raise RuntimeError("required isolation needs bubblewrap (bwrap) on PATH")
+    _probe_isolation_capability(backend)
     return backend
 
 
@@ -143,24 +199,28 @@ def isolated_command(
     sandbox_root: Path,
     env: dict[str, str],
 ) -> str:
-    """Wrap one command in a read-only-root bubblewrap workspace."""
+    """Wrap one command in a read-only-root bubblewrap workspace.
+
+    The command's executable must resolve on ``PATH`` (or as a literal path)
+    and land inside the read-only bind roots. An executable ``shutil.which``
+    cannot find is rejected rather than passed through unvalidated, so a
+    lookup failure can never silently bypass the read-only-root check it was
+    supposed to receive.
+    """
     argv = shlex.split(command)
     if not argv:
         raise ValueError("command must not be empty")
-    bind_roots = [
-        Path(path)
-        for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt")
-        if Path(path).exists()
-    ]
+    bind_roots = _bind_roots()
     executable = shutil.which(argv[0], path=env.get("PATH"))
-    if executable is not None:
-        executable_path = Path(executable)
-        if executable_path.is_relative_to(Path.home()):
-            raise RuntimeError("commands from the host home directory are not allowed in isolation")
-        if not any(executable_path.is_relative_to(root) for root in bind_roots):
-            raise RuntimeError(
-                f"executable is outside the isolated bind roots: {executable_path}"
-            )
+    if executable is None:
+        raise RuntimeError(f"executable could not be resolved for isolation validation: {argv[0]}")
+    executable_path = Path(executable)
+    if executable_path.is_relative_to(Path.home()):
+        raise RuntimeError("commands from the host home directory are not allowed in isolation")
+    if not any(executable_path.is_relative_to(root) for root in bind_roots):
+        raise RuntimeError(
+            f"executable is outside the isolated bind roots: {executable_path}"
+        )
     args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
@@ -245,13 +305,20 @@ def require_loopback_readiness_url(url: str) -> None:
     Literal ``localhost`` is resolved and every answer must be loopback, so a
     poisoned hosts file cannot smuggle a public A/AAAA record through the
     name allowlist. IPv4-mapped IPv6 addresses are unwrapped and re-checked
-    so ``::ffff:8.8.8.8`` cannot bypass the loopback rule.
+    so ``::ffff:8.8.8.8`` cannot bypass the loopback rule. A nonnumeric or
+    out-of-range port is rejected here too, so a malformed readiness URL
+    fails with the documented invalid-readiness diagnostic instead of an
+    uncaught exception once an HTTP client actually opens it.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme.lower() not in {"http", "https"}:
         raise ValueError(f"URL must start with http:// or https://, got: {url}")
     if parsed.username or parsed.password:
         raise ValueError("URL cannot include userinfo")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"URL has a malformed port: {url}") from exc
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if not hostname:
         raise ValueError("URL must include a loopback hostname")
