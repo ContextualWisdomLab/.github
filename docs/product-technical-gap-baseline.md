@@ -398,12 +398,14 @@ flowchart LR
 
 ## 2026-08-30 hourly loop recheck: bootstrap/sidecar-pin cycle still open, one independent fix landed
 
-- Reconfirmed at the start of this hourly pass: protected `main` is still
-  `6c8ee24046d743b3981c566c6e29f99f09137f6a` (the same commit the 2026-08-26
-  107-open-PR snapshot was taken against). #1413 (Strix `orchestrator/auto`
-  route), #1422 (stale contextual-orchestrator sidecar pin refresh), and
-  #1414 (bootstrap `if:` guard removal) have not merged; no human admin
-  bootstrap merge landed this cycle.
+- Reconfirmed at the start of this hourly pass: protected `main` is
+  `6c8ee24046d743b3981c566c6e29f99f09137f6a` (this has moved on from the
+  2026-08-26 107-open-PR snapshot's `826b92394c63deb6981c3a8d16a724d71f85a0d7`
+  through ordinary merges since; it is not the same commit). #1413 (Strix
+  `orchestrator/auto` route), #1422 (stale contextual-orchestrator sidecar
+  pin refresh), and #1414 (bootstrap `if:` guard removal) have not merged
+  into this current `main`; no human admin bootstrap merge landed this
+  cycle.
 - Sampled the newest open PRs (#1394, #1398, #1411, #1416, #1417, #1418,
   #1419, #1420) against current-head job logs. All of #1411, #1416, #1418,
   #1419, and #1420's `strix`/`noema-review`/`opencode-review` failures
@@ -416,8 +418,13 @@ flowchart LR
   `contextual-orchestrator` sidecar pin `b21645116b352967e50fc497b87eb745b9cc8c61`
   failing gateway preflight with `request_failed status=413
   code=request_too_large` / `sidecar exited before healthz` (#1422's fix —
-  seen verbatim on #1418). These will clear once one of #1413/#1414/#1422
-  merges; none were reclassified or worked around.
+  seen verbatim on #1418). These are three independent fixes, not
+  interchangeable: the Strix `orchestrator/auto` failure clears only once
+  #1413 merges; the sidecar-pin failure clears only once #1422 merges; the
+  bootstrap `if:` guard failure clears once any of #1413, #1414, or #1422
+  merges (all three carry that fix). A PR failing on more than one signature
+  needs each corresponding fix on `main`, not just one merge. None of these
+  failures were reclassified or worked around.
 - One independent, non-systemic defect was found and fixed this pass: #1417
   ("Bolt: label_section 탐색 로직 최적화") added a `ThreadPoolExecutor`-based
   `probe_agent` nested closure to
