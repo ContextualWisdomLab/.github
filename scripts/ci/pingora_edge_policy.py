@@ -352,6 +352,14 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
     caller may treat differently from every other, genuinely malformed
     response shape, which always raises the base ``PolicyError`` instead.
+
+    GitHub's Contents API returns two distinct shapes for a file it cannot
+    inline: some responses still report ``encoding: "base64"`` with a
+    ``size`` over the inline-content ceiling and empty/absent ``content``;
+    for files whose blob exceeds that ceiling, GitHub instead reports
+    ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
+    all. Both are treated as the same size-exceeded evidence; every other
+    response shape still fails closed.
     """
 
     encoded_path = quote(path, safe="/")
@@ -359,10 +367,17 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     payload = opener(url, token)
     if not isinstance(payload, Mapping):
         raise PolicyError(f"GitHub content evidence for {path} is not an object")
-    if payload.get("type") != "file" or payload.get("encoding") != "base64":
+    if payload.get("type") != "file":
+        raise PolicyError(f"GitHub content evidence for {path} is not a regular file")
+    encoding = payload.get("encoding")
+    declared_size = payload.get("size")
+    if encoding == "none":
+        if isinstance(declared_size, int) and declared_size > MAX_FILE_BYTES:
+            raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+        raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
+    if encoding != "base64":
         raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
     encoded = payload.get("content")
-    declared_size = payload.get("size")
     if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0:
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
     if declared_size > MAX_FILE_BYTES:
@@ -477,8 +492,10 @@ def evaluate_pull_request(
         # also omits one for an oversized textual diff), so this confirms
         # the real %PDF- magic prefix whenever the bytes can be fetched at
         # all, falling back to the path+suffix convention only when the
-        # content genuinely exceeds the Contents API's size ceiling.
-        if _is_binary_documentation_pdf(changed):
+        # content genuinely exceeds the Contents API's size ceiling. A
+        # removed file has no head content to fetch at all -- _needs_content_scan
+        # already special-cases this the same way for every other file.
+        if changed.status != "removed" and _is_binary_documentation_pdf(changed):
             if _pdf_evidence_confirms_binary(
                 changed,
                 api_url=api_url.rstrip("/"),

@@ -298,10 +298,14 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
 def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     """A genuinely oversized documentation PDF still cannot be verified by content.
 
-    GitHub's Contents API refuses to return content for a file over
-    MAX_FILE_BYTES at all, so this is the one case that still falls back to
-    the path+suffix convention -- the real research-paper-citation use case
-    this whole exemption exists for.
+    GitHub's real Contents API response for a file whose blob exceeds the
+    inline-content ceiling reports ``encoding: "none"`` with an accurate
+    ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
+    an oversized declared size) -- this is that real shape, not a synthetic
+    one, per Devin Review's finding that the earlier version of this test
+    used a response shape GitHub never actually returns. This is the one
+    case that still falls back to the path+suffix convention -- the real
+    research-paper-citation use case this whole exemption exists for.
     """
 
     def opener(url: str, _token: str) -> object:
@@ -310,7 +314,7 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
                 {"filename": "docs/papers/big-paper.pdf", "status": "added"},
             ]
         assert "/contents/docs/papers/big-paper.pdf" in url
-        return {"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
 
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
@@ -370,6 +374,35 @@ def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> No
         repository="ContextualWisdomLab/example",
         pull_request=13,
         head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
+    """A removed documentation PDF has no head content to fetch at all.
+
+    Regression coverage for Devin Review's finding: _is_binary_documentation_pdf
+    does not itself check status, so without an explicit removed-status guard
+    in evaluate_pull_request's own loop, a deleted PDF would try to fetch its
+    (nonexistent) head content and fail evidence collection for every such
+    deletion.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/14/files" in url:
+            return [
+                {"filename": "docs/papers/removed-paper.pdf", "status": "removed"},
+            ]
+        raise AssertionError(f"must not fetch content for a removed file: {url}")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=14,
+        head_sha="f" * 40,
         event_action="opened",
         token="token",
         opener=opener,
@@ -465,6 +498,12 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
         ({"type": "symlink", "encoding": "base64", "size": 0, "content": ""}, "not a regular"),
         ({"type": "file", "encoding": "base64", "size": -1, "content": ""}, "malformed size"),
         ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "size contract"),
+        # GitHub's real response shape for a file whose blob exceeds the
+        # inline-content ceiling: no content at all, encoding "none".
+        ({"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1}, "size contract"),
+        ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
+        ({"type": "file", "encoding": "none", "size": "not-an-int"}, "no inline content"),
+        ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "not a regular base64 file"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
