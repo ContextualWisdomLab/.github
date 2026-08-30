@@ -145,6 +145,44 @@ def _resolve_api_base(env: dict[str, str], model: str) -> tuple[int, str]:
     return completed.returncode, completed.stdout.strip()
 
 
+def _child_model(env_model: str, api_base: str) -> tuple[int, str]:
+    """Execute the production child-model qualifier for one gateway model."""
+
+    gate_source = STRIX_GATE.read_text(encoding="utf-8")
+    helper_names = (
+        "is_contextual_orchestrator_model",
+        "is_contextual_orchestrator_api_base",
+        "is_github_models_api_base",
+    )
+    helper_sources = [
+        _function_block(gate_source, name)
+        for name in helper_names
+    ]
+    child_source = _function_block(gate_source, "child_model_for_api_base")
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -euo pipefail",
+                    *helper_sources,
+                    child_source,
+                    'child_model_for_api_base "$1" "$2"',
+                ]
+            ),
+            "strix-child-model",
+            env_model,
+            api_base,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin"},
+    )
+    return completed.returncode, completed.stdout.strip()
+
+
 class ExplicitOpenAIFallbackRouting(unittest.TestCase):
     """Direct-OpenAI fallbacks must not inherit the primary provider base."""
 
@@ -245,6 +283,31 @@ class ExplicitOpenAIFallbackRouting(unittest.TestCase):
             "openai-direct/gpt-5.4",
         )
         self.assertEqual(rc, 2)
+
+
+class ContextualOrchestratorChildModel(unittest.TestCase):
+    """Gateway child models must preserve the actual orchestrator pool name."""
+
+    def test_provider_prefixed_gateway_model_is_not_double_qualified(self) -> None:
+        """A provider-qualified model becomes exactly one OpenAI-qualified id."""
+
+        for model, expected in (
+            (
+                "contextual-orchestrator/orchestrator/auto",
+                "openai/orchestrator/auto",
+            ),
+            (
+                "contextual-orchestrator/orchestrator/free",
+                "openai/orchestrator/free",
+            ),
+        ):
+            with self.subTest(model=model):
+                rc, child_model = _child_model(
+                    model,
+                    "http://127.0.0.1:18080/v1",
+                )
+                self.assertEqual(rc, 0)
+                self.assertEqual(child_model, expected)
 
 
 class WorkflowUsesContextualOrchestrator(unittest.TestCase):

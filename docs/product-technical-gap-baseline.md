@@ -421,8 +421,9 @@ flowchart LR
   `TaskOrchestrator.AUTO_MODEL` / `FREE_MODEL` are real, distinct sentinels),
   makes `child_model_for_api_base()` qualify the child-process model from the
   actually-resolved `$model` instead of a hardcoded `openai/orchestrator/free`
-  literal, and refreshes two `STRIX_PROVIDER_UNAVAILABLE` log lines to name
-  the real primary model. Adds a mirrored `orchestrator/auto` scenario to
+  literal, stripping an optional `contextual-orchestrator/` provider prefix so
+  LiteLLM receives exactly one `openai/` prefix, and refreshes two
+  `STRIX_PROVIDER_UNAVAILABLE` log lines to name the real primary model. Adds a mirrored `orchestrator/auto` scenario to
   `scripts/ci/test_strix_quick_gate.sh` and a new Python regression in
   `tests/test_strix_openai_fallback_api_base.py`. Full suite: 1,874 passed, 1
   skipped (pre-existing); interrogate 100%. This PR's own Strix check is

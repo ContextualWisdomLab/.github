@@ -2572,7 +2572,7 @@ child_model_for_api_base() {
 	# itself distinguishes by this exact string.
 	if is_contextual_orchestrator_model "$model" &&
 		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
-		printf 'openai/%s\n' "$model"
+		printf 'openai/%s\n' "${model#contextual-orchestrator/}"
 		return 0
 	fi
 

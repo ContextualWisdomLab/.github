@@ -18,6 +18,9 @@ Semantic Versioning where the repository publishes a release.
   existing `orchestrator/free` route or the provider-diverse
   `orchestrator/auto` route. This provides a fail-closed two-phase migration
   path without admitting direct-provider model identifiers.
+- Normalize an optional `contextual-orchestrator/` provider prefix before
+  qualifying the Strix sidecar child model, preventing invalid double-prefixed
+  gateway model ids.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge
