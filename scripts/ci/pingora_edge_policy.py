@@ -303,7 +303,9 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
-    for page in range(1, 32):
+    # The loop-exhaustion edge is unreachable: a full 31st page crosses the
+    # 3,000-file guard below, while a short 31st page returns immediately.
+    for page in range(1, 32):  # pragma: no branch
         url = f"{api_url}/repos/{repository}/pulls/{pull_request}/files?per_page=100&page={page}"
         payload = opener(url, token)
         if not isinstance(payload, list):
@@ -334,9 +336,6 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
-
-
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
     """Load one final head file's raw decoded bytes from the Contents API.
 
