@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import atexit
 import fnmatch
 import functools
@@ -136,6 +137,43 @@ def _is_trusted_org_archive_url(url: str) -> bool:
     )
 
 
+_GITHUB_COM_ARCHIVE_PATH_RE = re.compile(r"^/(?P<owner>[^/]+)/(?P<repo>[^/]+)/archive/")
+_CODELOAD_ARCHIVE_PATH_RE = re.compile(
+    r"^/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?:tar\.gz|zip|legacy\.tar\.gz|legacy\.zip)(?:/|$)"
+)
+
+
+def _org_archive_repository(url: str) -> tuple[str, str] | None:
+    """Return the ``(owner, repository)`` one organization archive URL names.
+
+    ``github.com`` archive links and their ``codeload.github.com`` redirect
+    target use different path shapes for the exact same repository
+    (``/{owner}/{repo}/archive/...`` versus
+    ``/{owner}/{repo}/{tar.gz|zip}[/...]``). Parsing both here lets a redirect
+    be proven to stay on the exact same repository rather than merely the
+    same allowlisted host, so ``codeload.github.com/other-org/other-repo``
+    cannot be reached through a host-only allowlist. Returns ``None`` when the
+    URL is not one of the two known trusted archive path shapes.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname == "github.com":
+        match = _GITHUB_COM_ARCHIVE_PATH_RE.match(parsed.path)
+    elif parsed.hostname == "codeload.github.com":
+        match = _CODELOAD_ARCHIVE_PATH_RE.match(parsed.path)
+    else:
+        return None
+    if match is None:
+        return None
+    return (match.group("owner").casefold(), match.group("repo").casefold())
+
+
+def _is_same_org_archive_repository(source_url: str, target_url: str) -> bool:
+    """Return whether two trusted archive URLs name the identical repository."""
+    source_repository = _org_archive_repository(source_url)
+    target_repository = _org_archive_repository(target_url)
+    return source_repository is not None and source_repository == target_repository
+
+
 class _TrustedOrgArchiveRedirects(urllib.request.HTTPRedirectHandler):
     """Follow GitHub archive redirects only onto GitHub's code-download host."""
 
@@ -148,8 +186,12 @@ class _TrustedOrgArchiveRedirects(urllib.request.HTTPRedirectHandler):
         headers: Any,
         new_url: str,
     ) -> urllib.request.Request:
-        """Reject archive redirects that leave the fixed GitHub origins."""
-        if not _is_trusted_org_archive_url(request.full_url) or not _is_trusted_org_archive_url(new_url):
+        """Reject archive redirects that leave the fixed GitHub origins or repository."""
+        if (
+            not _is_trusted_org_archive_url(request.full_url)
+            or not _is_trusted_org_archive_url(new_url)
+            or not _is_same_org_archive_repository(request.full_url, new_url)
+        ):
             raise RuntimeError("trusted organization archive redirected outside GitHub")
         followed = super().redirect_request(
             request,
@@ -174,7 +216,10 @@ def _download_trusted_org_archive(url: str, hashes: list[str]) -> bytes:
     )
     try:
         with opener.open(url, timeout=TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS) as response:
-            if not _is_trusted_org_archive_url(response.geturl()):
+            final_url = response.geturl()
+            if not _is_trusted_org_archive_url(final_url) or not _is_same_org_archive_repository(
+                url, final_url
+            ):
                 raise RuntimeError("trusted organization archive left GitHub origins")
             payload = bytearray()
             while len(payload) <= TRUSTED_ORG_ARCHIVE_MAX_BYTES:
@@ -895,12 +940,109 @@ def _rewrite_materialized_includes(
     return "".join(rewritten).encode("utf-8")
 
 
+_SUPPORTED_MARKER_VARIABLES = frozenset({"python_version", "python_full_version"})
+
+
+class _UnsupportedMarkerError(Exception):
+    """Raised when a marker shape is outside the narrow supported subset."""
+
+
+def _marker_version_tuple(value: str) -> tuple[int, ...]:
+    """Parse a dotted numeric version literal into a comparable integer tuple."""
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        raise _UnsupportedMarkerError(f"unsupported marker version literal: {value!r}")
+    return tuple(int(part) for part in value.split("."))
+
+
+def _compare_marker_versions(left: str, operator: type, right: str) -> bool:
+    """Compare two dotted version literals as zero-padded integer tuples."""
+    left_tuple = _marker_version_tuple(left)
+    right_tuple = _marker_version_tuple(right)
+    length = max(len(left_tuple), len(right_tuple))
+    left_padded = left_tuple + (0,) * (length - len(left_tuple))
+    right_padded = right_tuple + (0,) * (length - len(right_tuple))
+    if operator is ast.Eq:
+        return left_padded == right_padded
+    if operator is ast.NotEq:
+        return left_padded != right_padded
+    if operator is ast.Lt:
+        return left_padded < right_padded
+    if operator is ast.LtE:
+        return left_padded <= right_padded
+    if operator is ast.Gt:
+        return left_padded > right_padded
+    if operator is ast.GtE:
+        return left_padded >= right_padded
+    raise _UnsupportedMarkerError("unsupported marker comparison operator")
+
+
+def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
+    """Evaluate one parsed marker expression node against a fixed Python version.
+
+    Only boolean combinations (``and``/``or``/``not``/parentheses) of
+    ``python_version``/``python_full_version`` comparisons against a literal
+    dotted version string are understood -- the shape ``uv export`` emits for
+    Python-version-gated organization archive sources. Any other marker shape
+    (``sys_platform``, ``extra``, ``in``/``not in``, function calls, chained
+    comparisons, and so on) raises ``_UnsupportedMarkerError`` so the caller
+    fails open and still downloads the archive.
+    """
+    if isinstance(node, ast.Expression):
+        return _evaluate_marker_node(node.body, target_python_version)
+    if isinstance(node, ast.BoolOp):
+        values = [_evaluate_marker_node(value, target_python_version) for value in node.values]
+        # ast.BoolOp.op is exhaustively either And or Or in Python's grammar;
+        # there is no third case to fail open on.
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _evaluate_marker_node(node.operand, target_python_version)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
+        left, right = node.left, node.comparators[0]
+        variable_node, literal_node = (left, right) if isinstance(left, ast.Name) else (right, left)
+        if not isinstance(variable_node, ast.Name) or variable_node.id not in _SUPPORTED_MARKER_VARIABLES:
+            raise _UnsupportedMarkerError("unsupported marker variable")
+        if not isinstance(literal_node, ast.Constant) or not isinstance(literal_node.value, str):
+            raise _UnsupportedMarkerError("unsupported marker literal")
+        operator = type(node.ops[0])
+        if variable_node is left:
+            return _compare_marker_versions(target_python_version, operator, literal_node.value)
+        return _compare_marker_versions(literal_node.value, operator, target_python_version)
+    raise _UnsupportedMarkerError("unsupported marker expression shape")
+
+
+def _marker_excludes_target_python(marker: str, target_python_version: str) -> bool:
+    """Return whether ``marker`` can be proven false for one fixed Python version.
+
+    This only ever removes redundant network work: an archive this evaluator
+    cannot confidently rule out (an unsupported marker shape, or a parse
+    failure) is treated as included, exactly like today's unconditional
+    download, so it can never wrongly drop a dependency the target Python
+    version actually needs.
+    """
+    try:
+        tree = ast.parse(marker, mode="eval")
+        return not _evaluate_marker_node(tree, target_python_version)
+    except (SyntaxError, _UnsupportedMarkerError, RecursionError, ValueError):
+        return False
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
+    *,
+    target_python_version: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write base locks and resolvable bounded includes into a safe context.
+
+    ``target_python_version`` (a plain ``"major.minor"`` string such as
+    ``"3.14"``, matching the coverage image's pinned interpreter) lets an
+    archive whose ``marker`` field can be proven false for that version skip
+    the network download entirely -- the coverage image would never install
+    it anyway. Leave it ``None`` to download every archive unconditionally,
+    as before. This is purely an optimization: an archive that this cannot
+    confidently exclude is still downloaded and verified exactly as today.
+    """
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -947,6 +1089,18 @@ def materialize(
     archive_directory = output_dir / "archives"
     archive_manifest: list[dict[str, object]] = []
     for index, archive in enumerate(archive_sources):
+        marker = archive.get("marker")
+        if (
+            target_python_version is not None
+            and marker is not None
+            and _marker_excludes_target_python(str(marker), target_python_version)
+        ):
+            # This archive's own marker rules it out for the coverage image's
+            # pinned interpreter; the download would never be installed, so it
+            # is dropped entirely rather than recorded as an unmaterialized
+            # manifest entry (see _archive_entries in install_base_python_locks.py,
+            # which requires every manifest entry to have a real file on disk).
+            continue
         url = str(archive["url"])
         suffix = ".tar.gz" if url.endswith(".tar.gz") else ".zip"
         archive_file = f"archive-{index:03d}{suffix}"
@@ -968,10 +1122,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--target-python-version",
+        default=None,
+        help=(
+            "major.minor Python version of the coverage image (e.g. 3.14), "
+            "used only to skip downloading an organization archive whose "
+            "marker already excludes it. Omit to download every archive "
+            "unconditionally."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        manifest = materialize(
+            args.repo_root,
+            args.base_sha,
+            args.output_dir,
+            target_python_version=args.target_python_version,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr

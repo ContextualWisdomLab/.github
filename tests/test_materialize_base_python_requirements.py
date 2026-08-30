@@ -184,6 +184,160 @@ def test_materializes_archive_sources_separately_from_pip_locks(
     assert (output / "archives/archive-000.tar.gz").read_bytes() == archive
 
 
+def test_materialize_skips_downloading_an_archive_excluded_for_the_target_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker-excluded archive's unreachable URL must not fail the whole job.
+
+    The coverage image would never install this archive for its pinned
+    interpreter anyway, so an unrelated outage on its URL (404, network blip,
+    a removed tag) must not fail base Python lock materialization.
+    """
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git(repository, "init")
+    git(repository, "config", "user.name", "Test")
+    git(repository, "config", "user.email", "test@example.invalid")
+    git(repository, "commit", "--allow-empty", "-m", "base")
+    base_sha = git(repository, "rev-parse", "HEAD")
+    included_archive = b"included archive"
+    excluded_source = {
+        "package": "demo-py311-only",
+        "url": "https://github.com/ContextualWisdomLab/demo/archive/py311.tar.gz",
+        "hashes": ["a" * 64],
+        "marker": "python_version == '3.11'",
+        "source": "uv.lock",
+    }
+    included_source = {
+        "package": "demo",
+        "url": "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz",
+        "hashes": [hashlib.sha256(included_archive).hexdigest()],
+        "marker": "python_version == '3.14'",
+        "source": "uv.lock",
+    }
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([], [], [excluded_source, included_source]),
+    )
+
+    def fail_if_called_for_excluded_archive(url: str, _hashes: list[str]) -> bytes:
+        if url == excluded_source["url"]:
+            raise AssertionError(
+                "materialize() must not download an archive its own marker "
+                "excludes for the target coverage Python version"
+            )
+        return included_archive
+
+    monkeypatch.setattr(
+        materializer,
+        "_download_trusted_org_archive",
+        fail_if_called_for_excluded_archive,
+    )
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(
+        repository, base_sha, output, target_python_version="3.14"
+    )
+
+    assert manifest == []
+    archive_manifest = json.loads((output / "archive-manifest.json").read_text())
+    assert archive_manifest == [
+        {**included_source, "file": "archives/archive-001.tar.gz"}
+    ]
+    assert (output / "archives/archive-001.tar.gz").read_bytes() == included_archive
+    assert not (output / "archives/archive-000.tar.gz").exists()
+
+
+def test_materialize_downloads_every_archive_when_no_target_python_is_given(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting the target version keeps today's unconditional download behavior."""
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git(repository, "init")
+    git(repository, "config", "user.name", "Test")
+    git(repository, "config", "user.email", "test@example.invalid")
+    git(repository, "commit", "--allow-empty", "-m", "base")
+    base_sha = git(repository, "rev-parse", "HEAD")
+    archive_source = {
+        "package": "demo-py311-only",
+        "url": "https://github.com/ContextualWisdomLab/demo/archive/py311.tar.gz",
+        "hashes": ["a" * 64],
+        "marker": "python_version == '3.11'",
+        "source": "uv.lock",
+    }
+    monkeypatch.setattr(
+        materializer,
+        "_base_python_inputs",
+        lambda *_args: ([], [], [archive_source]),
+    )
+    calls: list[str] = []
+
+    def record_call(url: str, _hashes: list[str]) -> bytes:
+        calls.append(url)
+        return b"payload"
+
+    monkeypatch.setattr(materializer, "_download_trusted_org_archive", record_call)
+
+    output = tmp_path / "output"
+    materializer.materialize(repository, base_sha, output)
+
+    assert calls == [archive_source["url"]]
+
+
+@pytest.mark.parametrize(
+    ("marker", "target_python_version", "expected"),
+    [
+        ("python_version == '3.11'", "3.14", True),
+        ("python_version == '3.14'", "3.14", False),
+        ("python_version != '3.14'", "3.14", True),
+        ("python_version < '3.11'", "3.14", True),
+        ("python_version < '3.11'", "3.9", False),
+        ("python_version <= '3.14'", "3.14", False),
+        ("python_version > '3.14'", "3.14", True),
+        ("python_version >= '3.14'", "3.14", False),
+        ("python_version >= '3.9'", "3.14", False),
+        ("python_version == '3.9' or python_version == '3.14'", "3.14", False),
+        ("python_version == '3.9' or python_version == '3.10'", "3.14", True),
+        (
+            "python_version >= '3.10' and python_version < '3.12'",
+            "3.14",
+            True,
+        ),
+        (
+            "python_version >= '3.10' and python_version < '3.14'",
+            "3.9",
+            True,
+        ),
+        ("not python_version == '3.14'", "3.14", True),
+        ("python_full_version == '3.14.0'", "3.14", False),
+        ("python_full_version == '3.9.0'", "3.14", True),
+        # A literal on the left of the comparison is handled the same way.
+        ("'3.10' <= python_version", "3.9", True),
+        ("'3.10' <= python_version", "3.11", False),
+        # Unsupported/unparseable marker shapes must fail open (never exclude).
+        ("sys_platform == 'linux'", "3.14", False),
+        ("extra == 'test'", "3.14", False),
+        ("python_version in '3.11'", "3.14", False),
+        ("python_version == 'not-a-version'", "3.14", False),
+        ("not a valid marker (((", "3.14", False),
+        ("python_version == python_full_version", "3.14", False),
+        ("extra", "3.14", False),
+    ],
+)
+def test_marker_excludes_target_python(
+    marker: str, target_python_version: str, expected: bool
+) -> None:
+    """Only a confidently-false python_version/python_full_version marker excludes."""
+    assert (
+        materializer._marker_excludes_target_python(marker, target_python_version)
+        == expected
+    )
+
+
 def test_download_trusted_org_archive_uses_bounded_verified_https_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -255,6 +409,69 @@ def test_trusted_org_archive_redirects_follow_codeload() -> None:
     )
 
 
+def test_trusted_org_archive_redirects_reject_cross_repository_hop() -> None:
+    """A same-host redirect to a different repository must not be followed.
+
+    Both hosts are allowlisted, so a host-only check would let
+    ``github.com/ContextualWisdomLab/demo`` redirect onto
+    ``codeload.github.com/some-other-org/some-other-repo``. The redirect must
+    stay on the exact repository the original request named.
+    """
+    with pytest.raises(RuntimeError, match="redirected outside GitHub"):
+        materializer._TrustedOrgArchiveRedirects().redirect_request(
+            materializer.urllib.request.Request(
+                "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+            ),
+            object(),
+            302,
+            "Found",
+            {},
+            "https://codeload.github.com/some-other-org/some-other-repo/tar.gz/v1",
+        )
+
+
+def test_trusted_org_archive_redirects_accept_case_insensitive_same_repository() -> None:
+    """GitHub repository names are case-insensitive; the same-repo check must match."""
+    followed = materializer._TrustedOrgArchiveRedirects().redirect_request(
+        materializer.urllib.request.Request(
+            "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+        ),
+        object(),
+        302,
+        "Found",
+        {},
+        "https://codeload.github.com/contextualwisdomlab/DEMO/tar.gz/v1",
+    )
+
+    assert followed.full_url == (
+        "https://codeload.github.com/contextualwisdomlab/DEMO/tar.gz/v1"
+    )
+
+
+def test_trusted_org_archive_redirects_reject_unrecognized_archive_path() -> None:
+    """An allowlisted-host URL that is not a recognized archive path shape is rejected."""
+    with pytest.raises(RuntimeError, match="redirected outside GitHub"):
+        materializer._TrustedOrgArchiveRedirects().redirect_request(
+            materializer.urllib.request.Request(
+                "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+            ),
+            object(),
+            302,
+            "Found",
+            {},
+            "https://github.com/ContextualWisdomLab",
+        )
+
+
+def test_org_archive_repository_rejects_unrecognized_hosts() -> None:
+    """A host outside the two trusted archive hosts names no repository."""
+    assert materializer._org_archive_repository("https://example.invalid/demo/archive/v1.tar.gz") is None
+    assert not materializer._is_same_org_archive_repository(
+        "https://example.invalid/demo/archive/v1.tar.gz",
+        "https://example.invalid/demo/archive/v1.tar.gz",
+    )
+
+
 def test_trusted_org_archive_redirects_fail_when_parent_rejects_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -296,6 +513,34 @@ def test_download_trusted_org_archive_rejects_untrusted_final_url(
         def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
             del timeout
             return FakeHttpResponse("https://example.invalid/demo.tar.gz")
+
+    monkeypatch.setattr(
+        materializer.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(),
+    )
+
+    with pytest.raises(RuntimeError, match="left GitHub origins"):
+        materializer._download_trusted_org_archive(url, ["a" * 64])
+
+
+def test_download_trusted_org_archive_rejects_final_url_naming_another_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-allowlisted-host final URL for a different repository is rejected.
+
+    Defense in depth alongside the ``redirect_request`` check: even if the
+    observed final URL reached the response through some other path, it must
+    still name the exact repository that was originally requested.
+    """
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+
+    class FakeOpener:
+        def open(self, _request_url: str, *, timeout: int) -> FakeHttpResponse:
+            del timeout
+            return FakeHttpResponse(
+                "https://codeload.github.com/some-other-org/some-other-repo/tar.gz/v1"
+            )
 
     monkeypatch.setattr(
         materializer.urllib.request,
@@ -900,8 +1145,13 @@ def test_main_reports_each_materialized_lock(
     """The CLI identifies the exact trusted source and generated lock name."""
 
     def fake_materialize(
-        _repo_root: Path, _base_sha: str, _output_dir: Path
+        _repo_root: Path,
+        _base_sha: str,
+        _output_dir: Path,
+        *,
+        target_python_version: str | None = None,
     ) -> list[dict[str, str]]:
+        del target_python_version
         return [
             {
                 "file": "requirements-000.txt",
@@ -936,7 +1186,7 @@ def test_main_reports_when_no_locks_exist(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The CLI distinguishes an empty trusted base from a failed extraction."""
-    monkeypatch.setattr(materializer, "materialize", lambda *_args: [])
+    monkeypatch.setattr(materializer, "materialize", lambda *_args, **_kwargs: [])
 
     assert (
         materializer.main(
@@ -964,7 +1214,14 @@ def test_main_fails_with_the_materialization_reason(
 ) -> None:
     """A materialization exception fails closed and remains diagnosable in CI."""
 
-    def fail_materialize(_repo_root: Path, _base_sha: str, _output_dir: Path) -> None:
+    def fail_materialize(
+        _repo_root: Path,
+        _base_sha: str,
+        _output_dir: Path,
+        *,
+        target_python_version: str | None = None,
+    ) -> None:
+        del target_python_version
         raise OSError("fixture failure")
 
     monkeypatch.setattr(materializer, "materialize", fail_materialize)

@@ -664,10 +664,15 @@ jobs:
               esac
             done <"$python_change_files"
             if [ "$python_coverage_required" -eq 1 ]; then
+              # --target-python-version must track the coverage image's pinned
+              # "FROM docker.io/library/python:3.14-slim@sha256:..." tag below
+              # so an archive marker excluding that version skips its download
+              # instead of failing the whole job on an unrelated URL outage.
               python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
                 --repo-root "$COVERAGE_SOURCE_WORKDIR" \
                 --base-sha "$PR_BASE_SHA" \
-                --output-dir "$coverage_build_dir/base-python-requirements"
+                --output-dir "$coverage_build_dir/base-python-requirements" \
+                --target-python-version 3.14
             else
               mkdir -p "$coverage_build_dir/base-python-requirements"
               printf '[]\n' >"$coverage_build_dir/base-python-requirements/manifest.json"
