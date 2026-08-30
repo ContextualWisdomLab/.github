@@ -974,14 +974,23 @@ def label_section(text: str, label: str) -> str:
     if not starts:
         return ""
     start = starts[-1] + len(label)
-    next_starts = [
-        candidate_start
-        for candidate in APPROVAL_VERIFICATION_LABELS
-        if candidate != label
-        for candidate_start in label_starts(candidate)
-        if candidate_start >= start
-    ]
-    end = min(next_starts) if next_starts else len(text)
+
+    end = len(text)
+    for candidate in APPROVAL_VERIFICATION_LABELS:
+        if candidate == label:
+            continue
+        index = text.find(candidate, start, end)
+        if index != -1:
+            if candidate == "coverage:":
+                while index != -1:
+                    if text[max(0, index - 10):index] == "docstring ":
+                        index = text.find(candidate, index + len(candidate), end)
+                    else:
+                        end = index
+                        break
+            else:
+                end = index
+
     return text[start:end]
 
 
