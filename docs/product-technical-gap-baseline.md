@@ -1993,6 +1993,25 @@ record and the CHANGELOG's terse pointer entries, not a duplicate of either).
 (`.github#1347`: 커밋 `583af50b`, 전체 스위트 1930 passed 재확인; task 브랜치/`.github#1438`: 커밋
 `c76e5a24`, 전체 스위트 1898 passed 재확인). Force-push 없음.
 
+**추가 2**: 다른 세션이 `.github#1347`에 symlink-escape 가드를 두 라운드 더 강화했다(Devin이
+`resolve(strict=True)`가 `DEFAULT_IGNORE`로 제외된 멀쩡한 dangling symlink까지 오탐한다고 지적 →
+`os.readlink`+`os.path.normpath` 기반 hop-by-hop lexical walk로 교체한 `be77d299`, 그 walk의
+off-by-one을 고친 `fe237c4f` — 정확히 N-hop인 정상 체인이 잘못 거부되던 문제, 1934 passed로 검증).
+그 직후 `main`이 다시 전진해(`1ff82682`, ADR-0005의 실제 diagnostic/bounded-retry preflight 구현)
+`.github#1347`과 task 브랜치/`.github#1438` 둘 다 재차 dirty가 됐다 — 이번에도 CHANGELOG/gap-baseline의
+인접 항목 추가일 뿐이라 양쪽 유지하는 통상 merge로 해소(`.github#1347`: `46fdc2d7`, 1967 passed;
+task 브랜치/`.github#1438`: `6a74c672`, 1931 passed). Force-push 없음. 같은 패스에서 naruon#1486에
+새로 도착한 Devin 6건 + CodeRabbit 2건도 검증했다: 실재 결함 3건을 고쳤다 — (1) DOCX/XLSX/PPTX 등
+ZIP 기반 컨테이너 형식이 ZIP 매직 바이트와 일치한다는 이유만으로 quarantine되던 오탐(ZIP 컨테이너
+계열 MIME 부분 문자열 판정으로 제외), (2) 상한 초과로 바이트를 보존 못한 mismatch가 여전히
+reparse-intent가 수락하는 quarantine 상태를 받던 문제(다른 초과-크기 첨부와 동일하게
+parse_size_limit_exceeded로 전환), (3) `apply_correction`의 status_code/decision_code 검증이
+텍스트 전용 ValueError였던 것을 `error_code` 속성을 가진 타입으로 교체(현재 REST 경로는 Literal
+타입으로 이미 막혀 있어 방어적 일관성 확보 목적). 🟥 보안 지적(`_get_scoped_attachment`가
+workspace_id를 검증하지 않음)은 실재하지만 `Email` 모델 자체가 애초에 workspace_id가 없다는
+저장소 전반의 기존 gap임을 확인해 조용히 임시방편을 넣는 대신 ADR에 후속 작업으로 명시했다.
+review thread 25/25 코멘트+resolve 완료(커밋 `dcc9fcd0`, 전체 백엔드 스위트 1845 passed).
+
 - **Implemented** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`): Layer 1's `_preflight_review_agents` now
   probes each candidate at a new `REVIEW_PREFLIGHT_BASE_TOKENS = 16`, escalating that same candidate
