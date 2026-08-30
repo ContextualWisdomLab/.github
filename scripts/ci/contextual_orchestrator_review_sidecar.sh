@@ -380,7 +380,19 @@ fi
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
-printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
+# max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own per-agent
+# routing probe budget): a reasoning-capable free-tier model (e.g. a DeepSeek
+# NIM route) spends part of its token budget on internal reasoning before any
+# answer content, so a small budget here can make an agent the routing probe
+# already proved "ready" fail this separate end-to-end check with a spurious
+# "response did not contain assistant content" -> 502 invalid_structured_output
+# (contextual_orchestrator.orchestrator._response_content), even though the
+# model itself is healthy. See "2026-08-30 sidecar preflight max_tokens
+# desynchronized from the routing probe" in
+# ContextualWisdomLab/contextual-orchestrator's own
+# docs/product-technical-gap-baseline.md for the exact-evidence reproduction
+# (downloaded strix-reports artifact, PR #912 run 33304076516).
+printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
 if ! gateway_http_status="$(
   curl -sS --max-time 30 \
