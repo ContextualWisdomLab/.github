@@ -2430,6 +2430,15 @@ clean. ADR-0005 Revisions/Decision 두 문서 불일치와 `Email.workspace_id`(
 코멘트를 남기고 실패한 job을 1회 재실행(`rerun_failed_jobs`, run `33326526050`)했다 — PR
 자체의 diff와는 무관.
 
+**동일 서브 증상이 `.github#1438`(head `50febfe7`, run `33331290092`)에서도 재발**: 약 1시간
+뒤 다른 저장소의 다른 PR에서 완전히 동일한 로그 시그니처가 재현됐다 — sidecar healthz(48s)와
+gateway chat/completions preflight(1차 시도)는 정상 통과했지만, 실제 스캔이 5400초 동안
+멈췄다("Strix run timed out after 5400s" → exit 124 → `STRIX_PROVIDER_UNAVAILABLE:
+...orchestrator/free exhausted`, 남은 job 예산 595초로 재시도 불가). 같은 시간대에 서로 다른
+두 저장소에서 동일 서브 증상이 나타난 것은 단발성 flake가 아니라 `orchestrator/free` pool이
+현재 실시간으로 저하된 상태임을 시사한다. 진단 코멘트를 남기고 실패한 job을 1회 재실행
+(`rerun_failed_jobs`, run `33331290092`)했다 — 이 PR의 diff와도 무관.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
