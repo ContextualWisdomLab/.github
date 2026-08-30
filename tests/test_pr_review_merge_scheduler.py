@@ -3525,6 +3525,18 @@ def test_draft_pr_review_dispatch_failures_are_wait_states(monkeypatch):
         "same-head Strix workflow run is already active"
     )
 
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda *args, **kwargs: "repository_busy",
+    )
+    repository_busy = inspect(make_pr(isDraft=True))
+    assert repository_busy.action == "wait"
+    assert repository_busy.reason == (
+        "draft PR; current head has no completed Strix evidence; "
+        "target repository already has active Strix evidence"
+    )
+
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)

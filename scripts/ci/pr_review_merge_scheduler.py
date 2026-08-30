@@ -2516,6 +2516,13 @@ def inspect_draft_pr_for_review(
                 "draft PR; current head has no completed Strix evidence; "
                 "same-head Strix workflow run is already active",
             )
+        if strix_dispatch_result == "repository_busy":
+            return Decision(
+                number,
+                "wait",
+                "draft PR; current head has no completed Strix evidence; "
+                "target repository already has active Strix evidence",
+            )
         return Decision(
             number,
             "security_dispatch",
