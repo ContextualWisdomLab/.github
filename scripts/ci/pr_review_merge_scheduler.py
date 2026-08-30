@@ -2420,17 +2420,26 @@ def _draft_review_request_records(value: Any, *, expected_name: str) -> tuple[di
 def active_draft_review_request(repo: str, pr: dict[str, Any]) -> bool:
     """Return whether an explicit draft review-only request is active for this head.
 
-    ``agent-mention-opencode-dispatch.yml`` uploads one short-lived artifact per
-    mention invocation in the central automation repository (the same
-    repository ``repository_dispatch`` review dispatch always targets, per
-    :func:`repository_dispatch_target`). The initial mention's own scheduler
-    pass reaches :func:`dispatch_draft_review_only` through the CLI's
-    ``--allow-draft-review-dispatch`` flag; a later pass over the same draft
-    PR -- most commonly the Strix-completion ``workflow_run`` that follows an
-    initial ``security_dispatch``, which carries no ``repository_dispatch``
-    ``client_payload`` of its own -- has no such flag, so it checks here
-    instead to recognize the same explicit request is still in flight for
-    this exact head.
+    This is the sole automatic gate for draft review dispatch. A bare
+    ``repository_dispatch`` ``client_payload`` field (an invocation key, a PR
+    number) is never trusted on its own: any dispatch-capable caller could
+    supply one for an arbitrary target, and a genuinely stale mention (the
+    draft gained a new commit after being requested) must not review a
+    commit nobody asked about. ``agent-mention-opencode-dispatch.yml``
+    instead uploads one short-lived Actions artifact per mention invocation,
+    named with the exact PR and head SHA
+    (:func:`draft_review_request_artifact_name`), only after that workflow's
+    own HMAC-style canonical-payload check has already validated the
+    invocation -- so a live artifact is itself the validated proof, bound to
+    one exact head, that this specific mention was genuine. The artifact
+    lives in the central automation repository (the same repository
+    ``repository_dispatch`` review dispatch always targets, per
+    :func:`repository_dispatch_target`), so every scheduler pass over this
+    draft PR -- the initial mention-triggered run and any later pass with no
+    ``repository_dispatch`` ``client_payload`` of its own, most commonly the
+    Strix-completion ``workflow_run`` that follows an initial
+    ``security_dispatch`` -- checks the same durable signal here rather than
+    trusting anything the triggering event itself claims.
     """
     head_sha = pr.get("headRefOid")
     if not isinstance(head_sha, str) or not head_sha:
@@ -4122,9 +4131,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Allow a --pr-number draft PR to receive Strix/OpenCode review "
             "dispatch. Structurally review-only: never merges, enables "
-            "auto-merge, or updates the branch. Set only for an explicit "
-            "single-PR review request (a mention invocation); never for the "
-            "ordinary multi-PR queue sweep, which must keep skipping drafts."
+            "auto-merge, or updates the branch. A manual operator override "
+            "for direct CLI use only -- no caller-supplied signal reaching "
+            "this script (repository_dispatch client_payload included) is "
+            "trusted to set this automatically, because it cannot be bound "
+            "to a specific validated request. The production automatic path "
+            "is inspect_pr()'s own active_draft_review_request() marker "
+            "check, gated on a cryptographically validated, exact-head-named "
+            "artifact that only a legitimate mention invocation can create."
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
