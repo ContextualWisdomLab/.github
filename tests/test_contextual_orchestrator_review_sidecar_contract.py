@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import runpy
 import subprocess
+from types import SimpleNamespace
 
 _ORG_REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,6 +27,9 @@ NOEMA_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/noema-review.yml"
 OPENCODE_DISPATCH_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml"
 STRIX_WORKFLOW = _ORG_REPO_ROOT / ".github/workflows/strix.yml"
 OPENCODE_CONFIG = _ORG_REPO_ROOT / "opencode.jsonc"
+SIDECAR_ADR = (
+    _ORG_REPO_ROOT / "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
+)
 
 FIVE_SECRETS = (
     "BYTEZ_API_KEY",
@@ -35,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "c60ec889bdd1b8dd0b2be53e60d7b758a4ece6b7"
+ORCH_PIN_SHA = "b21645116b352967e50fc497b87eb745b9cc8c61"
 
 
 def _read(path: Path) -> str:
@@ -59,6 +64,11 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert "from contextual_orchestrator.review_gateway import register_review_credentials" in text
     assert 'ORCHESTRATOR_PORT="18080"' in text
     assert 'ORCHESTRATOR_HOST="127.0.0.1"' in text
+
+
+def test_sidecar_adr_names_the_current_vendored_revision() -> None:
+    """The accepted decision record must not advertise a stale runtime SHA."""
+    assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
 def test_sidecar_requires_the_five_provider_secrets() -> None:
@@ -110,8 +120,11 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert 'CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-' in text
     assert '[ ! -f "$token_file" ]' in text
     assert '[ -L "$token_file" ]' in text
-    assert 'stat -c %a -- "$token_file"' in text
-    assert 'stat -c %u -- "$token_file"' in text
+    assert '_contextual_orchestrator_stat()' in text
+    assert 'stat -c "$format" -- "$target"' in text
+    assert '[ "$format" = "%a" ]' in text
+    assert "stat -f '%OMp %OLp' \"$target\"" in text
+    assert 'stat -f "$format" "$target"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
     assert "printf '::add-mask::%s\\n' \"$CONTEXTUAL_ORCHESTRATOR_TOKEN\"" in text
     assert "export CONTEXTUAL_ORCHESTRATOR_TOKEN" in text
@@ -166,6 +179,12 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     assert wrong_mode.returncode != 0
     assert "must have mode 600" in wrong_mode.stderr
 
+    for special_mode in (0o1600, 0o2600, 0o4600):
+        token_file.chmod(special_mode)
+        special_bits = run(token_file)
+        assert special_bits.returncode != 0
+        assert "must have mode 600" in special_bits.stderr
+
     token_file.chmod(0o600)
     symlink = tmp_path / "bearer.link"
     symlink.symlink_to(token_file)
@@ -185,11 +204,11 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     token_path.write_text("synthetic-test-bearer", encoding="utf-8")
     token_path.chmod(0o600)
     command = (
-        'set -euo pipefail; token_file=caller-file; token_size=caller-size; '
+        'set -euo pipefail; token_file=caller-file; token_mode=caller-mode; token_size=caller-size; '
         'source "$TOKEN_LOADER"; '
         'declare -F _contextual_orchestrator_token_fail >/dev/null && exit 91; '
         'declare -F _contextual_orchestrator_load_token >/dev/null && exit 92; '
-        'printf "caller=%s:%s\\n" "$token_file" "$token_size"'
+        'printf "caller=%s:%s:%s\\n" "$token_file" "$token_mode" "$token_size"'
     )
     result = subprocess.run(
         ["bash", "-c", command],
@@ -204,7 +223,7 @@ def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path
     )
 
     assert result.returncode == 0, result.stderr
-    assert "caller=caller-file:caller-size" in result.stdout
+    assert "caller=caller-file:caller-mode:caller-size" in result.stdout
 
 
 def test_sidecar_scopes_private_umask_to_token_creation() -> None:
@@ -240,7 +259,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     mask_index = text.index(mask)
     for later_operation in (
         "git clone",
-        "python3 -m pip install",
+        '"$sidecar_python" -m pip install',
         '"$ORCHESTRATOR_WORK/launch_sidecar.py"',
         "healthz",
     ):
@@ -257,14 +276,47 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
     assert "get_credential(REVIEW_AUTH_CREDENTIAL_NAME)" in text
 
 
-def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
-    """Discovery, free filtering, and serving come from the vendored library."""
+def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
+    """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
+    assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
     assert "free_discovered_models(discovered)" in text
+    assert 'getattr(model, "output_modalities", None)' in text
+    assert 'isinstance(modalities, str)' in text
+    assert '"text" in {str(modality).casefold() for modality in modalities}' in text
+    assert "not _has_text_output(model)" in text
+    assert 'model_id = getattr(model, "model_id", "")' in text
+
+    launcher = runpy.run_path(str(LAUNCHER))
+    has_text_output = launcher["_has_text_output"]
+    assert has_text_output(SimpleNamespace(output_modalities="text"))
+    assert has_text_output(SimpleNamespace(output_modalities=("text", "image")))
+    assert not has_text_output(SimpleNamespace(output_modalities=("video",)))
+    assert not has_text_output(SimpleNamespace())
+    report_rows = launcher["_report_rows"]
+    free = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="free/model",
+        agent_id="openrouter_free_model",
+        output_modalities=("text",),
+    )
+    priced = SimpleNamespace(
+        provider_name="openai",
+        model_id="priced-model",
+        agent_id="openai_priced_model",
+        output_modalities=("text",),
+        prompt_price_per_1k=0.002,
+        completion_price_per_1k=0.008,
+        currency_code="USD",
+    )
+    rows = report_rows([free, priced], frozenset({("openrouter", "free/model")}))
+    assert [row["is_free"] for row in rows] == [True, False]
+    assert rows[1]["prompt_price_per_1k"] == 0.002
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
-    assert "orchestrator/free would fail closed" in text
+    assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
+    assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text
 
@@ -284,16 +336,37 @@ def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
 
 
 def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
-    """Large review envelopes fit without changing the library's generic default."""
+    """Review images fit without changing the library's generic default."""
     text = _read(LAUNCHER)
-    assert "REVIEW_MAX_BODY_BYTES = 8 * 1024 * 1024" in text
+    assert "REVIEW_MAX_BODY_BYTES = 512 * 1024 * 1024" in text
     assert "max_body_bytes=REVIEW_MAX_BODY_BYTES" in text
 
 
-def test_sidecar_validates_the_pinned_server_body_limit_constructor() -> None:
-    """The exact vendored SHA must accept the review envelope keyword at boot."""
+def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
+    """Gateway free-pool scans must not force unsupported provider controls."""
+    text = _read(STRIX_WORKFLOW)
+    assert "STRIX_REASONING_EFFORT: none" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
+
+
+def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
+    """The exact vendored SHA must enforce the review limit at its HTTP boundary."""
     text = _read(SIDECAR)
-    assert 'from contextual_orchestrator.server import SecurityConfig; from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_MAX_BODY_BYTES; SecurityConfig(auth_token="contract", max_body_bytes=REVIEW_MAX_BODY_BYTES)' in text
+    assert "from contextual_orchestrator.server import SecurityConfig, build_server" in text
+    assert '"POST",' in text
+    assert '"/v1/chat/completions",' in text
+    assert "accepted_size = 64 * 1024 + 1" in text
+    assert "REVIEW_MAX_BODY_BYTES + 1" in text
+    assert "assert response.status == 413" in text
+    assert "_request_body_size" not in text
+    assert "class CaptureClient(ModelClient):" in text
+    assert '"description": description' in text
+    assert "large_status" in text
+    assert "assert encoded_size > accepted_size" in text
+    assert "for description_length in (1025, 1026, 2000)" in text
+    assert "assert status == 200" in text
+    assert "proxy_payloads[-1]" in text
+    assert '"utf-8"' in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
@@ -379,7 +452,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
