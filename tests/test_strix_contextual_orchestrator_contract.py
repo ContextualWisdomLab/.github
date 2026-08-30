@@ -73,7 +73,11 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
     def test_required_smoke_pins_the_gateway_default(self) -> None:
         """The bounded required-path smoke rejects a future direct-default regression."""
         self.assertIn("contextual-orchestrator Strix sidecar", self.smoke)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.smoke)
+        self.assertIn("active_strix_models=", self.smoke)
+        self.assertIn(
+            '"$active_strix_models" = "contextual-orchestrator/orchestrator/free"',
+            self.smoke,
+        )
         self.assertIn("Strix does not resolve a direct provider outside the gateway", self.smoke)
 
     def test_required_smoke_rejects_invalid_sidecar_syntax(self) -> None:
@@ -85,6 +89,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                 root = Path(temp_dir)
                 (root / "scripts/ci").mkdir(parents=True)
                 (root / ".github/workflows").mkdir(parents=True)
+                (root / "docs/adr").mkdir(parents=True)
                 for source in (
                     ROOT / "scripts/ci/strix_required_workflow_smoke.sh",
                     ROOT / "scripts/ci/strix_quick_gate.sh",
@@ -94,6 +99,11 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                 ):
                     shutil.copy2(source, root / source.relative_to(ROOT))
                 shutil.copy2(WORKFLOW, root / WORKFLOW.relative_to(ROOT))
+                shutil.copy2(ROOT / "AGENTS.md", root / "AGENTS.md")
+                decision_record = (
+                    ROOT / "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
+                )
+                shutil.copy2(decision_record, root / decision_record.relative_to(ROOT))
                 copied_sidecar = root / SIDECAR.relative_to(ROOT)
                 copied_sidecar.write_text(
                     copied_sidecar.read_text(encoding="utf-8") + "\nif broken; then\n",
