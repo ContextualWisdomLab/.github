@@ -1647,6 +1647,51 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   추적이 아직 구현되지 않아) 여전히 fail-closed 상태로 남겨두었다. 수정·테스트 갱신·전체 스위트
   검증 후 `contextual-orchestrator#923`에 병합했다.
 
+## 2026-08-30 시간별 재개: main과의 conflict 해소 + Strix streaming workaround와 stream_options 버그의 연결 확인
+
+- 시간별 loop 재개 시점에 세 PR의 현재 상태를 다시 확인했다: `naruon#1486`(`blocked`),
+  `ContextualWisdomLab/contextual-orchestrator#923`(`blocked`), `ContextualWisdomLab/.github#1438`
+  (**`dirty`** — 새로 발생한 merge conflict). `.github`의 `main`이 이 세션이 마지막으로 동기화한
+  이후 3개 커밋(`34c88356`, `702392a2`, 병합 커밋 `1d8e8724`) 앞서 있었다.
+- **`34c88356`**: 오너의 (다른) Claude 세션이 **이 세션이 이번 pass에서 고친 것과 정확히 동일한
+  `scripts/ci/pingora_edge_policy.py`의 죽은 post-loop raise 버그**를 완전히 독립적으로
+  발견·수정했다 — 근거(31×100=3,100 산술), 결론(`# pragma: no cover`), 커밋 메시지의 논증까지
+  거의 동일하다. 다만 오너 쪽 수정이 한 걸음 더 나아갔다: `test_changed_file_pagination_bound_is_provably_unreachable`
+  테스트를 추가해 `inspect.getsource`로 소스의 페이지 수·per_page·3,000 cap 상수를 직접 파싱하고
+  그 부등식을 assert함으로써, 향후 이 세 상수 중 하나라도 바뀌어 불변식이 깨지면 (죽은 코드가
+  더 이상 죽은 코드가 아니게 되면) 테스트가 요란하게 실패하도록 만들었다 — 이 세션의 수정에는
+  없던, 더 견고한 안전장치다. Merge conflict를 ordinary merge commit으로 해소하며 **오너 쪽
+  버전을 채택**하고 이 세션의 동등하지만 덜 완전한 버전은 버렸다(앞선 `_log_preflight_rejections`
+  중복 사례와 동일한 패턴).
+- **`702392a2`(★ 중요, 이 세션 자신의 발견과 직접 연결됨)**: 오너가 Strix 자신의 코드에 **정확히
+  이 세션이 `contextual-orchestrator#923`에서 발견·수정한 바로 그 `stream_options.include_usage=true`
+  + `tools` 거부 버그**를 우회하는 workaround를 커밋했다. 커밋 메시지: "contextual-orchestrator의
+  게이트웨이가 stream_options.include_usage=true와 tools 조합을 의도적으로 거부한다(사용량
+  집계가 조용히 불완전해지는 것을 막는 정합성 보장; 여기서 바꾸는 것은 범위 밖)" — 즉 오너
+  (또는 오너의 세션)는 이 거부를 **의도된, 고칠 수 없는 제약**으로 받아들이고 호출자
+  (Strix)측에서 `LLM_DISABLE_STREAMING=true`로 스트리밍 자체를 꺼서 문제의 조합을 아예
+  보내지 않는 방식으로 우회했다. 그런데 이 세션은 `_chat_response_sse_chunks`가 이미
+  tool_calls delta와 정직하게 라벨링된 usage chunk를 완전히 지원한다는 것을 직접 코드로
+  증명했고, 그 거부는 "고칠 수 없는 제약"이 아니라 **불필요한 자체 버그**였다 — 이미
+  `contextual-orchestrator#923`에 서버 쪽 근본 수정을 넣었다(아직 `contextual-orchestrator`의
+  `main`에는 병합되지 않음). 두 수정은 **모순되지 않는다**: `702392a2`는 이미 병합되어 지금
+  당장 Strix의 org-wide 필수 게이트를 복구하고 있는(직접 인용: "이것이 모든 PR의
+  opencode-review 체크를 교착시키고 있었다 — 그 체크는 dispatch 전에 완료된 Strix evidence를
+  요구하는데 Strix가 스캔을 완료할 수 없었다") 실사용 중인 fix이고, 이 세션의 fix는 근본
+  원인(게이트웨이 자신의 불필요한 거부)을 없애 향후 이 workaround 자체를 불필요하게 만들
+  후속 정리 대상이다. **지금 당장 `702392a2`를 되돌리거나 건드리지 않는다** — 아직 서버 쪽
+  수정이 병합·중앙 vendoring pin에 반영되지 않았으므로, 지금 워크어라운드를 제거하면 Strix가
+  다시 죽는다. `contextual-orchestrator#923` 병합 + `.github`의 `ORCHESTRATOR_PIN_SHA` 갱신
+  이후 별도 pass에서 이 workaround의 제거 가능 여부를 재검토한다(새 Gap 항목으로 기록).
+- **이 발견이 바꾸는 것**: `702392a2`가 이미 `main`에 있으므로, Strix의 org-wide 필수 게이트가
+  이미 복구되어 있을 가능성이 높다 — 이전 조사에서 확인한 "`inspect_pr()`가 OpenCode dispatch를
+  Strix evidence 뒤에 순서화하며 Strix가 완료되지 않으면 dispatch 자체가 발생하지 않는다"는
+  구조가, naruon#1486·contextual-orchestrator#923가 dispatch조차 받지 못했던 이유의 상당 부분을
+  설명했을 수 있다. naruon과 contextual-orchestrator는 자기 브랜치가 아니라 `.github`의 `main`에서
+  중앙 워크플로우를 매 dispatch 시점에 새로 가져오므로(trusted source ref), 이 두 PR은 **자기
+  브랜치를 건드리지 않고도** 다음 dispatch부터 이 fix의 혜택을 받을 수 있다.
+- 병합 후 전체 스위트 재검증 결과는 아래에 기록한다(진행 중).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

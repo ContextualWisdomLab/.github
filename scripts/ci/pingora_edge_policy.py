@@ -342,13 +342,20 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    raise PolicyError(  # pragma: no cover - unreachable: 31 full pages of 100 always
-        # trip the len(files) > 3_000 raise above during page 31's own iteration
-        # (30 full pages = exactly 3,000, so page 31's first item always pushes
-        # past 3,000) before this loop can exhaust its range; kept as a defensive
-        # invariant in case the page count or per-page size above ever changes.
-        "GitHub changed-file pagination exceeded 3,000 files"
-    )
+    # Unreachable by construction, not a live fallback: every one of the 31
+    # `range(1, 32)` iterations that reaches this point already returned a
+    # page whose length is >= 100 (a page under 100 items hits the `return`
+    # two lines up first), so 31 such pages accumulate at least 3,100 files
+    # -- strictly more than the 3,000 cap above, which is checked after
+    # every single appended item, not just at page boundaries. That in-loop
+    # check therefore always raises no later than partway through the 31st
+    # page, before the `for` loop can ever exhaust its range. Kept as a
+    # structural fail-closed guard (so a future change to PAGE_COUNT,
+    # per_page, or the 3,000 cap that breaks this invariant fails loudly
+    # instead of silently truncating evidence) rather than deleted; see
+    # test_changed_file_pagination_bound_is_provably_unreachable, which
+    # pins the arithmetic relationship itself.
+    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
 
 
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:

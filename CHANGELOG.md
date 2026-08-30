@@ -15,7 +15,10 @@ Semantic Versioning where the repository publishes a release.
   ever posting an APPROVED verdict anywhere in the org. Marked
   `# pragma: no cover` with justification, matching this repo's existing
   convention. See the 2026-08-30 "OpenCode Agent 자체 문제" gap-baseline
-  entry for the full three-PR diagnosis this came out of.
+  entry for the full three-PR diagnosis this came out of. (Independently
+  found and fixed by the org owner in the same window, commit `34c88356`,
+  with a stronger regression test pinning the arithmetic invariant itself —
+  adopted the owner's version when reconciling the resulting merge conflict.)
 - Document a structural CodeRabbit gap in `docs/product-technical-gap-baseline.md`
   (2026-08-30 entry): every ContextualWisdomLab repo is below CodeRabbit's
   10-GitHub-star automatic-review threshold, so CodeRabbit never reviews a new
