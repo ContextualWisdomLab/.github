@@ -111,6 +111,21 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     )
 
 
+def test_required_workflow_reruns_on_draft_reconversion() -> None:
+    """A ready PR converted back to draft must get a fresh required-workflow run.
+
+    Without ``converted_to_draft`` in the trigger list, a PR that goes
+    ready -> draft with no new commit keeps its previously failed
+    ``opencode-review`` check forever: no event refires the job that could
+    apply the draft exemption below.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, "
+        "converted_to_draft, closed]"
+    ) in workflow
+
+
 def _extract_run_block(workflow_text: str, step_name: str) -> str:
     """Return the literal bash text of one workflow step's ``run: |`` block."""
     lines = workflow_text.splitlines()
@@ -245,7 +260,9 @@ def test_draft_pr_short_circuits_before_the_reviews_api_call(tmp_path: Path) -> 
     assert "PR is a draft" in result.stdout
 
 
-@pytest.mark.parametrize("event_action", ("opened", "synchronize", "reopened"))
+@pytest.mark.parametrize(
+    "event_action", ("opened", "synchronize", "reopened", "converted_to_draft")
+)
 def test_draft_pr_short_circuits_on_every_non_closed_event_type(
     tmp_path: Path, event_action: str
 ) -> None:

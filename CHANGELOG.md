@@ -21,6 +21,12 @@ Semantic Versioning where the repository publishes a release.
   review (`ready_for_review` and subsequent `synchronize` events carry
   `draft: false`). See `tests/test_opencode_required_verdict_regression.py`
   for shell-level regression coverage executing the production step body.
+  Follow-up: add `converted_to_draft` to the same workflow's
+  `pull_request_target` trigger types. Without it, a ready PR converted
+  back to draft with no new commit never gets a fresh required-workflow
+  run, so its previously failed `opencode-review` check keeps showing
+  failure indefinitely even though the draft exemption above would have
+  passed it.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

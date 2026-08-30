@@ -499,7 +499,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
 	assert_file_contains "$bootstrap_file" "pull_request_target:" "opencode required workflow loads its metadata-only bootstrap from the protected base ref"
-	assert_file_contains "$bootstrap_file" "types: [opened, synchronize, reopened, ready_for_review, closed]" "opencode required workflow reacts to current PR head changes and closed-PR cleanup"
+	assert_file_contains "$bootstrap_file" "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" "opencode required workflow reacts to current PR head changes, draft reconversion, and closed-PR cleanup"
 	assert_file_contains "$bootstrap_file" "required-workflow-bootstrap:" "opencode required workflow materializes at least one job for pull_request ruleset runs"
 	assert_file_contains "$bootstrap_file" "Required OpenCode workflow materialized without checking out or" "opencode required workflow bootstrap documents its data-only trust boundary"
 	assert_file_contains "$bootstrap_file" "coverage-source-tree:" "opencode required workflow preserves the stable coverage-source-tree branch-protection context"

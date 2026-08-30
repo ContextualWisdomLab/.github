@@ -425,8 +425,9 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
-    assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in (
-        opencode_bootstrap
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
+        in opencode_bootstrap
     )
     assert "actions/checkout" not in opencode_bootstrap
     assert "${{ secrets." not in opencode_bootstrap

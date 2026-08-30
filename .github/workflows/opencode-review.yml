@@ -9,7 +9,7 @@ on:
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
   group: >-
