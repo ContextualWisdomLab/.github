@@ -1837,11 +1837,14 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
    정정, family_cap 수정이 진짜 root cause임을 반영)의 required Checks·독립 승인을 재확인하고, 조건 충족
    시 merge한다.
 3. ContextualWisdomLab/naruon#1486 — develop과 이미 동기화됨, ready-for-review로 전환 완료. `check_calendar_conflict`
-   도구 위에 G-06의 human-correction 슬라이스(judgment 영속화 + 정정 API 3개, Alembic `0018`)를 추가
-   배포했고, 그 위에 도착한 Devin Review 5건 + github-code-quality 1건을 모두 실제로 고치고 6개 thread를
-   전부 코멘트+resolve했다(row lock, decision/reason/action 일관성, list 상한, 공유 상수 통합, import 정리).
-   naruon 자체 required Checks(OpenCode/Strix/merge-scheduler)를 current head(`7c20155f`)에서 재확인하고,
-   조건 충족 시 merge한다.
+   도구 위에 G-06의 human-correction 슬라이스(judgment 영속화 + 정정 API 4개 — 단건 조회 `GET
+   /judgments/{judgment_uid}` 포함, Alembic `0018`)를 추가 배포했고, 이후 여러 라운드에 걸쳐 도착한 Devin
+   Review 전건(1차 6건 + 2차 6건 — workspace_id 인가 우회 보안 수정 포함 + 3차 no-op override rationale
+   보존 수정 + 4차 doctoring 문서 최신화/자기모순 정정) + github-code-quality 1건을 모두 실제로 고치고
+   review thread 17/17을 전부 코멘트+resolve했다(row lock, decision/reason/action 일관성, workspace_id
+   스코핑, list 상한 + 단건 조회 우회, 공유 상수 통합, import 정리, doctoring 문서 동기화). naruon 자체
+   required Checks(OpenCode/Strix/merge-scheduler)를 current head(`a5cebe53`)에서 재확인하고, 조건 충족
+   시 merge한다.
 4. ContextualWisdomLab/.github#1347 — **conflict 해소 완료** (더 이상 "아직 손대지 않음"이 아니다). web-E2E
    isolation/SSRF 수정을 `main`과 merge해 정확히 예상된 3개 파일 충돌을 해소했고(main의 DNS-rebind 방지
    validator 채택 + PR의 bubblewrap isolation 유지), 그 과정에서 실제 회귀(빈 readiness URL 처리 누락)도
