@@ -206,8 +206,29 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "default-branch repository_dispatch evidence cannot cancel" "strix workflow documents manual evidence isolation from branch protection contexts"
 	assert_file_contains "$workflow_file" "re-dispatches exact-head evidence" "strix workflow documents current-head queue recovery"
 	assert_file_contains "$workflow_file" "refs/pull/<n>/head has already advanced before this queued run starts" "strix workflow documents stale scan queue avoidance"
+	# Two declarations as of 2026-08-30: the strix job's own inline status
+	# publish, and publish-manual-pr-evidence-status's -- the latter added a
+	# github-token fallback for the self-referential case where .github is
+	# the repository_dispatch target of its own Strix run (target-app-token
+	# is scoped for sibling repositories and always 403s there). Both must
+	# stay byte-identical same-repository conditionals, not merely
+	# same-named: a third assertion below pins the exact conditional
+	# expression to the same count so a divergent copy (e.g. a typo'd
+	# comparison, or one job's copy missing the || github.repository
+	# fallback) fails closed here instead of only in the field the next
+	# time .github dispatches Strix at itself.
 	status_token_count="$(grep -c '^[[:space:]]*GITHUB_STATUS_TOKEN:' "$workflow_file")"
-	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
+	assert_equals "2" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN exactly twice, once per status-publishing job"
+	status_token_conditional_count="$(grep -c "GITHUB_STATUS_TOKEN: \${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}" "$workflow_file")"
+	assert_equals "2" "$status_token_conditional_count" "both GITHUB_STATUS_TOKEN declarations use the identical same-repository conditional"
+	# Three invocations, not two: the strix job's own inline publish tries
+	# the github-token fallback twice (once mid-chain, once as the final
+	# last-resort retry after every other credential has failed), while
+	# publish-manual-pr-evidence-status tries it once. Both jobs actually
+	# consuming their own declared GITHUB_STATUS_TOKEN (not just declaring
+	# and ignoring it) is the property under test here.
+	github_status_token_fallback_count="$(grep -c 'post_strix_status "github-token" "\$GITHUB_STATUS_TOKEN"' "$workflow_file")"
+	assert_equals "3" "$github_status_token_fallback_count" "both status-publishing jobs actually invoke their own GITHUB_STATUS_TOKEN fallback, not just declare it"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "strix workflow must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "models: read" "strix workflow grants only the GitHub Models read permission needed for Strix"
 	assert_file_contains "$workflow_file" "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0" "strix workflow pins actions/setup-python"
