@@ -2334,7 +2334,23 @@ diff range) finding 1건을 남겼다: `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` �
 방향의 결함)하는 실재 버그였다 — case 패턴에 `00`/`0000`을 추가하고 기존 parametrized 회귀 테스트에도
 포함시켜 커밋 `17974388`으로 고쳤다(전체 스위트 1933 passed/1 skipped/21 subtests, coverage 100%,
 interrogate 100%). `.github#1347`에는 또 새 Devin 라운드가 도착해 실제 코드 대조 검증을 전담 백그라운드
-에이전트에 위임했다(진행 중, 다음 항목에서 결과를 기록한다).
+에이전트에 위임했다 — **완료**: 위임 중 다른 세션이 독립적으로 동일한 9건 중 4건을 이미 고쳐(`fe68c2fa`
+— repo launcher 경로 해석, `.env.example` 등 env 템플릿이 `DEFAULT_IGNORE`에 잘못 걸리던 문제, 공백만
+있는 명령이 코드화된 실패 대신 처리되지 않은 예외로 새던 문제, `shutil.which("sh")`가 호출자 PATH를 써
+bwrap mount 안에 없는 셸을 잘못 통과시키던 문제) 별도 hardening(`bd0697aa`, symlink 순환 탐지를 재귀
+active-set 방식으로 교체)까지 push했음을 발견 — 에이전트는 자신의 중복 draft를 버리고 `git merge
+--ff-only`로만 재조정했다(새 커밋 없음, force-push 없음). 나머지 5건: 2건은 정보성 확인(이미 정확,
+조치 불필요), 1건(readiness probe가 bwrap의 `--unshare-net` 부재로 같은 runner의 다른 서비스를 오탐할
+수 있음)은 이미 다른 세션이 PR 코멘트로 3가지 옵션을 제시한 진짜 아키텍처 결정 사항이라 그대로 유지,
+나머지 2건은 이번 세션이 직접 검증해 처리: (a) "rejected copy 유지" — `copy_workspace`의 symlink-escape
+`ValueError`를 `sandboxed_verify.py`/`sandboxed_web_e2e.py` 양쪽 `main()` 모두 잡지 않아 코드화된 실패
+대신 raw traceback이 새던 실재 버그를 확인·수정(exit 125, 기존 다른 ValueError 거부와 동일 관례) —
+`--keep-sandbox`가 rejected copy도 유지하는 것 자체는 "디버깅용 보존"이라는 플래그의 명시된 목적과
+일치해 정책 문제가 아니라고 판단, 변경하지 않음; (b) "`sandboxed`: true가 isolation 비활성 상태를
+가린다" — 별도 `isolation`/`isolation_backend` 필드가 이미 실제 구분을 담당하고, 어떤 스크립트도
+`sandboxed`를 프로그램적으로 파싱하지 않으며, sibling 모듈(`sandboxed_verify.py`)에서 이 필드는 애초에
+OS 격리 개념이 없어 의미가 다르므로 스키마 변경 없이 그대로 둠. 커밋 `528a1eae`로 push, 전체 스위트
+1980 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%, ruff clean.
 
 ## 6. Compliance and data boundary
 
