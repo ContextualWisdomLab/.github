@@ -1,0 +1,58 @@
+name: OpenCode Rust Coverage Toolchain Quality CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - ".github/workflows/opencode-rust-coverage-toolchain-quality-ci.yml"
+      - "scripts/ci/ensure_rust_llvm19.sh"
+      - "tests/test_opencode_rust_coverage_toolchain_contract.py"
+      - "tests/test_pr_review_autofix_nvidia_nim_contract.py"
+      - "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
+      - "CHANGELOG.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-rust-coverage-toolchain-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install exact hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Run permanent LLVM runtime-boundary contract
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py
+          python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py
+          git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
