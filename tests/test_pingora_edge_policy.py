@@ -128,6 +128,29 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     assert not policy._needs_content_scan(changed("src/runtime.go", "modified", "+exec pingora"))
 
 
+def test_binary_suffix_exemption_never_overrides_an_nginx_runtime_path() -> None:
+    """A runtime-path match takes precedence over the binary-suffix exemption.
+
+    Filename extension alone cannot prove a file is inert: an Nginx runtime
+    artifact named with a suffix from ``NON_RUNTIME_BINARY_SUFFIXES`` (e.g. a
+    config mistakenly or adversarially named ``*.png``) must still scan, or
+    the exemption added for legitimate doc screenshots would let a real
+    runtime artifact dodge the fail-closed policy just by its extension.
+    """
+
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(
+        changed("infra/nginx/screenshot.png", "added", "", patch_available=False)
+    )
+    assert policy._needs_content_scan(
+        changed("infra/nginx/evidence.pdf", "added", "", patch_available=False)
+    )
+    # The exemption still applies to a genuinely non-runtime binary path.
+    assert not policy._needs_content_scan(
+        changed("docs/screenshots/edge.pdf", "added", "", patch_available=False)
+    )
+
+
 def test_active_test_source_is_scanned_while_dedicated_fixtures_are_exempt() -> None:
     """Executable test helpers remain candidates; only explicit fixtures are exempt."""
 

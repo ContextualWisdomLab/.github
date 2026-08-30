@@ -315,11 +315,15 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
+    # Path-based runtime detection must run before the binary-suffix exemption
+    # below: a file under an Nginx runtime path (e.g. an "nginx" directory) is
+    # a scan candidate regardless of its extension, so a real config cannot
+    # dodge the fail-closed policy just by being named "config.png".
+    if _runtime_path_rule(changed.path) is not None:
+        return True
     if PurePosixPath(changed.path.lower()).suffix in NON_RUNTIME_BINARY_SUFFIXES:
         return False
     if not changed.patch_available:
-        return True
-    if _runtime_path_rule(changed.path) is not None:
         return True
     lower_path = changed.path.lower()
     if PurePosixPath(lower_path).name in {"dockerfile", "containerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
