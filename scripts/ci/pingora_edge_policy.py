@@ -29,6 +29,16 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
+NON_RUNTIME_BINARY_SUFFIXES = frozenset({
+    ".avif",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".webp",
+})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -304,6 +314,8 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     """Return whether a changed final file can carry an active edge runtime."""
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
+        return False
+    if PurePosixPath(changed.path.lower()).suffix in NON_RUNTIME_BINARY_SUFFIXES:
         return False
     if not changed.patch_available:
         return True

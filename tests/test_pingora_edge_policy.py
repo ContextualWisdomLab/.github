@@ -109,6 +109,9 @@ def test_needs_content_scan_is_delta_bounded() -> None:
     changed = policy.ChangedFile
     assert not policy._needs_content_scan(changed("Dockerfile", "removed", "+FROM nginx"))
     assert not policy._needs_content_scan(changed("README.md", "modified", "+nginx"))
+    assert not policy._needs_content_scan(
+        changed("docs/screenshots/edge.png", "added", "", patch_available=False)
+    )
     assert policy._needs_content_scan(changed("Dockerfile", "modified", "-FROM nginx\n+FROM scratch"))
     assert policy._needs_content_scan(changed("config/runtime.txt", "modified", "+FROM nginx"))
     assert policy._needs_content_scan(changed("infra/nginx/default.yaml", "modified", "+server: edge"))
