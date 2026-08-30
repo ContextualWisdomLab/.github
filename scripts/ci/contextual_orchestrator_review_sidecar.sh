@@ -73,10 +73,11 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 # latency itself becomes the bottleneck, the more complete fix is a live
 # provider /v1/models cross-check at discovery time to drop retired model ids
 # before they ever reach preflight -- see git history's now-removed
-# select_nvidia_nim_model.py (fix/remove-orphaned-nim-model-resolver) for a
-# worked example of that exact query-the-provider-catalog pattern, applied
-# there to a different, direct-provider caller -- rather than raising this
-# further.
+# select_nvidia_nim_model.py (removed at commit e864378c5aa064b8840cdf3ef83c56a38cd5ea56)
+# for a worked example of that exact query-the-provider-catalog pattern,
+# applied there to a different, direct-provider caller -- rather than raising
+# this further. A commit SHA is used here rather than the removing branch's
+# name because branches are deleted after merge; the commit is not.
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
