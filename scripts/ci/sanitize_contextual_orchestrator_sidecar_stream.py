@@ -15,8 +15,21 @@ _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
     (
-        "review sidecar discovered no zero-cost models;",
-        "review sidecar discovered no zero-cost models",
+        # Matches contextual_orchestrator_review_launcher.py's actual
+        # SystemExit text ("no eligible models", not "no zero-cost models" --
+        # that stale prefix never matched the launcher's real message, so
+        # this fail-closed diagnostic was silently dropped to
+        # omitted_unstructured_lines instead of reaching CI operators).
+        "review sidecar discovered no eligible models;",
+        "review sidecar discovered no eligible models",
+    ),
+    (
+        "review sidecar requires an explicit --auth-token or the KV credential",
+        "review sidecar auth token unavailable",
+    ),
+    (
+        "review sidecar requires at least one provider credential in the KV",
+        "review sidecar requires at least one provider credential in the KV",
     ),
 )
 
