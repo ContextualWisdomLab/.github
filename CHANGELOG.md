@@ -8,6 +8,15 @@ Semantic Versioning where the repository publishes a release.
 - Run npm workspace coverage installs from the nearest validated ancestor lock
   while keeping tests scoped to the changed package; regular non-symlink lock
   files remain hash-bounded by the existing materialization manifest.
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
+  `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
+  Models.dev free-cost join beyond `opencode_zen` to `nvidia_nim`/
+  `nvidia_nim_sub`/`openai`, and fixes the actual root cause — `_fetch_json`
+  sent no `User-Agent`, so Cloudflare-fronted `models.dev` rejected every
+  discovery request with HTTP 403, silently breaking the Models.dev join for
+  every provider (including the pre-existing `opencode_zen` path). See the
+  2026-08-30 gap-baseline entry for the merge/bypass rationale.
 - Keep the required OpenCode bootstrap's Pingora policy step unconditional
   within its pull-request-only workflow, so the static bootstrap contract does
   not depend on event payload fields. (Ported from #1414, not yet merged, to
