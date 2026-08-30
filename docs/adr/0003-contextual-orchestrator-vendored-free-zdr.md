@@ -145,6 +145,15 @@ all five, and auto-optimize routing by cost.
 
 ## Addendum (2026-08-30): evidence-gated path toward `orchestrator/free` for Strix
 
+**Superseded by ADR-0020 (2026-08-30):** a separate, parallel PR
+(`ContextualWisdomLab/.github#1437`) decided this question directly — Strix
+now routes through `orchestrator/free`, accepting the outage-domain risk
+below as a documented residual rather than waiting on the evidence threshold
+this addendum proposed. `free_family_diversity` (added by this PR) remains
+useful as ongoing monitoring evidence for that pool regardless of which way
+the pin points. The analysis below is kept as the record of this PR's own
+reasoning at the time; it is no longer the operative decision.
+
 The 2026-08-30 owner directive (`docs/product-goal-directive.md` §8, and its
 same-date instance-specific instruction) asks that Noema, OpenCode, *and*
 Strix all route through `contextual-orchestrator`'s `orchestrator/free` pool.
