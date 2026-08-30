@@ -135,7 +135,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
     with pytest.raises(ValueError, match="http"):
         sandboxed_web_e2e.wait_for_url("file:///tmp/ready", 1, service)
     assert not sandboxed_web_e2e.wait_for_url(
-        "https://example.invalid/ready",
+        "https://127.0.0.1/ready",
         1,
         service,
     )
@@ -143,7 +143,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
     running = _service(tmp_path, process=_RunningProcess())
     running.log_path.write_bytes(b"x" * 4097)
     assert not sandboxed_web_e2e.wait_for_url(
-        "https://example.invalid/ready",
+        "https://127.0.0.1/ready",
         1,
         running,
     )
@@ -170,7 +170,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
         def open(self, url: str, timeout: int):
             """Validate the poll request and return readiness."""
 
-            assert url == "https://ready.example/health"
+            assert url == "https://127.0.0.1/health"
             assert timeout == 2
             return Response()
 
@@ -181,7 +181,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
         lambda handler: Opener(),
     )
     assert sandboxed_web_e2e.wait_for_url(
-        "https://ready.example/health",
+        "https://127.0.0.1/health",
         1,
         clean_running,
     )
@@ -213,7 +213,7 @@ def test_wait_for_url_retries_url_errors_until_deadline(
     )
 
     assert not sandboxed_web_e2e.wait_for_url(
-        "https://ready.example/health",
+        "https://127.0.0.1/health",
         1,
         _service(tmp_path, process=_RunningProcess()),
     )
