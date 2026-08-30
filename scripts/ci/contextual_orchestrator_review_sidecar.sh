@@ -271,6 +271,22 @@ log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
+# Stream stdout/stderr through the redacting sanitizer as two named, awaitable
+# processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
+# so a failure handler can wait for the sanitizer to finish flushing before it
+# reads the sanitized file — otherwise the read can race the still-draining
+# pipe and silently show an empty/truncated diagnostic (the exact class of bug
+# this sanitizer exists to avoid: see the 2026-08-30 sidecar-diagnostics gap
+# baseline entry).
+exec {orchestrator_stdout_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
+stdout_sanitizer_pid=$!
+exec {orchestrator_stderr_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
+stderr_sanitizer_pid=$!
+wait_for_sidecar_sanitizers() {
+  wait "$stdout_sanitizer_pid" 2>/dev/null || true
+  wait "$stderr_sanitizer_pid" 2>/dev/null || true
+}
+
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
   "$sidecar_python" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
@@ -283,9 +299,14 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
     "${pool_args[@]}" \
-> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \
-2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &
+  >&"$orchestrator_stdout_fd" 2>&"$orchestrator_stderr_fd" &
 sidecar_pid=$!
+# Close our own copies of the write ends now that the sidecar process holds
+# its own duplicated fds. If these stayed open in this shell, the sanitizer
+# process substitutions would never see EOF (and never exit) once the sidecar
+# itself closes its fds, since a process substitution's reader only finishes
+# after every writer has closed.
+exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-
 cleanup_sidecar_on_error() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -293,6 +314,7 @@ cleanup_sidecar_on_error() {
     log "stopping failed sidecar (pid $sidecar_pid)"
     kill "$sidecar_pid" 2>/dev/null || true
     wait "$sidecar_pid" 2>/dev/null || true
+    wait_for_sidecar_sanitizers
   fi
 }
 trap cleanup_sidecar_on_error EXIT
@@ -302,6 +324,11 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?
+    # The sidecar has fully exited (confirmed above), so its stderr pipe has
+    # already sent EOF; draining the sanitizer here cannot hang, and it
+    # guarantees $sidecar_stderr holds everything the sidecar wrote before we
+    # read it for the failure message below.
+    wait_for_sidecar_sanitizers
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))

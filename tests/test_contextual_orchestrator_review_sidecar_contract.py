@@ -401,6 +401,26 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
 
 
+def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() -> None:
+    """A bare `2> >(sanitizer)` races the failure-path read and can hide the diagnostic; the drain must close that race."""
+    text = _read(SIDECAR)
+    assert "exec {orchestrator_stdout_fd}> >(" in text
+    assert "stdout_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stderr_fd}> >(" in text
+    assert "stderr_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-" in text
+    assert "wait_for_sidecar_sanitizers" in text
+    # The old bare, unwaited process-substitution redirection must be gone.
+    assert '> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \\' not in text
+    assert '2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &' not in text
+    # The drain must happen strictly before the failure-path read, only in the
+    # branch where the sidecar has already exited (not the healthz-timeout
+    # branch, where it may still be running and draining would hang).
+    exited_branch = text.index("sidecar exited before healthz")
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < exited_branch
+
+
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     """Required Noema review uses the gateway; the public NIM hardcode is gone."""
     workflow = _read(NOEMA_WORKFLOW)
