@@ -468,6 +468,42 @@ def test_gateway_retry_loop_rejects_a_malformed_attempt_limit_before_any_curl_ca
     assert report == {}
 
 
+def test_gateway_retry_loop_rejects_an_oversized_attempt_limit_before_any_curl_call(
+    tmp_path: Path,
+) -> None:
+    """Regression for a follow-up Devin Review finding on the malformed-limit
+    fix: an all-digit value is not automatically safe -- `[ -ge ]` errors the
+    identical way once the value overflows the shell's integer range (a
+    55-digit all-digit string reproduces "integer expression expected",
+    exactly like a non-numeric one), so the digit-only guard alone is
+    insufficient. This asserts a value that passes the digit-only check but
+    is absurdly long is still rejected, closed, before any curl call.
+    """
+    result, report = _run_gateway_retry_loop(
+        tmp_path,
+        max_attempts="9" * 55,
+        plan=[],
+    )
+
+    assert result.returncode == 1
+    assert "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be at most 9999" in result.stderr
+    assert report == {}
+
+
+def test_gateway_retry_loop_accepts_the_maximum_allowed_attempt_limit(tmp_path: Path) -> None:
+    """The digit-count cap's boundary (9999) itself must still be accepted --
+    proving the guard rejects on length, not by rejecting every large-looking
+    value indiscriminately.
+    """
+    success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts="9999", plan=[f"200\n{success_body}"]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert report["gateway"]["status"] == "ready"
+
+
 def test_gateway_retry_loop_succeeds_on_the_first_attempt(tmp_path: Path) -> None:
     """A clean 200 on the very first curl call needs no retry at all."""
     success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
@@ -561,6 +597,61 @@ def test_gateway_retry_loop_records_transport_exhaustion_evidence_before_failing
     }
 
 
+def test_gateway_retry_loop_classifies_a_transport_then_http_exhaustion_by_the_final_attempt(
+    tmp_path: Path,
+) -> None:
+    """Regression for Devin Review's mixed-retry-outcomes-lack-coverage
+    finding: the failure type can change between attempts (a transport
+    failure retried into an HTTP rejection, or the reverse), and the final
+    evidence must reflect the LAST attempt's actual outcome, not the first.
+    Here attempt 1 times out (no response at all) and attempt 2 gets a
+    non-2xx response -- exhaustion must classify as the non-2xx path
+    (`http_status` present, `gateway_retry_rejected` since this is a retry),
+    not the transport-exhaustion path.
+    """
+    error_body = json.dumps({"error": {"code": "invalid_structured_output"}})
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=2, plan=["FAIL", f"500\n{error_body}"]
+    )
+
+    assert result.returncode == 1
+    assert "gateway preflight returned HTTP 500 after 2 attempts" in result.stderr
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "error_type": "gateway_retry_rejected",
+        "error_code": "invalid_structured_output",
+        "http_status": 500,
+        "attempts": 2,
+        "status": "rejected",
+    }
+
+
+def test_gateway_retry_loop_classifies_an_http_then_transport_exhaustion_by_the_final_attempt(
+    tmp_path: Path,
+) -> None:
+    """The reverse mixed sequence: attempt 1 gets a non-2xx response, attempt
+    2 times out with no response at all. Exhaustion must classify as the
+    transport-exhaustion path (no `http_status`), matching what actually
+    happened on the final, decisive attempt.
+    """
+    error_body = json.dumps({"error": {"code": "invalid_structured_output"}})
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=2, plan=[f"500\n{error_body}", "FAIL"]
+    )
+
+    assert result.returncode == 1
+    assert (
+        "gateway preflight request could not reach the local sidecar after 2 attempts"
+        in result.stderr
+    )
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "error_type": "gateway_transport_exhausted",
+        "attempts": 2,
+        "status": "rejected",
+    }
+
+
 def test_reasoning_without_content_escalates_then_still_fails_closed_if_unresolved() -> None:
     """ADR-0005 round 5 (Devin Review): escalation must key off the vendored
     ``ModelClient._response_content``'s own "reasoning, no content" signature,
@@ -611,6 +702,13 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     """The OpenAI-documented ``finish_reason == "length"`` signature also
     escalates, independent of the ``reasoning`` field, and a candidate that
     only needed a bigger budget is correctly marked ready on the retry.
+
+    Also a regression for Devin Review's successful-escalations-keep-stale-
+    telemetry finding: the escalated (successful, final) response here
+    deliberately carries a DIFFERENT ``finish_reason`` (``"stop"``) than the
+    base attempt's ``"length"``, so a stale, unrefreshed field would be
+    caught -- the row must describe the response that actually made this
+    route ready, not the earlier one that didn't.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -621,7 +719,14 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     client = _SequencedClient(
         [
             {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
-            _openai_text("OK, here is the answer."),
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "OK, here is the answer."},
+                    }
+                ]
+            },
         ]
     )
 
@@ -636,7 +741,8 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     assert row["status"] == "ready"
     assert row["attempts"] == 2
     assert row["escalated"] is True
-    assert row["finish_reason"] == "length"
+    # Describes the escalated (final) attempt, not the stale base one.
+    assert row["finish_reason"] == "stop"
     assert row["reasoning_without_content"] is False
     assert report["escalations_used"] == 1
 

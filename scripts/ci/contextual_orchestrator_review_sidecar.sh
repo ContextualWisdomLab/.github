@@ -390,6 +390,15 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  # KNOWN GAP, tracked as ContextualWisdomLab/.github#1455 (not yet fixed):
+  # this 180s covers the launcher's ENTIRE startup sequence -- discovery,
+  # catalog build, AND preflight probing -- not just probing. Layer 1's own
+  # "160s worst case" comment
+  # (contextual_orchestrator_review_launcher.py's REVIEW_PREFLIGHT_MAX_ESCALATIONS)
+  # accounts only for probing; discover_all_models() runs first, inside this
+  # same 180s, and can itself take up to ~105s worst case (verified against
+  # the vendored contextual_orchestrator.model_discovery source: ~7
+  # sequential HTTP calls at up to 15s each).
   if [ "$i" -ge 180 ]; then
     fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
@@ -489,9 +498,19 @@ REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-
 # non-integer `$X` is itself a bash integer-comparison error, not a false
 # result, so the retry loop below would keep looping (never satisfying its
 # own exit test) until the surrounding CI job's own timeout kills it instead
-# of this check ever rejecting bad configuration on its own.
+# of this check ever rejecting bad configuration on its own. An all-digit
+# value is not automatically safe either: `[ -ge ]` still errors the exact
+# same way once the value overflows the shell's integer range (reproduced
+# directly: a 55-digit all-digit string fails with "integer expression
+# expected", identical to a non-numeric one) -- so the bound below also caps
+# digit COUNT, not just digit-ness. Four digits (up to 9999) is already far
+# beyond any realistic attempt count and stays safely representable on every
+# platform this runs on.
 case "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" in
-  ''|*[!0-9]*|0) fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be a positive integer" ;;
+  ''|*[!0-9]*|0)
+    fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be a positive integer" ;;
+  ?????*)
+    fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be at most 9999" ;;
 esac
 gateway_attempt=1
 gateway_http_status=""

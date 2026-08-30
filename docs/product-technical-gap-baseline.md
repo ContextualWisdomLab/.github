@@ -1454,6 +1454,37 @@ new), 100% coverage and 100% docstring coverage on `scripts/ci/`, `bash -n` synt
 script, and all 4 embedded Python heredoc blocks in it (including the new transport-exhaustion evidence
 writer) parse cleanly.
 
+**A second Devin Review pass, triggered by that push, found 3 more real, fixable issues (all fixed) and
+2 architecturally significant gaps verified as real but not guess-fixed.** Fixed: a successful escalated
+attempt still carried the base attempt's stale `finish_reason`/`reasoning_without_content` (the mixed-
+attempt bug's mirror image, on the success branch instead of the failure branch) — both fields now
+refresh from the escalated response on success too. The `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` `case`
+guard rejected non-numeric values but not oversized all-digit ones — reproduced directly that a 55-digit
+value hits the identical `[ -ge ]` integer-overflow failure the guard exists to prevent — so the guard now
+also caps digit count (at most 4 digits, 9999). Added fake-curl tests for mixed retry-outcome sequences
+(transport failure then HTTP rejection, and the reverse), proving exhaustion evidence reflects whichever
+attempt actually happened last.
+
+**Verified real but left open, tracked as `ContextualWisdomLab/.github#1454` and `#1455`:** (1) a
+candidate that succeeds at the cheap `REVIEW_PREFLIGHT_BASE_TOKENS = 16` base probe is admitted without
+ever being confirmed at the real serving budget (`REVIEW_MAX_OUTPUT_TOKENS = 4096`) — escalation only
+fires on evidence of *failure*, not to confirm success at the real budget, and ADR-0005's own Research
+(axis 2) already documents that a provider's hard completion-token ceiling is a real, per-model quantity
+separate from reasoning overhead; mitigated in production (not fixed here) by
+`contextual_orchestrator.orchestrator.TaskOrchestrator`'s own per-request failover/circuit-breaker, which
+this preflight does not replace. (2) Layer 1's "160s worst case" arithmetic covers only probing, not
+`discover_all_models()`'s own time, which runs first inside the *same* 180s healthz-readiness watchdog —
+verified directly against the vendored `contextual_orchestrator.model_discovery` source: up to ~7
+sequential HTTP calls (shared models.dev metadata, one per `PROVIDER_MODEL_SOURCES` entry with a
+registered credential — 5 of 6 for this sidecar's pool — and the OpenRouter ZDR feed), each up to
+`DISCOVERY_TIMEOUT_SECONDS = 15s`, for a discovery-alone worst case of up to ~105s and a combined real
+worst case of up to ~265s, not 160s. Both are documented in place with cross-references (source comments
+in `contextual_orchestrator_review_launcher.py` and `contextual_orchestrator_review_sidecar.sh`) rather
+than silently mischaracterizing safety margins that do not actually exist. Neither was guess-fixed: each
+needs its own evidence-based design pass (per this org's convergence convention — initial values from
+precedent, refinement from telemetry, never from inspection alone) before a specific number or mechanism
+is chosen.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

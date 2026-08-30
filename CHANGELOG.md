@@ -5,6 +5,33 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix 3 more Devin Review findings from a second review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), triggered
+  by the push that resolved the first 7: a successful escalated attempt still
+  carried the base attempt's stale `finish_reason`/`reasoning_without_content`
+  (the same class of bug as the mixed-attempt fix above, on the opposite
+  branch) -- now both fields are refreshed from the escalated response on
+  success too. `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`'s new `case` guard
+  rejected non-numeric values but not oversized all-digit ones, which hit the
+  identical `[ -ge ]` integer-overflow failure mode the guard exists to
+  prevent (reproduced directly: a 55-digit value fails the same way a
+  non-numeric one did) -- the guard now also caps digit count (at most 4
+  digits, 9999). Added mixed-outcome fake-curl tests (transport failure then
+  HTTP rejection, and the reverse) proving exhaustion evidence reflects
+  whichever attempt actually happened last. Two further findings from the same
+  pass -- (1) a base-probe success never confirms the candidate at the real
+  serving token budget (only escalation-on-failure does), and (2)
+  `discover_all_models()`'s own up-to-~105s sequential network time (verified
+  against the vendored `contextual_orchestrator.model_discovery` source: ~7
+  sequential HTTP calls at up to 15s each) is not counted against the same
+  180s watchdog Layer 1's 160s probing bound assumes it has entirely to
+  itself -- are real, verified, and architecturally significant enough to need
+  their own design pass rather than a guessed patch; documented in place with
+  cross-references and tracked as `ContextualWisdomLab/.github#1454` and
+  `#1455` respectively, left open (not resolved) on the PR. 1917 tests pass;
+  100% coverage and 100% docstring coverage on `scripts/ci/`.
 - Fix 7 Devin Review findings on PR #1452, ADR-0005's implementation
   (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`,

@@ -61,11 +61,27 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's worst case stays computed and bounded:
-# REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS +
-# REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# = 12*10 + 4*10 = 160s, under the sidecar's existing 180s healthz-readiness
-# wait. See docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
+# escalation retry above, so Layer 1's PROBING worst case stays computed and
+# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
+# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
+# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
+# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
+#
+# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
+# discover_all_models() call that runs before it inside the SAME 180s
+# watchdog. Verified directly against the vendored contextual-orchestrator
+# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
+# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
+# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
+# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
+# own 160s even starts. Combined real worst case is therefore up to ~265s,
+# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
+# shared monotonic deadline, scaled-down probing, or an evidence-justified
+# watchdog extension) and #1454 for the related, separately-tracked gap that
+# a base-probe *success* never confirms the candidate at the real serving
+# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
+# findings; both are architecturally significant enough to need their own
+# design pass rather than a guessed patch here.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
@@ -365,6 +381,20 @@ def _preflight_review_agents(
             routes.append(row)
             continue
         if _chat_response_has_text(response):
+            # KNOWN GAP, tracked (not yet fixed) as
+            # ContextualWisdomLab/.github#1454: this admits the candidate
+            # having only proven it works at REVIEW_PREFLIGHT_BASE_TOKENS
+            # (16), never at the real serving budget
+            # (REVIEW_MAX_OUTPUT_TOKENS, 4096) main()'s ModelClient actually
+            # requests. ADR-0005's own Research (axis 2) already documents
+            # that a provider's hard completion-token ceiling is a real,
+            # separate-from-reasoning-overhead quantity per model; a
+            # candidate whose real ceiling sits strictly between 16 and 4096
+            # would pass here and only fail later, on real review traffic.
+            # Mitigated in production (not fixed here) by
+            # contextual_orchestrator.orchestrator.TaskOrchestrator's own
+            # per-request failover/circuit-breaker, which this preflight
+            # does not replace.
             row["status"] = "ready"
             routes.append(row)
             viable.append(agent)
@@ -413,6 +443,15 @@ def _preflight_review_agents(
         if _chat_response_has_text(escalated_response):
             row["status"] = "ready"
             row["escalated"] = True
+            # Overwrite the base attempt's stale diagnostic fields with the
+            # escalated (successful, final) attempt's own state -- otherwise
+            # a ready route's evidence would still show the budget-too-small
+            # signature that triggered the escalation in the first place,
+            # describing a response this route no longer produced.
+            row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
+            row["reasoning_without_content"] = _response_has_reasoning_without_content(
+                escalated_response
+            )
             routes.append(row)
             viable.append(agent)
             continue
