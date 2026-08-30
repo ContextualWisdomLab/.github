@@ -272,6 +272,7 @@ def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
     project_dir.mkdir(parents=True)
     package_source = tmp_path / "real-packages" / "example" / "src"
     package_source.mkdir(parents=True)
+    (tmp_path / "linked-repository" / ".git").mkdir()
     (tmp_path / "linked-repository" / "packages").symlink_to(tmp_path / "real-packages")
 
     assert safe_pytest._repository_package_python_paths(project_dir) == []

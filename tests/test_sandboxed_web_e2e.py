@@ -243,6 +243,42 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://localhost:8000/health", 10, service) is True
 
 
+@POSIX_PROCESS_GROUPS
+def test_wait_for_url_ignores_environment_proxy_configuration(monkeypatch, tmp_path):
+    """The readiness opener must reach loopback directly, never via an env-configured proxy.
+
+    ``urllib.request.build_opener`` installs its full default handler set --
+    including a ``ProxyHandler`` built from ``HTTP_PROXY``/``HTTPS_PROXY``/
+    ``ALL_PROXY`` -- alongside whatever handlers are explicitly passed to it.
+    Without an explicit no-proxy override, a URL that passes the loopback
+    allowlist in ``require_loopback_readiness_url`` could still have its real
+    TCP connection silently rerouted through an external proxy that decides
+    the actual destination, defeating the entire loopback guarantee. This
+    points the proxy env vars at a closed local port (an immediate,
+    deterministic connection refusal) and asserts the readiness check still
+    succeeds promptly by reaching the real loopback service directly.
+    """
+    closed_port = free_port()
+    for no_proxy_name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(no_proxy_name, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{closed_port}/")
+    monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{closed_port}/")
+    monkeypatch.setenv("ALL_PROXY", f"http://127.0.0.1:{closed_port}/")
+
+    real_port = free_port()
+    service = sandboxed_web_e2e.start_service(
+        "proxy-bypass-target",
+        http_server_command(real_port, "proxy-bypass-target"),
+        tmp_path,
+        dict(os.environ),
+        tmp_path,
+    )
+    try:
+        assert sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{real_port}/", 8, service) is True
+    finally:
+        sandboxed_web_e2e.stop_service(service)
+
+
 def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
     """Readiness polling must fail closed on public, metadata, and userinfo targets."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)

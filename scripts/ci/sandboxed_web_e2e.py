@@ -175,7 +175,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     require_loopback_readiness_url(url)
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(NoRedirectHandler(), urllib.request.ProxyHandler({}))
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
