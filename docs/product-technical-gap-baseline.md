@@ -1985,6 +1985,14 @@ accidental redundancy (`docs/adr/0002-product-technical-gap-baseline.md`: this d
 operational snapshot" and "live PR metadata inventory," a distinct role from the ADR's settled design
 record and the CHANGELOG's terse pointer entries, not a duplicate of either).
 
+**추가 (2026-08-30, 같은 시간별 재개 안):** `main`이 위 sidecar-preflight ADR-0005(#1449)를 병합해
+`6ffd8f8a`로 전진하면서 `.github#1347`(`fix/sandboxed-web-e2e-isolation-clean`)과
+`.github#1438`(공유 task 브랜치) 둘 다 `mergeable_state`가 `dirty`로 전환됐다. 두 곳 모두 충돌은
+`CHANGELOG.md`/`docs/product-technical-gap-baseline.md`에 각자 독립적으로 추가한 인접 항목뿐이었다
+(같은 줄을 편집한 실제 충돌 아님) — 양쪽 다 유지하는 통상적 merge commit으로 해소했다
+(`.github#1347`: 커밋 `583af50b`, 전체 스위트 1930 passed 재확인; task 브랜치/`.github#1438`: 커밋
+`c76e5a24`, 전체 스위트 1898 passed 재확인). Force-push 없음.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
