@@ -396,6 +396,66 @@ flowchart LR
   or typed provider result. A green event handler that skips the LLM call is not
   acceptance evidence.
 
+## 2026-08-30 org-wide Strix `orchestrator/auto` recognition gap
+
+- Root cause found for the identical `Strix Security Scan/strix: failure —
+  Default-branch repository_dispatch Strix evidence failed` seen across many
+  unrelated open PRs (#1414, #789, #1382, #1276, and others): #1401 (commit
+  `e94f1d12`) renamed Strix's primary contextual-orchestrator model from
+  `orchestrator/free` to `orchestrator/auto` throughout `strix.yml` and its
+  contract tests, but left `scripts/ci/strix_quick_gate.sh`'s
+  `is_contextual_orchestrator_model()` recognizing only the old
+  `orchestrator/free` spelling. `resolved_llm_api_base_for_model()` then
+  treated `orchestrator/auto` as a non-gateway model and rejected the pinned
+  loopback sidecar base (`http://127.0.0.1:18080/v1`) under its https-only
+  check, exiting 2 with `LLM_API_BASE must be an https URL when configured`
+  before any scan could start. This did not fail #1401's own CI because
+  `pull_request_target` required workflows run the *base* branch's trusted
+  workflow file (pre-rename at the time); the new-workflow/old-gate-script
+  mismatch became observable only on PRs opened after #1401 merged into
+  `main` — the same trusted-workflow-deadlock shape #1401 itself broke.
+- Fix opened as `.github` PR #1421
+  (`fix/strix-orchestrator-auto-model-recognition`): teaches
+  `is_contextual_orchestrator_model()` both pool spellings
+  (`CONTEXTUAL_ORCHESTRATOR_POOL` supports `free` and `auto`; the gateway's
+  `TaskOrchestrator.AUTO_MODEL` / `FREE_MODEL` are real, distinct sentinels),
+  makes `child_model_for_api_base()` qualify the child-process model from the
+  actually-resolved `$model` instead of a hardcoded `openai/orchestrator/free`
+  literal, and refreshes two `STRIX_PROVIDER_UNAVAILABLE` log lines to name
+  the real primary model. Adds a mirrored `orchestrator/auto` scenario to
+  `scripts/ci/test_strix_quick_gate.sh` and a new Python regression in
+  `tests/test_strix_openai_fallback_api_base.py`. Full suite: 1,874 passed, 1
+  skipped (pre-existing); interrogate 100%. This PR's own Strix check is
+  expected to reproduce the exact bug it fixes until it merges, for the same
+  base-branch-trust-boundary reason described above; not yet merged this
+  cycle — left for human/admin merge or the next hourly pass once other
+  required checks and OpenCode review land clean.
+- `.github` PR #1233 (`fix/organization-loop-oidc-fallback`) had drifted to a
+  real `mergeable_state: dirty` (not just the Strix failure above): `main`
+  had advanced past its last merge-main commit. Merged current `main` in,
+  resolved one additive `CHANGELOG.md` conflict, reran the full suite (1,876
+  passed, 1 skipped) plus interrogate (100%), and pushed to the existing head
+  — now `mergeable_state: blocked` (conflict-free, awaiting checks/review).
+- Of the three mechanical Action-version-pin PRs named for recheck: #1274
+  (CodeQL v4.37.7) was superseded by #1307 already on `main` (v4.37.8) —
+  merging it would have downgraded the pin, so it was closed as superseded.
+  #1275 (Scorecard v2.4.4) and #1276 (OSV-Scanner v2.5.1) were both still
+  needed and both had real `dirty` merge conflicts against current `main`
+  (same drift pattern as #1233, unrelated to Strix); both were merged with
+  current `main`, revalidated (full suite green, interrogate 100%, target
+  Action pin confirmed post-merge), and pushed — both now `blocked` rather
+  than `dirty`.
+- #789 and #1382 also show `mergeable_state: dirty` against current `main`
+  but are large, complex, long-running PRs (49 and 76 commits respectively,
+  wide diffs); left unresolved this cycle rather than rushing a conflict
+  resolution on that scale — candidates for a dedicated future pass.
+- One pre-existing, unrelated finding surfaced while validating the above:
+  `coverage report` shows a stable 99% (`scripts/ci/pingora_edge_policy.py`
+  line 274, an apparently-unreachable >3,000-file pagination guard clause) on
+  unmodified `main` itself, independent of anything touched this cycle. Not
+  fixed here (out of scope for the Strix investigation); worth a follow-up
+  pass since this repo's coverage gate is nominally 100%-required.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
