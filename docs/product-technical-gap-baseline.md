@@ -2415,6 +2415,21 @@ PostgreSQL advisory lease를 매 항목 `commit()`이 커넥션을 풀로 반환
 clean. ADR-0005 Revisions/Decision 두 문서 불일치와 `Email.workspace_id`(이미 추적된 gap의
 재발견) 스레드도 각각 문서 수정과 회신으로 정리했다.
 
+**naruon#1486 `strix` 재발 (head `da816566`, run `33326526050`)**: 같은 PR의 앞선 `dcc9fcd0`
+발생과 동일한 `STRIX_PROVIDER_UNAVAILABLE` 클래스가 새 head에서 다시 발생했으나 메커니즘은
+달랐다 — 이번에는 sidecar 기동과 preflight(healthz 25s, gateway chat/completions preflight
+1차 시도 성공, `orchestrator/free` 8개 모델 선정)가 전부 정상 완료된 후, 실제 스캔 실행 자체가
+`orchestrator/free`를 대상으로 5400초(90분) 동안 응답 없이 멈췄다("Strix run timed out after
+5400s" → exit 124 → `STRIX_PROVIDER_UNAVAILABLE: ...orchestrator/free exhausted`). 워크플로
+자체의 bounded-retry gate가 남은 job 예산(589초)이 재시도에 부족해 fail-closed됐다. 이는 앞서
+이 PR의 `noema-review` 코멘트(10:18)에서 이미 추적된 "`orchestrator/free` pool exhaustion"
+클래스의 새 증거이지만, "healthz 이후 완전 무응답" 서브 증상과는 다른 "discovery/preflight는
+통과하지만 실제 스캔 완료 요청이 stall"하는 별도 서브 증상이다 — 두 서브 증상을 하나로
+단정하지 않고 구분해서 기록한다. `contextual-orchestrator#923`/`.github#1438`이 다루는 discovery
+쪽 bounded retry가 이 런타임-스톨 서브 증상까지 커버하는지는 아직 확인되지 않았다. 진단
+코멘트를 남기고 실패한 job을 1회 재실행(`rerun_failed_jobs`, run `33326526050`)했다 — PR
+자체의 diff와는 무관.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
