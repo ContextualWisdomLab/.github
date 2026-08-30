@@ -317,6 +317,31 @@ def test_changed_python_lock_accepts_an_empty_dependency_closure(
     ) == []
 
 
+def test_changed_python_lock_rejects_malformed_empty_dependency_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Undecodable bytes cannot impersonate an intentional empty closure."""
+    old_content = b"old==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {"requirements.txt": (b"\xff\xfe", "b" * 40)},
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"a" * 40)
+
+    with pytest.raises(
+        ValueError,
+        match="current-head Python lock requirements.txt is not valid UTF-8",
+    ):
+        materializer._select_python_locks(
+            tmp_path,
+            "a" * 40,
+            [("requirements.txt", old_content)],
+            "b" * 40,
+        )
+
+
 def test_materializes_exact_vcs_sources_in_a_separate_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

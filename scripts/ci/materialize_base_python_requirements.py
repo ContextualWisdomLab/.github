@@ -822,6 +822,12 @@ def _select_python_locks(
         base_blob_sha = base_blob.decode("ascii", errors="strict").strip().lower()
         if base_blob_sha == head_blob:
             continue
+        try:
+            content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"current-head Python lock {source_path} is not valid UTF-8"
+            ) from exc
         if not _requirement_lines(content):
             selected.pop(source_path, None)
             continue
