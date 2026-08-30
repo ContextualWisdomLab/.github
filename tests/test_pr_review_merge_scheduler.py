@@ -364,75 +364,6 @@ def test_fetch_open_pr_priorities_reads_all_pages_without_full_enrichment(monkey
     assert [fields.get("cursor") for _query, fields in seen] == [None, "next"]
 
 
-def test_fetch_open_pr_priorities_rest_is_inventory_only(monkeypatch):
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        return [
-            {
-                "number": 1,
-                "base": {"ref": "main"},
-                "head": {"sha": "a" * 40},
-            },
-            {
-                "number": 2,
-                "base": {"ref": "feature-a"},
-                "head": {"sha": "b" * 40},
-            },
-        ]
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    monkeypatch.setattr(
-        sched,
-        "rest_pr_node",
-        lambda *_args: pytest.fail("discarded inventory rows must not be hydrated"),
-    )
-
-    assert sched.fetch_open_pr_priorities_rest("owner/repo") == [
-        {
-            "number": 1,
-            "baseRefName": "main",
-            "headRefOid": "a" * 40,
-            "reviews": {"nodes": []},
-        },
-        {
-            "number": 2,
-            "baseRefName": "feature-a",
-            "headRefOid": "b" * 40,
-            "reviews": {"nodes": []},
-        },
-    ]
-    assert calls == [
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=1"
-    ]
-
-
-def test_fetch_open_pr_priorities_rest_paginates_complete_inventory(monkeypatch):
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        if path.endswith("&page=1"):
-            return [
-                {
-                    "number": number,
-                    "base": {"ref": "main"},
-                    "head": {"sha": f"{number:040x}"},
-                }
-                for number in range(1, 101)
-            ]
-        return []
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    assert len(sched.fetch_open_pr_priorities_rest("owner/repo")) == 100
-    assert calls == [
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=1",
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2",
-    ]
-
-
 def test_fetch_prioritized_open_prs_bounds_full_hydration_after_global_sort(monkeypatch):
     old_reviewed_default = make_pr(
         number=1,
@@ -480,6 +411,40 @@ def test_fetch_prioritized_open_prs_drops_moved_or_missing_selected_rows(monkeyp
 
     assert sched.fetch_prioritized_open_prs("owner/repo", 3, "main") == []
     assert hydrated == [3, 1, 2]
+
+
+def test_fetch_prioritized_open_prs_backfills_one_changed_candidate(monkeypatch):
+    inventory = [make_pr(number=1), make_pr(number=2)]
+    hydrated = []
+
+    monkeypatch.setattr(sched, "fetch_open_pr_priorities", lambda repo: inventory)
+
+    def fake_fetch_pr(repo, number):
+        hydrated.append(number)
+        if number == 1:
+            return [make_pr(number=1, headRefOid="b" * 40)]
+        return [inventory[1]]
+
+    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
+
+    assert sched.fetch_prioritized_open_prs("owner/repo", 1, "main") == [inventory[1]]
+    assert hydrated == [1, 2]
+
+
+def test_fetch_prioritized_open_prs_bounds_changed_candidate_backfill(monkeypatch):
+    inventory = [make_pr(number=1), make_pr(number=2), make_pr(number=3)]
+    hydrated = []
+
+    monkeypatch.setattr(sched, "fetch_open_pr_priorities", lambda repo: inventory)
+
+    def fake_fetch_pr(repo, number):
+        hydrated.append(number)
+        return [make_pr(number=number, headRefOid="b" * 40)]
+
+    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
+
+    assert sched.fetch_prioritized_open_prs("owner/repo", 1, "main") == []
+    assert hydrated == [1, 2]
 
 
 def test_fetch_pr_uses_exact_pull_request_number(monkeypatch):
@@ -866,11 +831,11 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
     monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
-    monkeypatch.setattr(sched, "fetch_open_pr_priorities_rest", lambda repo: [{"repo": repo}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
-    assert sched.fetch_open_pr_priorities("owner/repo") == [{"repo": "owner/repo"}]
+    with pytest.raises(RuntimeError, match="global review priority"):
+        sched.fetch_open_pr_priorities("owner/repo")
     assert sched.fetch_pr("owner/repo", 1) == [{"repo": "owner/repo", "number": 1}]
 
 

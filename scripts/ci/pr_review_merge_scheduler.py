@@ -927,33 +927,6 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
     return prs
 
 
-def fetch_open_pr_priorities_rest(repo: str) -> list[dict[str, Any]]:
-    """Fetch only queue-priority identity through the REST fallback."""
-    candidates: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        payload = gh_api_json(
-            f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
-            f"&per_page=100&page={page}"
-        )
-        candidates.extend(
-            {
-                "number": pr.get("number"),
-                "baseRefName": (pr.get("base") or {}).get("ref"),
-                "headRefOid": (pr.get("head") or {}).get("sha"),
-                # REST's list endpoint has no review collection. Treat an
-                # unknown verdict as highest dispatch priority, then hydrate
-                # only the bounded selected set below.
-                "reviews": {"nodes": []},
-            }
-            for pr in payload
-        )
-        if len(payload) < 100:
-            break
-        page += 1
-    return candidates
-
-
 def fetch_open_pr_priorities(repo: str) -> list[dict[str, Any]]:
     """Fetch the complete open-PR inventory using priority-only fields."""
     owner, name = split_repo(repo)
@@ -971,7 +944,10 @@ def fetch_open_pr_priorities(repo: str) -> list[dict[str, Any]]:
             payload = gh_graphql(OPEN_PR_PRIORITIES_QUERY, **fields)
         except RuntimeError as exc:
             if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
-                return fetch_open_pr_priorities_rest(repo)
+                raise RuntimeError(
+                    "Unable to preserve global review priority: "
+                    "GraphQL priority inventory is unavailable"
+                ) from exc
             raise
         page = payload["data"]["repository"]["pullRequests"]
         candidates.extend(page.get("nodes") or [])
@@ -991,9 +967,14 @@ def fetch_prioritized_open_prs(repo: str, max_prs: int, base_branch: str) -> lis
             pr.get("baseRefName") == base_branch,
             review_dispatch_priority(pr),
         ),
-    )[:max_prs]
+    )
     prs: list[dict[str, Any]] = []
-    for candidate in candidates:
+    # Backfill a changed or disappeared selected row without allowing a
+    # high-churn queue to turn the bounded scan back into full hydration.
+    hydration_budget = min(len(candidates), max_prs * 2)
+    for candidate in candidates[:hydration_budget]:
+        if len(prs) >= max_prs:
+            break
         rows = fetch_pr(repo, int(candidate["number"]))
         if not rows:
             continue
