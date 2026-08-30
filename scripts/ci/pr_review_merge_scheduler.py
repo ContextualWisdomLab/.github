@@ -1227,9 +1227,40 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def check_run_supersedes(
+    started_at: datetime | None,
+    node: dict[str, Any],
+    index: int,
+    previous_started_at: datetime | None,
+    previous_index: int,
+) -> bool:
+    """Return whether a check run is newer than the current best-known run.
+
+    Shared recency rule for folding a sequence of same-purpose check runs
+    (either the reruns sharing one (workflow, name) key in
+    ``latest_check_runs``, or the coverage-evidence runs
+    ``latest_coverage_evidence_index`` compares across workflow names) down
+    to the single newest one. A rerun that has not started yet has no
+    ``startedAt``, so it can never win a chronological comparison against an
+    already-started predecessor -- even though GitHub only ever creates it
+    after that predecessor. Fall back to the check run's own actively-pending
+    status (QUEUED/IN_PROGRESS/etc, the same predicate ``running_check_state``
+    uses) as the recency signal in that case: a currently-pending run always
+    supersedes a predecessor that already has a result, regardless of
+    timestamps. A node with no startedAt and no pending status (e.g.
+    cancelled before it started) carries no such signal and keeps deferring
+    to the timestamped predecessor. Ties fall back to the later index.
+    """
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    if started_at is None and previous_started_at is not None:
+        return running_check_state(node) == "running"
+    if previous_started_at is None and started_at is not None:
+        return True
+    return (started_at or epoch, index) >= (previous_started_at or epoch, previous_index)
+
+
 def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the newest check run for each workflow and check-name pair."""
-    epoch = datetime.min.replace(tzinfo=timezone.utc)
     latest: dict[
         tuple[str, str],
         tuple[datetime | None, int, dict[str, Any]],
@@ -1248,29 +1279,7 @@ def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
             latest[key] = (started_at, index, node)
             continue
         previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            # A rerun that has not started yet has no startedAt, so it can
-            # never win a chronological comparison against an
-            # already-started predecessor -- even though GitHub only ever
-            # creates it after that predecessor. Fall back to the check
-            # run's own actively-pending status (QUEUED/IN_PROGRESS/etc, the
-            # same predicate ``running_check_state`` uses) as the recency
-            # signal in that case: within one (workflow, name) key, a
-            # currently-pending run always supersedes a predecessor that
-            # already has a result, regardless of timestamps. A node with no
-            # startedAt and no pending status (e.g. cancelled before it
-            # started) carries no such signal and keeps deferring to the
-            # timestamped predecessor.
-            if running_check_state(node) == "running":
-                latest[key] = (started_at, index, node)
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest[key] = (started_at, index, node)
-            continue
-        if (started_at or epoch, index) >= (
-            previous_started_at or epoch,
-            previous_index,
-        ):
+        if check_run_supersedes(started_at, node, index, previous_started_at, previous_index):
             latest[key] = (started_at, index, node)
     return [node for _, _, node in sorted(latest.values(), key=lambda item: item[1])]
 
@@ -1588,18 +1597,27 @@ def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]
 
 
 def latest_coverage_evidence_index(check_runs: Sequence[dict[str, Any]]) -> int | None:
-    """Return the newest coverage-evidence index across workflow names."""
+    """Return the newest coverage-evidence index across workflow names.
+
+    Folds the candidates through the same ``check_run_supersedes`` recency
+    rule ``latest_check_runs`` uses within one (workflow, name) key, so a
+    freshly QUEUED coverage-evidence rerun (``startedAt: null``) in one
+    workflow correctly outranks an older, already-completed coverage-evidence
+    run in a *different* workflow instead of losing a naive timestamp
+    comparison because it has not started yet.
+    """
     coverage_indices = coverage_evidence_indices(check_runs)
     if not coverage_indices:
         return None
-    return max(
-        coverage_indices,
-        key=lambda item: (
-            parse_github_datetime(check_runs[item].get("startedAt"))
-            or datetime.min.replace(tzinfo=timezone.utc),
-            item,
-        ),
-    )
+    best_index = coverage_indices[0]
+    best_started_at = parse_github_datetime(check_runs[best_index].get("startedAt"))
+    for item in coverage_indices[1:]:
+        node = check_runs[item]
+        started_at = parse_github_datetime(node.get("startedAt"))
+        if check_run_supersedes(started_at, node, item, best_started_at, best_index):
+            best_index = item
+            best_started_at = started_at
+    return best_index
 
 
 def coverage_evidence_state(pr: dict[str, Any]) -> str:

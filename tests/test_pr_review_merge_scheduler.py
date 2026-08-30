@@ -3145,6 +3145,54 @@ def test_coverage_evidence_state_prefers_newest_run_across_workflows():
     assert sched.coverage_evidence_state(pr) == "complete"
 
 
+def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run_across_workflows():
+    """A freshly queued rerun in a different workflow outranks an older completed run.
+
+    Sibling of test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run:
+    that test covers the same-(workflow, name) case inside latest_check_runs; this one
+    covers latest_coverage_evidence_index's own cross-workflow-name selection, which has
+    the same null-``startedAt``-while-``QUEUED`` pitfall. An older, already-completed
+    "Required OpenCode Review" coverage-evidence run must not beat a newer, still-QUEUED
+    "OpenCode Review Dispatch" coverage-evidence run just because GitHub has not yet
+    populated the queued run's ``startedAt`` -- otherwise the scheduler could report
+    stale "complete" coverage state while the real, currently-relevant rerun is pending.
+    """
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-08-24T01:00:00Z",
+                        "checkSuite": {
+                            "workflowRun": {"workflow": {"name": "Required OpenCode Review"}}
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "QUEUED",
+                        "conclusion": None,
+                        "startedAt": None,
+                        "checkSuite": {
+                            "workflowRun": {"workflow": {"name": "OpenCode Review Dispatch"}}
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    check_runs = sched.latest_check_runs(pr)
+    assert len(check_runs) == 2
+    latest_index = sched.latest_coverage_evidence_index(check_runs)
+    assert check_runs[latest_index]["status"] == "QUEUED"
+    assert sched.coverage_evidence_state(pr) == "running"
+
+
 def test_central_coverage_placeholder_cannot_mask_dispatch_failure(monkeypatch):
     """Central metadata-only coverage success cannot hide failed dispatch evidence."""
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
