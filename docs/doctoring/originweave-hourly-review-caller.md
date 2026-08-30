@@ -75,9 +75,16 @@ OpenCode GitHub App token from GitHub OIDC when the mapped PAT is absent
 forbids executing the caller with write or model privileges it does not
 need (MITRE, 2026).
 
-Model execution remains inside the central worker. The model credential
-is the GitHub Secret `NVIDIA_NIM_API_KEY`; the caller does not receive or
-forward it.
+Model execution remains inside the central worker, which routes through the
+vendored `contextual-orchestrator` gateway sidecar
+(`scripts/ci/contextual_orchestrator_review_sidecar.sh`) using all five
+provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+`NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) and the
+fail-closed zero-cost `orchestrator/free` pool (see
+[ADR-0003](../adr/0003-contextual-orchestrator-vendored-free-zdr.md)); the
+caller receives none of them. (Updated 2026-08-30: this paragraph originally
+described a single hardcoded `NVIDIA_NIM_API_KEY` model credential, which
+predates the ADR-0003 gateway migration.)
 
 Before protected-main activation, the repository variable
 `OPENCODE_REPOSITORY_DISPATCH_TARGETS` must contain the exact

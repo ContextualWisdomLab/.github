@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Remove `scripts/ci/select_nvidia_nim_model.py`: an orphaned helper that
+  opened a direct `HTTPSConnection` to `integrate.api.nvidia.com` with a raw
+  provider API key to resolve a live NVIDIA NIM model id, predating the
+  ADR-0003 gateway migration and wired into nothing (no workflow or script
+  referenced it — only its own dedicated test, `test_scheduled_autofix_routes_through_contextual_orchestrator`
+  already pins `https://integrate.api.nvidia.com/v1` as a **forbidden**
+  string in `pr-review-autofix.yml`). Removed with its test
+  (`tests/test_select_nvidia_nim_model.py`). Not the same thing as
+  `contextual-orchestrator`'s own legitimate internal support for NVIDIA NIM
+  as one of its five backend providers, which is unmodified and out of this
+  repository's scope. Corrected four stale pre-ADR-0003 "single hardcoded
+  `NVIDIA_NIM_API_KEY`" descriptions of the scheduled autofix worker's model
+  credential in `docs/doctoring/hourly-nvidia-nim-autofix.md` (dated
+  addendum, extensive historical detail kept as history),
+  `docs/doctoring/originweave-hourly-review-caller.md`,
+  `docs/doctoring/nonnest2-hourly-review-caller.md` (one stale sentence
+  each), and `docs/automation/hourly-review-repair.md` (summary bullet and
+  the Clearfolio credential paragraph) to describe the current five-secret
+  `contextual-orchestrator` gateway routing instead. Split out of
+  `ContextualWisdomLab/.github#1437` per its exact-head governance review's
+  fifth acceptance criterion: this cleanup is orthogonal to that PR's
+  Strix pool-gating behavior repair and belongs in its own,
+  independently-reviewable change.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
