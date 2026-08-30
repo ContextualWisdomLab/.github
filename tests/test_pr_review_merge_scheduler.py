@@ -1828,7 +1828,7 @@ def test_coverage_retry_floor_uses_latest_dispatch_timestamp(monkeypatch):
     monkeypatch.setattr(
         sched,
         "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+        lambda repo, workflow, pr, since=None: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
     )
 
     assert sched.coverage_retry_wait_reason(
@@ -1874,7 +1874,9 @@ def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavai
     monkeypatch.setattr(
         sched,
         "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr: (_ for _ in ()).throw(RuntimeError("temporary API failure")),
+        lambda repo, workflow, pr, since=None: (_ for _ in ()).throw(
+            RuntimeError("temporary API failure")
+        ),
     )
 
     assert sched.coverage_retry_wait_reason(
@@ -1906,7 +1908,7 @@ def test_coverage_retry_floor_keeps_newer_review_timestamp(monkeypatch):
     monkeypatch.setattr(
         sched,
         "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+        lambda repo, workflow, pr, since=None: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
     )
 
     assert sched.coverage_retry_wait_reason(
@@ -4129,7 +4131,7 @@ def test_latest_opencode_dispatch_started_at_matches_exact_completed_run(monkeyp
     monkeypatch.setattr(
         sched,
         "active_workflow_runs",
-        lambda repo, statuses: [
+        lambda repo, statuses, event=None, created=None: [
             {"event": "push", "display_title": "irrelevant"},
             {
                 "event": "repository_dispatch",
@@ -4175,7 +4177,7 @@ def test_latest_opencode_dispatch_started_at_returns_none_without_exact_run(monk
     monkeypatch.setattr(
         sched,
         "active_workflow_runs",
-        lambda repo, statuses: [
+        lambda repo, statuses, event=None, created=None: [
             {
                 "event": "repository_dispatch",
                 "display_title": "Required OpenCode Review owner/repo#1@" + "b" * 40,
@@ -4189,6 +4191,107 @@ def test_latest_opencode_dispatch_started_at_returns_none_without_exact_run(monk
         "OpenCode Review",
         make_pr(headRefOid="a" * 40),
     ) is None
+
+
+def test_latest_opencode_dispatch_started_at_passes_since_as_created_lower_bound(
+    monkeypatch,
+):
+    """Forward ``since`` into the underlying ``active_workflow_runs`` REST filters."""
+    captured = {}
+
+    def fake_active_workflow_runs(repo, statuses, event=None, created=None):
+        captured["repo"] = repo
+        captured["statuses"] = statuses
+        captured["event"] = event
+        captured["created"] = created
+        return []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid="a" * 40),
+        since=datetime(2026, 8, 24, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert captured["statuses"] == ("completed",)
+    assert captured["event"] == "repository_dispatch"
+    assert captured["created"] == ">=2026-08-24T00:00:00Z"
+
+
+def test_latest_opencode_dispatch_started_at_without_since_leaves_created_unbounded(
+    monkeypatch,
+):
+    """No ``since`` anchor means no ``created`` lower bound is requested."""
+    captured = {}
+
+    def fake_active_workflow_runs(repo, statuses, event=None, created=None):
+        captured["event"] = event
+        captured["created"] = created
+        return []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    sched.latest_opencode_dispatch_started_at(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid="a" * 40),
+    )
+
+    assert captured["event"] == "repository_dispatch"
+    assert captured["created"] is None
+
+
+def test_active_workflow_runs_narrows_query_with_event_and_created(monkeypatch):
+    """Request server-side ``event``/``created`` filters instead of full history.
+
+    ``active_workflow_runs(dispatch_repo, ("completed",))`` with no filter
+    fetches the dispatch repository's *entire* completed-run history, since
+    matching against a target PR happens client-side after the fetch. The
+    central dispatch repository's completed-run count only grows, so a
+    same-head dispatch-history lookup must narrow the REST query itself.
+    """
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    sched.active_workflow_runs(
+        "owner/repo",
+        ("completed",),
+        event="repository_dispatch",
+        created=">=2026-08-24T00:00:00Z",
+    )
+
+    assert len(calls) == 1
+    args = calls[0]
+    assert "event=repository_dispatch" in args
+    assert "created=>=2026-08-24T00:00:00Z" in args
+    assert args.count("-f") == 3  # status, event, created
+
+
+def test_active_workflow_runs_omits_filters_by_default(monkeypatch):
+    """Existing unfiltered callers keep requesting no ``event``/``created`` params."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    sched.active_workflow_runs("owner/repo", ("queued",))
+
+    assert len(calls) == 1
+    args = calls[0]
+    assert not any(str(arg).startswith("event=") for arg in args)
+    assert not any(str(arg).startswith("created=") for arg in args)
 
 
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):

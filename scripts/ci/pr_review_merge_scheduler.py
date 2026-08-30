@@ -1579,7 +1579,9 @@ def coverage_retry_wait_reason(
     retry_anchor = submitted_at
     if repo and workflow:
         try:
-            dispatch_started_at = latest_opencode_dispatch_started_at(repo, workflow, pr)
+            dispatch_started_at = latest_opencode_dispatch_started_at(
+                repo, workflow, pr, since=retry_anchor
+            )
         except RuntimeError:
             return "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
         if dispatch_started_at and dispatch_started_at > retry_anchor:
@@ -2329,27 +2331,45 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
-    """Return active workflow runs for a repository."""
+def active_workflow_runs(
+    repo: str,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+    *,
+    event: str | None = None,
+    created: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return workflow runs for a repository, optionally narrowed server-side.
+
+    ``event`` and ``created`` map directly onto GitHub's ``List workflow
+    runs for a repository`` REST query parameters (``event`` selects the
+    triggering webhook event, ``created`` accepts a date/range qualifier
+    such as ``>=2026-08-24T00:00:00Z``). Both are omitted by default so
+    existing callers keep fetching every run for the given statuses
+    unfiltered; a caller with a naturally bounded lookup -- one whose
+    target repository's run history only grows, such as a same-head
+    dispatch search -- should pass them to avoid paginating history it can
+    never use.
+    """
     runs: list[dict[str, Any]] = []
     for status in statuses:
-        payload = json.loads(
-            run_github_actions(
-                [
-                    "gh",
-                    "api",
-                    "--method",
-                    "GET",
-                    f"repos/{repo}/actions/runs",
-                    "--paginate",
-                    "--slurp",
-                    "-f",
-                    f"status={status}",
-                    "-F",
-                    "per_page=100",
-                ]
-            )
-        )
+        args = [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            f"repos/{repo}/actions/runs",
+            "--paginate",
+            "--slurp",
+            "-f",
+            f"status={status}",
+            "-F",
+            "per_page=100",
+        ]
+        if event:
+            args += ["-f", f"event={event}"]
+        if created:
+            args += ["-f", f"created={created}"]
+        payload = json.loads(run_github_actions(args))
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
@@ -2485,8 +2505,21 @@ def latest_opencode_dispatch_started_at(
     repo: str,
     workflow: str,
     pr: dict[str, Any],
+    *,
+    since: datetime | None = None,
 ) -> datetime | None:
-    """Return the latest completed same-head OpenCode dispatch start time."""
+    """Return the latest completed same-head OpenCode dispatch start time.
+
+    The dispatch repository hosting ``repository_dispatch`` runs only
+    accumulates completed-run history over time, so this narrows GitHub's
+    REST query server-side to ``event=repository_dispatch`` plus a
+    ``created`` lower bound of ``since``, instead of paginating every
+    completed run ever recorded there and filtering client-side. ``since``
+    is safe to pass whenever the caller only cares about a dispatch strictly
+    newer than a known anchor timestamp -- any run created at or before that
+    anchor cannot become the returned maximum -- and is left unset (no lower
+    bound) for callers with no such anchor.
+    """
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
     head = str(pr.get("headRefOid") or "").lower()
@@ -2499,8 +2532,11 @@ def latest_opencode_dispatch_started_at(
             reverse=True,
         )
     )
+    created = f">={since.strftime('%Y-%m-%dT%H:%M:%SZ')}" if since else None
     latest: datetime | None = None
-    for run_data in active_workflow_runs(dispatch_repo, ("completed",)):
+    for run_data in active_workflow_runs(
+        dispatch_repo, ("completed",), event="repository_dispatch", created=created
+    ):
         if run_data.get("event") != "repository_dispatch":
             continue
         display_title = str(run_data.get("display_title") or "")
