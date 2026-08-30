@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-43a5c91955df9794c9f8d3679d3ca38265e22928}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-a67fb3dfff7f8fdae458a765e6bd922a09d699cd}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.

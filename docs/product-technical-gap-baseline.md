@@ -772,21 +772,36 @@ recurrence" section below out of the file entirely; both are restored here.)
   and passes the parsed metadata into `discover_provider_models`. This lets
   OpenAI/NVIDIA/opencode_zen free models be recognized even when bytez is
   unavailable, breaking the single-provider-of-free-models dependency.
+- A follow-up commit on the same PR, `a67fb3dfff7f8fdae458a765e6bd922a09d699cd`,
+  fixes a second, equally fatal bug Devin's review caught: `models.dev` rejects
+  urllib's default `Python-urllib/X.Y` user agent with a Cloudflare HTTP 403
+  (error 1010), so every Models.dev fetch — including the pre-existing
+  `opencode_zen` join — was silently degrading to "fetch failed" and returning
+  `is_free=False` for everything. `_fetch_json` now always sends a stable,
+  non-credential `User-Agent`. Verified live: default UA → 403, the new UA →
+  200 (4,432,166 bytes). Without this, bumping the pin to `43a5c919...` alone
+  would very likely still have produced an empty `orchestrator/free` pool.
 - Fix for `.github`: bump `ORCHESTRATOR_PIN_SHA` in
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`, the contract constant
   in `tests/test_contextual_orchestrator_review_sidecar_contract.py`, and the
-  ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to
-  `43a5c91955df9794c9f8d3679d3ca38265e22928`.
-- Catch-22: because `opencode-review`/`strix`/`noema-review` are required
-  `pull_request_target` checks, a `.github` PR that updates the sidecar pin is
-  tested with the *base* sidecar (old pin). That base sidecar still cannot boot,
-  so the required checks on the `.github` PR itself will fail until the base
-  branch already contains the new pin. This is an accepted, documented trust
-  boundary for `.github` workflow changes (see CLAUDE.md), but it means the
-  `.github` PR needs either (a) a base-branch direct update by an owner-level
-  actor, or (b) a `repository_dispatch`/manual Strix run that materializes the
-  new pin separately. The PR is opened with the correct code change and evidence
-  so the next pass can land it.
+  ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to the more
+  complete `a67fb3dfff7f8fdae458a765e6bd922a09d699cd` (#1428 originally pinned
+  `43a5c919...`; updated in a follow-up commit on #1428 once the User-Agent fix
+  landed on #919, before merging).
+- Catch-22, resolved: because `opencode-review`/`strix`/`noema-review` are
+  required `pull_request_target` checks, this `.github` PR (#1428) was tested
+  with the *base* sidecar (old pin) and could never pass its own required
+  checks — the base sidecar still couldn't boot, by design, until the base
+  branch already contained the new pin. This is the documented trust boundary
+  for `.github` workflow changes (see CLAUDE.md): a required-workflow fix that
+  repairs its own gate cannot self-certify through that same gate. Resolved by
+  an explicit owner-authorized bypass merge of #1428 past its own (necessarily
+  red, for this reason alone) required checks, after independently verifying
+  #919's actual engineering gates (full unit/contract suite, Hypothesis,
+  Atheris, CodeQL, Semgrep, Trivy, osv-scan, Scorecard — all green on
+  `a67fb3d`; only its own `opencode-review`/`noema-review`/`strix` were red,
+  for the identical circular reason) and reading #1428's diff directly. No
+  other required check or review evidence was bypassed or fabricated.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
