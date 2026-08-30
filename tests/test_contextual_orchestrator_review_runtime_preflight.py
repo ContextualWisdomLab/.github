@@ -82,6 +82,44 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     assert routable([]) == []
 
 
+def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A discarded discovery error must become a visible, sanitizer-safe diagnostic."""
+    namespace = _load_launcher()
+    log_discovery_errors = namespace.get("_log_discovery_errors")
+    assert callable(log_discovery_errors), "launcher must expose a discovery-error logger"
+
+    errors = [
+        SimpleNamespace(provider_name="bytez", error_code="http_status_401"),
+        SimpleNamespace(provider_name="openai", error_code="timeout"),
+    ]
+
+    log_discovery_errors(errors)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        "provider_discovery_failed provider=bytez code=http_status_401",
+        "provider_discovery_failed provider=openai code=timeout",
+    ]
+
+
+def test_log_discovery_errors_is_a_silent_no_op_on_a_clean_discovery(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No providers failed -> no diagnostic lines, not even an empty summary."""
+    namespace = _load_launcher()
+    log_discovery_errors = namespace.get("_log_discovery_errors")
+    assert callable(log_discovery_errors)
+
+    log_discovery_errors([])
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
     """Reject provider errors/malformed replies before the sidecar becomes ready."""
     namespace = _load_launcher()
@@ -335,6 +373,9 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line(
         "review sidecar requires at least one provider credential in the KV"
     ) == "review sidecar requires at least one provider credential in the KV"
+    assert sanitize_line(
+        "provider_discovery_failed provider=bytez code=http_status_401"
+    ) == "provider_discovery_failed provider=bytez code=http_status_401"
     assert sanitize_line("provider response sk-secret") is None
 
 

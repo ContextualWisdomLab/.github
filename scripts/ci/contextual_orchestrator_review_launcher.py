@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,27 @@ def _has_text_output(model: object) -> bool:
     if isinstance(modalities, str):
         modalities = (modalities,)
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
+
+
+def _log_discovery_errors(errors: list[object]) -> None:
+    """Print one bounded, secret-free diagnostic per provider discovery failure.
+
+    ``discover_all_models()`` isolates one provider's failure from the
+    others by design, but a caller that discards the returned errors cannot
+    tell "this provider has zero free models" from "this provider's
+    discovery silently failed" -- exactly the ambiguity that made a real
+    incident impossible to diagnose from CI logs alone. Each error's
+    ``error_code`` is a bounded classification (``http_status_NNN`` /
+    ``timeout`` / ``transport_error`` / ``invalid_response``) that never
+    carries raw provider response text, so this is safe to print to stderr.
+    """
+    for error in errors:
+        print(
+            f"provider_discovery_failed provider={getattr(error, 'provider_name', 'unknown')} "
+            f"code={getattr(error, 'error_code', 'unknown')}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
@@ -395,9 +417,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("review sidecar requires at least one provider credential in the KV")
 
     try:
-        discovered, _ = discover_all_models()
+        discovered, discovery_errors = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
+    _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
     free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
