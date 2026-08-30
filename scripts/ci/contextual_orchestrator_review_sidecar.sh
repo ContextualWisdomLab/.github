@@ -374,6 +374,19 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     # guarantees $sidecar_stderr holds everything the sidecar wrote before we
     # read it for the failure message below.
     wait_for_sidecar_sanitizers
+    # $preflight_report is written by the launcher's own ReviewPreflightError
+    # handler before it exits (see contextual_orchestrator_review_launcher.py
+    # main()), so it can hold real per-route evidence (agent_id/provider/
+    # model/status/error_type/http_status -- schema-bounded, never raw
+    # provider content or secrets) even though the generic exception message
+    # above never does. Previously this file was only ever surfaced by
+    # Strix's separate artifact-upload step, leaving every other workflow
+    # (noema-review, opencode-review) blind to *why* every candidate route
+    # was rejected. Printing it here puts that evidence in the one place
+    # every workflow's job log already is.
+    if [ -s "$preflight_report" ]; then
+      log "sidecar preflight route evidence: $(sed -n '1,80p' "$preflight_report" | tr '\n' ' ')"
+    fi
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
@@ -420,21 +433,36 @@ fi
 # scanner step.
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own per-agent
-# routing probe budget): a reasoning-capable free-tier model (e.g. a DeepSeek
-# NIM route) spends part of its token budget on internal reasoning before any
-# answer content, so a small budget here can make an agent the routing probe
-# already proved "ready" fail this separate end-to-end check with a spurious
-# "response did not contain assistant content" -> 502 invalid_structured_output
-# (contextual_orchestrator.orchestrator._response_content), even though the
-# model itself is healthy. See "2026-08-30 sidecar preflight max_tokens
-# desynchronized from the routing probe" in
+# routing probe budget): observed behavior was an agent the routing probe
+# already proved "ready" at that budget failing this separate end-to-end check
+# with a spurious 502 invalid_structured_output at a much smaller budget, even
+# though the model itself is healthy. The exact field-level cause was never
+# captured (the sidecar's log sanitizer strips raw provider payloads by
+# design), so treat any specific mechanism as a hypothesis, not fact. See
+# "2026-08-30 sidecar preflight max_tokens desynchronized from the routing
+# probe" (and its 2026-08-30 correction) in
 # ContextualWisdomLab/contextual-orchestrator's own
-# docs/product-technical-gap-baseline.md for the exact-evidence reproduction
-# (downloaded strix-reports artifact, PR #912 run 33304076516).
+# docs/product-technical-gap-baseline.md for the evidence that is actually
+# captured (downloaded strix-reports artifact,
+# ContextualWisdomLab/contextual-orchestrator#912 run 33304076516).
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
+# 30s (this check's previous bound) is too tight for a real completion from a
+# reasoning-capable free-tier model: exact-evidence reproduction (Strix run
+# 33306775025 on ContextualWisdomLab/contextual-orchestrator#921, job
+# 99244624298) shows the routing probe marking a DeepSeek NIM route "ready"
+# in 18s, then this identical request against that same healthy route being
+# cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
+# request could not reach the local sidecar" is this curl failure, not an
+# actual connectivity problem. This required-workflow job already budgets
+# 120 minutes (see timeout-minutes in strix.yml/noema-review.yml), and the
+# org's own stated policy accepts multi-hour central review latency in
+# favor of accuracy over speed -- a 30s bound on one preflight self-check
+# contradicted that policy and rejected a route the routing probe had just
+# proven healthy. 120s keeps this a bounded, fail-closed check while giving
+# a real reasoning generation room to finish.
 if ! gateway_http_status="$(
-  curl -sS --max-time 30 \
+  curl -sS --max-time 120 \
     -o "$gateway_preflight_response" \
     -w '%{http_code}' \
     -X POST \
