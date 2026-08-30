@@ -177,11 +177,15 @@ def _reject_escaping_symlinks(destination: Path) -> None:
         if not path.is_symlink():
             continue
         try:
-            resolved = path.resolve()
+            resolved = path.resolve(strict=True)
         except (OSError, RuntimeError) as exc:
-            # A symlink cycle (a -> b -> a) raises RuntimeError on some Python
-            # versions and OSError (ELOOP) on others; either way it cannot be
-            # trusted to stay inside the sandbox root.
+            # strict=True forces resolve() to confirm the fully-resolved path
+            # actually exists, so both a symlink cycle (a -> b -> a) and a
+            # plain dangling target reliably raise OSError (ELOOP/ENOENT) here
+            # across Python versions. Non-strict resolve() is not sufficient:
+            # some CPython versions detect a cycle and silently return a
+            # partially-resolved path instead of raising, which would let an
+            # unresolvable symlink slip past this check.
             raise ValueError(f"workspace symlink could not be resolved: {path}") from exc
         if resolved != root and root not in resolved.parents:
             raise ValueError(f"workspace symlink escapes the sandbox root: {path} -> {resolved}")
