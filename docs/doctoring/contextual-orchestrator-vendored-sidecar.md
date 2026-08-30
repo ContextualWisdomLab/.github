@@ -85,8 +85,10 @@ request then defaulted to `auto` orchestration and reached the pinned
 server's triage/conduct path. That path returned `invalid_structured_output`
 with HTTP 502 even though route admission had succeeded. The smoke request now
 sets `orchestration: route`, which exercises the direct virtual-pool path used
-by tool-bearing Strix requests and avoids an unrelated auto-mode triage call.
-This changes only the smoke request mode: provider response validation and the
+by Noema's strict-JSON request and tool-bearing Strix requests and avoids an
+unrelated auto-mode triage call. Noema now sends the same mode when its API URL
+matches the process-local sidecar origin; unrelated external OpenAI-compatible
+URLs retain their original payload. Provider response validation and the
 fail-closed treatment of every non-200 response remain unchanged.
 
 ## What changed

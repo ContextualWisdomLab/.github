@@ -432,6 +432,27 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
 
+def test_call_llm_selects_direct_route_for_the_process_local_sidecar(monkeypatch):
+    """The sidecar-backed Noema request must bypass the gateway's auto triage."""
+    pr = make_pr()
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:18080/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse({"choices": [{"message": {"content": '{"decision":"approve","summary":"ok","findings":[]}'}}]})
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            return fake_urlopen(request, timeout)
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
+    assert noema.call_llm("owner/repo", 1, pr, "diff", False)["decision"] == "approve"
+    assert seen["body"]["orchestration"] == "route"
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()

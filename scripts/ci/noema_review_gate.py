@@ -570,6 +570,8 @@ def call_llm(
             prompt,
         ],
     }
+    if is_allowed_orchestrator_sidecar_url(api_url):
+        payload["orchestration"] = "route"
     request = urllib.request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
