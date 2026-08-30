@@ -206,38 +206,54 @@ def _reject_escaping_symlink_chain(candidate: Path, root: Path) -> None:
     example one whose file was excluded from the copy by ``DEFAULT_IGNORE``
     -- is therefore accepted as long as it still lexically resolves inside
     ``root``: verification must still run despite the broken link. Only an
-    absolute target, a target that normalizes outside ``root``, or a chain
-    that revisits a path it has already followed (an unresolvable cycle)
-    raises. The hop count is bounded so a chain that never repeats (due to
-    purely lexical, not real-path, normalization) still fails closed instead
-    of walking forever. The walk allows one more iteration than the hop
-    limit: each iteration checks one position and then, if it is a symlink,
-    advances to the next, so a chain of exactly ``MAXIMUM_SYMLINK_HOPS``
-    real, resolvable symlinks needs a final iteration to confirm the landing
-    position is not itself a further symlink -- without it, such a chain
-    would be rejected even though the OS itself can resolve it.
+    absolute target, a target segment that normalizes outside ``root``, or a
+    chain that revisits a symlink it has already followed (an unresolvable
+    cycle) raises. The walk processes the candidate's path one component at a
+    time rather than resolving each symlink's whole target in a single
+    ``os.path.normpath`` call, because a target can itself contain an
+    intermediate component that is a symlink -- for example
+    ``some-alias/../secret`` where ``some-alias`` is itself a relative,
+    entirely-legitimate-looking internal symlink. Collapsing that whole
+    string lexically in one step would cancel ``some-alias`` against the
+    following ``..`` textually, silently ignoring that following
+    ``some-alias`` for real can land somewhere shallower or deeper than one
+    directory level -- exactly the gap a real ``os.path.normpath`` call
+    cannot see, since it never re-examines whether an intermediate segment is
+    itself a symlink needing its own resolution first. Processing one
+    component at a time and re-checking ``is_symlink()`` after every step
+    closes that gap without ever calling ``Path.resolve()``. A hop budget
+    bounds the total number of symlinks followed so a chain that never
+    repeats still fails closed instead of walking forever; only actually
+    dereferencing a symlink spends one unit of that budget, so a chain of
+    exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
     """
-    visited: set[Path] = set()
-    current = candidate
-    for _ in range(MAXIMUM_SYMLINK_HOPS + 1):
-        if current in visited:
+    seen: set[Path] = set()
+    resolved = root
+    stack = list(candidate.relative_to(root).parts)
+    hops_remaining = MAXIMUM_SYMLINK_HOPS
+    while stack:
+        component = stack.pop(0)
+        if component == "..":
+            if resolved == root:
+                raise ValueError(f"workspace symlink escapes the sandbox root: {candidate}")
+            resolved = resolved.parent
+            continue
+        step = resolved / component
+        if not step.is_symlink():
+            resolved = step
+            continue
+        if step in seen:
             raise ValueError(f"workspace symlink could not be resolved: {candidate}")
-        visited.add(current)
-        if not current.is_symlink():
-            return
-        target = Path(os.readlink(current))
+        if hops_remaining <= 0:
+            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+        seen.add(step)
+        hops_remaining -= 1
+        target = Path(os.readlink(step))
         if target.is_absolute():
             raise ValueError(
-                f"workspace symlink escapes the sandbox root: {candidate} -> {target}"
+                f"workspace symlink escapes the sandbox root: {step} -> {target}"
             )
-        current = Path(os.path.normpath(current.parent / target))
-        try:
-            current.relative_to(root)
-        except ValueError as exc:
-            raise ValueError(
-                f"workspace symlink escapes the sandbox root: {candidate} -> {target}"
-            ) from exc
-    raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+        stack = list(target.parts) + stack
 
 
 def _ignore_with_env_template_allowlist(patterns: Sequence[str]) -> Callable[[str, list[str]], set[str]]:

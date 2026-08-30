@@ -195,6 +195,28 @@ def test_copy_workspace_rejects_directory_symlink_escaping_sandbox_root(tmp_path
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
+def test_copy_workspace_rejects_escape_via_intermediate_directory_alias(tmp_path):
+    """An intermediate alias component inside a target is resolved, not skipped.
+
+    ``self-alias`` points at ``.`` (its own parent, the repo root) -- entirely
+    legitimate and safe standing on its own. But ``link``'s target,
+    ``self-alias/../outside-secret.txt``, only *looks* safe if the whole
+    string is collapsed lexically in one step (``self-alias/..`` cancels to
+    nothing, leaving what looks like a plain in-repo reference). Resolved for
+    real, component by component, following ``self-alias`` lands at the repo
+    root itself (zero depth), so the very next ``..`` immediately exits the
+    repo. A check that only ran ``os.path.normpath`` on the whole target
+    string once would miss this; walking one component at a time must not.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "self-alias").symlink_to(".", target_is_directory=True)
+    (repo / "link").symlink_to("self-alias/../outside-secret.txt")
+
+    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
 def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
     """A symlink cycle that never terminates fails closed instead of hanging.
 
@@ -223,6 +245,27 @@ def test_copy_workspace_keeps_internal_symlinks_intact(tmp_path):
 
     assert (copied / "link.txt").is_symlink()
     assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_cross_directory_symlink_using_parent_traversal(tmp_path):
+    """A relative ``..`` that climbs back into the repo, not out of it, is accepted.
+
+    ``subdir/link.txt -> ../sibling.txt`` needs exactly one ``..`` to reach a
+    real sibling file at the repo root -- a common, legitimate pattern (e.g.
+    ``bin/tool -> ../lib/tool``). This must not be confused with a ``..``
+    that pops above the sandbox root itself.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sibling.txt").write_text("payload", encoding="utf-8")
+    subdir = repo / "subdir"
+    subdir.mkdir()
+    (subdir / "link.txt").symlink_to("../sibling.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "subdir" / "link.txt").is_symlink()
+    assert (copied / "subdir" / "link.txt").read_text(encoding="utf-8") == "payload"
 
 
 def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tmp_path):
