@@ -158,8 +158,11 @@ triggers, both bounded, both explicit:
   differently on a new attempt — this is not a budget problem, so escalating the budget would not help
   and is not done here.
 - **Trigger B — a response was received, content is empty, and `choices[0].finish_reason == "length"`**
-  (the OpenAI-documented signature of "budget too small," cited above): retry the *same* candidate/route
-  once at a **materially larger** budget. This is the only trigger that changes the budget.
+  (the OpenAI-documented signature of "budget too small," cited above): for Layer 1, which targets one
+  specific candidate, retry that *same* candidate once at a **materially larger** budget — the only
+  case that changes the budget. For Layer 2, which cannot target a specific candidate (see Decision
+  §3), Trigger B instead retries a fresh request at the same budget, same as Trigger A — a different
+  route via the virtual pool's own variance is the operative lever there, not a bigger number.
 - **Neither trigger fires more than once per attempt distinguishing between them, and both draw from
   one small, shared, explicit retry budget per layer** (Decision §3) — not "one retry per route"
   unconditionally, which is what produced Devin's second finding (an unbounded-looking worst case).
@@ -211,9 +214,13 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   completed by the time Layer 2 runs): keep the existing per-attempt timeout (**120s, unchanged** — not
   shortened, per Context above) and the existing `4096` base budget (already proven working on a real
   hosted run, `contextual-orchestrator#921`). Allow up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`
-  total attempts, covering both Trigger A (transport failure/hang) and Trigger B (empty +
-  `finish_reason == "length"`, escalating to a larger budget on the *next* attempt only) before failing
-  closed with the specific last-observed reason. **Worst case**: 3 × 120s = **360s (6 minutes)** —
+  total attempts. Unlike Layer 1, Layer 2 cannot target a specific candidate — a fresh attempt may land
+  on a different route via the virtual pool's own internal variance, which is the operative lever here,
+  not a bigger budget — so both Trigger A (transport failure/hang) and Trigger B (empty +
+  `finish_reason == "length"`) retry a fresh request at the **same** `4096` budget rather than
+  escalating to an unproven new number; a non-2xx rejection specifically on a *retry* (not the first
+  attempt) is recorded as its own distinct outcome rather than retried again. **Worst case**: 3 × 120s
+  = **360s (6 minutes)** —
   explicit, bounded, and small relative to the job's 120-minute ceiling; the previous design's worst
   case was already 120s for one unconditional attempt with no chance of recovery, so this trades a
   bounded amount of additional worst-case latency for surviving exactly the transient-hang class of
