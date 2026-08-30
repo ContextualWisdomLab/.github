@@ -169,17 +169,20 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
 
 
 def _validate_contained_symlink_cycle(candidate: Path, source_root: Path) -> None:
-    """Accept a repository-internal symlink cycle, rejecting only an escape.
+    """Accept a repository-internal symlink chain, rejecting only an escape.
 
-    ``Path.resolve(strict=False)`` raises an uncaught ``RuntimeError`` for a
-    symlink loop -- even one fully self-contained inside the copied
-    repository -- before ``validate_repository_symlinks`` can classify it.
-    This walks the same chain by hand, one ``os.readlink`` hop at a time,
-    tracking visited paths itself instead of asking the filesystem to
-    resolve indefinitely. A hop whose target is absolute, or whose lexically
-    normalized target steps outside ``source_root``, still raises
-    ``RepositoryPathBoundaryError`` exactly like a non-cyclic escape. A chain
-    that revisits a path it already followed -- without ever leaving
+    ``validate_repository_symlinks`` calls this for every symlink it finds,
+    walking the chain by hand one ``os.readlink`` hop at a time instead of
+    asking ``Path.resolve()`` to follow it: ``resolve()`` only reports the
+    first hop's absolute-ness, silently following any absolute hop reached
+    partway through a chain, and its behavior on an actual cycle is not
+    reliable evidence either way -- it raises ``RuntimeError`` on some Python
+    versions but silently returns a partially-resolved path, with no error at
+    all, on others. This function instead tracks visited paths itself, so a
+    hop whose target is absolute, or whose lexically normalized target steps
+    outside ``source_root``, raises ``RepositoryPathBoundaryError`` no matter
+    how deep into the chain it occurs or which Python version is running. A
+    chain that revisits a path it already followed -- without ever leaving
     ``source_root`` -- is treated as contained and returns normally. The hop
     count is bounded so a chain that (due to purely lexical, not real-path,
     normalization) never repeats still fails closed instead of hanging.
@@ -216,35 +219,25 @@ def validate_repository_symlinks(source: Path) -> None:
     Relative links are retained only when their resolved target stays beneath
     ``source``. Absolute links are rejected even when they currently name a
     path beneath ``source`` because preserving them would point the sandboxed
-    command back at the original checkout instead of the isolated copy. A
-    symlink cycle fully contained beneath ``source`` (see
-    ``_validate_contained_symlink_cycle``) is accepted rather than aborting
-    verification with an uncaught ``RuntimeError``.
+    command back at the original checkout instead of the isolated copy. Every
+    symlink is validated with ``_validate_contained_symlink_cycle``'s lexical,
+    hop-by-hop walk rather than ``Path.resolve()``: resolving a multi-hop
+    chain silently follows any absolute hop partway through instead of just
+    the first one, and resolving a genuine cycle is not reliable evidence
+    either way -- it raises ``RuntimeError`` on some Python versions but
+    silently returns a partially-resolved path, with no error at all, on
+    others. Neither behavior is something this boundary check can depend on;
+    the manual walk is deterministic across Python versions and checks every
+    hop, not just the first. A symlink cycle fully contained beneath
+    ``source`` is accepted rather than aborting verification.
     """
     source_root = source.resolve(strict=True)
     for current_root, directory_names, file_names in os.walk(source_root, followlinks=False):
         current = Path(current_root)
         for name in (*directory_names, *file_names):
             candidate = current / name
-            if not candidate.is_symlink():
-                continue
-            target = Path(os.readlink(candidate))
-            if target.is_absolute():
-                raise RepositoryPathBoundaryError(
-                    f"symlink escapes repository verification sandbox via absolute target: "
-                    f"{candidate} -> {target}"
-                )
-            try:
-                resolved_target = (candidate.parent / target).resolve(strict=False)
-            except RuntimeError:
+            if candidate.is_symlink():
                 _validate_contained_symlink_cycle(candidate, source_root)
-                continue
-            try:
-                resolved_target.relative_to(source_root)
-            except ValueError as exc:
-                raise RepositoryPathBoundaryError(
-                    f"symlink escapes repository verification sandbox: {candidate} -> {target}"
-                ) from exc
 
 
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
