@@ -460,6 +460,23 @@ def _preflight_review_agents(
         reasoning_without_content = _response_has_reasoning_without_content(response)
         row["reasoning_without_content"] = reasoning_without_content
         budget_signature = finish_reason == "length" or reasoning_without_content
+        # KNOWN, ACCEPTED, TRACKED LIMITATION on the escalations_used >=
+        # REVIEW_PREFLIGHT_MAX_ESCALATIONS branch below, ContextualWisdomLab/.github#1458
+        # (originally documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
+        # escalations_used is one shared, first-come-first-served counter for
+        # the whole run, consumed in catalog order
+        # (build_zdr_prioritized_catalog's (cost_evidence_rank,
+        # zdr_attested_rank, provider, model) sort, not random). A
+        # later-sorting candidate can be denied its own escalation attempt
+        # purely because REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates
+        # already claimed the shared budget -- even if it would have been the
+        # only one to succeed at REVIEW_PREFLIGHT_ESCALATED_TOKENS.
+        # Deliberately not reordered (round-robin/random): a fixed-size
+        # shared budget smaller than the candidate pool always has to deny
+        # someone an escalation, so reordering only changes who, and picking
+        # a specific policy without real telemetry on which candidates
+        # actually need escalation would itself be the kind of unjustified
+        # heuristic this design rejects elsewhere.
         if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
             row["status"] = "rejected"
             row["error_type"] = (
