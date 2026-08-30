@@ -27,8 +27,10 @@ so a governed shared implementation is required.
    contracts. Environment deployment remains in `linux-cluster-ops`.
 4. The organization required workflow rejects active Nginx runtime artifacts in
    changed final files without executing pull-request code.
-5. Only dedicated source fixtures and the policy scanner may contain denied Nginx
-   samples; executable integration and end-to-end test helpers remain candidates
+5. Documentation prose, license text, dedicated source fixtures, the policy
+   scanner, and byte-validated raster evidence beneath documentation directories
+   may contain denied Nginx samples. A documentation suffix alone is not an
+   exemption; executable integration and end-to-end test helpers remain candidates
    for enforcement.
 6. Initial migration does not use Pingora's experimental cache integration.
 7. PHP workloads move to an HTTP application server or reviewed FastCGI adapter

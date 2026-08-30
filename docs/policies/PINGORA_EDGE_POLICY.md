@@ -6,8 +6,8 @@ ContextualWisdomLab production and test edge runtimes use **Cloudflare Pingora**
 Active Nginx containers, packages, commands, configuration files, Kubernetes
 Nginx ingress annotations/classes, and host-service units are prohibited.
 
-This is a runtime boundary, not a vocabulary ban. Documentation, non-executable
-image evidence beneath a documentation directory, license notices, dedicated
+This is a runtime boundary, not a vocabulary ban. Documentation, byte-validated
+raster evidence beneath a documentation directory, license notices, dedicated
 source fixtures under `tests/fixtures/`, the scanner source itself, and migration
 histories may name Nginx. Executable integration and end-to-end test helpers remain
 runtime candidates. Pull requests that modify a runtime candidate are evaluated
@@ -54,8 +54,9 @@ The organization-required `required-workflow-bootstrap` job runs trusted
 base-branch scanner code at the immutable required-workflow SHA. It reads bounded
 changed-file metadata and final UTF-8 content through GitHub's REST API. It does
 not check out or execute pull-request content and receives only read permissions.
-Malformed, truncated, binary, symlink, oversized, or unavailable evidence fails
-closed.
+Malformed, truncated, unexpected binary, symlink, oversized, or unavailable
+evidence fails closed. Supported documentation raster evidence is fetched and
+validated by file signature before it is excluded from the text scanner.
 
 ## Exception process
 

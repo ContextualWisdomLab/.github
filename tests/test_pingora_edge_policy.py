@@ -37,6 +37,17 @@ def encoded_file(content: str, *, size: int | None = None, kind: str = "file", e
     }
 
 
+def encoded_bytes(content: bytes) -> dict[str, object]:
+    """Build one binary GitHub Contents API response."""
+
+    return {
+        "type": "file",
+        "encoding": "base64",
+        "size": len(content),
+        "content": base64.b64encode(content).decode(),
+    }
+
+
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
@@ -79,7 +90,7 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
 
 
 def test_documentation_image_assets_are_not_runtime_candidates() -> None:
-    """Binary screenshots under documentation cannot execute an edge runtime."""
+    """Documentation screenshots require bounded byte validation."""
 
     changed = policy.ChangedFile(
         "docs/screenshots/acceptance.png",
@@ -88,10 +99,47 @@ def test_documentation_image_assets_are_not_runtime_candidates() -> None:
         patch_available=False,
     )
 
-    assert not policy._needs_content_scan(changed)
+    assert policy._needs_content_scan(changed)
     assert policy._needs_content_scan(
         policy.ChangedFile("public/acceptance.png", "added", "", patch_available=False)
     )
+
+
+def test_documentation_image_requires_matching_raster_signature() -> None:
+    """An executable renamed with an image suffix cannot bypass enforcement."""
+
+    valid_png = b"\x89PNG\r\n\x1a\n" + b"bounded synthetic image"
+
+    def valid_opener(url: str, _token: str) -> object:
+        if "/pulls/7/files" in url:
+            return [{"filename": "docs/screenshots/evidence.png", "status": "added"}]
+        return encoded_bytes(valid_png)
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=7,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        opener=valid_opener,
+    ) == ()
+
+    def renamed_script_opener(url: str, _token: str) -> object:
+        if "/pulls/8/files" in url:
+            return [{"filename": "docs/screenshots/evidence.png", "status": "added"}]
+        return encoded_bytes(b"#!/bin/sh\nnginx -g 'daemon off;'\n")
+
+    with pytest.raises(policy.PolicyError, match="invalid raster bytes"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=8,
+            head_sha="b" * 40,
+            event_action="opened",
+            token="token",
+            opener=renamed_script_opener,
+        )
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])

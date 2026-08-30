@@ -146,8 +146,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
     if lower_name in LICENSE_NAMES or (
-        is_known_documentation_path
-        and pure.suffix.lower() in DOCUMENT_SUFFIXES | DOCUMENT_ASSET_SUFFIXES
+        is_known_documentation_path and pure.suffix.lower() in DOCUMENT_SUFFIXES
     ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
@@ -157,6 +156,32 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     if is_tests_fixture and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES:
         return True
     return False
+
+
+def _is_documentation_image(path: str) -> bool:
+    """Return whether *path* names a supported raster asset below documentation."""
+
+    pure = PurePosixPath(path)
+    return (
+        any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts)
+        and pure.suffix.lower() in DOCUMENT_ASSET_SUFFIXES
+    )
+
+
+def _is_supported_documentation_image(path: str, raw: bytes) -> bool:
+    """Validate a documentation image by its bounded bytes, not its suffix alone."""
+
+    suffix = PurePosixPath(path).suffix.lower()
+    signatures = {
+        ".gif": (b"GIF87a", b"GIF89a"),
+        ".jpeg": (b"\xff\xd8\xff",),
+        ".jpg": (b"\xff\xd8\xff",),
+        ".png": (b"\x89PNG\r\n\x1a\n",),
+        ".webp": (b"RIFF",),
+    }
+    if not any(raw.startswith(signature) for signature in signatures.get(suffix, ())):
+        return False
+    return suffix != ".webp" or len(raw) >= 12 and raw[8:12] == b"WEBP"
 
 
 def _runtime_path_rule(path: str) -> str | None:
@@ -296,6 +321,10 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"GitHub content evidence for {path} is invalid base64") from exc
     if len(raw) != declared_size:
         raise PolicyError(f"GitHub content evidence for {path} has a size mismatch")
+    if _is_documentation_image(path):
+        if not _is_supported_documentation_image(path, raw):
+            raise PolicyError(f"Documentation image evidence {path} has invalid raster bytes")
+        return ""
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -307,6 +336,8 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
+    if _is_documentation_image(changed.path):
+        return True
     if not changed.patch_available:
         return True
     if _runtime_path_rule(changed.path) is not None:
