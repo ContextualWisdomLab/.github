@@ -271,7 +271,7 @@ def _response_has_reasoning_without_content(response: object) -> bool:
 
 
 def _preflight_review_agents(
-    agents: list[object], *, client: Any
+    agents: list[object], *, client: Any, escalations_used: int = 0
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
@@ -288,34 +288,52 @@ def _preflight_review_agents(
     responded to) -- that *same* candidate is retried once at a larger,
     escalated budget (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``) before being
     marked rejected -- bounded by a shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
-    counter across the whole run, not per candidate. Every other failure
-    class (transport exception, non-2xx, or empty content matching neither
-    signature) is not retried: a genuinely-down candidate never reaches the
-    escalation path, so it cannot produce a false "healthy" read.
+    counter, which the ``escalations_used`` argument carries forward across
+    calls (not per candidate, and not reset per call): a caller that probes
+    two stages of the same preflight run (e.g. ``_preflight_with_fallback``'s
+    primary and fallback stages) must pass the previous stage's ending count
+    back in here so the two stages share one budget instead of each getting
+    its own -- otherwise the computed worst-case bound this counter exists to
+    enforce silently doubles. Every other failure class (transport exception,
+    non-2xx, or empty content matching neither signature) is not retried: a
+    genuinely-down candidate never reaches the escalation path, so it cannot
+    produce a false "healthy" read.
     A non-2xx rejection specifically on the escalated attempt is recorded as
     ``escalated_probe_rejected`` -- distinguishable evidence the escalated
     budget itself exceeds that one candidate's real ceiling, genuinely
     attributable since the candidate object is pinned throughout -- and is
-    not retried further.
+    not retried further. An escalated-attempt exception with no HTTP status
+    (a transport failure, e.g. a timeout) is never labeled this way: that
+    would falsely attribute a connectivity failure to the token budget, so it
+    instead records the sanitized exception type, same as the base probe.
 
     The report deliberately records only stable route identity, a bounded
     exception class name, an optional numeric HTTP status, attempt count, and
     a bounded ``finish_reason``. Provider response bodies, exception
     messages, URLs, prompts, and credentials are never copied into evidence.
+    ``finish_reason`` and ``reasoning_without_content`` always describe the
+    same, most recent attempt for a route (the base attempt when only one was
+    made; the escalated attempt when a second was made) -- never a mix of the
+    two attempts' state.
 
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
+        escalations_used: Escalations already spent earlier in this same
+            preflight run (e.g. by a prior stage), so the shared budget is
+            honored across calls rather than restarted at zero.
 
     Returns:
-        A pair of viable agents and a sanitized preflight report.
+        A pair of viable agents and a sanitized preflight report. The
+        report's ``escalations_used`` is the running total including
+        ``escalations_used``'s starting value, so a caller chaining another
+        stage can pass it straight back in.
 
     Raises:
         ReviewPreflightError: If no provider route returns usable text.
     """
     viable: list[object] = []
     routes: list[dict[str, object]] = []
-    escalations_used = 0
     for agent in agents:
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
@@ -339,7 +357,7 @@ def _preflight_review_agents(
             row["status"] = "rejected"
             error_type = type(exc).__name__
             row["error_type"] = (
-                error_type if error_type.isidentifier() and len(error_type) <= 64 else "ProviderError"
+                error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
             )
             http_status = _safe_http_status(exc)
             if http_status is not None:
@@ -359,7 +377,7 @@ def _preflight_review_agents(
         if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
             row["status"] = "rejected"
             row["error_type"] = (
-                "InvalidChatResponse" if not budget_signature else "EscalationBudgetExhausted"
+                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
             )
             routes.append(row)
             continue
@@ -371,12 +389,25 @@ def _preflight_review_agents(
             escalated_response = client.proxy_send_once(
                 agent, "chat/completions", escalated_payload
             )
-        except Exception as exc:  # noqa: BLE001 - a rejection here evidences the escalated budget, not just this candidate, does not fit
+        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             row["status"] = "rejected"
-            row["error_type"] = "EscalatedProbeRejected"
             http_status = _safe_http_status(exc)
             if http_status is not None:
+                # Distinguishable evidence the *escalated* budget itself
+                # exceeds this candidate's real ceiling -- genuinely
+                # attributable, since the candidate object is pinned
+                # throughout. A transport failure (no HTTP status) is never
+                # labeled this way; it falls through to the same sanitized
+                # exception-type recording the base probe uses, below.
+                row["error_type"] = "escalated_probe_rejected"
                 row["http_status"] = http_status
+            else:
+                error_type = type(exc).__name__
+                row["error_type"] = (
+                    error_type
+                    if error_type.isidentifier() and len(error_type) <= 64
+                    else "provider_error"
+                )
             routes.append(row)
             continue
         if _chat_response_has_text(escalated_response):
@@ -386,8 +417,13 @@ def _preflight_review_agents(
             viable.append(agent)
             continue
         row["status"] = "rejected"
-        row["error_type"] = "InvalidChatResponse"
+        row["error_type"] = "invalid_chat_response"
+        # Both fields now describe this escalated (2nd, final) attempt,
+        # never a mix with the base attempt's state -- see the docstring.
         row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
+        row["reasoning_without_content"] = _response_has_reasoning_without_content(
+            escalated_response
+        )
         routes.append(row)
 
     report: dict[str, object] = {
@@ -409,15 +445,31 @@ def _preflight_review_agents(
 def _preflight_with_fallback(
     primary_agents: list[object], fallback_agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object], bool]:
-    """Use the priced catalog only after every primary route rejects."""
+    """Use the priced catalog only after every primary route rejects.
+
+    The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
+    budget for the whole preflight run, not one budget each: the primary
+    stage's ending ``escalations_used`` is passed as the fallback stage's
+    starting point, so a run that rejects all 8 primary routes and then
+    probes 4 fallback routes still spends at most 4 escalations total (12
+    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
+    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    stages' reports remain in the result: the fallback (or sole) stage's
+    report carries the run's final, cumulative ``escalations_used``, and
+    ``primary_attempt`` nests the primary stage's own report -- including its
+    own ``escalations_used`` -- whenever a fallback stage ran at all.
+    """
     try:
         viable, report = _preflight_review_agents(primary_agents, client=client)
         return viable, report, False
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
             raise
+        escalations_used = int(primary_error.report.get("escalations_used", 0))
         try:
-            viable, report = _preflight_review_agents(fallback_agents, client=client)
+            viable, report = _preflight_review_agents(
+                fallback_agents, client=client, escalations_used=escalations_used
+            )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report
             raise

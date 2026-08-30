@@ -1400,6 +1400,60 @@ Summary of the current ADR:
   labeled `gateway_retry_rejected` rather than implying candidate-ceiling attribution it cannot support.
   1901 tests pass, 100% coverage and 100% docstring coverage on `scripts/ci/`.
 
+**Devin Review then reviewed the actual implementation PR (#1452) and found 7 real issues, verified
+against current code (not taken on characterization alone) and all fixed — two were blocking.** (1)
+`_preflight_review_agents` initialized its escalation counter fresh on every call, so
+`_preflight_with_fallback` calling it twice (up to 8 primary routes, then up to 4 fallback routes) could
+spend the full `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` budget in *each* stage — up to 8 escalations total,
+200s worst case, exceeding Layer 1's own 180s healthz-readiness watchdog and directly contradicting the
+160s worst case computed above. Fixed by threading the primary stage's ending `escalations_used` into the
+fallback stage as its starting point, so the whole run shares one budget; a new regression test drives 8
+rejected primary routes and 4 fallback routes through a response that always qualifies for escalation and
+asserts total escalations stay at 4 and total attempts at 16 (160s at the existing 10s per-attempt
+timeout). (2) A non-numeric, empty, zero, or negative `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` made the
+shell script's `[ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]` integer comparison
+error out (which bash reports as the condition being false, not a fatal error, inside an `if`), so the
+retry loop would never detect it had reached the limit and would retry until the surrounding CI job's own
+timeout, instead of failing closed on bad configuration — fixed with an explicit `case` guard
+(`''|*[!0-9]*|0`) before the loop starts.
+
+Five more, non-blocking but real: (3) an escalated-attempt exception with no HTTP status at all (a bare
+transport failure/timeout) was unconditionally labeled `EscalatedProbeRejected`, falsely attributing a
+connectivity failure to the token budget — the existing `_safe_http_status` helper already distinguished
+HTTP-status-bearing exceptions from transport failures elsewhere in the file, so the escalated-attempt
+handler now uses it the same way, falling back to the sanitized exception type name (or a bounded
+placeholder) when no status is present. (4) Layer 2 exhausting every `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`
+attempts with no usable HTTP response ever wrote to the gateway evidence report before calling `fail` and
+exiting — the exact failure case telemetry matters most for left zero trace of attempt count or trigger;
+fixed by writing a bounded `gateway_transport_exhausted` classification first, via the identical
+sanitize-then-atomic-replace pattern the non-2xx and invalid-content paths already used. (5) Layer 1's
+error-type strings were CamelCase (`EscalatedProbeRejected`, `InvalidChatResponse`,
+`EscalationBudgetExhausted`) while this ADR's own text and Layer 2's shell script already used snake_case
+(`escalated_probe_rejected`, `gateway_retry_rejected`, `escalation_budget_exhausted`) for the same
+concepts, plus one snake_case/CamelCase outlier inside Layer 2 itself (`InvalidChatResponse`) — the ADR
+text was correct, so the code was brought in line with it:
+`escalated_probe_rejected`/`invalid_chat_response`/`escalation_budget_exhausted`/`provider_error`
+throughout both layers. (6) The Layer 2 gateway retry-loop test only asserted source literals (e.g. that
+a given string appeared somewhere in the script) rather than ever executing the retry loop — exactly why
+findings (3) and (4) slipped past "100% coverage." Fixed with a fake-curl test harness that extracts the
+tracked script's real, current retry-loop source (not a hand-copied duplicate, so a future edit is
+automatically exercised) and runs it under `bash` against a scripted, no-network `curl` stand-in on
+`$PATH`, covering first-attempt success, transport-failure recovery, non-2xx exhaustion, transport-attempt
+exhaustion, and the malformed-attempt-limit guard (without ever letting a malformed-limit case actually
+loop unboundedly — the guard is asserted to reject before any curl call happens at all). (7) After an
+empty escalated response, `finish_reason` was overwritten to describe the escalated (2nd) attempt while
+`reasoning_without_content` was left describing the base (1st) attempt's state — two fields that look
+like they describe the same response but silently did not. Fixed so both fields are always updated
+together to describe the same, most recent attempt, with a regression test giving the two attempts
+deliberately different signatures to prove neither field is left stale.
+
+**Implemented and verified** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+`scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+`tests/test_contextual_orchestrator_review_runtime_preflight.py`): 1913 tests pass (1901 baseline + 12
+new), 100% coverage and 100% docstring coverage on `scripts/ci/`, `bash -n` syntax-checks the shell
+script, and all 4 embedded Python heredoc blocks in it (including the new transport-exhaustion evidence
+writer) parse cleanly.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

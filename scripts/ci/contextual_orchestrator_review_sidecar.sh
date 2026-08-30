@@ -484,6 +484,15 @@ printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful 
 # which exposes no parameter to exclude or deprioritize a specific candidate
 # on a retry).
 REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-3}"
+# A malformed override (non-numeric, empty, or zero) must fail closed instead
+# of silently disabling the bound: `[ "$gateway_attempt" -ge "$X" ]` with a
+# non-integer `$X` is itself a bash integer-comparison error, not a false
+# result, so the retry loop below would keep looping (never satisfying its
+# own exit test) until the surrounding CI job's own timeout kills it instead
+# of this check ever rejecting bad configuration on its own.
+case "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" in
+  ''|*[!0-9]*|0) fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be a positive integer" ;;
+esac
 gateway_attempt=1
 gateway_http_status=""
 while :; do
@@ -506,6 +515,32 @@ while :; do
   fi
   if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then
     if [ -z "$gateway_http_status" ]; then
+      # Every configured attempt exhausted with no usable HTTP response at
+      # all (Trigger A never resolved) -- record that before failing closed,
+      # using the same sanitize-then-atomic-replace pattern as the non-2xx
+      # and invalid-content paths below, so this exact failure case (the one
+      # telemetry matters most for) does not leave zero evidence trail.
+      "$sidecar_python" - "$preflight_report" "$gateway_attempt" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+report_path = Path(sys.argv[1])
+attempts = int(sys.argv[2]) if sys.argv[2].isdecimal() else 0
+try:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    report = {}
+report["gateway"] = {
+    "endpoint": "chat/completions",
+    "error_type": "gateway_transport_exhausted",
+    "attempts": attempts,
+    "status": "rejected",
+}
+temporary = report_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+temporary.replace(report_path)
+PY
       fail "gateway preflight request could not reach the local sidecar after ${gateway_attempt} attempts"
     fi
     "$sidecar_python" - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" "$gateway_attempt" <<'PY'
@@ -594,7 +629,7 @@ try:
     report["gateway"] = {
         "endpoint": "chat/completions",
         "status": "rejected",
-        "error_type": "InvalidChatResponse",
+        "error_type": "invalid_chat_response",
         "finish_reason": finish_reason or "unknown",
         "reasoning_without_content": reasoning_without_content,
         "attempts": attempts,

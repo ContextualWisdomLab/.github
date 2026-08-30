@@ -5,6 +5,46 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix 7 Devin Review findings on PR #1452, ADR-0005's implementation
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`). Two were
+  blocking: (1) `_preflight_review_agents` reset its escalation counter fresh
+  on every call, so `_preflight_with_fallback` calling it twice (primary,
+  then fallback) could spend the full `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget in each stage -- up to 200s, past Layer 1's 180s
+  healthz-readiness watchdog and contradicting the ADR's own claimed 160s
+  worst case. Fixed by threading the primary stage's ending
+  `escalations_used` into the fallback stage as its starting point, so one
+  shared budget covers the whole run; both stages' counts remain visible in
+  the returned evidence. (2) A non-numeric, empty, zero, or negative
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` made the shell script's integer
+  comparison silently fail on every iteration, removing the retry bound
+  entirely instead of failing closed. Fixed with an explicit `case` guard
+  before the retry loop starts. The remaining five: an escalated-attempt
+  transport failure (no HTTP status at all) was mislabeled
+  `EscalatedProbeRejected`, falsely attributing a connectivity failure to
+  the token budget -- now distinguishes on HTTP-status presence, falling
+  back to the sanitized exception type otherwise; total transport-attempt
+  exhaustion at Layer 2 used to `fail` without ever writing gateway evidence
+  -- now records a bounded `gateway_transport_exhausted` classification
+  first, via the same sanitize-and-atomic-replace pattern the non-2xx and
+  invalid-content paths already use; Layer 1's error-type strings were
+  CamelCase (`EscalatedProbeRejected`, `InvalidChatResponse`,
+  `EscalationBudgetExhausted`) while the ADR and Layer 2 already used
+  snake_case -- Layer 1 (and Layer 2's one remaining outlier) now match:
+  `escalated_probe_rejected`, `invalid_chat_response`,
+  `escalation_budget_exhausted`, `gateway_transport_exhausted`; the Layer 2
+  gateway retry-loop test only asserted source literals rather than
+  executing the loop -- added a fake-curl harness (extracting the tracked
+  script's real retry-loop source and running it under `bash` against a
+  scripted, no-network `curl` stand-in) covering first-attempt success,
+  transport-failure recovery, non-2xx exhaustion, transport exhaustion, and
+  the malformed-attempt-limit guard; and a mixed-attempt telemetry bug where
+  `finish_reason` reflected the escalated attempt while
+  `reasoning_without_content` was left describing the base attempt -- both
+  fields now always describe the same (most recent) attempt. 1913 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
 - Implement ADR-0005's diagnostic, bounded-retry sidecar preflight
   (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`). A 5th Devin

@@ -5,9 +5,11 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import io
 import json
+import os
 import re
 import runpy
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -192,7 +194,7 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         "ready",
     ]
     assert report["routes"][0]["error_type"] == "RuntimeError"
-    assert report["routes"][1]["error_type"] == "InvalidChatResponse"
+    assert report["routes"][1]["error_type"] == "invalid_chat_response"
     assert secret not in repr(report)
 
     for agent, endpoint, payload in client.calls:
@@ -299,6 +301,264 @@ def test_gateway_preflight_retries_transport_failures_up_to_a_bounded_attempt_co
     # retried, with its budget-too-small signature preserved for diagnosis.
     assert "reasoning_without_content" in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
+
+
+_GATEWAY_RETRY_BLOCK_START = 'gateway_virtual_model="orchestrator/${orchestrator_pool}"'
+_GATEWAY_RETRY_BLOCK_END = (
+    'log "gateway chat/completions preflight confirmed '
+    '(attempt ${gateway_attempt}/${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS})"'
+)
+
+# A minimal stand-in for curl: it never touches the network. Each invocation
+# consumes the next numbered plan file in $FAKE_CURL_PLAN_DIR (a fixed,
+# test-controlled queue of outcomes, one per expected attempt) so a test can
+# script an exact multi-attempt sequence -- transport failure, non-2xx,
+# success -- without a real gateway process. A plan file's first line is
+# either "FAIL" (curl exits non-zero, exactly like a real timeout with zero
+# bytes) or an HTTP status code (written verbatim to stdout, mirroring
+# `-w '%{http_code}'`); any remaining lines become the `-o` response body,
+# exactly like a real curl would write one.
+_FAKE_CURL_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+plan_dir="$FAKE_CURL_PLAN_DIR"
+counter_file="$plan_dir/.count"
+count=0
+if [ -f "$counter_file" ]; then
+  count="$(cat "$counter_file")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$counter_file"
+plan_file="$plan_dir/$count"
+output_file=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    output_file="$arg"
+  fi
+  prev="$arg"
+done
+if [ ! -f "$plan_file" ]; then
+  printf 'fake curl: no plan queued for call %s\\n' "$count" >&2
+  exit 2
+fi
+status_line="$(head -n 1 "$plan_file")"
+if [ "$status_line" = "FAIL" ]; then
+  exit 28
+fi
+if [ -n "$output_file" ]; then
+  tail -n +2 "$plan_file" > "$output_file"
+fi
+printf '%s' "$status_line"
+"""
+
+
+def _run_gateway_retry_loop(
+    tmp_path: Path,
+    *,
+    max_attempts: int | str,
+    plan: list[str],
+) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+    """Execute the sidecar's real gateway curl retry loop against a fake curl.
+
+    Extracts the exact, current source of the retry loop from the tracked
+    sidecar script (rather than a hand-copied duplicate in this test file)
+    so a future edit to that loop is automatically exercised here instead of
+    silently drifting from a second, untested copy -- the same drift this
+    org's conventions flag repository-local workflow copies for elsewhere.
+
+    Args:
+        tmp_path: Pytest's per-test scratch directory.
+        max_attempts: Value for ``REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS``,
+            including deliberately malformed strings for the config-guard
+            regression test.
+        plan: One entry per expected curl call, each either ``"FAIL"`` (a
+            transport failure) or ``"<status>\\n<response body>"``.
+
+    Returns:
+        The completed harness process and the resulting preflight report
+        (``{}`` when the loop never wrote to it).
+    """
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+    start = sidecar_text.index(_GATEWAY_RETRY_BLOCK_START)
+    end = sidecar_text.index(_GATEWAY_RETRY_BLOCK_END, start) + len(_GATEWAY_RETRY_BLOCK_END)
+    retry_block = sidecar_text[start:end]
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(_FAKE_CURL_SCRIPT, encoding="utf-8")
+    fake_curl.chmod(0o755)
+
+    plan_dir = tmp_path / "curl-plan"
+    plan_dir.mkdir()
+    for index, outcome in enumerate(plan, start=1):
+        (plan_dir / str(index)).write_text(outcome, encoding="utf-8")
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    gateway_preflight_request = work_dir / "gateway-preflight-request.json"
+    gateway_preflight_request.write_text("{}", encoding="utf-8")
+    gateway_preflight_response = work_dir / "gateway-preflight.json"
+    preflight_report = work_dir / "preflight.json"
+    preflight_report.write_text("{}", encoding="utf-8")
+
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -euo pipefail\n"
+        "log() { printf '[test-sidecar] %s\\n' \"$*\"; }\n"
+        'fail() { log "error: $*" >&2; exit 1; }\n'
+        'orchestrator_pool="free"\n'
+        'ORCHESTRATOR_TOKEN="synthetic-test-bearer"\n'
+        'ORCHESTRATOR_HOST="127.0.0.1"\n'
+        'ORCHESTRATOR_PORT="18080"\n'
+        'sidecar_python="$(command -v python3)"\n'
+        f'gateway_preflight_request="{gateway_preflight_request}"\n'
+        f'gateway_preflight_response="{gateway_preflight_response}"\n'
+        f'preflight_report="{preflight_report}"\n'
+        + retry_block
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS": str(max_attempts),
+            "FAKE_CURL_PLAN_DIR": str(plan_dir),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    report: dict[str, object] = {}
+    try:
+        report = json.loads(preflight_report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        report = {}
+    return result, report
+
+
+@pytest.mark.parametrize("malformed_value", ["not-a-number", "0", "-1", "3.5"])
+def test_gateway_retry_loop_rejects_a_malformed_attempt_limit_before_any_curl_call(
+    tmp_path: Path, malformed_value: str
+) -> None:
+    """Regression for Devin Review's malformed-retry-limit-removes-bound
+    finding: a non-numeric (or zero, or negative) override used to make the
+    integer comparison `[ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]`
+    fail on every iteration -- which evaluates as "not yet at the limit," so
+    the loop would retry forever instead of failing closed on bad config.
+    (An empty override is not exercised here: ``${VAR:-3}`` already treats
+    unset-or-empty as "use the default," so it never reaches the guard --
+    the guard's own ``''`` pattern is defense in depth for a future change to
+    that assignment, not a reachable case today.)
+
+    The plan is deliberately empty: if the fix regresses and the loop reaches
+    curl at all, the fake curl exits 2 with a distinct "no plan queued"
+    message, which the assertions below would not match -- proving this
+    fails closed on the config check itself, never even attempting a call.
+    """
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=malformed_value, plan=[]
+    )
+
+    assert result.returncode == 1
+    assert "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be a positive integer" in result.stderr
+    assert report == {}
+
+
+def test_gateway_retry_loop_succeeds_on_the_first_attempt(tmp_path: Path) -> None:
+    """A clean 200 on the very first curl call needs no retry at all."""
+    success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=3, plan=[f"200\n{success_body}"]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "confirmed (attempt 1/3)" in result.stdout
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "status": "ready",
+        "attempts": 1,
+    }
+
+
+def test_gateway_retry_loop_recovers_from_one_transport_failure(tmp_path: Path) -> None:
+    """ADR-0005 Trigger A: a timeout with zero bytes is retried, not fatal.
+
+    Regression for the live ContextualWisdomLab/.github#1449 reproduction
+    (job 99253418179): a curl timeout with no response used to abort the
+    sidecar outright with no recovery path at all.
+    """
+    success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=3, plan=["FAIL", f"200\n{success_body}"]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "did not reach the sidecar cleanly (status=unreachable); retrying" in result.stdout
+    assert "confirmed (attempt 2/3)" in result.stdout
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "status": "ready",
+        "attempts": 2,
+    }
+
+
+def test_gateway_retry_loop_records_a_non2xx_rejection_after_exhausting_attempts(
+    tmp_path: Path,
+) -> None:
+    """A non-2xx status on every attempt fails closed with retry-aware evidence.
+
+    The second (retry) attempt's rejection is recorded as
+    ``gateway_retry_rejected``, distinct from a first-attempt rejection,
+    since the virtual pool's routing is not pinned across separate calls.
+    """
+    error_body = json.dumps({"error": {"code": "invalid_structured_output"}})
+    result, report = _run_gateway_retry_loop(
+        tmp_path,
+        max_attempts=2,
+        plan=[f"500\n{error_body}", f"500\n{error_body}"],
+    )
+
+    assert result.returncode == 1
+    assert "gateway preflight returned HTTP 500 after 2 attempts" in result.stderr
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "error_type": "gateway_retry_rejected",
+        "error_code": "invalid_structured_output",
+        "http_status": 500,
+        "attempts": 2,
+        "status": "rejected",
+    }
+
+
+def test_gateway_retry_loop_records_transport_exhaustion_evidence_before_failing(
+    tmp_path: Path,
+) -> None:
+    """Regression for Devin Review's transport-exhaustion-loses-evidence
+    finding: exhausting every attempt on repeated transport failures (never
+    receiving one usable HTTP response) used to fail closed with the
+    preflight report untouched -- exactly the failure case telemetry matters
+    most for left zero trace of attempt count or trigger. Must now record a
+    bounded classification before ``fail`` exits.
+    """
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=2, plan=["FAIL", "FAIL"]
+    )
+
+    assert result.returncode == 1
+    assert (
+        "gateway preflight request could not reach the local sidecar after 2 attempts"
+        in result.stderr
+    )
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "error_type": "gateway_transport_exhausted",
+        "attempts": 2,
+        "status": "rejected",
+    }
 
 
 def test_reasoning_without_content_escalates_then_still_fails_closed_if_unresolved() -> None:
@@ -408,7 +668,7 @@ def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
 
     exhausted_row = failure.value.report["routes"][-1]
     assert exhausted_row["attempts"] == 1
-    assert exhausted_row["error_type"] == "EscalationBudgetExhausted"
+    assert exhausted_row["error_type"] == "escalation_budget_exhausted"
     assert failure.value.report["escalations_used"] == max_escalations
     assert len(client.calls) == max_escalations * 2 + 1
 
@@ -416,7 +676,7 @@ def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
 def test_escalated_probe_rejection_is_recorded_distinctly_and_not_retried() -> None:
     """A non-2xx rejection specifically on the escalated attempt is
     distinguishable evidence the escalated budget exceeds that candidate's
-    real ceiling -- recorded as ``EscalatedProbeRejected``, not conflated
+    real ceiling -- recorded as ``escalated_probe_rejected``, not conflated
     with a generic empty-content rejection, and not retried again.
     """
     namespace = _load_launcher()
@@ -425,10 +685,16 @@ def test_escalated_probe_rejection_is_recorded_distinctly_and_not_retried() -> N
     low_ceiling = SimpleNamespace(
         id="nvidia_nim_low_ceiling", provider_name="nvidia_nim", model="low/free"
     )
+
+    class _HttpError(RuntimeError):
+        """A synthetic exception carrying an HTTP status, like a real client's."""
+
+        code = 429
+
     client = _SequencedClient(
         [
             {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
-            RuntimeError("max_tokens exceeds this model's ceiling"),
+            _HttpError("max_tokens exceeds this model's ceiling"),
         ]
     )
 
@@ -437,8 +703,105 @@ def test_escalated_probe_rejection_is_recorded_distinctly_and_not_retried() -> N
 
     assert len(client.calls) == 2
     row = failure.value.report["routes"][0]
-    assert row["error_type"] == "EscalatedProbeRejected"
+    assert row["error_type"] == "escalated_probe_rejected"
+    assert row["http_status"] == 429
     assert row["attempts"] == 2
+
+
+def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() -> None:
+    """A transport failure (no HTTP status at all) on the escalated attempt
+    must never become ``escalated_probe_rejected`` -- that label is reserved
+    for a genuine provider rejection of the escalated budget specifically.
+    A bare connection timeout is a different root cause and gets the same
+    sanitized exception-type recording the base probe uses.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    flaky = SimpleNamespace(
+        id="openrouter_flaky", provider_name="openrouter", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("connection timed out with zero bytes received"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["error_type"] == "TimeoutError"
+    assert "http_status" not in row
+    assert row["attempts"] == 2
+
+
+def test_escalated_probe_transport_failure_sanitizes_an_unsafe_exception_name() -> None:
+    """An escalated-attempt exception whose type name is unsafe to log
+    verbatim (not a plain identifier, or implausibly long) still falls back
+    to the same bounded ``provider_error`` placeholder the base probe uses,
+    rather than ever copying raw exception state into evidence.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    unsafe_exception_type = type("Not An Identifier", (RuntimeError,), {})
+
+    flaky = SimpleNamespace(
+        id="openrouter_unsafe_exception", provider_name="openrouter", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            unsafe_exception_type("unsafe"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["error_type"] == "provider_error"
+    assert "http_status" not in row
+
+
+def test_escalated_empty_response_updates_both_telemetry_fields_together() -> None:
+    """``finish_reason`` and ``reasoning_without_content`` must describe the
+    SAME (final) attempt -- regression for Devin Review's mixed-attempt
+    telemetry finding. The base attempt matches Trigger B via
+    ``finish_reason == "length"`` (``reasoning_without_content`` is False);
+    the escalated attempt comes back with a completely different signature
+    (no ``finish_reason`` at all, but a populated ``reasoning`` field with no
+    content). Both fields must end up describing attempt 2, not a stale mix
+    of attempt 1's ``reasoning_without_content`` with attempt 2's
+    ``finish_reason``.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    still_starved = SimpleNamespace(
+        id="nvidia_nim_still_starved", provider_name="nvidia_nim", model="starved/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "still reasoning, no answer yet"}}
+                ]
+            },
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([still_starved], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["attempts"] == 2
+    # Both fields reflect the escalated (final) attempt, not the base one.
+    assert row["finish_reason"] == "unknown"
+    assert row["reasoning_without_content"] is True
 
 
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
@@ -500,6 +863,67 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
         preflight([primary], [fallback], client=failing_client)
     assert failure.value.report["ready_count"] == 0
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
+
+
+def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case() -> None:
+    """Regression for Devin Review's fallback-retries-exceed-startup-deadline
+    finding: ``_preflight_review_agents`` used to start ``escalations_used``
+    fresh on every call, so ``_preflight_with_fallback`` calling it twice (up
+    to 8 primary routes, then up to 4 fallback routes) could spend the full
+    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` budget in EACH stage -- up to 8
+    escalations total, 200s worst case (12 base attempts + 8 escalations x
+    10s), blowing past Layer 1's 180s healthz-readiness watchdog and
+    contradicting the ADR's own claimed 160s worst case.
+
+    This drives all 8 primary routes and all 4 fallback routes (the exact
+    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
+    always qualifies for escalation and never resolves, so every one of the
+    12 candidates *would* escalate if the budget were not shared. Asserts
+    the run spends at most ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations
+    in total (not per stage), and that the resulting worst-case attempt count
+    keeps total elapsed time at or under 160s -- both stages' escalation
+    counts are visible in the returned evidence.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_with_fallback"]
+    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
+    timeout_seconds = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
+    primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
+    total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    fallback_limit = total_route_limit - primary_limit
+
+    budget_starved_response = {
+        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+    }
+    primary_agents = [
+        SimpleNamespace(id=f"primary_{index}", provider_name="openrouter", model="x/free")
+        for index in range(primary_limit)
+    ]
+    fallback_agents = [
+        SimpleNamespace(id=f"fallback_{index}", provider_name="openrouter", model="y/priced")
+        for index in range(fallback_limit)
+    ]
+    client = _ProbeClient(
+        {agent.id: dict(budget_starved_response) for agent in [*primary_agents, *fallback_agents]}
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(primary_agents, fallback_agents, client=client)
+
+    report = failure.value.report
+    assert report["escalations_used"] == max_escalations
+    assert report["primary_attempt"]["escalations_used"] == max_escalations
+
+    total_attempts = len(client.calls)
+    worst_case_seconds = total_attempts * timeout_seconds
+    assert worst_case_seconds <= 160, (
+        f"worst-case preflight time ({worst_case_seconds}s across "
+        f"{total_attempts} attempts) must stay within the 160s the ADR "
+        "computes and the 180s healthz-readiness watchdog allows"
+    )
+    # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
+    # candidate across both stages) + 4 escalations (the shared cap) = 16.
+    assert total_attempts == total_route_limit + max_escalations
 
 
 def test_preflight_stage_limits_share_one_startup_budget() -> None:
