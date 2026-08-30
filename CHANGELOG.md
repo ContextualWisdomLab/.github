@@ -5,6 +5,17 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `scripts/ci/pingora_edge_policy.py`'s `_load_changed_files`: the
+  post-loop pagination-exhaustion `PolicyError` was unreachable dead code
+  (proven: 31 full 100-item pages always trip the in-loop `len(files) >
+  3_000` raise during page 31's own iteration before the loop can exhaust
+  its range), and it was silently failing this repo's org-wide
+  `coverage-evidence` gate (`fail_under=100`) for every PR reviewed through
+  the central OpenCode/Noema/Strix dispatcher, blocking opencode-agent from
+  ever posting an APPROVED verdict anywhere in the org. Marked
+  `# pragma: no cover` with justification, matching this repo's existing
+  convention. See the 2026-08-30 "OpenCode Agent 자체 문제" gap-baseline
+  entry for the full three-PR diagnosis this came out of.
 - Document a structural CodeRabbit gap in `docs/product-technical-gap-baseline.md`
   (2026-08-30 entry): every ContextualWisdomLab repo is below CodeRabbit's
   10-GitHub-star automatic-review threshold, so CodeRabbit never reviews a new

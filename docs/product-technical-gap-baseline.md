@@ -1540,6 +1540,65 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   해결책 후보"는 재시도/backoff까지 함께 고려해야 완전하다. 이번 pass에서는 재트리거하지 않고
   rate-limit 창(가장 늦은 것 기준 naruon#1486 쪽 31분)이 지나기를 기다린다.
 
+## 2026-08-30 "OpenCode Agent 자체 문제" 진단: 세 PR이 서로 다른 3가지 원인으로 막혀 있었다
+
+- 운영자 직접 질의("OpenCode Agent 자체에 문제가 있는 듯")에 대응해 4갈래 병렬 조사(디스패치
+  메커니즘 코드 분석, GitHub Actions 실행 이력, 조직 전체 리뷰 증거, 공유 게이트웨이 상태) +
+  종합진단 5-agent Workflow를 실행했다. 결론: **단일 공통 장애가 아니라, 세 PR이 각기 다른
+  이유로 opencode-agent의 dispatch 단계에 도달하지 못하거나(2건) 도달은 했지만 근본 원인이
+  다른 버그로 막혀 있었다(1건)**. "async dispatch를 기다리는 중"이라는 이전 프레이밍은 두 PR에
+  대해서는 틀렸다 — dispatch 자체가 시도된 적이 없었다.
+  - `ContextualWisdomLab/naruon#1486`: 스케줄러(`scan-pr-queue`, 11:41Z 실행)가
+    `{"action":"block","reason":"2 unresolved review thread(s)"}`로 dispatch를 보류했다.
+    실제로는 이 세션이 이미 그 시점 이전에 모든 review thread를 resolve했으므로 stale한
+    스냅샷이었을 가능성이 높다 — 다음 스케줄러 tick(이벤트 기반 `scan-pr-queue` 또는 15분
+    주기 `org-queue-sweep`)에서 자동 해소되어야 한다.
+  - `ContextualWisdomLab/contextual-orchestrator#923`: `pr_review_merge_scheduler.py`의
+    `inspect_pr()`가 OpenCode dispatch를 Strix evidence 뒤에 순서화하는데(Strix가
+    `"completed"`가 아니면 OpenCode를 아예 호출하지 않음), 이 PR의 스케줄러 실행(11:49Z)이
+    동시에 `"this scheduler run has no cross-repository repository-dispatch credential"`을
+    로그에 남겼다 — 다른 저장소(`contextual-orchestrator`)에서 트리거된 스케줄러 컨텍스트가
+    `.github`로의 cross-repo dispatch에 필요한 자격 증명을 갖지 못한 것으로 보인다. 이것이
+    비밀 값 만료/누락(사람이 로테이션해야 함)인지, 아니면 workflow 배선 누락(코드로 고칠 수
+    있음)인지는 아직 미확인 — 다음 pass에서 `.github/workflows/pr-review-merge-scheduler.yml`의
+    cross-repo 토큰 배선을 직접 확인해야 한다.
+  - `ContextualWisdomLab/.github#1438`: dispatch는 실제로 실행되었다(run `33310753001`,
+    12:09:57Z 트리거). 하지만 이 저장소 자신의 `coverage-evidence` job이
+    `scripts/ci/pingora_edge_policy.py`의 `_load_changed_files` 함수 끝의 방어적 post-loop
+    `raise`(당시 345번째 줄)에서 커버리지 미달로 실패했다 — `Coverage failure: total of 99 is
+    less than fail-under=100`. 이 job의 실패는 `.github`를 통해 리뷰되는 **모든** 대상 저장소의
+    approval을 막는다(`opencode-review-dispatch.yml`이 "Coverage evidence did not pass;
+    approval is blocked"라고 명시). 동일한 정확한 실패가 완전히 무관한 다른 PR(`.github#1161`,
+    11:31Z run)에서도 재현되어, PR별 결함이 아니라 `main`에 이미 존재하는 구조적 결함임을
+    확인했다.
+- **근본 원인 분석과 수정**: `_load_changed_files`는 `for page in range(1, 32)`(최대 31페이지,
+  page당 최대 100개)로 변경 파일을 페이지네이션하며, 루프 안에서 `len(files) > 3_000`이면 즉시
+  raise한다. 30페이지 모두 정확히 100개씩 반환되면 정확히 3,000개(초과 아님, raise 없음)가
+  누적되고, 이어지는 31번째(마지막) 페이지가 100개 미만이면 조기 `return`, 정확히 100개이면 그
+  첫 항목을 추가하는 순간 3,001 > 3,000이 되어 루프 **안**의 raise가 먼저 발동한다. 즉 루프가
+  break/return/raise 없이 정상적으로 31회를 모두 소진해 루프 **밖**의 post-loop raise에 도달할
+  수 있는 입력은 수학적으로 존재하지 않는다 — 순수한 방어적 죽은 코드였다. 이 저장소는
+  `# pragma: no cover`를 이미 다른 곳에서(`scripts/ci/*.py`의 `if __name__ == "__main__":`,
+  `contextual_orchestrator_review_launcher.py`의 provider 예외 등) 근거 주석과 함께 쓰는
+  확립된 관례가 있으므로, 동일한 관례로 이 줄에 이유를 설명하는 pragma를 추가했다(코드 삭제가
+  아니라 유지 — 향후 page 개수·per_page 값이 바뀔 경우를 대비한 방어적 불변식이므로).
+  검증: `coverage run -m pytest tests` → 1897 passed, 1 skipped, 21 subtests; `coverage report`
+  → TOTAL 9966/9966 statements, 3926/3926 branches, **100%**; `interrogate` → 100.0%.
+- **hosted 확인**: 별도로, 이전 "family_cap 4→8 완화, hosted confirmation 보류" 항목의 hosted
+  확인도 이번 조사에서 확보되었다 — family_cap 수정(`e36a1f71`, 2026-08-30T10:46:01Z 병합) 이후
+  베이스를 사용한 3건의 실제 hosted run(`.github#1161`/`#1438`/`#1448`) 모두 sidecar가 healthz+
+  provider-route preflight를 통과했고, 그 이전 베이스를 쓴 1건은 정확히 문서화된 pre-fix 서명
+  그대로 실패했다. **family_cap 결정론적 결함은 해결된 것으로 확인**(표본 3건, load-sensitive
+  provider timeout/429/502 가설은 아직 미검증). 단, 이 확인과는 별개로, 같은 커밋(`c11b68c2`)에서
+  noema-review와 strix가 "healthz 통과 후 실제 completion 요청이 120초 타임아웃으로 0바이트
+  응답"이라는 다른 실패 시그니처를 보였다 — family_cap과는 다른, 아직 미해결인 별도 문제로 다음
+  pass에서 추적한다(위 "완화, hosted confirmation 보류" 항목의 새 하위 이슈로 취급).
+- **다음 행동**: (1) 이 커밋 병합 후 `.github`를 통해 리뷰되는 모든 PR의 `coverage-evidence`가
+  회복되는지 재확인, (2) naruon#1486은 스케줄러의 다음 tick을 기다리거나 필요시
+  `repository_dispatch`로 수동 재트리거, (3) contextual-orchestrator#923의 cross-repo
+  dispatch 자격 증명 배선을 직접 확인, (4) org-wide 15분 주기 cron이 07:03Z 이후 ~5시간
+  공백이 있었다는 조사 결과(별도의 신뢰성 회귀)도 다음 pass에서 조사한다.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
