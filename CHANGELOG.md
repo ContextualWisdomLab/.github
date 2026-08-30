@@ -5,6 +5,43 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
+  `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
+  Models.dev free-cost join beyond `opencode_zen` to `nvidia_nim`/
+  `nvidia_nim_sub`/`openai`, and fixes the actual root cause — `_fetch_json`
+  sent no `User-Agent`, so Cloudflare-fronted `models.dev` rejected every
+  discovery request with HTTP 403, silently breaking the Models.dev join for
+  every provider (including the pre-existing `opencode_zen` path). See the
+  2026-08-30 gap-baseline entry for the merge/bypass rationale.
+- Keep the required OpenCode bootstrap's Pingora policy step unconditional
+  within its pull-request-only workflow, so the static bootstrap contract does
+  not depend on event payload fields. (Ported from #1414, not yet merged, to
+  unblock this PR's own `exact-head-path-policy` check.)
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `b2164511` (103 commits stale) to current `main` `5f2753a`, so the
+  gateway's model-discovery/ZDR/pool-selection fixes landed since the old pin
+  reach `opencode-review`/`noema-review`. The stale pin's discovery logic was
+  failing the sidecar's own preflight with a gateway 502 before any review
+  could post, which is why `opencode-review` and `noema-review` were failing
+  closed on most `contextual-orchestrator` PRs and several `.github` PRs.
+- Skip trusted base Python lock materialization for exact-head reviews with no
+  Python source or dependency-manifest changes, while preserving the
+  fail-closed wheel-only path when Python coverage is relevant.
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover. Priced routes require finite, nonnegative
+  published prompt/completion prices and an explicit currency; unknown pricing
+  fails closed. Private-target ZDR enforcement and the no-external-fallback
+  contract remain unchanged.
+- Allow the protected Strix required-workflow smoke to recognize only the
+  existing `orchestrator/free` route or the provider-diverse
+  `orchestrator/auto` route. This provides a fail-closed two-phase migration
+  path without admitting direct-provider model identifiers.
+- Give stacked pull requests a separately bounded organization-sweep
+  OpenCode dispatch budget, so default-branch review traffic cannot leave a
+  stacked PR at `OpenCode review absent` without changing the protected merge
+  or exact-head evidence rules.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator
@@ -147,6 +184,12 @@ Semantic Versioning where the repository publishes a release.
 - Normalized a successful OSV scan with no findings output to a valid empty
   result document after both base and head scan outcomes are verified, while
   keeping failed scans, failed retries, and symlinked result paths fail-closed.
+- Web verification now checks services through local readiness addresses only.
+  Start the backend and frontend on this computer and use their local health
+  URLs when running the check.
+- Review results now separate cosmetic notices from blocking failures. Open the
+  failure details and correct the requested issue before running the check
+  again.
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
   dispatches whose workflow token may not see the target repository.
@@ -228,6 +271,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
+- Fail closed when GitHub dependency-review evidence is unavailable (non-200, transport failure, or truncated compare) instead of treating HTTP 403/404 as a clean skip; the probe checks out the exact head SHA and never prints the API body.
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.

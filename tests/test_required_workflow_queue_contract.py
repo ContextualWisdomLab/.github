@@ -149,6 +149,9 @@ def test_targeted_scheduler_dispatch_is_allowlisted_and_exact_pr_scoped() -> Non
     assert '"repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}"' in validation
     assert '[ "$live_state" != "open" ]' in validation
     assert '[ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ]' in validation
+    assert 'target_default_branch="$(gh api "repos/${TARGET_REPOSITORY_INPUT}" --jq' in validation
+    assert 'printf \'base_branch=%s\\n\' "$target_default_branch"' in validation
+    assert "PR base %s; scheduler default branch %s" in validation
     assert (
         '! [[ "$live_head_repository" =~ '
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
@@ -581,7 +584,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/auto",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -590,12 +593,12 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/free",
+        "strix_model=contextual-orchestrator/orchestrator/auto",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/auto"
         in workflow_text("strix.yml")
     )
     assert (
@@ -853,14 +856,19 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     # resetting the configured limit for every target can flood Actions with
     # long-running review dispatches.
     assert '"$ORG_SWEEP_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
+    assert '"$ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
     assert '"$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$' in workflow
     assert "org_review_dispatches_used=0" in workflow
+    assert "org_stacked_review_dispatches_used=0" in workflow
     assert "org_branch_updates_used=0" in workflow
     assert 'review_dispatch_limit=$((ORG_SWEEP_REVIEW_DISPATCH_LIMIT - org_review_dispatches_used))' in workflow
+    assert 'stacked_review_dispatch_limit=$((ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT - org_stacked_review_dispatches_used))' in workflow
     assert 'branch_update_limit=$((ORG_SWEEP_BRANCH_UPDATE_LIMIT - org_branch_updates_used))' in workflow
     assert '--review-dispatch-limit "$review_dispatch_limit"' in workflow
+    assert '--stacked-review-dispatch-limit "$stacked_review_dispatch_limit"' in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert 'grep -Ec \'^PR #[0-9]+: (review_dispatch|security_dispatch):\'' in workflow
+    assert 'grep -Ec \'^PR #[0-9]+: review_dispatch: stacked PR onto\'' in workflow
     assert 'grep -Ec \'^PR #[0-9]+: (update_branch|restamp_head):\'' in workflow
     # The scheduler requires --project-flow; the sweep must derive and pass it
     # per target repository (regression: the first sweep failed every repo with
@@ -1218,10 +1226,11 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
     # guarantee the fix is meant to provide (ContextualWisdomLab/.github#1220
     # review finding). The env-block default must not reintroduce it.
     assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
-    # The fix must not change the org-wide budget itself, only which
-    # repositories consume it — otherwise it reintroduces the exact
-    # cost/rate-limit risk #1219 explicitly declined to guess at.
+    # Keep ordinary and stacked review budgets independently configurable so
+    # ordinary work cannot starve the only review path for stacked PRs.
     assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "Stacked PRs have no" in workflow
 
 
 def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
@@ -1231,6 +1240,10 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert (
         "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || "
         "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
+    ) in workflow
+    assert (
+        "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || "
+        "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}"
     ) in workflow
     assert (
         "STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || "
@@ -1258,6 +1271,17 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
     assert 'if [ "$ORG_SWEEP_ENABLE_AUTO_MERGE" = "true" ]; then' in workflow
     assert '--merge-mode "$ORG_SWEEP_MERGE_MODE"' in workflow
     assert 'if [ "$ORG_SWEEP_UPDATE_BRANCHES" = "true" ]; then' in workflow
+
+
+def test_stacked_budget_is_not_declared_as_an_unused_workflow_call_input() -> None:
+    """Keep the stacked-only organization setting out of the reusable API."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    workflow_call = workflow.split("  workflow_call:", 1)[1].split(
+        "  schedule:", 1
+    )[0]
+
+    assert "stacked_review_dispatch_limit" not in workflow_call
+    assert "inputs.stacked_review_dispatch_limit" not in workflow
 
 
 def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
@@ -1334,17 +1358,151 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_security_scan_skips_dependency_review_when_dependency_graph_is_unavailable() -> (
-    None
-):
-    """Treat unsupported dependency graphs as an explicit non-enforceable case."""
+def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
     workflow = workflow_text("security-scan.yml")
+    support_probe = workflow_step(workflow, "Check dependency review support")
 
     assert "id: dependency_review_support" in workflow
     assert "/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" in workflow
-    assert '"$status" = "403"' in workflow
-    assert '"$status" = "404"' in workflow
-    assert "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    assert "repository: ${{ github.event.pull_request.head.repo.full_name }}" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert 'if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then' in workflow
+    assert "--connect-timeout 10" in workflow
+    assert "--max-time 30" in workflow
+    assert "-o /dev/null" in workflow
+    assert "curl_status=$?" in support_probe
+    assert "set +e" in support_probe
+    assert "set -e" in support_probe
+    assert "|| true" not in support_probe
+    assert "HTTP ${http_status}; curl exit ${curl_status}" in workflow
+    assert "REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}" in workflow
+    assert 'case "${REPOSITORY_VISIBILITY:-}" in' in support_probe
+    assert 'public | private | internal)' in support_probe
+    assert 'repository_visibility="$REPOSITORY_VISIBILITY"' in support_probe
+    assert 'repository_visibility="unknown"' in support_probe
+    assert (
+        'DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} '
+        'base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} '
+        'curl_exit=${curl_status}'
+        in support_probe
+    )
+    assert "supported=false" not in workflow
+    assert "skipping dependency-review hard gate" not in workflow
+    assert (
+        "steps.dependency_review_support.outputs.supported == 'true'" in workflow
+    )
+    dependency_review = workflow_step(workflow, "Dependency review")
+    assert "comment-summary-in-pr: never" in dependency_review
+    assert "comment-summary-in-pr: on-failure" not in dependency_review
+
+
+def test_security_scan_binds_every_scan_to_immutable_pr_revisions() -> None:
+    """Reject synthetic-merge evidence for head and dual-revision security scans."""
+    workflow = workflow_text("security-scan.yml")
+
+    for step_name, expected_sha, rev_parse in (
+        (
+            "Verify OSV base checkout",
+            "github.event.pull_request.base.sha",
+            'git -C source rev-parse HEAD',
+        ),
+        (
+            "Verify OSV head checkout",
+            "github.event.pull_request.head.sha",
+            'git -C source rev-parse HEAD',
+        ),
+        (
+            "Verify Dependency Review head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+        (
+            "Verify Trivy head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+        (
+            "Verify Scorecard head checkout",
+            "github.event.pull_request.head.sha",
+            'git rev-parse HEAD',
+        ),
+    ):
+        step = workflow_step(workflow, step_name)
+        assert f"EXPECTED_CHECKOUT_SHA: ${{{{ {expected_sha} }}}}" in step
+        assert f'actual_sha="$({rev_parse})"' in step
+        assert 'if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then' in step
+        assert "exit 1" in step
+
+    for checkout_name in (
+        "Checkout exact dependency-review head",
+        "Checkout exact Trivy head",
+        "Checkout exact Scorecard head",
+    ):
+        checkout = workflow_step(workflow, checkout_name)
+        assert (
+            "repository: ${{ github.event.pull_request.head.repo.full_name }}"
+            in checkout
+        )
+        assert "ref: ${{ github.event.pull_request.head.sha }}" in checkout
+        assert "persist-credentials: false" in checkout
+
+    dependency_review = workflow_step(workflow, "Dependency review")
+    assert "base-ref: ${{ github.event.pull_request.base.sha }}" in dependency_review
+    assert "head-ref: ${{ github.event.pull_request.head.sha }}" in dependency_review
+
+    for upload_name in (
+        "Upload OSV SARIF to code scanning",
+        "Upload Trivy SARIF to code scanning",
+        "Upload Scorecard SARIF to code scanning",
+    ):
+        upload = workflow_step(workflow, upload_name)
+        assert (
+            "ref: refs/pull/${{ github.event.pull_request.number }}/head" in upload
+        )
+        assert "sha: ${{ github.event.pull_request.head.sha }}" in upload
+
+
+def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
+    tmp_path: Path,
+) -> None:
+    """A failed curl transport must not make HTTP 200 acceptable evidence."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\nprintf '200'\nexit 18\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    github_output = tmp_path / "github-output"
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("security-scan.yml"),
+            "Check dependency review support",
+        ).split("        run: |\n", 1)[1]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_API_URL": "https://api.example.invalid",
+            "GITHUB_OUTPUT": str(github_output),
+            "GH_TOKEN": "synthetic-read-token",
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "REPOSITORY": "ContextualWisdomLab/.github",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "HTTP 200; curl exit 18" in result.stdout
+    assert not github_output.exists()
 
 
 def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
