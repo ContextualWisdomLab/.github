@@ -143,43 +143,82 @@ limited by the context remaining after input tokens."* Only the second field can
 
 ## Decision
 
-### 1. Two distinct, explicitly-bounded retry mechanisms, not one generic "retry"
+### 1. Two distinct, explicitly-bounded retry mechanisms, not one generic "retry" — and not the same behavior in both layers
 
 Devin Review correctly found that a single "retry on empty content + `finish_reason == 'length'`"
 predicate cannot fix the actual live outage this ADR is responding to: the reproduced failure (job
 `99253418179`, cited in the Evidence trail) is a **120-second timeout with zero bytes received** —
 there is no response object at all in that case, so there is no `finish_reason` to inspect, and the
 original design's retry path would never trigger for it. Fixed by splitting into two independent
-triggers, both bounded, both explicit:
+triggers. **Layer 1 and Layer 2 use these triggers differently, by structural necessity, not by
+inconsistency — the difference is stated once here and referenced everywhere else, rather than
+implied and then contradicted section to section (a real self-contradiction Devin Review's third pass
+correctly caught in an earlier revision of this text):**
 
 - **Trigger A — no usable response** (transport timeout, connection failure, or non-2xx status on the
-  *first* attempt at a given budget): retry with a **fresh attempt at the same budget**, on the theory
-  that the virtual pool's internal routing (Layer 2) or a flaky provider (either layer) may behave
-  differently on a new attempt — this is not a budget problem, so escalating the budget would not help
-  and is not done here.
+  *first* attempt at a given budget).
+  - **Layer 2**: retry with a fresh attempt at the same `4096` budget, up to the shared attempt cap
+    (Decision §3). Layer 2 has exactly one check — there is no other candidate to fall back to — so a
+    hang there must be survived by retrying, or the reproduced outage is not actually fixed. **This
+    retry is justified even without any guarantee of hitting a different underlying candidate** — see
+    the route-diversity note below — because it is bounded and strictly better than the current
+    design's single unconditional attempt with no recovery path at all: worst case, the outcome is
+    identical and the check still fails closed with the same accurate diagnosis; best case, a
+    transient failure (a network blip, a momentarily overloaded connection) clears on retry.
+  - **Layer 1**: **no retry**. Layer 1 already probes up to 12 distinct candidates
+    (`REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`); one candidate's timeout simply consumes its existing 10s
+    slot and the loop moves to the next candidate, exactly as it does today. A same-candidate retry
+    here would add latency without adding resilience Layer 1's own multi-candidate design does not
+    already provide.
 - **Trigger B — a response was received, content is empty, and `choices[0].finish_reason == "length"`**
-  (the OpenAI-documented signature of "budget too small," cited above): for Layer 1, which targets one
-  specific candidate, retry that *same* candidate once at a **materially larger** budget — the only
-  case that changes the budget. For Layer 2, which cannot target a specific candidate (see Decision
-  §3), Trigger B instead retries a fresh request at the same budget, same as Trigger A — a different
-  route via the virtual pool's own variance is the operative lever there, not a bigger number.
-- **Neither trigger fires more than once per attempt distinguishing between them, and both draw from
-  one small, shared, explicit retry budget per layer** (Decision §3) — not "one retry per route"
-  unconditionally, which is what produced Devin's second finding (an unbounded-looking worst case).
-- **A non-2xx rejection specifically on a Trigger-B escalated attempt is not itself retried further.**
-  If a candidate's *first* attempt at the base budget succeeds or fails openly (Trigger A), that is
-  handled as above. If it instead comes back empty with `finish_reason == "length"` and the escalated
-  retry (Trigger B) is then rejected outright (non-2xx) rather than merely still empty, that is
-  distinguishable evidence the *escalated* budget — not the base one — exceeds this specific model's
-  real ceiling (Devin Review's second finding). Retrying again with an even larger budget would not be
-  justified by any evidence in hand and risks the same rejection; instead this is recorded as its own
-  distinct outcome (e.g. `escalated_probe_rejected`) and the candidate/route is treated as not-ready
-  for this run. This is an honest, bounded limitation, not a silent misclassification — the complete
-  fix (knowing each model's real ceiling in advance) is `ContextualWisdomLab/contextual-orchestrator#927`,
+  (the OpenAI-documented signature of "budget too small," cited above).
+  - **Layer 1**: retry that *same* candidate (`client.proxy_send_once(agent, ...)` pins the exact agent
+    object, so this retry is genuinely attributable to that one candidate) once at a **materially
+    larger** budget — `REVIEW_PREFLIGHT_ESCALATED_TOKENS` (`4096`, reusing `REVIEW_MAX_OUTPUT_TOKENS`),
+    up from a `16`-token base probe (`REVIEW_PREFLIGHT_BASE_TOKENS` — a **new, smaller** value than the
+    `4096` Layer 1 uses today; see Decision §3). This is the only place in either layer where the
+    budget itself changes.
+  - **Layer 2**: **no retry — this is a deliberate simplification made across this ADR's review, not an
+    oversight.** Devin Review's fourth pass found the reason directly: a `finish_reason == "length"`
+    response is still `HTTP 200` — the gateway's own routing layer already recorded that as a
+    *successful* attempt before the sidecar ever inspects the content, so a subsequent identical
+    request is not a fresh, independent draw against the pool; the gateway's routing is more likely to
+    *repeat* the same "successful" candidate than to diversify away from it. Retrying at the same
+    budget against the same likely candidate has no principled reason to produce a different outcome,
+    so Layer 2 does not attempt it: an empty response with `finish_reason == "length"` at Layer 2 is
+    recorded as not-ready immediately, with that `finish_reason` preserved in the report for diagnosis.
+
+**Route diversity on Layer 2's Trigger-A retry is a best-effort hope, not a verified guarantee, and
+this ADR stops trying to force it.** This is the fourth time a version of "does the retry actually
+reach a different or better outcome" has come back reshaped across Devin Review's passes on this ADR
+(round 2: a too-small budget; round 3: an escalated retry that could hit an unaccountable different
+candidate; round 4: the specific case above). Checked directly rather than assumed before accepting
+this as final: `contextual_orchestrator/server.py`'s request handling exposes no field to exclude,
+deprioritize, or pin away from a specific candidate on a subsequent call — grepped for any such
+parameter and found none. Given no verified mechanism to force diversity exists, and per this org's
+convention to converge on an honestly-scoped decision rather than iterate indefinitely toward a fully
+"solved" design, this ADR's final position is: **Layer 1's genuine N-of-M across truly distinct,
+individually-addressed candidates is what does the real resilience and diversity work in this design.
+Layer 2 remains what it always was — a single end-to-end smoke test proving the virtual-pool dispatch
+path itself works at all — and its bounded retry (Trigger A only) is a modest, honest safety margin
+against transient failures, not a pool-exploration mechanism.** If the gateway later exposes a real way
+to exclude a specific candidate, that would improve Layer 2's retry meaningfully and should be
+revisited then (a natural extension of `ContextualWisdomLab/contextual-orchestrator#926`); this ADR
+does not invent that mechanism speculatively.
+- **Both triggers draw from one small, shared, explicit retry budget per layer** (Decision §3), not
+  "one retry per route" unconditionally.
+- **A non-2xx rejection on a Layer 1 escalated (Trigger-B) retry** is distinguishable evidence the
+  *escalated* budget specifically — not the base one — exceeds that one candidate's real ceiling
+  (genuinely attributable, since the candidate is pinned). Recorded as its own outcome,
+  `escalated_probe_rejected`, and that candidate is not retried further this run. The complete fix
+  (knowing each model's real ceiling in advance) is `ContextualWisdomLab/contextual-orchestrator#927`,
   not this ADR.
+- **A non-2xx rejection on a Layer 2 Trigger-A retry** is recorded as `gateway_retry_rejected` —
+  deliberately **not** named or described as candidate-ceiling evidence, because Layer 2 structurally
+  cannot confirm which candidate served the rejected attempt.
 - **Every other outcome is not retried**: a non-2xx or empty-with-a-different-`finish_reason` result on
-  an attempt that is not eligible for Trigger A or B (i.e., already a retry, or already past the shared
-  budget) is recorded as not-ready immediately.
+  an attempt that is not eligible for Trigger A or B for that layer (i.e., already the layer's one
+  retry, or already past its shared budget) is recorded as not-ready immediately.
 
 ### 2. Keep both existing layers — neither replaces the other
 
@@ -199,28 +238,26 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
 "one retry per route":
 
 - **Layer 1** (bounded by the existing 180s healthz-readiness wait, unchanged): keep the existing
-  per-attempt timeout (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10`, unchanged) and the existing base probe
-  budget. Trigger A does not need its own retry allowance here — Layer 1 already has up to 12 distinct
-  candidates providing exactly the resilience a same-candidate retry-on-hang would give, so one
-  candidate's timeout simply consumes its 10s slot and the loop moves to the next candidate, as today.
-  Only Trigger B (escalate budget on `finish_reason == "length"`) is new here, and it is capped by a
-  new shared counter, `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4`, across the whole Layer 1 run (not
-  per-candidate) — once 4 candidates have consumed an escalation attempt, any further candidate that
-  would otherwise qualify for Trigger B is instead recorded not-ready immediately with an explicit
+  per-attempt timeout (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10`, unchanged). The **base probe budget
+  changes from `4096` (today's value) to a new, smaller `REVIEW_PREFLIGHT_BASE_TOKENS = 16`** — cheap
+  by design, because the escalation path below corrects for it being wrong, unlike today where a wrong
+  first (and only) guess is fatal. Trigger A does not need its own retry allowance here (see Decision
+  §1). Trigger B (escalate to `REVIEW_PREFLIGHT_ESCALATED_TOKENS = 4096`, reusing today's
+  `REVIEW_MAX_OUTPUT_TOKENS`, on `finish_reason == "length"`) is capped by a new shared counter,
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4`, across the whole Layer 1 run (not per-candidate) — once 4
+  candidates have consumed an escalation attempt, any further candidate that would otherwise qualify
+  for Trigger B is instead recorded not-ready immediately with an explicit
   `escalation_budget_exhausted` reason. **Worst case**: 12 × 10s (base attempts) + 4 × 10s (escalation
   attempts) = **160s**, under the existing 180s ceiling with real margin, computed rather than assumed.
 - **Layer 2** (bounded only by the job's own 120-minute ceiling, per the org's stated "accuracy over
   speed" policy already reasoned in this file — *not* by the 180s Layer 1 budget, which has already
   completed by the time Layer 2 runs): keep the existing per-attempt timeout (**120s, unchanged** — not
-  shortened, per Context above) and the existing `4096` base budget (already proven working on a real
-  hosted run, `contextual-orchestrator#921`). Allow up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`
-  total attempts. Unlike Layer 1, Layer 2 cannot target a specific candidate — a fresh attempt may land
-  on a different route via the virtual pool's own internal variance, which is the operative lever here,
-  not a bigger budget — so both Trigger A (transport failure/hang) and Trigger B (empty +
-  `finish_reason == "length"`) retry a fresh request at the **same** `4096` budget rather than
-  escalating to an unproven new number; a non-2xx rejection specifically on a *retry* (not the first
-  attempt) is recorded as its own distinct outcome rather than retried again. **Worst case**: 3 × 120s
-  = **360s (6 minutes)** —
+  shortened, per Context above) and the existing **`4096` budget, unchanged throughout — Layer 2 never
+  escalates** (already proven working on a real hosted run, `contextual-orchestrator#921`; see Decision
+  §1 for why an escalation tier was considered and dropped here). Allow up to
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3` total attempts, consumed only by Trigger A (transport
+  failure/hang/non-2xx) — Trigger B (empty + `finish_reason == "length"`) is not retried at Layer 2 at
+  all (Decision §1). **Worst case**: 3 × 120s = **360s (6 minutes)** —
   explicit, bounded, and small relative to the job's 120-minute ceiling; the previous design's worst
   case was already 120s for one unconditional attempt with no chance of recovery, so this trades a
   bounded amount of additional worst-case latency for surviving exactly the transient-hang class of
@@ -232,9 +269,10 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   minimum of 16"* for the deprecated `max_tokens` field). The two new counters
   (`REVIEW_PREFLIGHT_MAX_ESCALATIONS`, `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`) are chosen to keep each
   layer's worst case under its own already-established ceiling, shown above, not picked by inspection
-  of "what feels right." Both preflight layers now emit `finish_reason`, attempt count, and which
-  trigger fired in their structured reports (`_preflight_review_agents`'s `routes[]`; the shell script's
-  `preflight_report`/`gateway` JSON) specifically so that a **follow-up, evidence-driven pass** — after
+  of "what feels right." The implementation must have both preflight layers emit `finish_reason`,
+  attempt count, and which trigger fired in their structured reports (`_preflight_review_agents`'s
+  `routes[]`; the shell script's `preflight_report`/`gateway` JSON) — this ADR does not implement that
+  itself (see Status) — specifically so that a **follow-up, evidence-driven pass** — after
   observing real hosted runs with this telemetry — can adjust these two counters and the base/escalated
   token budgets from real data, which is the methodology this ADR commits to for future tuning: initial
   values from direct precedent, refinement from telemetry this change itself introduces, never from
@@ -257,26 +295,36 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
 
 ## Consequences
 
-- Both preflight layers become structurally tolerant of an individual attempt being wrong for a fixed
-  token budget, or hanging/failing transiently, which is the actual shape of the problem — while
-  keeping every worst case explicit and bounded rather than open-ended.
-- Layer 1's worst case grows from ~120s to a computed 160s, still under its existing 180s
-  healthz-readiness ceiling. Layer 2's worst case grows from a single 120s attempt with no recovery
-  path to up to 360s across bounded retries — small relative to the job's 120-minute ceiling and
-  consistent with this file's own already-stated "accuracy over speed" policy.
-- Keeping Layer 2 (not just Layer 1) means the preflight still proves the actual consumer-facing
+**This ADR is `proposed`; no code has shipped yet. The consequences below describe what the
+implementation is expected to achieve once it lands, verified against this ADR's design — not an
+outcome already observed in production.**
+
+- Once implemented, both preflight layers would become structurally tolerant of an individual attempt
+  being wrong for a fixed token budget, or hanging/failing transiently, which is the actual shape of
+  the problem — while keeping every worst case explicit and bounded rather than open-ended.
+- Layer 1's worst case would grow from ~120s to a computed 160s, still under its existing 180s
+  healthz-readiness ceiling. Layer 2's worst case would grow from a single 120s attempt with no
+  recovery path to up to 360s across bounded retries — small relative to the job's 120-minute ceiling
+  and consistent with this file's own already-stated "accuracy over speed" policy.
+- Keeping Layer 2 (not just Layer 1) would mean the preflight still proves the actual consumer-facing
   `orchestrator/free` route works, not only that individual candidates can respond in isolation —
   closing the PR #1433 gap class rather than reopening it. Giving Layer 2 a bounded retry (rather than
-  either a single unconditional attempt or a shortened timeout) is what actually fixes the live
-  120s-hang reproduction on this ADR's own PR — a shortened timeout alone would not have, and would
-  have regressed the prior, already-evidenced 30s→120s fix in the same file.
-- A candidate whose escalated probe is rejected outright (rather than merely still empty) is recorded
-  as not-ready with a distinct, honest reason rather than silently retried indefinitely or
+  either a single unconditional attempt or a shortened timeout) is what would actually address the live
+  120s-hang reproduction on this ADR's own PR (job `99253418179`) — a shortened timeout alone would not
+  have, and would have regressed the prior, already-evidenced 30s→120s fix in the same file. Whether it
+  would have *prevented* that exact reproduction is not claimed with certainty (Layer 2's retry has no
+  verified route-diversity guarantee — see Decision §1); what it would change is that the check no
+  longer fails after one unconditional attempt with zero chance of recovery.
+- A Layer 1 candidate whose escalated probe is rejected outright (rather than merely still empty) would
+  be recorded as not-ready with a distinct, honest reason rather than silently retried indefinitely or
   misclassified — a known, accepted, documented residual limitation until
-  `ContextualWisdomLab/contextual-orchestrator#927` lands.
-- Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues,
-  and are explicitly not closed by this ADR.
-- No production routing default changes; this is scoped to the sidecar's own liveness checks.
+  `ContextualWisdomLab/contextual-orchestrator#927` lands. Layer 2's retry-diversity limitation
+  (Decision §1) is accepted the same way, for the same reason: no verified mechanism exists today to
+  do better.
+- Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues, and
+  would remain explicitly not closed by this ADR even once the sidecar-side implementation lands.
+- No production routing default changes are proposed; this is scoped to the sidecar's own liveness
+  checks.
 - **This is currently active, not theoretical**: the live reproduction in the Evidence trail below is
   from `noema-review` failing on this ADR's own PR while this ADR was being written, presently
   blocking that required check org-wide on every repo that routes through this sidecar. The

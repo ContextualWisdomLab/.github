@@ -1342,9 +1342,28 @@ that long and the job already budgets 120 minutes total) and gets up to 3 total 
 case) instead of one unconditional attempt with no recovery path. Initial numeric values (`16`, `4096`,
 `10s`, `120s`, and the two new attempt-count caps) are each either already deployed in this codebase or
 backed by direct external documentation (OpenRouter's own schema: *"some providers enforce a minimum of
-16"*), not fresh guesses — both preflight layers now also emit `finish_reason`/attempt-count/trigger
-telemetry specifically so a future pass can refine these from real data. Source citations are now
-SHA-pinned permalinks (`8b3235d2...`) instead of bare line numbers.
+16"*), not fresh guesses — the implementation must have both preflight layers emit
+`finish_reason`/attempt-count/trigger telemetry specifically so a future pass can refine these from
+real data. Source citations are now SHA-pinned permalinks (`8b3235d2...`) instead of bare line numbers.
+
+**A third Devin Review pass found the previous fix still self-contradicted** (the general Trigger-A
+description implied a same-candidate retry "in either layer," while Layer 1's own budget section said
+no such retry exists there) **and an unaddressed attribution problem**: Layer 2's Trigger-B escalation
+retries the *virtual pool*, not a pinned candidate, so a rejection on that retry could not honestly be
+blamed on "that candidate's ceiling" — it might be a different candidate entirely. **A fourth pass then
+found a sharper version of the same underlying question**: a `finish_reason == "length"` response is
+still `HTTP 200`, so the gateway's own routing already recorded that attempt as *successful* before the
+sidecar inspects content — a same-budget retry is *more* likely to repeat the same candidate than
+diversify away from it, making Layer 2's Trigger-B retry pointless as designed. Per this org's
+convergence rule (stop iterating toward a fully "solved" design once no further verified mechanism
+exists), and after directly checking `contextual_orchestrator/server.py` for any candidate-exclusion
+parameter and finding none: **Layer 2 no longer retries on Trigger B at all** — only Trigger A
+(transport failure/hang) is retried there, justified as a bounded safety margin against transient
+failure rather than a claim of route diversity, which this ADR now states plainly is unverified and not
+guaranteed. Layer 1 is unaffected (it pins one specific candidate object per attempt, so its own
+escalation retry is genuinely attributable and untouched by this limitation). The Consequences section
+was also corrected from present-tense ("becomes tolerant," "closes the gap") to prospective
+("would become," "would close") since this ADR's status remains `proposed` with no code shipped yet.
 
 Summary of the current ADR:
 

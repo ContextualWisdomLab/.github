@@ -29,8 +29,23 @@ Semantic Versioning where the repository publishes a release.
   existing 180s ceiling via a computed, capped escalation budget. Adds two
   real tracked upstream issues (`ContextualWisdomLab/contextual-orchestrator#926`,
   `#927`) and SHA-pinned permalink citations (`8b3235d2...`) in place of both
-  prose-only follow-ups and line numbers that would otherwise rot. No code
-  change in this PR; the sidecar migration is tracked separately.
+  prose-only follow-ups and line numbers that would otherwise rot. A third
+  Devin Review pass found the revised text still self-contradicted which
+  layer retries on which trigger, plus an attribution problem: Layer 2's
+  escalation retried the virtual pool, not a pinned candidate, so a
+  rejection there could not be honestly blamed on one candidate's ceiling.
+  A fourth pass found a sharper version of the same question -- a
+  `finish_reason == "length"` response is still HTTP 200, so the gateway's
+  routing already recorded that attempt as successful, making a same-budget
+  retry more likely to repeat the same candidate than diversify away from
+  it. Per this org's convergence rule, and after directly checking
+  `contextual_orchestrator/server.py` for a candidate-exclusion parameter
+  and finding none: Layer 2 no longer retries on `finish_reason == "length"`
+  at all, only on transport failure/hang, and its route diversity is stated
+  as an unverified best effort rather than a guarantee. Layer 1 (which pins
+  one specific candidate per attempt) is unaffected. Consequences corrected
+  from present tense to prospective, matching the ADR's `proposed` status.
+  No code change in this PR; the sidecar migration is tracked separately.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
