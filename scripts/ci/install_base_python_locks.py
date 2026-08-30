@@ -282,7 +282,9 @@ def install_materialized_locks(
             for entry in directory_entries
             if entry.generated_file not in independently_valid
         ]
-        if not invalid_entries or len(directory_entries) < 2:
+        # ponytail: recover only one unambiguous two-file supplement pair;
+        # multi-environment directories need an explicit include graph.
+        if not invalid_entries or len(directory_entries) != 2:
             continue
         print(
             "Preflighting same-directory trusted base Python lock group "
