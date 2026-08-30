@@ -766,17 +766,18 @@ recurrence" section below out of the file entirely; both are restored here.)
   inconsistently, so most rows were treated as priced and dropped from the free
   pool.
 - `ContextualWisdomLab/contextual-orchestrator#919`
-  (`43a5c91955df9794c9f8d3679d3ca38265e22928`) generalizes the Models.dev
+  (`a67fb3dfff7f8fdae458a765e6bd922a09d699cd`) generalizes the Models.dev
   free-cost join from `opencode_zen` to every provider that carries a
-  `models_dev_provider_id`, fetches `https://models.dev/api.json` exactly once,
-  and passes the parsed metadata into `discover_provider_models`. This lets
-  OpenAI/NVIDIA/opencode_zen free models be recognized even when bytez is
-  unavailable, breaking the single-provider-of-free-models dependency.
+  `models_dev_provider_id`, fetches `https://models.dev/api.json` exactly once
+  with a stable non-secret User-Agent, and passes the parsed metadata into
+  `discover_provider_models`. This lets OpenAI/NVIDIA/opencode_zen free models
+  be recognized even when bytez is unavailable, breaking the
+  single-provider-of-free-models dependency.
 - Fix for `.github`: bump `ORCHESTRATOR_PIN_SHA` in
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`, the contract constant
   in `tests/test_contextual_orchestrator_review_sidecar_contract.py`, and the
   ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to
-  `43a5c91955df9794c9f8d3679d3ca38265e22928`.
+  `a67fb3dfff7f8fdae458a765e6bd922a09d699cd`.
 - Catch-22: because `opencode-review`/`strix`/`noema-review` are required
   `pull_request_target` checks, a `.github` PR that updates the sidecar pin is
   tested with the *base* sidecar (old pin). That base sidecar still cannot boot,
