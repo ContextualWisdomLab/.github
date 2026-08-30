@@ -181,6 +181,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
     offset = 8
     width = height = bit_depth = color_type = interlace = None
     idat_parts: list[bytes] = []
+    saw_plte = False
     saw_idat = False
     finished_idat = False
     while offset + 12 <= len(raw):
@@ -190,9 +191,18 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             return False
         chunk_type = raw[offset + 4 : offset + 8]
         chunk_data = raw[offset + 8 : offset + 8 + length]
-        if len(chunk_type) != 4 or any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in chunk_type):
+        if (
+            len(chunk_type) != 4
+            or any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in chunk_type)
+            or chunk_type[2] & 0x20
+        ):
             return False
-        if chunk_type[0] & 0x20 == 0 and chunk_type not in {b"IHDR", b"IDAT", b"IEND"}:
+        if chunk_type[0] & 0x20 == 0 and chunk_type not in {
+            b"IHDR",
+            b"PLTE",
+            b"IDAT",
+            b"IEND",
+        }:
             return False
         declared_crc = int.from_bytes(raw[offset + 8 + length : end], "big")
         if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != declared_crc:
@@ -213,25 +223,52 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 or compression != 0
                 or filtering != 0
                 or interlace not in {0, 1}
-                or (color_type, bit_depth) not in {(4, 8), (6, 8)}
+                or bit_depth
+                not in {
+                    0: {1, 2, 4, 8, 16},
+                    2: {8, 16},
+                    3: {1, 2, 4, 8},
+                    4: {8, 16},
+                    6: {8, 16},
+                }.get(color_type, set())
             ):
                 return False
+        elif chunk_type == b"PLTE":
+            if (
+                width is None
+                or saw_plte
+                or saw_idat
+                or color_type in {0, 4}
+                or length == 0
+                or length % 3
+                or length > 768
+                or (color_type == 3 and length // 3 > 2**bit_depth)
+            ):
+                return False
+            saw_plte = True
         elif chunk_type == b"IDAT":
-            if finished_idat:
+            if width is None or finished_idat or (color_type == 3 and not saw_plte):
                 return False
             saw_idat = True
             idat_parts.append(chunk_data)
         elif saw_idat:
             finished_idat = True
         if chunk_type == b"IEND":
-            if length != 0 or not saw_idat or end != len(raw) or width is None or height is None:
+            if (
+                length != 0
+                or not saw_idat
+                or end != len(raw)
+                or width is None
+                or height is None
+                or (color_type == 3 and not saw_plte)
+            ):
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
             passes = [(0, 0, 1, 1)] if interlace == 0 else [
                 (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8),
                 (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
             ]
-            filter_offsets: list[int] = []
+            pass_layouts: list[tuple[int, int, int]] = []
             expected_size = 0
             for x_start, y_start, x_step, y_step in passes:
                 pass_width = 0 if width <= x_start else (width - x_start + x_step - 1) // x_step
@@ -239,13 +276,12 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 if not pass_width or not pass_height:
                     continue
                 row_bytes = (pass_width * channels * bit_depth + 7) // 8
-                filter_offsets.extend(
-                    expected_size + row * (row_bytes + 1)
-                    for row in range(pass_height)
-                )
-                expected_size += pass_height * (row_bytes + 1)
-            if expected_size > MAX_IMAGE_DECODED_BYTES:
-                return False
+                stride = row_bytes + 1
+                pass_size = pass_height * stride
+                if pass_size > MAX_IMAGE_DECODED_BYTES - expected_size:
+                    return False
+                pass_layouts.append((expected_size, stride, pass_height))
+                expected_size += pass_size
             try:
                 decoder = zlib.decompressobj()
                 pixels = decoder.decompress(b"".join(idat_parts), expected_size + 1)
@@ -257,7 +293,11 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 and not decoder.unused_data
                 and not decoder.unconsumed_tail
                 and len(pixels) == expected_size
-                and all(pixels[offset] <= 4 for offset in filter_offsets)
+                and all(
+                    pixels[start + row * stride] <= 4
+                    for start, stride, rows in pass_layouts
+                    for row in range(rows)
+                )
             )
         offset = end
     return False

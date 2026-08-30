@@ -92,6 +92,31 @@ def replace_png_chunk(raw: bytes, chunk_type: bytes, data: bytes) -> bytes:
     chunk += policy.zlib.crc32(chunk_type + data).to_bytes(4, "big")
     return raw[:chunk_offset] + chunk + raw[old_end:]
 
+
+def build_png(
+    *,
+    color_type: int,
+    bit_depth: int,
+    width: int = 2,
+    height: int = 2,
+    palette: bytes | None = None,
+) -> bytes:
+    """Build a small structurally complete, non-interlaced PNG fixture."""
+
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    row_bytes = (width * channels * bit_depth + 7) // 8
+    pixels = b"".join(b"\x00" + bytes(row_bytes) for _ in range(height))
+    ihdr = (
+        width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + bytes((bit_depth, color_type, 0, 0, 0))
+    )
+    chunks = [png_chunk(b"IHDR", ihdr)]
+    if palette is not None:
+        chunks.append(png_chunk(b"PLTE", palette))
+    chunks.extend((png_chunk(b"IDAT", policy.zlib.compress(pixels)), png_chunk(b"IEND")))
+    return b"\x89PNG\r\n\x1a\n" + b"".join(chunks)
+
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
@@ -255,6 +280,60 @@ def test_documentation_png_validation_rejects_truncated_corrupt_and_invalid_chun
     )
     assert not policy._is_recognized_documentation_image(
         "docs/acceptance.png", PNG_BYTES + b"trailing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("color_type", "bit_depth"),
+    [
+        (0, 1),
+        (0, 2),
+        (0, 4),
+        (0, 8),
+        (0, 16),
+        (2, 8),
+        (2, 16),
+        (3, 1),
+        (3, 2),
+        (3, 4),
+        (3, 8),
+        (4, 8),
+        (4, 16),
+        (6, 8),
+        (6, 16),
+    ],
+)
+def test_documentation_png_accepts_every_legal_color_and_depth_pair(
+    color_type: int, bit_depth: int
+) -> None:
+    """The bounded validator accepts each PNG-defined color/depth combination."""
+
+    palette = b"\x00\x00\x00" if color_type == 3 else None
+    raw = build_png(color_type=color_type, bit_depth=bit_depth, palette=palette)
+    assert policy._is_recognized_documentation_image("docs/acceptance.png", raw)
+
+
+def test_documentation_png_enforces_palette_and_chunk_name_contracts() -> None:
+    """Palette placement, cardinality, and the reserved chunk-name bit fail closed."""
+
+    indexed_without_palette = build_png(color_type=3, bit_depth=1)
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", indexed_without_palette
+    )
+
+    rgba_with_palette = build_png(
+        color_type=6,
+        bit_depth=8,
+        palette=b"\x00\x00\x00\xff\xff\xff",
+    )
+    assert policy._is_recognized_documentation_image(
+        "docs/acceptance.png", rgba_with_palette
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(rgba_with_palette, b"PLTE", b"\x00\x00\x00")
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(PNG_BYTES, b"abca")
     )
 
 
