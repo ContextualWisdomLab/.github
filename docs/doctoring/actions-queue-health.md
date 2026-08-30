@@ -13,9 +13,22 @@ The report schema is `actions.queue_health.v1`. Each observed run records its
 repository, pull-request number, head SHA, event, run attempt, concurrency
 group (or an explicit unavailable marker), queue age, job state, and runner
 assignment. A run is `current_head` only when its linked open pull request and
-head SHA match. Stale linked runs are `obsolete`; runs without a pull-request
-link are `unlinked`. Queued evidence remains incomplete even when a report is
-successfully produced.
+head SHA match; the match compares the open pull request's head SHA against
+the *linked* pull-request entry's head SHA carried on the run
+(`run.pull_requests[].head.sha`), never against the run-level `head_sha`.
+`pull_request_target`-triggered runs report the base-branch commit that was
+checked out as their run-level `head_sha`, so comparing against that value
+would misclassify a genuinely active, current required-workflow run as
+obsolete and skip its job evidence. Stale linked runs are `obsolete`; runs
+without a pull-request link are `unlinked`. Queued evidence remains incomplete
+even when a report is successfully produced. GitHub's `waiting` job status
+(paused on an environment or deployment approval) is also treated as pending
+evidence, distinct from a runner-capacity blocker.
+
+Queue age for a job is measured from that job's own `created_at`, not the
+parent run's, so a later job in an already in-progress run (for example one
+gated by `needs:`) that only just became eligible is not measured against the
+whole run's age and does not trigger a false capacity-breach alert.
 
 Queued runs use run-level evidence because GitHub has not assigned their jobs;
 only current-head `in_progress` runs make the additional jobs API read needed

@@ -363,6 +363,44 @@ def test_normalise_pull_request_preserves_exact_head_identity() -> None:
         queue_health._normalise_pull_request({"number": 0, "head": {}, "base": {}})
 
 
+def test_normalise_pull_request_rejects_empty_identity_fields_instead_of_retrying_later() -> None:
+    """An empty API-provided identity field must retry, not silently pass through."""
+    empty_head_sha = pull_request()
+    empty_head_sha["head"] = {"sha": ""}
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(empty_head_sha)
+
+    empty_base_ref = pull_request()
+    empty_base_ref["base"]["ref"] = ""
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(empty_base_ref)
+
+    empty_base_repository = pull_request()
+    empty_base_repository["base"]["repo"]["full_name"] = ""
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(empty_base_repository)
+
+    missing_base_repo = pull_request()
+    del missing_base_repo["base"]["repo"]
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(missing_base_repo)
+
+    empty_updated_at = pull_request()
+    empty_updated_at["updated_at"] = ""
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(empty_updated_at)
+
+    empty_normalized = {
+        "number": 1,
+        "base_ref": "main",
+        "base_repository": "owner/repo",
+        "head_sha": "",
+        "updated_at": "2026-08-19T11:00:00Z",
+    }
+    with pytest.raises(queue_health.IncompletePullRequestIdentity, match="non-empty"):
+        queue_health._normalise_pull_request(empty_normalized, allow_normalized=True)
+
+
 def test_normalise_job_preserves_runner_assignment_and_fails_closed() -> None:
     """Retain runner evidence while rejecting malformed job identities."""
     normalized = queue_health._normalise_job(job(1, runner_id=3, runner_name="runner"))
@@ -394,6 +432,12 @@ def test_normalise_run_validates_links_jobs_and_fallback_names() -> None:
     assert queue_health._normalise_run(
         "owner/repo", {"id": 3, "pull_requests": [{"number": 1, "head": None}]}, []
     )["pull_requests"] == [{"number": 1, "head_sha": ""}]
+    # Re-normalising an already-normalised link (as build_report does when
+    # loading a snapshot collect_snapshot produced) must preserve head_sha
+    # rather than treating the flattened shape as missing "head".
+    assert queue_health._normalise_run(
+        "owner/repo", {"id": 4, "pull_requests": [{"number": 5, "head_sha": "flat-sha"}]}, []
+    )["pull_requests"] == [{"number": 5, "head_sha": "flat-sha"}]
 
     for invalid_run, invalid_jobs in (
         ("bad", []),
@@ -531,6 +575,96 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     assert invalid_pull_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
 
+def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty head_sha in one API response must retry like a missing head/base."""
+    queued_current = workflow_run(20, pull_requests=[{"number": 1, "head": {"sha": "head"}}])
+    responses = {
+        "repos/owner/repo": {"default_branch": "main"},
+        "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
+        "repos/owner/repo/actions/runs?status=queued&per_page=50": [queued_current],
+        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [],
+    }
+    empty_identity_pull = pull_request()
+    empty_identity_pull["head"] = {"sha": ""}
+    retry_calls = 0
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(queue_health.time, "sleep", sleep_calls.append)
+
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return one empty-identity pull response followed by a complete one."""
+        nonlocal retry_calls
+        payload = responses[args[-1]]
+        if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
+            retry_calls += 1
+            payload = [empty_identity_pull] if retry_calls == 1 else payload
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    snapshot = queue_health.collect_snapshot(["owner/repo"], runner=runner)
+    assert retry_calls == 2
+    assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
+    assert snapshot["collection_errors"] == []
+    assert snapshot["repositories"][0]["pull_requests"][0]["head_sha"] == "head"
+
+    def persistent_empty_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return an empty-identity pull response on every attempt."""
+        payload = (
+            [empty_identity_pull]
+            if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
+            else responses[args[-1]]
+        )
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    persistent_snapshot = queue_health.collect_snapshot(["owner/repo"], runner=persistent_empty_runner)
+    assert persistent_snapshot["repositories"] == []
+    assert persistent_snapshot["collection_errors"][0]["repository"] == "owner/repo"
+
+
+def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_trip() -> None:
+    """The full collect -> build pipeline must not lose the linked head SHA.
+
+    ``build_report`` re-normalises runs loaded from a collected snapshot;
+    this exercises the entire ``collect_snapshot`` -> ``build_report`` path
+    for a ``pull_request_target``-shaped run (run-level head_sha is the base
+    commit, the linked pull-request entry carries the real PR head) and
+    checks the run still resolves to ``current_head``.
+    """
+    pull_request_target_run = workflow_run(
+        70,
+        head_sha="base-branch-checkout-sha",
+        status="in_progress",
+        pull_requests=[{"number": 1, "head": {"sha": "pr-head-sha"}}],
+        jobs=[job(700, runner_id=9, runner_name="runner-9")],
+    )
+    responses = {
+        "repos/owner/repo": {"default_branch": "main"},
+        "repos/owner/repo/pulls?state=open&per_page=100": [pull_request(1, "pr-head-sha")],
+        "repos/owner/repo/actions/runs?status=queued&per_page=50": [],
+        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [pull_request_target_run],
+        "repos/owner/repo/actions/runs/70/jobs?per_page=100": {
+            "jobs": [job(700, runner_id=9, runner_name="runner-9")]
+        },
+    }
+
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return the deterministic API response for each requested endpoint."""
+        payload = responses[args[-1]]
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    snapshot = queue_health.collect_snapshot(["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z")
+    report = queue_health.build_report(snapshot, now=NOW)
+    row = report["runs"][0]
+    assert row["identity_state"] == "current_head"
+    assert row["obsolete"] is False
+
+
 def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evidence() -> None:
     """Continue healthy collection while recording one repository's failure."""
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
@@ -629,10 +763,29 @@ def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:
     with pytest.raises(queue_health.QueueHealthError):
         queue_health.load_snapshot(tmp_path / "missing.json")
 
-    current_run = {"head_sha": "head", "pull_requests": [{"number": 1}]}
+    current_run = {"head_sha": "head", "pull_requests": [{"number": 1, "head_sha": "head"}]}
     assert queue_health._run_identity(current_run, {1: {"head_sha": "head"}}) == ("current_head", 1)
     assert queue_health._run_identity(current_run, {1: {"head_sha": "other"}}) == ("obsolete", 1)
     assert queue_health._run_identity({"pull_requests": []}, {}) == ("unlinked", None)
+
+    # pull_request_target runs report the *base*-branch commit as their
+    # run-level head_sha; identity must use the linked entry's head_sha
+    # (preserved by _normalise_run) instead, or an active run looks obsolete.
+    base_triggered_run = {
+        "head_sha": "base-branch-checkout-sha",
+        "pull_requests": [{"number": 1, "head_sha": "pr-head-sha"}],
+    }
+    assert queue_health._run_identity(base_triggered_run, {1: {"head_sha": "pr-head-sha"}}) == (
+        "current_head",
+        1,
+    )
+    stale_base_triggered_run = {
+        "head_sha": "base-branch-checkout-sha",
+        "pull_requests": [{"number": 1, "head_sha": "old-pr-head-sha"}],
+    }
+    assert queue_health._run_identity(
+        stale_base_triggered_run, {1: {"head_sha": "pr-head-sha"}}
+    ) == ("obsolete", 1)
 
 
 def test_job_state_and_queue_age_cover_pending_terminal_and_unknown_paths() -> None:
@@ -646,7 +799,14 @@ def test_job_state_and_queue_age_cover_pending_terminal_and_unknown_paths() -> N
     assert queue_health._job_state({"status": "queued"}) == ("queued_unassigned", True, False)
     assert queue_health._job_state({"status": "completed"}) == ("terminal", False, False)
     assert queue_health._job_state({"status": "", "conclusion": "failure"}) == ("terminal", False, False)
-    assert queue_health._job_state({"status": "waiting"}) == ("unknown", False, False)
+    # "waiting" (paused on an environment/deployment approval) is pending
+    # evidence, not unclassified "unknown" evidence that drops off the report.
+    assert queue_health._job_state({"status": "waiting"}) == ("waiting_approval", True, False)
+    assert queue_health._job_state({"status": "waiting", "runner_id": 3}) == (
+        "waiting_approval",
+        True,
+        True,
+    )
     assert queue_health._format_age("2026-08-19T10:00:00Z", NOW) == 7200
     assert queue_health._format_age("2026-08-19T13:00:00Z", NOW) == 0
     with pytest.raises(queue_health.QueueHealthError):
@@ -658,8 +818,10 @@ def test_build_report_classifies_exact_head_and_external_blockers() -> None:
     report = queue_health.build_report(report_snapshot(), now=NOW, queue_age_slo_seconds=900)
     assert report["schema_version"] == "actions.queue_health.v1"
     assert report["summary"]["observed_job_count"] == 7
-    assert report["summary"]["pending_job_count"] == 5
-    assert report["summary"]["current_head_pending_count"] == 3
+    # job 102 (run 10) is "waiting" on an environment/deployment approval; it
+    # must be visible as pending evidence, not silently dropped.
+    assert report["summary"]["pending_job_count"] == 6
+    assert report["summary"]["current_head_pending_count"] == 4
     assert report["summary"]["unassigned_slo_breached_count"] == 2
     assert report["summary"]["obsolete_job_count"] == 1
     assert report["summary"]["unlinked_job_count"] == 1
@@ -670,9 +832,98 @@ def test_build_report_classifies_exact_head_and_external_blockers() -> None:
     assert report["duplicate_pending_lanes"][0]["count"] == 2
     assert any(row["blocker"] == "obsolete_run_requires_identity_confirmed_cleanup" for row in report["runs"])
     assert any(row["blocker"] == "run_not_linked_to_pull_request" for row in report["runs"])
+    waiting_row = next(row for row in report["runs"] if row["job_id"] == 102)
+    assert waiting_row["execution_state"] == "waiting_approval"
+    assert waiting_row["is_pending"] is True
+    assert waiting_row["blocker"] == "environment_or_deployment_approval_required"
+    assert waiting_row["recommended_action"] == "reviewer_or_owner_approve_pending_environment_deployment"
+    # A waiting-on-approval job must never be folded into the runner-capacity
+    # SLO metric, which is reserved for queued_unassigned jobs.
+    assert report["summary"]["unassigned_slo_breached_count"] == 2
     assert report["runs"] == sorted(report["runs"], key=lambda row: (row["repository"], row["run_id"], row["job_id"]))
     assert queue_health.build_report(report_snapshot(), now=NOW, queue_age_slo_seconds=7200)["summary"]["unassigned_slo_breached_count"] == 0
     assert queue_health.build_report(report_snapshot(), queue_age_slo_seconds=0)["summary"]["observed_job_count"] == 7
+
+
+def test_build_report_treats_pull_request_target_linked_head_as_current() -> None:
+    """A pull_request_target run's base-commit head_sha must not look obsolete.
+
+    For a ``pull_request_target``-triggered run, GitHub reports the checked
+    out *base*-branch commit as the run-level ``head_sha``, while the run's
+    linked pull-request entry still carries the real PR head SHA. The run
+    must classify as ``current_head`` (and have its job evidence inspected)
+    whenever that linked head SHA matches the currently open pull request.
+    """
+    snapshot = {
+        "generated_at": "2026-08-19T11:00:00Z",
+        "repositories": [
+            {
+                "full_name": "owner/repo",
+                "pull_requests": [pull_request(1, "pr-head-sha")],
+                "runs": [
+                    workflow_run(
+                        50,
+                        head_sha="base-branch-checkout-sha",
+                        pull_requests=[{"number": 1, "head": {"sha": "pr-head-sha"}}],
+                        jobs=[job(500)],
+                        workflow_name="opencode-review",
+                    ),
+                ],
+            }
+        ],
+    }
+    report = queue_health.build_report(snapshot, now=NOW)
+    row = report["runs"][0]
+    assert row["identity_state"] == "current_head"
+    assert row["obsolete"] is False
+    assert row["blocker"] != "obsolete_run_requires_identity_confirmed_cleanup"
+
+
+def test_build_report_measures_job_wait_from_job_created_at_not_run_creation() -> None:
+    """A freshly queued job inside an old in-progress run must not inherit its age."""
+    old_run_created_at = "2026-08-19T08:00:00Z"
+    recent_job_created_at = "2026-08-19T11:55:00Z"
+    snapshot = {
+        "generated_at": "2026-08-19T11:00:00Z",
+        "repositories": [
+            {
+                "full_name": "owner/repo",
+                "pull_requests": [pull_request()],
+                "runs": [
+                    workflow_run(
+                        60,
+                        created_at=old_run_created_at,
+                        status="in_progress",
+                        pull_requests=[{"number": 1, "head": {"sha": "head"}}],
+                        jobs=[
+                            job(600, status="in_progress", runner_id=1, runner_name="runner-1"),
+                            {
+                                "id": 601,
+                                "name": "second-stage",
+                                "status": "queued",
+                                "conclusion": None,
+                                "runner_id": None,
+                                "runner_name": None,
+                                "created_at": recent_job_created_at,
+                                "steps": [],
+                            },
+                        ],
+                    ),
+                ],
+            }
+        ],
+    }
+    report = queue_health.build_report(snapshot, now=NOW, queue_age_slo_seconds=900)
+    second_stage = next(row for row in report["runs"] if row["job_id"] == 601)
+    assert second_stage["queue_age_seconds"] == 300
+    assert second_stage["slo_breached"] is False
+    assert second_stage["blocker"] == "current_head_required_evidence_incomplete"
+    # The first-stage job is still measured against the run's own (old)
+    # creation time because it carries no job-level created_at of its own,
+    # but it is runner-assigned so it never counts as an unassigned breach.
+    first_stage = next(row for row in report["runs"] if row["job_id"] == 600)
+    assert first_stage["queue_age_seconds"] == 14400
+    assert report["summary"]["unassigned_slo_breached_count"] == 0
 
 
 @pytest.mark.parametrize(

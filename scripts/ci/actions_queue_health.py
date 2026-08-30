@@ -159,17 +159,25 @@ def github_json(path: str, *, paginate: bool = False, runner: Runner = subproces
 def _normalise_pull_request(
     pull_request: dict[str, Any], *, allow_normalized: bool = False
 ) -> dict[str, Any]:
-    """Keep only exact-head identity fields needed for queue classification."""
+    """Keep only exact-head identity fields needed for queue classification.
+
+    Empty or missing ``head_sha``, ``base_ref``, ``base_repository``, or
+    ``updated_at`` values are treated as an incomplete identity — the same
+    as a missing ``head``/``base`` object — so a transient, partially
+    populated GitHub API response triggers the caller's bounded retry
+    instead of being silently accepted and later misclassifying an active
+    run as obsolete.
+    """
     if not isinstance(pull_request, dict):
         raise QueueHealthError("pull request entry must be an object")
     number = pull_request.get("number")
     if allow_normalized and "head" not in pull_request and "base" not in pull_request:
         if not all(
-            isinstance(pull_request.get(field), str)
+            isinstance(pull_request.get(field), str) and pull_request.get(field)
             for field in ("base_ref", "base_repository", "head_sha", "updated_at")
         ):
             raise IncompletePullRequestIdentity(
-                "normalized pull request identity fields must be strings"
+                "normalized pull request identity fields must be non-empty strings"
             )
         if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
             raise QueueHealthError("pull request number must be a positive integer")
@@ -187,20 +195,36 @@ def _normalise_pull_request(
         raise IncompletePullRequestIdentity("pull request head and base must be objects")
     if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
         raise QueueHealthError("pull request number must be a positive integer")
+    head_sha = head.get("sha", "")
+    base_ref = base.get("ref", "")
+    base_repository = (
+        (base.get("repo") or {}).get("full_name", "") if isinstance(base.get("repo"), dict) else ""
+    )
+    updated_at = pull_request.get("updated_at", "")
+    if not all(
+        isinstance(value, str) and value for value in (head_sha, base_ref, base_repository, updated_at)
+    ):
+        raise IncompletePullRequestIdentity(
+            "pull request head, base, and updated_at identity fields must be non-empty"
+        )
     return {
         "number": number,
         "state": pull_request.get("state", "open"),
-        "base_ref": base.get("ref", ""),
-        "base_repository": (base.get("repo") or {}).get("full_name", "")
-        if isinstance(base.get("repo"), dict)
-        else "",
-        "head_sha": head.get("sha", ""),
-        "updated_at": pull_request.get("updated_at", ""),
+        "base_ref": base_ref,
+        "base_repository": base_repository,
+        "head_sha": head_sha,
+        "updated_at": updated_at,
     }
 
 
 def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
-    """Keep job state and runner assignment evidence without log contents."""
+    """Keep job state and runner assignment evidence without log contents.
+
+    Preserves the job's own ``created_at`` (when GitHub scheduled that
+    specific job) separately from the parent run's ``created_at``, so a
+    job that only became eligible after an earlier stage in the same
+    in-progress run finished is not measured against the whole run's age.
+    """
     if not isinstance(job, dict):
         raise QueueHealthError("workflow job entry must be an object")
     job_id = job.get("id")
@@ -216,12 +240,21 @@ def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
         "conclusion": str(job.get("conclusion") or "").upper(),
         "runner_id": runner_id,
         "runner_name": str(job.get("runner_name") or ""),
+        "created_at": str(job.get("created_at") or ""),
         "steps_count": len(job.get("steps") or []) if isinstance(job.get("steps"), list) else 0,
     }
 
 
 def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Keep run identity and job state required for deterministic reporting."""
+    """Keep run identity and job state required for deterministic reporting.
+
+    Accepts a pull-request link either in GitHub's raw shape
+    (``{"number": ..., "head": {"sha": ...}}``) or in the flattened shape
+    this function itself emits (``{"number": ..., "head_sha": ...}``), so
+    re-normalising an already-normalised run loaded back from a collected
+    snapshot (as ``build_report`` does) does not silently zero out the
+    linked head SHA that exact-head identity resolution depends on.
+    """
     if not isinstance(run, dict):
         raise QueueHealthError("workflow run entry must be an object")
     if not isinstance(jobs, list) or not all(isinstance(job, dict) for job in jobs):
@@ -239,6 +272,9 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         number = item.get("number")
         if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
             raise QueueHealthError("workflow run pull request number must be positive")
+        if "head" not in item and isinstance(item.get("head_sha"), str):
+            links.append({"number": number, "head_sha": item["head_sha"]})
+            continue
         head = item.get("head", {})
         if head is None:
             head = {}
@@ -379,12 +415,23 @@ def load_snapshot(path: Path) -> dict[str, Any]:
 
 
 def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]]) -> tuple[str, int | None]:
-    """Resolve one run to current-head, obsolete, or unlinked identity."""
+    """Resolve one run to current-head, obsolete, or unlinked identity.
+
+    Compares the open pull request's head SHA against the *linked*
+    pull-request head SHA carried on the run (``run["pull_requests"][*]
+    ["head_sha"]``), never against the run-level ``head_sha``. For
+    ``pull_request_target``-triggered runs, GitHub reports the run-level
+    ``head_sha`` as the base-branch commit that was checked out, not the
+    pull request's head commit; only the linked pull-request entry carries
+    the real head SHA that was reviewed. Using the run-level value there
+    would misclassify a genuinely current, active required-workflow run as
+    ``obsolete`` and skip fetching its job evidence.
+    """
     links = run.get("pull_requests") or []
     for link in links:
         number = link.get("number")
         pull_request = pull_requests.get(number)
-        if pull_request and pull_request.get("head_sha") == run.get("head_sha"):
+        if pull_request and pull_request.get("head_sha") == link.get("head_sha"):
             return "current_head", number
     if links:
         return "obsolete", links[0].get("number")
@@ -392,10 +439,19 @@ def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]])
 
 
 def _job_state(job: dict[str, Any]) -> tuple[str, bool, bool]:
-    """Return normalized execution state, pending flag, and runner assignment."""
+    """Return normalized execution state, pending flag, and runner assignment.
+
+    GitHub's ``waiting`` job status (a job paused on an environment or
+    deployment approval) is incomplete pending evidence just like
+    ``queued``/``in_progress`` — it must remain visible with its own
+    blocker and action rather than silently dropping out of the pending
+    count as unclassified ``unknown`` evidence.
+    """
     status = str(job.get("status") or "").upper()
     conclusion = str(job.get("conclusion") or "").upper()
     assigned = bool(job.get("runner_name")) or (isinstance(job.get("runner_id"), int) and job.get("runner_id", 0) > 0)
+    if status == "WAITING":
+        return "waiting_approval", True, assigned
     if status in QUEUE_STATES:
         return ("queued_assigned" if assigned else "queued_unassigned"), True, assigned
     if status in TERMINAL_STATES or conclusion:
@@ -482,7 +538,14 @@ def build_report(
             jobs = run["jobs"]
             for job in jobs or [{"id": run["id"], "name": "run", "status": run.get("status")}]:
                 state, pending, assigned = _job_state(job)
-                age_seconds = _format_age(run.get("created_at"), report_now)
+                # Prefer the job's own created_at: for a job with `needs:`
+                # dependencies inside an already in-progress run, GitHub
+                # sets it when the job became eligible, which can be long
+                # after the run itself started. Falling back to the run's
+                # created_at only applies to the synthetic run-level job
+                # used when no job evidence was fetched.
+                age_created_at = job.get("created_at") or run.get("created_at")
+                age_seconds = _format_age(age_created_at, report_now)
                 slo_breached = pending and age_seconds > queue_age_slo_seconds
                 if identity == "obsolete":
                     blocker = "obsolete_run_requires_identity_confirmed_cleanup"
@@ -490,6 +553,9 @@ def build_report(
                 elif identity == "unlinked":
                     blocker = "run_not_linked_to_pull_request"
                     action = "reconcile_run_identity_before_cleanup"
+                elif state == "waiting_approval":
+                    blocker = "environment_or_deployment_approval_required"
+                    action = "reviewer_or_owner_approve_pending_environment_deployment"
                 elif pending and not assigned and slo_breached:
                     blocker = "external_runner_assignment_or_capacity"
                     action = "owner_check_runner_billing_policy_and_concurrency"
@@ -514,6 +580,7 @@ def build_report(
                         "status": job.get("status", ""),
                         "conclusion": job.get("conclusion", ""),
                         "execution_state": state,
+                        "is_pending": pending,
                         "runner_assigned": assigned,
                         "created_at": run.get("created_at", ""),
                         "updated_at": run.get("updated_at", ""),
@@ -527,7 +594,7 @@ def build_report(
                 )
 
     rows.sort(key=lambda row: (row["repository"], row["run_id"], row["job_id"]))
-    pending = [row for row in rows if row["execution_state"].startswith("queued_")]
+    pending = [row for row in rows if row["is_pending"]]
     current_pending = [row for row in pending if row["identity_state"] == "current_head"]
     lane_run_ids: dict[tuple[str, int, str], set[int]] = {}
     for row in current_pending:
