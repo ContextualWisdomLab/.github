@@ -232,6 +232,76 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
+def test_evaluate_pull_request_enforces_cumulative_content_request_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broad diff stops before issuing a content request beyond the budget."""
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 2)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/10/files" in url:
+            return [
+                {
+                    "filename": f"deploy/runtime-{index}.yaml",
+                    "status": "modified",
+                    "patch": "+image: app",
+                }
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("image: cwl-pingora-proxy:0.1.0\n")
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=10,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
+@pytest.mark.parametrize("byte_budget", [6, 8])
+def test_evaluate_pull_request_enforces_cumulative_content_byte_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    byte_budget: int,
+) -> None:
+    """Decoded evidence stops before a file would exceed the aggregate budget."""
+    monkeypatch.setattr(policy, "MAX_TOTAL_CONTENT_BYTES", byte_budget)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [
+                {
+                    "filename": f"deploy/runtime-{index}.yaml",
+                    "status": "modified",
+                    "patch": "+image: app",
+                }
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("edge")
+
+    with pytest.raises(policy.PolicyError, match="content byte budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=11,
+            head_sha="d" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
     """Closed-event cleanup remains a no-op for the required-workflow context."""
 

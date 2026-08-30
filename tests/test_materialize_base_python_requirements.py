@@ -1371,6 +1371,62 @@ def test_changed_uv_lock_rejects_conflicting_replaced_vcs_revision(
         )
 
 
+def test_changed_uv_inputs_preserve_distinct_shared_repository_owners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replacing a uv project cannot collapse distinct owners of one revision."""
+    commit = "a" * 40
+    owners = [
+        {
+            "package": package,
+            "import_name": package.replace("-", "_"),
+            "repository": "shared-repository",
+            "commit": commit,
+        }
+        for package in ("first-owner", "second-owner")
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: (b"", owners),
+    )
+
+    assert materializer._replace_changed_uv_inputs(
+        tmp_path,
+        "b" * 40,
+        [],
+        [],
+        {"uv.lock"},
+        {"uv.lock"},
+    ) == ([], [{**owner, "source": "uv.lock"} for owner in owners])
+
+
+def test_changed_uv_inputs_reject_conflicting_retained_repository_revisions(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing manifest conflict cannot survive an unrelated replacement."""
+    with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._replace_changed_uv_inputs(
+            tmp_path,
+            "b" * 40,
+            [],
+            [
+                {
+                    "repository": "shared-repository",
+                    "commit": commit,
+                    "source": source,
+                }
+                for commit, source in (
+                    ("a" * 40, "first/uv.lock"),
+                    ("b" * 40, "second/uv.lock"),
+                )
+            ],
+            {"third/uv.lock"},
+            set(),
+        )
+
+
 @pytest.mark.parametrize(
     ("head_dependencies", "expected_source", "expected_error"),
     [

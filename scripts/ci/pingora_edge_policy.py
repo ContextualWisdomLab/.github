@@ -24,6 +24,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
+MAX_CONTENT_REQUESTS = 256
+MAX_TOTAL_CONTENT_BYTES = 16_777_216
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
@@ -277,7 +279,16 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
         page += 1
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+def _load_file_content(
+    api_url: str,
+    repository: str,
+    path: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+    *,
+    max_bytes: int = MAX_FILE_BYTES,
+) -> str:
     """Load one final head file as bounded UTF-8 text from the Contents API."""
 
     encoded_path = quote(path, safe="/")
@@ -289,8 +300,15 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
     encoded = payload.get("content")
     declared_size = payload.get("size")
-    if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0 or declared_size > MAX_FILE_BYTES:
+    if (
+        not isinstance(encoded, str)
+        or not isinstance(declared_size, int)
+        or declared_size < 0
+        or declared_size > MAX_FILE_BYTES
+    ):
         raise PolicyError(f"GitHub content evidence for {path} exceeds or violates the size contract")
+    if declared_size > max_bytes:
+        raise PolicyError("GitHub policy evidence exceeded the content byte budget")
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
@@ -344,10 +362,27 @@ def evaluate_pull_request(
         raise PolicyError("GITHUB_TOKEN is required for policy evidence")
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
+    content_requests = 0
+    total_content_bytes = 0
     for changed in changed_files:
         if not _needs_content_scan(changed):
             continue
-        content = _load_file_content(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
+        if content_requests >= MAX_CONTENT_REQUESTS:
+            raise PolicyError("GitHub policy evidence exceeded the content request budget")
+        remaining_bytes = MAX_TOTAL_CONTENT_BYTES - total_content_bytes
+        if remaining_bytes <= 0:
+            raise PolicyError("GitHub policy evidence exceeded the content byte budget")
+        content = _load_file_content(
+            api_url.rstrip("/"),
+            repository,
+            changed.path,
+            head_sha,
+            token,
+            opener,
+            max_bytes=remaining_bytes,
+        )
+        content_requests += 1
+        total_content_bytes += len(content.encode("utf-8"))
         violations.extend(scan_content(changed.path, content))
     return tuple(violations)
 

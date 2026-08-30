@@ -296,7 +296,8 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
 def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
     """Separate registry hash pins from exact organization VCS source pins."""
     registry_requirements: list[str] = []
-    vcs_by_repository: dict[str, dict[str, str]] = {}
+    vcs_dependencies: list[dict[str, str]] = []
+    vcs_commits: dict[str, str] = {}
     for line in _requirement_lines(content):
         if _is_fully_hash_pinned_requirement(line):
             registry_requirements.append(line)
@@ -313,10 +314,11 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
             "commit": match.group("commit").lower(),
         }
         repository_key = dependency["repository"].casefold()
-        previous = vcs_by_repository.get(repository_key)
-        if previous is not None and previous["commit"] != dependency["commit"]:
+        previous_commit = vcs_commits.get(repository_key)
+        if previous_commit is not None and previous_commit != dependency["commit"]:
             raise ValueError("uv export pins one VCS repository to conflicting commits")
-        vcs_by_repository[repository_key] = dependency
+        vcs_commits[repository_key] = dependency["commit"]
+        vcs_dependencies.append(dependency)
 
     registry_content = (
         ("\n".join(registry_requirements) + "\n").encode("utf-8")
@@ -324,8 +326,12 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
         else b""
     )
     return registry_content, sorted(
-        vcs_by_repository.values(),
-        key=lambda dependency: dependency["repository"].casefold(),
+        vcs_dependencies,
+        key=lambda dependency: (
+            dependency["repository"].casefold(),
+            dependency["package"].casefold(),
+            dependency["import_name"].casefold(),
+        ),
     )
 
 
@@ -745,30 +751,46 @@ def _replace_changed_uv_inputs(
         for source_path, content in locks
         if source_path not in changed_paths
     ]
-    vcs_by_repository = {
-        str(dependency["repository"]).casefold(): dependency
+    vcs_dependencies = [
+        dependency
         for dependency in vcs_manifest
         if dependency.get("source") not in changed_paths
-    }
+    ]
+    vcs_commits: dict[str, str] = {}
+    for dependency in vcs_dependencies:
+        repository_key = str(dependency["repository"]).casefold()
+        commit = str(dependency["commit"])
+        previous_commit = vcs_commits.get(repository_key)
+        if previous_commit is not None and previous_commit != commit:
+            raise RuntimeError(
+                "Python uv locks pin one VCS repository to conflicting commits"
+            )
+        vcs_commits[repository_key] = commit
     for lock_path in sorted(changed_paths & head_paths):
         exported = _export_uv_lock(repo_root, head_sha, lock_path)
         if exported is None:
             continue
-        registry_content, vcs_dependencies = exported
+        registry_content, exported_vcs_dependencies = exported
         if registry_content:
             locks.append((lock_path, registry_content))
-        for dependency in vcs_dependencies:
+        for dependency in exported_vcs_dependencies:
             dependency = {**dependency, "source": lock_path}
             repository_key = dependency["repository"].casefold()
-            previous = vcs_by_repository.get(repository_key)
-            if previous is not None and previous["commit"] != dependency["commit"]:
+            previous_commit = vcs_commits.get(repository_key)
+            if previous_commit is not None and previous_commit != dependency["commit"]:
                 raise RuntimeError(
                     "Python uv locks pin one VCS repository to conflicting commits"
                 )
-            vcs_by_repository[repository_key] = dependency
+            vcs_commits[repository_key] = dependency["commit"]
+            vcs_dependencies.append(dependency)
     return sorted(locks, key=lambda item: item[0]), sorted(
-        vcs_by_repository.values(),
-        key=lambda dependency: dependency["repository"].casefold(),
+        vcs_dependencies,
+        key=lambda dependency: (
+            dependency["repository"].casefold(),
+            dependency.get("source", ""),
+            dependency.get("package", "").casefold(),
+            dependency.get("import_name", "").casefold(),
+        ),
     )
 
 

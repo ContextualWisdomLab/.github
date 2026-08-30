@@ -149,6 +149,37 @@ def test_uv_export_rejects_conflicting_commits_for_one_repository() -> None:
         )
 
 
+def test_uv_export_preserves_distinct_owners_from_one_repository_revision() -> None:
+    """Distinct package owners sharing one immutable repository remain auditable."""
+    commit = "a" * 40
+
+    registry, vcs_sources = materializer._partition_uv_export(
+        (
+            "first-owner @ git+https://github.com/ContextualWisdomLab/demo.git@"
+            + commit
+            + "\nsecond-owner @ git+https://github.com/ContextualWisdomLab/Demo.git@"
+            + commit
+            + "\n"
+        ).encode()
+    )
+
+    assert registry == b""
+    assert vcs_sources == [
+        {
+            "package": "first-owner",
+            "import_name": "first_owner",
+            "repository": "demo",
+            "commit": commit,
+        },
+        {
+            "package": "second-owner",
+            "import_name": "second_owner",
+            "repository": "Demo",
+            "commit": commit,
+        },
+    ]
+
+
 def test_tracked_pyproject_read_failure_is_not_misclassified_as_orphan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
