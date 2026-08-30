@@ -250,6 +250,10 @@ jobs:
             echo "PR closed; a current-head OpenCode verdict is not required."
             exit 0
           fi
+          if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "PR is a draft; a current-head OpenCode verdict is not required until it is marked ready for review."
+            exit 0
+          fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1

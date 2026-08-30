@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `opencode-review.yml`'s required `opencode-review-target` check
+  (`Fail closed without a current-head OpenCode verdict`) reporting a hard
+  `exit 1` failure on every push to a draft PR, forever, until the PR is
+  marked ready for review. Root cause: `scripts/ci/pr_review_merge_scheduler.py`
+  deliberately never dispatches an OpenCode review request for a draft PR
+  (`if pr.get("isDraft"): return Decision(number, "skip", "draft PR")`), but
+  the required check had no draft handling and unconditionally demanded a
+  current-head verdict on every `opened`/`synchronize`/`reopened` event
+  regardless. Adds a `github.event.pull_request.draft` early-exit mirroring
+  the existing `closed` early-exit in style and placement — the job still
+  always runs and reports a status, it just reports success instead of a
+  false-alarm failure for a state that was never going to get a verdict in
+  the first place. The gate is unchanged once a PR is marked ready for
+  review (`ready_for_review` and subsequent `synchronize` events carry
+  `draft: false`). See `tests/test_opencode_required_verdict_regression.py`
+  for shell-level regression coverage executing the production step body.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

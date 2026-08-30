@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import pytest
 HEAD = "a" * 40
 WORKFLOW = Path(".github/workflows/opencode-review.yml")
 STATUS_HELPER = Path("scripts/ci/opencode_dispatch_status.py")
+STEP_NAME = "Fail closed without a current-head OpenCode verdict"
 
 
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
@@ -106,3 +109,197 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "Review approval remains a separate current-head PR review requirement"
         not in workflow
     )
+
+
+def _extract_run_block(workflow_text: str, step_name: str) -> str:
+    """Return the literal bash text of one workflow step's ``run: |`` block."""
+    lines = workflow_text.splitlines()
+    step_index = next(
+        index for index, line in enumerate(lines) if line.strip() == f"- name: {step_name}"
+    )
+    run_index = next(
+        index
+        for index in range(step_index + 1, len(lines))
+        if lines[index].strip() == "run: |"
+    )
+    run_indent = len(lines[run_index]) - len(lines[run_index].lstrip())
+    block_lines = []
+    for line in lines[run_index + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= run_indent:
+            break
+        block_lines.append(line[run_indent + 2 :] if len(line) >= run_indent + 2 else "")
+    return "\n".join(block_lines) + "\n"
+
+
+def _render_step(script: str, *, event_action: str, draft: str) -> str:
+    """Substitute the two inline ``${{ github.* }}`` expressions GitHub Actions
+    would resolve before invoking bash, so the raw step body becomes directly
+    executable outside of Actions."""
+    rendered = script.replace("${{ github.event.action }}", event_action)
+    rendered = rendered.replace("${{ github.event.pull_request.draft }}", draft)
+    assert "${{" not in rendered, "unresolved GitHub Actions expression remains"
+    return rendered
+
+
+def _write_refusing_gh(bin_dir: Path) -> None:
+    """Install a fake ``gh`` on PATH that fails loudly if it is ever invoked.
+
+    Used to prove an early-exit branch never reaches the Reviews API call.
+    """
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo 'unexpected gh invocation: the early-exit should have short-circuited' >&2\n"
+        "exit 17\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+
+
+def _write_reviews_gh(bin_dir: Path, reviews: list[dict[str, object]]) -> Path:
+    """Install a fake ``gh`` on PATH that serves a fixed Reviews API page."""
+    fake_gh = bin_dir / "gh"
+    fixture = bin_dir / "reviews.json"
+    fixture.write_text(json.dumps(reviews), encoding="utf-8")
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        f"cat {fixture}\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+    return fake_gh
+
+
+def _run_step(
+    tmp_path: Path,
+    *,
+    event_action: str,
+    draft: str,
+    pr_number: str = "",
+    head_sha: str = "",
+    gh_fixture: str = "refuse",
+    reviews: list[dict[str, object]] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the production step body with the given event shape.
+
+    ``gh_fixture`` selects a fake ``gh`` on PATH: ``"refuse"`` fails loudly if
+    invoked (proving an early exit never reaches the Reviews API call), and
+    ``"reviews"`` serves ``reviews`` back from ``gh api``.
+    """
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    script = _render_step(
+        _extract_run_block(workflow, STEP_NAME),
+        event_action=event_action,
+        draft=draft,
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if gh_fixture == "refuse":
+        _write_refusing_gh(bin_dir)
+    else:
+        _write_reviews_gh(bin_dir, reviews or [])
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GH_TOKEN": "fake-token",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "PR_NUMBER": pr_number,
+        "HEAD_SHA": head_sha,
+    }
+    return subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+
+def test_draft_pr_short_circuits_before_the_reviews_api_call(tmp_path: Path) -> None:
+    """A draft PR passes without ever calling the Reviews API.
+
+    The merge scheduler (``scripts/ci/pr_review_merge_scheduler.py``) never
+    dispatches a review request for a draft PR, so this required check must
+    not demand a verdict that was never going to be requested. ``PR_NUMBER``
+    and ``HEAD_SHA`` are deliberately left unset here to prove the draft
+    early-exit runs before the "missing PR number or head SHA" fail-closed
+    check that follows it.
+    """
+    result = _run_step(
+        tmp_path,
+        event_action="synchronize",
+        draft="true",
+        gh_fixture="refuse",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PR is a draft" in result.stdout
+
+
+@pytest.mark.parametrize("event_action", ("opened", "synchronize", "reopened"))
+def test_draft_pr_short_circuits_on_every_non_closed_event_type(
+    tmp_path: Path, event_action: str
+) -> None:
+    """The draft exemption applies uniformly across opened/synchronize/reopened."""
+    result = _run_step(
+        tmp_path,
+        event_action=event_action,
+        draft="true",
+        gh_fixture="refuse",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PR is a draft" in result.stdout
+
+
+def test_ready_for_review_pr_still_requires_a_current_head_verdict(
+    tmp_path: Path,
+) -> None:
+    """Once a PR is not a draft, the real gate still runs unchanged."""
+    result = _run_step(
+        tmp_path,
+        event_action="ready_for_review",
+        draft="false",
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="reviews",
+        reviews=[review(state="APPROVED")],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Current-head OpenCode verdict: APPROVED." in result.stdout
+
+
+def test_non_draft_pr_without_a_verdict_still_fails_closed(tmp_path: Path) -> None:
+    """A non-draft PR with no matching review still fails closed as before."""
+    result = _run_step(
+        tmp_path,
+        event_action="synchronize",
+        draft="false",
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="reviews",
+        reviews=[],
+    )
+    assert result.returncode == 1
+    assert "No APPROVED or CHANGES_REQUESTED from opencode-agent" in result.stdout
+
+
+def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None:
+    """The pre-existing ``closed`` early-exit still takes precedence over draft."""
+    result = _run_step(
+        tmp_path,
+        event_action="closed",
+        draft="true",
+        gh_fixture="refuse",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
+    assert "PR is a draft" not in result.stdout
