@@ -472,7 +472,7 @@ recurrence" section below out of the file entirely; both are restored here.)
   `ORCHESTRATOR_PIN_SHA` default (`b21645116b352967e50fc497b87eb745b9cc8c61`)
   was already 103 commits behind `contextual-orchestrator` `main`. Observed
   directly in hosted `noema-review` job logs (`.github` PR #1421,
-  `ContextualWisdomLab/contextual-orchestrator` PR #857 and others): the
+  `ContextualWisdomLab/contextual-orchestrator#857` and others): the
   vendored sidecar's own preflight against the stale pin fails closed with
   `gateway preflight returned HTTP 502` (and, on a differently-shaped request,
   `request_failed status=413 code=request_too_large`) before the model pool
@@ -517,15 +517,15 @@ recurrence" section below out of the file entirely; both are restored here.)
   test-merge confirmed either a clean merge or a genuinely trivial conflict.
 - **15 PRs refreshed against the new `main`** (all pushed as plain merge
   commits):
-  - Clean merges, no conflicts (5 via `update_pull_request_branch`, GitHub's
+  - Clean merges, no conflicts (6 via `update_pull_request_branch`, GitHub's
     native "merge base into head" API): #1416, #1417, #1418, #1419, plus
     #1276 and #1275 (dependency/security-action version bumps).
   - Trivial conflicts resolved by hand, all confined to the additive
     `## [Unreleased]` list in `CHANGELOG.md` (both sides had independently
     appended unrelated bullets to the same list; resolution kept both):
-    #1411, #1398, #1397, #1348, #790, #821.
+    #1411, #1398, #1397, #1348, #790, #821, #1391.
     - #1348 additionally collided on Gap ID: its own draft `G-15` entry
-      (queue-hygiene live-ref race, LineageWeave#667) numerically collided
+      (queue-hygiene live-ref race, `ContextualWisdomLab/LineageWeave#667`) numerically collided
       with `main`'s already-merged, unrelated `G-15` (attachment-processing
       boundary). Renumbered the branch's entry to **G-16**; confirmed no
       test or cross-reference in that PR's diff pins the literal string
