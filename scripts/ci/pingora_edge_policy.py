@@ -342,7 +342,13 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
+    raise PolicyError(  # pragma: no cover - unreachable: 31 full pages of 100 always
+        # trip the len(files) > 3_000 raise above during page 31's own iteration
+        # (30 full pages = exactly 3,000, so page 31's first item always pushes
+        # past 3,000) before this loop can exhaust its range; kept as a defensive
+        # invariant in case the page count or per-page size above ever changes.
+        "GitHub changed-file pagination exceeded 3,000 files"
+    )
 
 
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
