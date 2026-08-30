@@ -59,6 +59,25 @@ unmodified):
    that the snake_case rule applies to **new** DB objects only, and that
    wardnet must not be treated as a rename target.
 
+## Follow-up findings (CodeRabbit, PR #1429)
+
+CodeRabbit's automated pass raised two further findings, both verified and
+fixed:
+
+3. **Markdown lint (MD040).** The `/goal` pointer example's fenced code block
+   had no language identifier. Changed the opening fence to ` ```text ` since
+   the block is a command example, not executable code.
+4. **Section 8 read as CI routing policy.** Section 8's quoted text describes
+   `contextual-orchestrator`'s general auto-discovery capability across all
+   five provider secrets — a product-level design principle, not CI routing
+   policy. Read in isolation, an agent could mistake it for license to loosen
+   which pool `OpenCode`/`Noema`/`Strix` route through. Added a note (not
+   inside the quote) stating that pool/credential-scope routing is governed
+   exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`:
+   `OpenCode`/`Noema` → fail-closed `orchestrator/free`; `Strix` →
+   `orchestrator/auto`; private/internal targets require an attested
+   ZDR-only catalog.
+
 ## Audit trail
 
 - `docs/product-goal-directive.md` — the directive itself and the

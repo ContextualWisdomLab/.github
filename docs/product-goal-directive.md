@@ -64,6 +64,8 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 > LLM·오케스트레이션·Embedding LLM이 필요한 테스트는 contextual-orchestrator 기반 OpenCode Agent로 만든다. contextual-orchestrator는 GitHub Secrets의 BYTEZ_API_KEY, NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, OPENROUTER_API_KEY, OPENAI_API_KEY를 모두 써 auto model discovery로 최적 모형을 제공한다. embedding·responses·completions, audio, video, image, ommi-modal 등 가용 모델을 폭넓게 지원한다. 가능하면 반입해 쓰고 발견한 해당 저장소 문제도 함께 수정한다. LLM 사용 소프트웨어와 contextual-orchestrator는 Fugu·Conductor·TRINITY 연구를 근거로 단일 모델 라우팅과 심층 다중 Agent 오케스트레이션 사이의 계산량을 배분한다. 워크플로 단계, 재귀 깊이, 작업 분해, 접근 목록으로 test-time compute를 조절하고 역할별 reasoning effort를 다르게 하며 추론 수준 ablation을 수행한다. 속도는 핵심 고려사항이 아니며 정확성을 우선한다. 중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다. LLM Chat model은 chat completion API와 responses API를 모두 지원하고 json_object와 json_schema를 모두 처리한다. Embedding은 문단·구문·DOM·송수신자 등 의미 단위를 식별해 chunking한다. 본문에 base64 이미지가 있으면 텍스트 인식, 객체 인식, 태그 설명, 이미지 별도 검색 방법을 연구 근거와 함께 DB 설계에 넣고 원래 삽입 위치를 보존해 그림 맥락까지 검색·표현한다. GitHub Actions scheduler는 contextual-orchestrator 기반 OpenCode Agent로 전환한다. COPILOT_GITHUB_TOKEN은 쓰지 않고 기존 리뷰 Agent 키 체계를 유지한다.
 
+**Note (flagged by CodeRabbit on this PR, 2026-08-30):** section 8's quoted text describes `contextual-orchestrator`'s general product capability — broad model/modality support and all-five-secret auto model discovery as a *design principle for the orchestrator itself*. It does not specify, and must not be read as overriding, which pool each CI consumer routes through: that is governed exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and its doctoring records — `OpenCode` and `Noema` use the fail-closed, ZDR-prioritized `orchestrator/free` pool; only `Strix` security analysis uses the provider-diverse `orchestrator/auto` pool; private/internal review targets require an attested ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen any CI consumer's pool or credential scope on the strength of this section's general wording alone.
+
 ## 9. Reference libraries, tool invocations, and ecosystem repositories
 
 > 참고 라이브러리와 호출 @Superpowers @GitHub @Figma @Visualize @Context7 @Product Design @Consensus를 활용한다.
@@ -83,7 +85,7 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 Because `/goal` truncates at 4000 characters, do not paste the sections above into it. Instead use a
 short pointer, e.g. (Korean, ~260 chars, well under the cap):
 
-```
+```text
 /goal ContextualWisdomLab/.github의 docs/product-goal-directive.md 전문을 지침으로 삼아 실행하라. 열린 PR마다 리뷰 확인→수정→Checks 재검증→병합→다음 개발을 중간 보고 없이 반복하고, PR·Issue 소진 후에도 Gap 기반 개발을 계속한다. 이 문서의 9개 절 전체(실행 루프, 동시작업/근본수정, 연구추적성, UX/UI, 아키텍처/DB, 언어/측정, 검증/부하, LLM/오케스트레이션, 참고 라이브러리)를 매 사이클 적용 대상으로 취급하고, 이 문서와 docs/CWL-MASTER-CONTEXT.md §7이 상충하면 상충을 해소하고 두 문서를 함께 갱신하라. 한 시간 간격으로 재예약하라.
 ```
 
