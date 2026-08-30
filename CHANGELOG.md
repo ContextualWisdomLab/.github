@@ -5,6 +5,40 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix 3 more Devin Review findings from a fourth review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), plus two
+  doc/test-staleness cleanups: an escalated attempt's EXCEPTION handler
+  (`_record_provider_exception`) left the base attempt's stale
+  `finish_reason`/`reasoning_without_content` on the row -- the same
+  mixed-attempt-telemetry bug class already fixed for the escalated-empty
+  and escalated-success outcomes, now closed for the escalated-exception
+  outcome too (both fields are cleared, not backfilled, since there is no
+  response object to describe). `_response_has_reasoning_without_content`
+  checked only whether `message.reasoning` was truthy, never whether
+  `message.content` was actually empty/absent -- so a normal, complete
+  answer that also discloses a reasoning trace alongside real content would
+  be wrongly flagged as "starved" (this had gone latent-but-harmless while
+  the predicate was only ever called on already-known-empty responses; the
+  round-3 fix that started calling it on the SUCCESS path exposed the
+  actual bug for the first time). Fixed to require content be genuinely
+  absent, reusing `_chat_response_has_text`'s own definition so the two
+  predicates are provably consistent; same predicate fixed in the sidecar
+  script's mirrored Layer 2 logic. A malformed/unparseable HTTP-200 gateway
+  response body (or a missing response file) hit the bare
+  `except (...): pass` fallback and wrote nothing to the gateway evidence
+  report -- the same evidence-loss pattern as the earlier transport-
+  exhaustion fix, a different trigger -- now records a bounded
+  `gateway_invalid_response` classification via the same atomic-write
+  pattern. Extended the fake-curl harness with `NOFILE:<status>` and
+  malformed-JSON-body plan entries to cover both. Also corrected a stale
+  test docstring (still described the routing probe as proving every route
+  at the real 4096-token budget, no longer true since most routes now prove
+  readiness at the cheaper 16-token base probe) and updated ADR-0005's
+  status from `proposed` to `accepted` with its Consequences section
+  reframed to present tense, now that this PR implements it. 1926 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
 - Fix 2 more Devin Review findings from a third review pass on PR #1452
   (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`,

@@ -275,6 +275,15 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     plus an optional numeric HTTP status, identically regardless of which
     probe attempt (base or escalated) raised it. Mutates ``row`` in place.
 
+    Also clears any ``finish_reason``/``reasoning_without_content`` already
+    on ``row`` from an EARLIER attempt on the same candidate (a no-op for
+    the base probe, which never set them yet, but essential for the
+    escalated probe: an exception here means there is no response object at
+    all for THIS attempt, so the base attempt's stale diagnostic fields must
+    not silently linger and look like they describe the outcome being
+    recorded now -- the same mixed-attempt-telemetry problem already fixed
+    for the escalated-empty and escalated-success outcomes, closed here too).
+
     Args:
         row: The in-progress per-route evidence row to update.
         exc: The exception a probe attempt raised.
@@ -287,6 +296,8 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     http_status = _safe_http_status(exc)
     if http_status is not None:
         row["http_status"] = http_status
+    row.pop("finish_reason", None)
+    row.pop("reasoning_without_content", None)
 
 
 def _response_has_reasoning_without_content(response: object) -> bool:
@@ -300,6 +311,18 @@ def _response_has_reasoning_without_content(response: object) -> bool:
     not verified as uniform across the pool), so ``finish_reason == "length"``
     alone would miss the exact original failure mode this preflight exists to
     diagnose (PR #1436).
+
+    True only when BOTH conditions hold: a populated ``message.reasoning``
+    field, AND ``_chat_response_has_text`` is false for this SAME response.
+    A normal, complete answer that happens to also disclose a reasoning
+    trace alongside real, non-empty content is never "starved" -- checking
+    ``reasoning`` alone, with no check that content is actually
+    absent/empty, would wrongly flag a genuinely healthy response and
+    pollute this preflight's own evidence. Reusing
+    ``_chat_response_has_text``'s existing "empty or missing" definition,
+    rather than duplicating similar-but-subtly-different logic, keeps the
+    two predicates provably consistent: this one can never be true for a
+    response the other already accepts as having usable text.
     """
     if not isinstance(response, dict):
         return False
@@ -310,7 +333,9 @@ def _response_has_reasoning_without_content(response: object) -> bool:
     if not isinstance(first, dict):
         return False
     message = first.get("message")
-    return isinstance(message, dict) and bool(message.get("reasoning"))
+    if not isinstance(message, dict) or not message.get("reasoning"):
+        return False
+    return not _chat_response_has_text(response)
 
 
 def _preflight_review_agents(
@@ -355,11 +380,14 @@ def _preflight_review_agents(
     a bounded ``finish_reason``. Provider response bodies, exception
     messages, URLs, prompts, and credentials are never copied into evidence.
     ``finish_reason`` and ``reasoning_without_content`` are populated on
-    every outcome -- success included, not just failure/escalation, so
-    future tuning has a real "normal" baseline to compare against -- and
-    always describe the same, most recent attempt for a route (the base
-    attempt when only one was made; the escalated attempt when a second was
-    made) -- never a mix of the two attempts' state.
+    every response-bearing outcome -- success included, not just
+    failure/escalation, so future tuning has a real "normal" baseline to
+    compare against -- and always describe the same, most recent attempt for
+    a route (the base attempt when only one was made; the escalated attempt
+    when a second was made) -- never a mix of the two attempts' state. When
+    the escalated attempt raises an exception instead of returning a
+    response, both fields are absent entirely (there is no response to
+    describe) rather than silently retaining the base attempt's values.
 
     Args:
         agents: Selected zero-cost model agents.

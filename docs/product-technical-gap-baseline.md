@@ -1514,6 +1514,43 @@ smaller number without real evidence would itself be exactly the kind of unjusti
 own convergence convention exists to prevent. 1920 tests pass; 100% coverage and 100% docstring coverage
 on `scripts/ci/`.
 
+**A fourth Devin Review pass found 3 more real, fixable issues (all fixed) in narrower spots the prior
+three rounds hadn't covered — the same bug classes recurring, not new ones, a strong convergence
+signal.** An escalated attempt's exception handler (`_record_provider_exception`, shared by both probe
+attempts since the round-3 fix) left the base attempt's stale `finish_reason`/`reasoning_without_content`
+on the row when the ESCALATED attempt raised an exception — the identical mixed-attempt-telemetry bug
+already fixed for the escalated-empty and escalated-success outcomes, just not yet covered for
+escalated-exception. Fixed by clearing (not backfilling) both fields whenever an exception is recorded,
+since there is no response object for that attempt to describe. Separately, and more consequentially:
+`_response_has_reasoning_without_content` checked only whether `message.reasoning` was truthy, never
+whether `message.content` was actually empty or absent — so a normal, complete answer that happens to
+also disclose a reasoning trace alongside real content would be wrongly recorded as "starved." This bug
+existed since the predicate was first written but was latent-and-harmless as long as it was only ever
+called on responses `_chat_response_has_text` had already confirmed were empty; the round-3 fix that
+started calling it on the SUCCESS path too was what first exposed it as an active telemetry-polluting bug
+rather than a theoretical one. Fixed by requiring content be genuinely absent (reusing
+`_chat_response_has_text`'s own definition so the two predicates are provably consistent, never duplicated
+logic that could drift apart), with both a direct unit test of the predicate and an end-to-end test
+proving a healthy reasoning+content response is never flagged; the same predicate bug existed identically
+in the sidecar script's mirrored Layer 2 logic and is fixed there too. Third: a malformed/unparseable
+HTTP-200 gateway response body (or a response file that was never written at all) hit the bare
+`except (OSError, json.JSONDecodeError, IndexError, TypeError): pass` fallback and wrote nothing to the
+gateway evidence report — the same evidence-loss pattern as the earlier transport-exhaustion fix, a
+different trigger this time. Fixed with a bounded `gateway_invalid_response` classification via the same
+atomic-write pattern already used everywhere else; the fake-curl test harness gained a `NOFILE:<status>`
+plan marker and malformed-JSON-body coverage for both triggers.
+
+Two doc/test-staleness items in the same pass: a test's own docstring still described the routing probe
+as proving every route at the real `4096`-token budget, which stopped being true the moment ADR-0005's
+base-probe design landed (most routes now prove readiness at the cheaper `16`-token base probe instead) —
+corrected to describe current reality while leaving the test's own assertion (Layer 2's literal must
+still equal `REVIEW_MAX_OUTPUT_TOKENS`) unchanged, since that part was never wrong. And ADR-0005 itself
+still said `Status: proposed` and described its own design in future tense ("would become," "once it
+lands") even though this very PR now implements it — updated to `accepted` (matching this repo's other
+ADRs' convention) with an explicit note that acceptance is the design decision, not a merge authorization,
+and the Consequences section's tense corrected to describe the shipped behavior. 1926 tests pass; 100%
+coverage and 100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

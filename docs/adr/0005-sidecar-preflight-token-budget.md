@@ -1,6 +1,12 @@
 # ADR-0005: Replace the sidecar's fixed-`max_tokens` gateway checks with diagnostic, bounded-retry readiness
 
-- Status: proposed
+- Status: accepted. Implemented in `ContextualWisdomLab/.github#1452`, stacked on this ADR's own PR
+  (`ContextualWisdomLab/.github#1449`); pending merge of both, governed separately (OpenCode review
+  approval required before merge, per this repo's governance model — this ADR's acceptance does not
+  itself authorize merging either PR). The implementation went through four rounds of Devin Review
+  scrutiny on PR #1452 after this ADR converged, each verified against actual code before fixing; two
+  findings were accepted as known, tracked, non-blocking residual risks rather than fixed
+  (`ContextualWisdomLab/.github#1454`, `#1455` — see Consequences).
 - Date: 2026-08-30
 - Scope: `ContextualWisdomLab/.github` central review pipelines' vendored `contextual-orchestrator`
   sidecar — `scripts/ci/contextual_orchestrator_review_launcher.py`'s existing
@@ -300,28 +306,32 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
 
 ## Consequences
 
-**This ADR is `proposed`; no code has shipped yet. The consequences below describe what the
-implementation is expected to achieve once it lands, verified against this ADR's design — not an
-outcome already observed in production.**
+**Implemented, in `ContextualWisdomLab/.github#1452` (stacked on this ADR's own PR #1449). The
+consequences below describe the shipped behavior, verified against this ADR's design through four
+rounds of Devin Review scrutiny on the implementation PR itself (each finding verified against actual
+code before fixing) — not a hypothetical outcome. Both PRs remain pending merge, governed separately
+(OpenCode review approval required); this ADR's `accepted` status is the design decision, not a merge
+authorization.**
 
-- Once implemented, both preflight layers would become structurally tolerant of an individual attempt
-  being wrong for a fixed token budget, or hanging/failing transiently, which is the actual shape of
-  the problem — while keeping every worst case explicit and bounded rather than open-ended.
-- Layer 1's worst case would grow from ~120s to a computed 160s, still under its existing 180s
-  healthz-readiness ceiling. Layer 2's worst case would grow from a single 120s attempt with no
-  recovery path to up to 360s across bounded retries — small relative to the job's 120-minute ceiling
-  and consistent with this file's own already-stated "accuracy over speed" policy.
-- Keeping Layer 2 (not just Layer 1) would mean the preflight still proves the actual consumer-facing
+- Both preflight layers are now structurally tolerant of an individual attempt being wrong for a fixed
+  token budget, or hanging/failing transiently, which is the actual shape of the problem — while keeping
+  every worst case explicit and bounded rather than open-ended.
+- Layer 1's worst case grew from ~120s to a computed 160s (probing/escalation alone — see the known,
+  tracked gap on discovery's own time below), still under its existing 180s healthz-readiness ceiling.
+  Layer 2's worst case grew from a single 120s attempt with no recovery path to up to 360s across bounded
+  retries — small relative to the job's 120-minute ceiling and consistent with this file's own
+  already-stated "accuracy over speed" policy.
+- Keeping Layer 2 (not just Layer 1) means the preflight still proves the actual consumer-facing
   `orchestrator/free` route works, not only that individual candidates can respond in isolation —
   closing the PR #1433 gap class rather than reopening it. Giving Layer 2 a bounded retry (rather than
-  either a single unconditional attempt or a shortened timeout) is what would actually address the live
+  either a single unconditional attempt or a shortened timeout) is what actually addresses the live
   120s-hang reproduction on this ADR's own PR (job `99253418179`) — a shortened timeout alone would not
   have, and would have regressed the prior, already-evidenced 30s→120s fix in the same file. Whether it
   would have *prevented* that exact reproduction is not claimed with certainty (Layer 2's retry has no
-  verified route-diversity guarantee — see Decision §1); what it would change is that the check no
-  longer fails after one unconditional attempt with zero chance of recovery.
-- A Layer 1 candidate whose escalated probe is rejected outright (rather than merely still empty) would
-  be recorded as not-ready with a distinct, honest reason rather than silently retried indefinitely or
+  verified route-diversity guarantee — see Decision §1); what it changes is that the check no longer
+  fails after one unconditional attempt with zero chance of recovery.
+- A Layer 1 candidate whose escalated probe is rejected outright (rather than merely still empty) is
+  recorded as not-ready with a distinct, honest reason rather than silently retried indefinitely or
   misclassified — a known, accepted, documented residual limitation until
   `ContextualWisdomLab/contextual-orchestrator#927` lands. Layer 2's retry-diversity limitation
   (Decision §1) is accepted the same way, for the same reason: no verified mechanism exists today to
@@ -349,7 +359,7 @@ outcome already observed in production.**
     picking a number from inspection alone (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). Tracked as
     `ContextualWisdomLab/.github#1455`.
 - Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues, and
-  would remain explicitly not closed by this ADR even once the sidecar-side implementation lands.
+  remain explicitly not closed by this ADR now that the sidecar-side implementation has landed.
 - No production routing default changes are proposed; this is scoped to the sidecar's own liveness
   checks.
 - **This is currently active, not theoretical**: the live reproduction in the Evidence trail below is

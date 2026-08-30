@@ -633,8 +633,16 @@ try:
         character.isalnum() or character == "_" for character in finish_reason
     ):
         finish_reason = "unknown"
-    reasoning_without_content = isinstance(message, dict) and bool(message.get("reasoning"))
-    if isinstance(content, str) and content.strip():
+    has_text = isinstance(content, str) and bool(content.strip())
+    # Requires BOTH a populated reasoning field AND no usable content --
+    # never true for a normal, complete answer that also discloses a
+    # reasoning trace alongside real content. Checking `reasoning` alone
+    # (with no check that content is actually absent) would wrongly flag a
+    # genuinely healthy response and pollute this evidence.
+    reasoning_without_content = (
+        isinstance(message, dict) and bool(message.get("reasoning")) and not has_text
+    )
+    if has_text:
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report["gateway"] = {
             "endpoint": "chat/completions",
@@ -664,7 +672,26 @@ try:
     temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.replace(report_path)
 except (OSError, json.JSONDecodeError, IndexError, TypeError):
-    pass
+    # The response file was missing/unreadable, or its body was HTTP 200
+    # but not the parseable JSON structure expected (malformed/truncated) --
+    # a different failure than "valid JSON, empty content" above. Record a
+    # bounded classification before failing closed, using the same
+    # sanitize-then-atomic-replace pattern as every other gateway outcome,
+    # so this exact case does not leave zero evidence trail either. Never
+    # attempts to read or copy the unparseable body itself.
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        report = {}
+    report["gateway"] = {
+        "endpoint": "chat/completions",
+        "status": "rejected",
+        "error_type": "gateway_invalid_response",
+        "attempts": attempts,
+    }
+    temporary = report_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(report_path)
 raise SystemExit(1)
 PY
 then
