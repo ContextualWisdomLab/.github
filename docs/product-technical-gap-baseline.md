@@ -1775,6 +1775,19 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
   없음을 확인). 가장 작은 실질적 슬라이스로 "MIME sniffing + 불일치 시 명시적
   quarantine 상태 + `attachment_uid` 부여 + reparse-intent API"를 특정했으나, 아직 구현하지
   않았다 — 다음 pass 최우선.
+- **추가**: `naruon#1486`에 push한 직후 Devin Review가 새 `calendar_conflict_judgment_service.py`에
+  대해 5건, github-code-quality가 1건을 지적했다(6개 unresolved review thread, PR governance
+  metadata gate 차단). 모두 검증 후 실제로 고쳤다: (1) `apply_correction`이 대상 judgment 행을
+  `SELECT ... FOR UPDATE`로 잠가 동시 정정 경쟁을 막음, (2) `decision_code`를 바꾸는 정정은
+  `reason_code`/`recommended_action`도 함께 교체해(`corrected_by_human_review` + rationale)
+  서로 다른 결정의 필드가 섞인 응답을 방지(원본은 `before_json`에 보존), (3) `list_judgments`에
+  200건 상한 추가, (4) `MAX_EXISTING_COMMITMENTS`를 `services/calendar_conflict_policy.py`의
+  공유 상수로 통합해 `api/calendar_conflicts.py`/`noema_agent.py`가 서로 어긋날 수 없게 함, (5)
+  테스트 파일의 이중 import 스타일 정리. 유일하게 고치지 않은 지적("PostgreSQL persistence
+  remains unverified")은 이 세션에 Postgres 접근이 없어 `test_project_graph_api.py`의 기존
+  Postgres-스킵 스모크 테스트와 동일한 한계임을 코멘트로 남기고 resolve했다. 6개 thread 모두
+  코멘트+resolve 완료. 검증: 신규 테스트 4개 추가, 전체 백엔드 스위트 1825 passed/32 skipped,
+  ruff clean.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
