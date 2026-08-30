@@ -5,26 +5,50 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Correct `docs/product-technical-gap-baseline.md`'s "2026-08-30 post-#1486/#1438 wake" entry (and flag
-  two earlier ones with the same error): Bytez can never populate `orchestrator/free` regardless of its
-  HTTP status (`_parse_bytez` never sets `is_free`), the `request_failed status=413` line is the
-  sidecar's own unconditional self-test rather than a live ZDR-prefetch fallback, and the incident's
-  actual terminating message was `"review sidecar preflight failed"` — a live warm-up-probe rejection,
-  not the `"no eligible models"` path those entries claimed. See `ContextualWisdomLab/contextual-orchestrator#923`
-  and this repo's #1438 for the fix that follows from the corrected diagnosis.
-- Surface the review sidecar's preflight-rejection detail (`error_type`,
-  `http_status` per rejected route) to the CI job's visible console log
-  (`_log_preflight_rejections` in `contextual_orchestrator_review_launcher.py`,
-  new sanitizer allowlist entry), mirroring the existing discovery-error
-  visibility fix. Previously this detail only reached a JSON artifact,
-  making it impossible to tell from CI logs alone whether a fail-closed
-  incident was transient or not. Bumped the sidecar's failure-path stderr
-  tail from a fixed 20 lines to a named `SIDECAR_STDERR_TAIL_LINES=60` so
-  the new diagnostics aren't truncated. Companion to
-  `ContextualWisdomLab/contextual-orchestrator#923`, which fixes the
-  matching discovery-side single-shot-fetch gap; this repo's own
-  completion-warm-up-probe path is deliberately left single-shot (see that
-  PR's description for why).
+- Raise `contextual_orchestrator_review_sidecar.sh`'s
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
+  live "no provider route passed the Strix plain-chat preflight" outage
+  blocking `noema-review`/`opencode-review`/`strix` org-wide to
+  `contextual_orchestrator_review_policy.py`'s family-cap candidate
+  selection deterministically admitting the same 4 alphabetically-first
+  `nvidia_nim`/`nvidia_nim_sub` free-model candidates on every run — 2 of
+  which are confirmed NVIDIA-retired model ids returning HTTP 404 forever —
+  while ~19 other healthy free candidates in the same discovery report
+  never got a chance. See the 2026-08-30 sidecar-preflight gap-baseline
+  entry for the full evidence trail, the exact trade-off reasoned through
+  (not live-verified, since this session lacks provider credentials), and
+  the more complete fix if this proves insufficient.
+- Switch Strix from `orchestrator/auto` to `orchestrator/free`, matching
+  OpenCode and Noema: `strix.yml`'s `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL`
+  default and both model-override allowlists, and
+  `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`, now
+  accept only `orchestrator/free`. This is an explicit, informed owner
+  override of `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  original `orchestrator/auto` decision (see that ADR's 2026-08-30
+  amendment and the matching gap-baseline entry for the full trade-off and
+  evidence trail): Strix no longer has a paid-model fallback and can go
+  fully dark during the class of single-provider-family-collapse incident
+  the original decision was written to survive, until the free-catalog's
+  stale-model and provider-diversity gaps are separately closed.
+- Strengthen `scripts/ci/zdr_policy.py`'s `nvidia_nim`/`nvidia_nim_sub` ZDR
+  attestation with a direct primary-source citation: NVIDIA's own current
+  *NVIDIA API Trial Terms of Service* (v. September 19, 2025), Section
+  3.3(iv), states User Content and Generated Content are collected "to
+  improve NVIDIA products and services, including AI models" — affirmative
+  evidence against zero data retention, not just an absence of attestation.
+  `zero_data_retention` stays `False` as it already was; only the citation
+  and note change. See the 2026-08-30 ZDR/NIM-routing gap-baseline entry for
+  the full architecture review this citation was part of.
+- Correct `docs/product-technical-gap-baseline.md`'s "2026-08-30 post-#1486/#1438 wake" entry: Bytez
+  can never populate `orchestrator/free` regardless of its HTTP status (`_parse_bytez` never sets
+  `is_free`), and the `request_failed status=413` line is the sidecar's own unconditional self-test
+  rather than a live ZDR-prefetch fallback. The incident's actual terminating message
+  (`"review sidecar preflight failed"`, a live warm-up-probe rejection) is the same one the
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` fix above resolves — the two corrections converge on the same
+  real root cause rather than describing two different bugs. Also adds a bounded, one-retry
+  resilience improvement to `contextual-orchestrator`'s provider *discovery* fetch (a different,
+  non-overlapping call site from the family-cap/preflight fix above) in
+  `ContextualWisdomLab/contextual-orchestrator#923`.
 - Refresh `docs/product-technical-gap-baseline.md`'s §5.1 next-increment list,
   which had gone stale: #1297 was already merged, and #1345/#1326 were closed
   unmerged, yet all three were still listed as pending candidates. Replaced
