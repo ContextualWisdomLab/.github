@@ -743,6 +743,25 @@ jobs:
           # The gateway auto pool is provider-diverse. Strix function tools
           # must not send a provider-specific reasoning setting to every route.
           STRIX_REASONING_EFFORT: none
+          # TEMPORARY INCIDENT MITIGATION (2026-08-30): strix hardcodes
+          # ModelSettings(include_usage=True) for every turn
+          # (strix/core/inputs.py make_model_settings(), strix-agent 1.5.3) with
+          # no supported env var/CLI/config knob to disable just that flag while
+          # still streaming. contextual-orchestrator's /v1/chat/completions
+          # unconditionally rejects stream=true + stream_options.include_usage=true
+          # whenever tools are present (server.py, "invalid_stream_options"),
+          # which strix always sends -- so every scan through this gateway fails
+          # closed with a 400, org-wide, since Strix moved onto orchestrator/free
+          # today. LLM_DISABLE_STREAMING is a genuine, documented strix env var
+          # (strix/config/models.py _NonStreamingModel) that makes every turn a
+          # single non-streaming call, so stream_options is never sent and the
+          # gateway's check never fires. This trades away real-time SSE streaming
+          # for a working scan; it is not the fix. Revert this line once the
+          # tracked contextual-orchestrator fix (removing/narrowing the stale
+          # tool-loop stream+include_usage rejection -- the honest usage-reporting
+          # path it guards already works today for non-streaming tool-loop calls)
+          # is merged and deployed. Tracking: #1446.
+          LLM_DISABLE_STREAMING: "true"
           STRIX_LLM_MAX_RETRIES: 1
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60
