@@ -9,6 +9,40 @@ Semantic Versioning where the repository publishes a release.
   cancels superseded runs, and fail closed when any ref cannot be read. This
   prevents a briefly stale pull-request payload from cancelling current-head
   Checks without adding an arbitrary grace period.
+- Raise `contextual_orchestrator_review_sidecar.sh`'s
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
+  live "no provider route passed the Strix plain-chat preflight" outage
+  blocking `noema-review`/`opencode-review`/`strix` org-wide to
+  `contextual_orchestrator_review_policy.py`'s family-cap candidate
+  selection deterministically admitting the same 4 alphabetically-first
+  `nvidia_nim`/`nvidia_nim_sub` free-model candidates on every run — 2 of
+  which are confirmed NVIDIA-retired model ids returning HTTP 404 forever —
+  while ~19 other healthy free candidates in the same discovery report
+  never got a chance. See the 2026-08-30 sidecar-preflight gap-baseline
+  entry for the full evidence trail, the exact trade-off reasoned through
+  (not live-verified, since this session lacks provider credentials), and
+  the more complete fix if this proves insufficient.
+- Switch Strix from `orchestrator/auto` to `orchestrator/free`, matching
+  OpenCode and Noema: `strix.yml`'s `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL`
+  default and both model-override allowlists, and
+  `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`, now
+  accept only `orchestrator/free`. This is an explicit, informed owner
+  override of `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  original `orchestrator/auto` decision (see that ADR's 2026-08-30
+  amendment and the matching gap-baseline entry for the full trade-off and
+  evidence trail): Strix no longer has a paid-model fallback and can go
+  fully dark during the class of single-provider-family-collapse incident
+  the original decision was written to survive, until the free-catalog's
+  stale-model and provider-diversity gaps are separately closed.
+- Strengthen `scripts/ci/zdr_policy.py`'s `nvidia_nim`/`nvidia_nim_sub` ZDR
+  attestation with a direct primary-source citation: NVIDIA's own current
+  *NVIDIA API Trial Terms of Service* (v. September 19, 2025), Section
+  3.3(iv), states User Content and Generated Content are collected "to
+  improve NVIDIA products and services, including AI models" — affirmative
+  evidence against zero data retention, not just an absence of attestation.
+  `zero_data_retention` stays `False` as it already was; only the citation
+  and note change. See the 2026-08-30 ZDR/NIM-routing gap-baseline entry for
+  the full architecture review this citation was part of.
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
