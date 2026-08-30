@@ -25,6 +25,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
+MAX_IMAGE_DECODED_BYTES = MAX_RESPONSE_BYTES
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
@@ -178,7 +179,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
     if suffix != ".png" or len(raw) < 33 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         return False
     offset = 8
-    width = height = bit_depth = color_type = None
+    width = height = bit_depth = color_type = interlace = None
     idat_parts: list[bytes] = []
     saw_idat = False
     finished_idat = False
@@ -189,6 +190,10 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             return False
         chunk_type = raw[offset + 4 : offset + 8]
         chunk_data = raw[offset + 8 : offset + 8 + length]
+        if len(chunk_type) != 4 or any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in chunk_type):
+            return False
+        if chunk_type[0] & 0x20 == 0 and chunk_type not in {b"IHDR", b"IDAT", b"IEND"}:
+            return False
         declared_crc = int.from_bytes(raw[offset + 8 + length : end], "big")
         if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != declared_crc:
             return False
@@ -203,17 +208,12 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             if (
                 width == 0
                 or height == 0
+                or width > MAX_IMAGE_DECODED_BYTES
+                or height > MAX_IMAGE_DECODED_BYTES
                 or compression != 0
                 or filtering != 0
-                or interlace != 0
-                or (color_type, bit_depth)
-                not in {
-                    (0, 1), (0, 2), (0, 4), (0, 8), (0, 16),
-                    (2, 8), (2, 16),
-                    (3, 1), (3, 2), (3, 4), (3, 8),
-                    (4, 8), (4, 16),
-                    (6, 8), (6, 16),
-                }
+                or interlace not in {0, 1}
+                or (color_type, bit_depth) not in {(4, 8), (6, 8)}
             ):
                 return False
         elif chunk_type == b"IDAT":
@@ -227,8 +227,25 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             if length != 0 or not saw_idat or end != len(raw) or width is None or height is None:
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
-            row_bytes = (width * channels * bit_depth + 7) // 8
-            expected_size = height * (row_bytes + 1)
+            passes = [(0, 0, 1, 1)] if interlace == 0 else [
+                (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8),
+                (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
+            ]
+            filter_offsets: list[int] = []
+            expected_size = 0
+            for x_start, y_start, x_step, y_step in passes:
+                pass_width = 0 if width <= x_start else (width - x_start + x_step - 1) // x_step
+                pass_height = 0 if height <= y_start else (height - y_start + y_step - 1) // y_step
+                if not pass_width or not pass_height:
+                    continue
+                row_bytes = (pass_width * channels * bit_depth + 7) // 8
+                filter_offsets.extend(
+                    expected_size + row * (row_bytes + 1)
+                    for row in range(pass_height)
+                )
+                expected_size += pass_height * (row_bytes + 1)
+            if expected_size > MAX_IMAGE_DECODED_BYTES:
+                return False
             try:
                 decoder = zlib.decompressobj()
                 pixels = decoder.decompress(b"".join(idat_parts), expected_size + 1)
@@ -240,7 +257,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 and not decoder.unused_data
                 and not decoder.unconsumed_tail
                 and len(pixels) == expected_size
-                and all(pixels[row * (row_bytes + 1)] <= 4 for row in range(height))
+                and all(pixels[offset] <= 4 for offset in filter_offsets)
             )
         offset = end
     return False

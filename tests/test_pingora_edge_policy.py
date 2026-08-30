@@ -52,6 +52,46 @@ PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
 
+
+def replace_png_ihdr(raw: bytes, **fields: int) -> bytes:
+    """Return *raw* with selected IHDR fields and a matching CRC."""
+
+    image = bytearray(raw)
+    positions = {"width": (16, 20), "height": (20, 24), "bit_depth": (24, 25), "color_type": (25, 26), "interlace": (28, 29)}
+    for name, value in fields.items():
+        start, end = positions[name]
+        image[start:end] = value.to_bytes(end - start, "big")
+    image[29:33] = policy.zlib.crc32(image[12:29]).to_bytes(4, "big")
+    return bytes(image)
+
+
+def insert_png_chunk(raw: bytes, chunk_type: bytes, data: bytes = b"") -> bytes:
+    """Insert one CRC-valid chunk immediately before the first IDAT."""
+
+    idat_offset = raw.index(b"IDAT") - 4
+    chunk = len(data).to_bytes(4, "big") + chunk_type + data
+    chunk += policy.zlib.crc32(chunk_type + data).to_bytes(4, "big")
+    return raw[:idat_offset] + chunk + raw[idat_offset:]
+
+
+def png_chunk(chunk_type: bytes, data: bytes = b"") -> bytes:
+    """Build one CRC-valid PNG chunk."""
+
+    chunk = len(data).to_bytes(4, "big") + chunk_type + data
+    return chunk + policy.zlib.crc32(chunk_type + data).to_bytes(4, "big")
+
+
+def replace_png_chunk(raw: bytes, chunk_type: bytes, data: bytes) -> bytes:
+    """Replace the first named PNG chunk with CRC-valid *data*."""
+
+    type_offset = raw.index(chunk_type, 8)
+    chunk_offset = type_offset - 4
+    old_length = int.from_bytes(raw[chunk_offset:type_offset], "big")
+    old_end = type_offset + 8 + old_length
+    chunk = len(data).to_bytes(4, "big") + chunk_type + data
+    chunk += policy.zlib.crc32(chunk_type + data).to_bytes(4, "big")
+    return raw[:chunk_offset] + chunk + raw[old_end:]
+
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
@@ -177,6 +217,45 @@ def test_documentation_png_validation_rejects_truncated_corrupt_and_invalid_chun
     del empty_idat[45:48]
     empty_idat[45:49] = policy.zlib.crc32(empty_idat[41:45]).to_bytes(4, "big")
     assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(empty_idat))
+
+    assert policy._is_recognized_documentation_image(
+        "docs/acceptance.png", replace_png_ihdr(PNG_BYTES, interlace=1)
+    )
+    assert policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(PNG_BYTES, b"tEXt")
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", replace_png_ihdr(PNG_BYTES, color_type=3)
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(PNG_BYTES, b"ABCD")
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png",
+        replace_png_ihdr(PNG_BYTES, width=policy.MAX_IMAGE_DECODED_BYTES + 1),
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(PNG_BYTES, b"IHDR", PNG_BYTES[16:29])
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(PNG_BYTES, b"AB1D")
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", replace_png_chunk(PNG_BYTES, b"IDAT", b"not-zlib")
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", replace_png_ihdr(PNG_BYTES, width=policy.MAX_IMAGE_DECODED_BYTES)
+    )
+    idat_offset = PNG_BYTES.index(b"IDAT") - 4
+    iend_offset = PNG_BYTES.index(b"IEND") - 4
+    duplicate_idat = PNG_BYTES[idat_offset:iend_offset]
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png",
+        PNG_BYTES[:iend_offset] + png_chunk(b"tEXt") + duplicate_idat + PNG_BYTES[iend_offset:],
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", PNG_BYTES + b"trailing"
+    )
 
 
 def test_evaluate_pull_request_accepts_recognized_documentation_image() -> None:
