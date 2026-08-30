@@ -14,6 +14,21 @@ Semantic Versioning where the repository publishes a release.
   unavailable isolation backend or an invalid readiness URL fails closed
   with a clear diagnostic (exit code 126/125) instead of after services are
   already running.
+- Close four gaps a Devin Review pass found in the same web E2E isolation
+  helper (`scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`):
+  a non-numeric or out-of-range readiness-URL port now raises the same
+  `ValueError` every other readiness check raises, instead of an uncaught
+  `http.client.InvalidURL` escaping past `main`'s exit-125 handling; a `bwrap`
+  binary on `PATH` now passes a bounded capability preflight (proving it can
+  actually create the sandbox's namespaces) before isolation is trusted as
+  available, so a restricted host fails closed with exit 126 instead of a
+  later, confusing readiness/test failure; an executable that cannot be
+  resolved on `PATH` is now a hard `isolated_command` failure rather than a
+  silent fallthrough that ran unwrapped and unvalidated; and the shared
+  workspace copy now rejects (fails the whole copy closed) any symlink whose
+  resolved target lands outside the copied tree, since `copytree(...,
+  symlinks=True)` otherwise preserves an escaping symlink as a live link
+  inside the bind-mounted `/workspace`.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

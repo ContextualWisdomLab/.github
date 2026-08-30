@@ -130,7 +130,10 @@ def _probe_isolation_capability(backend: str) -> None:
     seccomp policy that denies ``unshare``/``clone``) can have a working
     ``bwrap`` binary that still fails on every real invocation. This runs the
     same essential namespace and mount operations ``isolated_command`` relies
-    on against a harmless no-op executable, so that kind of failure is
+    on (new PID namespace, tmpfs root, the standard read-only binds,
+    ``/proc``, ``/dev``, a tmpfs ``/tmp``) against a harmless no-op
+    executable (``true``, resolved on PATH so it lands inside one of the same
+    bind roots rather than assuming a fixed path), so that kind of failure is
     classified as unavailable isolation (exit code 126) instead of surfacing
     later as a confusing service-readiness or test failure.
     """
@@ -141,6 +144,7 @@ def _probe_isolation_capability(backend: str) -> None:
     probe_command = [
         backend,
         "--die-with-parent",
+        "--new-session",
         "--unshare-pid",
         "--tmpfs",
         "/",
@@ -149,6 +153,8 @@ def _probe_isolation_capability(backend: str) -> None:
         "/proc",
         "--dev",
         "/dev",
+        "--tmpfs",
+        "/tmp",
         "--",
         probe_executable,
     ]
@@ -306,7 +312,8 @@ def require_loopback_readiness_url(url: str) -> None:
     poisoned hosts file cannot smuggle a public A/AAAA record through the
     name allowlist. IPv4-mapped IPv6 addresses are unwrapped and re-checked
     so ``::ffff:8.8.8.8`` cannot bypass the loopback rule. A nonnumeric or
-    out-of-range port is rejected here too, so a malformed readiness URL
+    out-of-range port is rejected here too, as the same ``ValueError`` class
+    every other check in this function raises, so a malformed readiness URL
     fails with the documented invalid-readiness diagnostic instead of an
     uncaught exception once an HTTP client actually opens it.
     """

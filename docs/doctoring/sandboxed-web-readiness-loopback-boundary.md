@@ -17,6 +17,16 @@ subdomains, cloud-metadata link-local addresses, missing hosts, and
 userinfo-confused URLs such as `http://user@127.0.0.1/`. A mapped public
 address such as `::ffff:8.8.8.8` cannot pass merely because it is IPv6.
 
+The port is validated too: `urllib.parse.ParseResult.port` is accessed inside
+the same function and any `ValueError` it raises (a non-numeric port such as
+`:abc`, or one out of the 0-65535 range) is re-raised as the same `ValueError`
+class every other check here raises. Before this, a malformed port passed the
+URL parse silently — the port was never read — and only surfaced later as an
+uncaught `http.client.InvalidURL` from the HTTP client itself, a class that is
+neither `ValueError` nor `urllib.error.URLError` and so was not covered by
+`main`'s exit-125 handling. It now fails the same way every other rejection
+in this function does, before any request opens.
+
 The boundary uses the standard library rather than a second address table.
 It therefore follows the runtime's maintained special-purpose definitions and
 keeps one fail-closed validation point before any network request. Do not add
@@ -40,16 +50,19 @@ The regression exercises literal `localhost`, a trailing-dot `localhost.`,
 `127.0.0.1`, another address in `127.0.0.0/8`, IPv6 `::1`, mapped loopback
 `::ffff:127.0.0.1`, an unspecified address, a `.localhost` subdomain, a
 public hostname, the common cloud metadata address, mapped public IPv6,
-userinfo, a missing host, and poisoned localhost resolution (public A,
-mapped public AAAA, empty answers, resolver errors, and non-IP answers).
-The existing no-redirect test continues to prove that an allowed readiness
-endpoint cannot redirect the poller across the boundary.
+userinfo, a missing host, poisoned localhost resolution (public A,
+mapped public AAAA, empty answers, resolver errors, and non-IP answers), and
+a non-numeric or out-of-range port on both the backend and frontend readiness
+URL, checked through both the standalone function and a `main()` run that
+never starts a service. The existing no-redirect test continues to prove that
+an allowed readiness endpoint cannot redirect the poller across the boundary.
 
 ```mermaid
 flowchart TD
   Url["Readiness URL"]
   Scheme{"http or https?"}
   Userinfo{"userinfo present?"}
+  Port{"port numeric and 0-65535?"}
   Host{"loopback IP, or localhost whose every resolved answer is loopback?"}
   Open["Poll with redirects disabled"]
   Reject["Fail closed before any request"]
@@ -58,7 +71,9 @@ flowchart TD
   Scheme -->|"no"| Reject
   Scheme -->|"yes"| Userinfo
   Userinfo -->|"yes"| Reject
-  Userinfo -->|"no"| Host
+  Userinfo -->|"no"| Port
+  Port -->|"no"| Reject
+  Port -->|"yes"| Host
   Host -->|"no"| Reject
   Host -->|"yes"| Open
 ```

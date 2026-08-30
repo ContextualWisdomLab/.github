@@ -325,6 +325,97 @@ def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
     sandboxed_web_e2e.stop_service(exited_service)
 
 
+def test_require_loopback_readiness_url_rejects_malformed_ports():
+    """Non-numeric and out-of-range ports are rejected before any request opens.
+
+    Previously this function never inspected the parsed port at all, so a
+    non-numeric port (e.g. ``:abc``) reached ``urllib``'s HTTP client and
+    raised an uncaught ``http.client.InvalidURL`` — a class that is neither
+    ``ValueError`` nor ``urllib.error.URLError`` and so was not covered by any
+    handler in this module, crashing the script instead of returning exit
+    code 125. Both the non-numeric and the out-of-range cases must now raise
+    the same ``ValueError`` class every other validation in this function
+    raises, on both the backend and the frontend readiness URL.
+    """
+    for host in ("localhost", "127.0.0.1", "[::1]"):
+        with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
+            sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:abc/ready")
+        with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
+            sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:99999/ready")
+        with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
+            sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:-1/ready")
+
+
+def test_main_reports_malformed_backend_port_before_starting_services(monkeypatch, tmp_path, capsys):
+    """A malformed backend readiness port fails closed with exit 125, not a crash."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--backend-ready-url",
+            "http://127.0.0.1:abc/health",
+            "--frontend-ready-url",
+            "http://127.0.0.1:3000/",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert not started
+    assert "invalid readiness URL: URL has a malformed port" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
+
+
+def test_main_reports_malformed_frontend_port_before_starting_services(monkeypatch, tmp_path, capsys):
+    """A malformed frontend readiness port fails closed with exit 125, not a crash."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--backend-ready-url",
+            "http://127.0.0.1:8000/health",
+            "--frontend-ready-url",
+            "http://127.0.0.1:99999/",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert not started
+    assert "invalid readiness URL: URL has a malformed port" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
+
+
 def test_no_redirect_handler_raises_httperror_without_following():
     """Readiness checks must raise HTTPError on redirects to prevent attacker-controlled internal URLs."""
     import urllib.error
@@ -930,7 +1021,7 @@ def test_isolation_backend_fails_closed_without_bwrap(monkeypatch):
 
 
 def test_isolation_backend_returns_bwrap_path_on_linux(monkeypatch):
-    """Linux isolation returns the resolved bubblewrap executable."""
+    """Linux isolation returns the resolved bubblewrap executable after a passing preflight."""
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
     monkeypatch.setattr(sandboxed_web_e2e, "_probe_isolation_capability", lambda backend: None)
@@ -997,6 +1088,40 @@ def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _raise)
     with pytest.raises(RuntimeError, match="could not run"):
         sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+
+def test_isolation_backend_preflight_runs_with_no_readiness_urls_configured(monkeypatch, tmp_path, capsys):
+    """A broken bwrap is still caught, and reported as exit code 126, with no readiness URLs at all."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        sandboxed_web_e2e,
+        "_probe_isolation_capability",
+        lambda backend: (_ for _ in ()).throw(RuntimeError("bubblewrap cannot create required namespaces: denied")),
+    )
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert "cannot create required namespaces" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 126
+    assert payload["isolation_backend"] == "unavailable"
 
 
 def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
@@ -1066,7 +1191,12 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
 
 
 def test_isolated_command_rejects_unresolved_executable(monkeypatch, tmp_path):
-    """An executable shutil.which cannot find is rejected, not silently unwrapped."""
+    """A command whose executable cannot be resolved on PATH must fail closed.
+
+    Letting an unresolved name fall through to bubblewrap/the shell would run
+    it without ever receiving the read-only-root/bind-mount validation this
+    function exists to apply.
+    """
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"

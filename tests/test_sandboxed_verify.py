@@ -80,6 +80,90 @@ def test_copy_workspace_rejects_missing_repo_root(tmp_path):
         sandboxed_verify.copy_workspace(tmp_path / "missing", tmp_path / "sandbox", [])
 
 
+def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path):
+    """A workspace symlink pointing at a host path outside the copy fails the whole copy closed.
+
+    ``shutil.copytree(..., symlinks=True)`` preserves a symlink's exact target
+    string instead of dereferencing it. Left unchecked, a repository-supplied
+    symlink pointing outside the copied tree would still be a live symlink
+    inside the workspace handed to sandboxed commands, so a command that
+    follows it could read or write host files outside the intended sandbox
+    boundary — defeating the point of the isolation this module provides.
+    Failing the whole copy closed guarantees the resulting tree can never be
+    used to reach outside the sandbox root through that link.
+    """
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(tmp_path):
+    """A relative, ``..``-laden symlink target that exits the copied tree is also rejected."""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sandbox = tmp_path / "sandbox"
+    # Once copied to sandbox/repo/escape-link, two ".." segments reach tmp_path.
+    (repo / "escape-link").symlink_to(Path("../../outside-secret.txt"))
+
+    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+        sandboxed_verify.copy_workspace(repo, sandbox, [])
+
+
+def test_copy_workspace_rejects_directory_symlink_escaping_sandbox_root(tmp_path):
+    """A directory symlink escaping the copy is rejected without recursing into it.
+
+    Descending into an escaping directory symlink to look for further
+    problems would itself be an unbounded walk of host filesystem the sandbox
+    is supposed to keep out of reach; the escaping symlink must be rejected
+    at the point it is found, not traversed.
+    """
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-dir").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
+    """A symlink cycle that cannot be resolved fails closed instead of crashing.
+
+    Resolving a symlink cycle raises ``RuntimeError`` on some Python versions
+    and ``OSError`` (ELOOP) on others; either way it must become the same
+    ``ValueError`` every other escape case in this function raises.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a").symlink_to("b")
+    (repo / "b").symlink_to("a")
+
+    with pytest.raises(ValueError, match="workspace symlink could not be resolved"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_keeps_internal_symlinks_intact(tmp_path):
+    """A symlink whose target stays inside the copied tree is preserved and still resolves."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+    (repo / "link.txt").symlink_to("real.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "link.txt").is_symlink()
+    assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
 def test_timeout_output_text_normalizes_subprocess_payloads():
     """Timeout output normalization handles subprocess bytes and missing streams."""
     assert sandboxed_verify.timeout_output_text(None) == ""

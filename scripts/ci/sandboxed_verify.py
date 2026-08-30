@@ -138,6 +138,37 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
+def _reject_escaping_symlinks(destination: Path) -> None:
+    """Fail closed if any symlink copied into the workspace resolves outside it.
+
+    ``shutil.copytree(..., symlinks=True)`` preserves the exact target string
+    of every symlink instead of dereferencing it, so a repository can carry a
+    symlink whose (possibly absolute, possibly ``..``-laden) target resolves
+    outside the copied tree. A command later run against the copy — under OS
+    sandboxing or, in ``--isolation disabled`` debugging mode, directly on the
+    host — must never be able to follow such a link to read or write a file
+    outside the workspace boundary, defeating the isolation this module
+    exists to provide. Every symlink under ``destination`` is therefore fully
+    resolved and checked against the workspace root before the copy is
+    trusted; the first symlink found to escape aborts the whole copy rather
+    than being silently dropped or repaired, since a repository author who
+    plants one such link cannot be assumed not to have planted others.
+    """
+    root = destination.resolve()
+    for path in destination.rglob("*"):
+        if not path.is_symlink():
+            continue
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            # A symlink cycle (a -> b -> a) raises RuntimeError on some Python
+            # versions and OSError (ELOOP) on others; either way it cannot be
+            # trusted to stay inside the sandbox root.
+            raise ValueError(f"workspace symlink could not be resolved: {path}") from exc
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"workspace symlink escapes the sandbox root: {path} -> {resolved}")
+
+
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
@@ -146,6 +177,7 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     destination = sandbox_root / "repo"
     ignore = shutil.ignore_patterns(*(DEFAULT_IGNORE + tuple(extra_ignores)))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
+    _reject_escaping_symlinks(destination)
     return destination
 
 
