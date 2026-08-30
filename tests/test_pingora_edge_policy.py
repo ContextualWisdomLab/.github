@@ -61,6 +61,7 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
     assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
     assert policy.scan_content("deploy/fixtures/runtime.yaml", sample)
@@ -72,10 +73,72 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     )
 
 
+def test_this_test_files_own_content_is_exempt() -> None:
+    """This file's own fixture strings (denied Nginx forms) must never self-trip.
+
+    Regression coverage for a real required-workflow-bootstrap failure: a
+    diff to this file that happens to add a line matching a CONTENT_RULES
+    pattern (e.g. a new test fixture containing "/etc/nginx/") triggers
+    _needs_content_scan's "nginx" in the patch heuristic, which then scans
+    this file's *entire* current content -- full of intentional denied
+    forms by design -- unless this exact path is self-exempted the same way
+    scripts/ci/pingora_edge_policy.py already is.
+    """
+
+    own_content = Path(__file__).read_text(encoding="utf-8")
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", own_content) == ()
+
+
 def test_nested_documentation_path_allows_prose_samples() -> None:
     """Documentation directories remain exempt when nested below a package."""
 
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
+
+
+def test_needs_content_scan_exempts_documentation_pdfs() -> None:
+    """A cited research-paper PDF under docs/ never reaches content scanning.
+
+    Binary files never carry a GitHub diff `patch`, so without this exemption
+    `_needs_content_scan` falls through to its `not patch_available` branch and
+    always returns True for a PDF -- and any such file over the Contents API's
+    1 MiB base64 ceiling then fails closed in `_load_file_content` for a
+    reason unrelated to the Nginx runtime policy this module enforces (see
+    this org's "attach the relevant paper PDF under docs/papers/" convention).
+    """
+
+    changed = policy.ChangedFile
+    assert not policy._needs_content_scan(
+        changed("docs/papers/helm-holistic-evaluation-2211.09110.pdf", "added", "", patch_available=False)
+    )
+    assert not policy._needs_content_scan(
+        changed("docs/papers/README.md", "modified", "", patch_available=False)
+    )
+    # A PDF outside a recognized documentation directory is not exempted --
+    # only prose/paper locations are trusted to be inert.
+    assert policy._needs_content_scan(
+        changed("scripts/ci/payload.pdf", "added", "", patch_available=False)
+    )
+
+
+def test_needs_content_scan_still_inspects_a_textual_pdf_with_a_patch() -> None:
+    """A '.pdf'-suffixed file GitHub *can* diff is not the binary case exempted.
+
+    GitHub never returns a diff `patch` for a true binary file, so
+    `patch_available=True` here means this file is textual despite its
+    suffix -- exactly the case that could smuggle an active Nginx runtime
+    artifact under a docs/ path if the PDF exemption were suffix-only rather
+    than gated on patch availability.
+    """
+
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(
+        changed(
+            "docs/papers/not-really-a-pdf.pdf",
+            "added",
+            "+load_module modules/ngx_http_nginx_module.so;",
+            patch_available=True,
+        )
+    )
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
@@ -302,6 +365,121 @@ def test_evaluate_pull_request_enforces_cumulative_content_byte_budget(
     assert len(content_calls) == 2
 
 
+def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
+    """A genuinely oversized documentation PDF still cannot be verified by content.
+
+    GitHub's real Contents API response for a file whose blob exceeds the
+    inline-content ceiling reports ``encoding: "none"`` with an accurate
+    ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
+    an oversized declared size) -- this is that real shape, not a synthetic
+    one, per Devin Review's finding that the earlier version of this test
+    used a response shape GitHub never actually returns. This is the one
+    case that still falls back to the path+suffix convention -- the real
+    research-paper-citation use case this whole exemption exists for.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/15/files" in url:
+            return [
+                {"filename": "docs/papers/big-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/big-paper.pdf" in url
+        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=15,
+        head_sha="00" + "c" * 38,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
+    """A patchless '.pdf' file that fetches as real content is still scanned.
+
+    Regression coverage for Devin Review's second finding: a missing diff
+    patch is not proof of binary content by itself (GitHub also omits one
+    for a textual diff over its own rendering limit, well under this
+    module's MAX_FILE_BYTES fetch ceiling), so a file this small must be
+    verified by its real magic bytes, not trusted on patch-absence alone.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/16/files" in url:
+            return [
+                {"filename": "docs/papers/not-really-a-pdf.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/not-really-a-pdf.pdf" in url
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=16,
+        head_sha="00" + "d" * 38,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> None:
+    """A genuine, fetchable PDF (verified by its magic bytes) is exempt too."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/17/files" in url:
+            return [
+                {"filename": "docs/papers/small-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/small-paper.pdf" in url
+        return encoded_file("%PDF-1.7\nupstream nginx { server 127.0.0.1:9; }\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=17,
+        head_sha="00" + "e" * 38,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
+    """A removed documentation PDF has no head content to fetch at all.
+
+    Regression coverage for Devin Review's finding: _is_binary_documentation_pdf
+    does not itself check status, so without an explicit removed-status guard
+    in evaluate_pull_request's own loop, a deleted PDF would try to fetch its
+    (nonexistent) head content and fail evidence collection for every such
+    deletion.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/18/files" in url:
+            return [
+                {"filename": "docs/papers/removed-paper.pdf", "status": "removed"},
+            ]
+        raise AssertionError(f"must not fetch content for a removed file: {url}")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=18,
+        head_sha="00" + "f" * 38,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
     """Closed-event cleanup remains a no-op for the required-workflow context."""
 
@@ -377,6 +555,35 @@ def test_changed_file_pagination_bound_is_fail_closed() -> None:
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 
 
+def test_changed_file_pagination_stops_at_page_31_without_a_page_32_request() -> None:
+    """The page-31 terminal check raises before ever requesting a page 32.
+
+    ``_load_changed_files`` no longer bounds itself with ``for page in
+    range(1, 32)``: it now loops with an explicit ``while True`` and its own
+    ``page == 31 and len(payload) >= 100`` check, fired immediately after
+    fetching each page and before that page's items are appended. This pins
+    that check as live, reachable code -- not dead code needing a coverage
+    pragma -- by asserting the opener is called exactly 31 times (one call
+    per page 1..31) and never for a 32nd page.
+    """
+
+    page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(100)
+    ]
+    calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        calls.append(url)
+        return page
+
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files("api", "a/b", 1, "x", opener)
+
+    assert len(calls) == 31
+    assert calls[-1].endswith("page=31")
+
+
 def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     """Exactly 3,000 changed files are accepted only after an empty next page."""
 
@@ -400,7 +607,14 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     [
         ([], "not an object"),
         ({"type": "symlink", "encoding": "base64", "size": 0, "content": ""}, "not a regular"),
+        ({"type": "file", "encoding": "base64", "size": -1, "content": ""}, "malformed size"),
         ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "size contract"),
+        # GitHub's real response shape for a file whose blob exceeds the
+        # inline-content ceiling: no content at all, encoding "none".
+        ({"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1}, "size contract"),
+        ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
+        ({"type": "file", "encoding": "none", "size": "not-an-int"}, "no inline content"),
+        ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "not a regular base64 file"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
