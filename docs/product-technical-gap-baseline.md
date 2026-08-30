@@ -747,6 +747,51 @@ recurrence" section below out of the file entirely; both are restored here.)
   with this file's existing test pattern for the same module's other
   runtime-only helpers.
 
+## 2026-08-30 orchestrator/free root-cause fix landed; sidecar pin bumped
+
+- Root cause of the "orchestrator/free pool exhausted by upstream ZDR
+  hardening" entry above is now fixed upstream:
+  `ContextualWisdomLab/contextual-orchestrator#919` generalized the
+  ADR-0032 Models.dev cost cross-reference from `opencode_zen`-only to also
+  cover `nvidia_nim`/`nvidia_nim_sub`/`openai`, and — the actual blocker
+  found during that PR's own review — fixed `_fetch_json` sending no
+  `User-Agent` header, which caused `models.dev` (Cloudflare-fronted) to
+  reject every discovery request with HTTP 403 error 1010. That 403 had been
+  silently breaking the Models.dev join for **all** providers, including the
+  pre-existing `opencode_zen` path, since before this incident was first
+  observed; without it, no provider could ever populate `orchestrator/free`
+  regardless of the OpenRouter `evidence_only` hardening this baseline
+  previously identified as the proximate cause.
+- Merged into `contextual-orchestrator` `main` as squash commit
+  `30c6d71680e659f25a0a433d4726ad0d437f9757`, with owner-authorized admin
+  bypass past `opencode-review`/`noema-review`/`strix` — those three required
+  checks run this org's central review pipeline against `.github`'s
+  *current* `main` pin, which (before this PR bump) still pointed at the
+  broken pre-fix commit, so they failed on the exact chicken-and-egg this fix
+  resolves: the PR that restores `orchestrator/free` cannot itself pass a
+  required review that depends on `orchestrator/free`. All 5 review threads
+  (Devin, CodeRabbit) were independently resolved before merge; local suite
+  was 2676 passed.
+- This PR bumps `ORCHESTRATOR_PIN_SHA` from
+  `5f2753ace756ddd81049a5221d55e8977572a416` (the #1422 pin) to
+  `30c6d71680e659f25a0a433d4726ad0d437f9757` in the same three places #1422
+  established as the contract: the sidecar script default
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
+  test's `ORCH_PIN_SHA`
+  (`tests/test_contextual_orchestrator_review_sidecar_contract.py`), and
+  `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
+  reference. `requirements.lock` needs no separate sync for the same reason
+  #1422 recorded — the sidecar installs it fresh from the freshly
+  checked-out pinned commit.
+- Acceptance is open the same way #1422's entry describes: this closes the
+  reproduced root cause (live-verified against the real `models.dev/api.json`
+  endpoint both before the fix, HTTP 403, and after, HTTP 200) and all
+  static contract tests pass, but only a fresh post-merge hosted
+  `noema-review`/`opencode-review` run against this new pin is proof the live
+  gateway path actually discovers a free model and posts a verdict.
+  Following up on that hosted-run confirmation is the concrete next check for
+  this entry, not a new code change.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
