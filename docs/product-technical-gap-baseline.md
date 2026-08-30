@@ -1255,95 +1255,117 @@ direct-NVIDIA-NIM communication is a removal target.
   (already dead) or removing the one resilience mechanism keeping a
   required check alive during a live outage.
 
-## 2026-08-30 pingora_edge_policy.py binary-evidence gap: two competing open fixes
+## 2026-08-30 pingora_edge_policy.py binary-evidence gap: resolved for PDF by #1435
 
-A live failure on `ContextualWisdomLab/contextual-orchestrator#906`'s `required-workflow-bootstrap`
+**Resolved — updated from an earlier "two competing open fixes" framing
+after #1435 merged (squash, `2026-08-30T11:10:11Z`) with a third,
+independent implementation, verified directly against its real diff, not
+assumed from a title.** A live failure on
+`ContextualWisdomLab/contextual-orchestrator#906`'s `required-workflow-bootstrap`
 job (`GitHub content evidence for docs/papers/helm-holistic-evaluation-2211.09110.pdf
-is not a regular base64 file`) traces to `scripts/ci/pingora_edge_policy.py`'s
+is not a regular base64 file`) originally traced to `scripts/ci/pingora_edge_policy.py`'s
 `_load_file_content`: GitHub's Contents API stops returning inline
 `encoding: "base64"` once a file crosses roughly 1 MB (returning
-`encoding: "none"` + a `download_url` instead), and this policy scanner's
-`_needs_content_scan` has no exemption for genuinely binary evidence files in
-general — any added/modified file without a `patch` (i.e. any binary file,
-regardless of size) reaches `_load_file_content`, which always fails once it
-tries `raw.decode("utf-8")`. Two **already-open, independent, partially
-conflicting** PRs address pieces of this:
+`encoding: "none"` instead), and the policy scanner had no exemption for
+genuinely binary evidence files — any binary file without a diff `patch`
+reached `_load_file_content`, which always failed on `raw.decode("utf-8")`.
 
-- **#1420** adds real, structural validation (`_is_recognized_documentation_image`:
-  PNG magic header, chunk order, CRC, zlib-stream, dimension, and scanline
-  checks) so an image *suffix* alone cannot exempt a file — consistent with
-  this policy's own stated principle. Covers `.png` only; does not touch
-  `.pdf`, so it would not by itself fix `ContextualWisdomLab/contextual-orchestrator#906`.
-- **#1427** adds a flat `NON_RUNTIME_BINARY_SUFFIXES` allowlist (`.avif`,
-  `.gif`, `.ico`, `.jpeg`, `.jpg`, `.pdf`, `.png`, `.webp`) that skips
-  content-scanning by **extension alone**, no byte-level verification. This
-  does fix `ContextualWisdomLab/contextual-orchestrator#906`, but for every
-  suffix in that list (not just `.pdf`) it
-  reintroduces the exact "extension alone is not an exception" gap #1420
-  exists to close for PNG — a shell/config file renamed to `evidence.pdf`
-  (or `.png`, `.jpg`, ...) would now bypass the Nginx-runtime-artifact scan
-  entirely.
-- Left substantive comments on both PRs (this pass) recommending #1420's
-  structural-validation pattern be extended to `.pdf` (a bounded magic-
-  header/`%%EOF`-trailer check, short of full parsing) rather than merging
-  #1427's blanket suffix-trust list, and that the two PRs coordinate so the
-  org does not land two divergent implementations of the same policy
-  surface. Not resolved in code this pass. At the time this was written
-  both PRs were also blocked by the sidecar-preflight outage below — see
-  the entry immediately below for confirmation that outage has since
-  cleared, so a genuine re-review of whichever approach the org picks is
-  now possible.
+- **#1435's approach is better than either of the two PRs this entry
+  previously compared** (#1420's PNG-only structural validation; #1427's
+  blanket-suffix-trust list this entry recommended against): it
+  network-verifies the real `%PDF-` magic prefix whenever the file's bytes
+  can actually be fetched (`_pdf_evidence_confirms_binary`,
+  `_load_raw_file_bytes`), so a shell/config file renamed to `.pdf` under a
+  documentation path is still caught and scanned — it does **not** trust
+  the extension alone. It falls back to the path+suffix convention only for
+  the one case that genuinely cannot be verified by content at all: a file
+  whose declared size exceeds the Contents API's fetch ceiling (the exact,
+  real research-paper-citation case this exemption exists for), gated
+  through a new `ContentSizeExceededError` distinct from every other
+  content-evidence failure, which still fails closed exactly as before. New
+  regression coverage in `tests/test_pingora_edge_policy.py` covers the
+  oversized-real-PDF case (using GitHub's actual `encoding: "none"`
+  response shape, not a synthetic one), a disguised textual `.pdf` with a
+  patch still getting scanned, a genuine small PDF verified by magic bytes,
+  and a removed PDF not being fetched at all.
+  `ContextualWisdomLab/contextual-orchestrator#906`'s original failure is
+  fixed by this.
+- **Scope note, not a gap in #1435**: this resolves `.pdf` specifically.
+  #1420 (still open) separately covers `.png` with equivalent
+  content-verified rigor (magic header, chunk/CRC/zlib/scanline checks);
+  #1427 (still open) still proposes the broader, weaker blanket-suffix-trust
+  list (`.avif`/`.gif`/`.ico`/`.jpeg`/`.jpg`/`.png`/`.webp`, extension alone,
+  no verification) for the remaining binary formats. The recommendation
+  from this investigation's earlier pass stands for whichever of those two
+  the org picks next: extend #1435/#1420's verified-content pattern to the
+  remaining formats rather than merging #1427's unverified allowlist as-is.
+  Neither PR is blocking anything today — the specific live failure that
+  motivated this whole entry is closed.
 
-## 2026-08-30 sidecar-preflight outage: confirmed resolved on a live hosted run
+## 2026-08-30 sidecar-preflight outage: family_cap/max_tokens fixes confirmed working end to end, but a separate compatibility gap can still fail Strix
 
-#1434 merged (squash `e36a1f71`) with all three fixes from the entries
-above: the Strix `orchestrator/auto`→`orchestrator/free` switch, the
-`ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent #1436
-merged into `main` mid-pass) the gateway preflight `max_tokens` fix. This
-entry is the requested end-to-end verification that the org-wide outage
-those three fixes targeted is actually closed, not just structurally
-excused.
+**Softened from an earlier "confirmed resolved" framing in this same entry**
+after a second, independently-found, timestamped counter-example — see
+below. #1434 merged (squash `e36a1f71`) with all three fixes from the
+entries above: the Strix `orchestrator/auto`→`orchestrator/free` switch,
+the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
+#1436 merged into `main` mid-pass) the gateway preflight `max_tokens` fix.
 
-- **Verified on `ContextualWisdomLab/contextual-orchestrator#921`** (a PR
-  unrelated to this investigation, picked specifically because it does not
+- **The family_cap/max_tokens fixes are confirmed working end-to-end on at
+  least one real run.** Checked `ContextualWisdomLab/contextual-orchestrator#921`
+  (unrelated to this investigation, picked specifically because it does not
   itself touch review-pipeline files, so it can't hit the same
-  `pull_request_target` self-test trust boundary PR #1434 and #1441 do), on
-  a fresh head (`55832c01...`) pushed well after `main` had all three
-  fixes: `noema-review` — **success**; `strix` — **success**.
-- `noema-review`'s job log confirms this was a real, complete sidecar
-  cycle, not a vacuous pass: `CONTEXTUAL_ORCHESTRATOR_BASE_URL:
-  http://127.0.0.1:18080` was exported to the step environment, which only
-  happens after the sidecar's own preflight found a viable route and the
-  server actually became healthy — the exact stage that failed 100% of the
+  `pull_request_target` self-test trust boundary PR #1434/#1441 do), on a
+  fresh head (`55832c01...`) pushed after `main` had all three fixes:
+  `noema-review` — **success**; `strix` — **success**. `noema-review`'s job
+  log confirms a real, complete sidecar cycle, not a vacuous pass:
+  `CONTEXTUAL_ORCHESTRATOR_BASE_URL: http://127.0.0.1:18080` was exported,
+  which only happens after the sidecar's own preflight found a viable route
+  and the server became healthy — the exact stage that failed 100% of the
   time (three independent reproductions) before these fixes landed.
-  `noema_review_gate.py` then exited via its own separate, expected,
-  unrelated gate ("Current head does not have a primary OpenCode approval;
-  Noema review skipped") — a normal short-circuit, not a masked failure.
-- `opencode-review` still showed `failure` on the same head, but for a
-  different, already-understood, benign reason unrelated to the sidecar:
-  its job log shows the same `"No APPROVED or CHANGES_REQUESTED from
-  opencode-agent on the current head"` gate this investigation has seen
-  before — this check ran (11:08:08) before the separate, async
-  `opencode-review-dispatch` flow had time to complete and post a verdict
-  for this exact head (confirmed: no `opencode-agent` review exists on the
-  PR at all yet at the time of this check). This is a timing/sequencing
-  gap this org's own scheduler design already re-dispatches for, not a
-  sidecar regression.
-- **Conclusion**: the root cause diagnosed and fixed in this investigation
-  (family-cap-driven deterministic admission of retired/slow candidates,
-  and separately the desynchronized `max_tokens` on the post-`healthz`
-  smoke request) is confirmed closed by a real hosted run, not merely
-  structurally argued. This does not mean the free catalog is now perfect
-  — the two permanently-retired `google/gemma-3-*-it` model ids are still
-  in the pool and will still individually fail when the alphabetical sort
-  reaches them (see the family-cap entry above for the still-open,
-  more-complete live-catalog-freshness fix) — only that with 8 candidates
-  instead of 4, enough of the other ~19 free `nvidia_nim`/`nvidia_nim_sub`
-  models are now reached to find a working route. If a future hosted run
-  shows `noema-review`/`opencode-review`/`strix` failing again with the
-  `"no provider route passed"` signature, that is the signal the
-  live-catalog-freshness fix is now the priority, not a further family_cap
-  increase.
+  `opencode-review` failed on the same head, but for an already-understood,
+  benign, unrelated timing gap (it ran before the async
+  `opencode-review-dispatch` flow had posted a verdict for that exact
+  head).
+- **A further, distinct compatibility gap can still cause Strix failures
+  depending on which provider gets selected — not yet fixed.** A `strix`
+  run on `.github`'s own `main` (job `99247611184`, completed
+  `2026-08-30T11:16:17Z`) failed independently, verified directly from its
+  job log rather than assumed: Strix's OpenAI Agents SDK client sends
+  `stream_options.include_usage=true` together with `tools`/
+  `response_format` in the same request; whichever `orchestrator/free`
+  candidate this run routed to (log evidence shows an `integrate.
+  api.nvidia.com` DNS resolution around the same window, consistent with an
+  `nvidia_nim` route) rejected that exact combination —
+  `openai.BadRequestError: 400 {'code': 'invalid_stream_options', 'message':
+  'stream_options.include_usage=true is not supported with tools or
+  response_format'}` — on all retries (two separate penetration-test
+  attempts, `11:12:34Z` and `11:16:12Z`, both hit the identical error),
+  ending in `STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free
+  exhausted; the gateway owns provider discovery and failover`. This
+  predates PR #1444's original "confirmed resolved" claim (`11:16:17Z` vs.
+  that PR's `11:21:52Z` creation) and is a genuinely separate defect from
+  both fixes above — a request-shape incompatibility between the OpenAI
+  Agents SDK's fixed request parameters and at least one upstream
+  provider's API, not a candidate-selection or token-budget problem.
+  Root-causing this has been delegated to a separate, already-in-flight
+  investigation (contextual-orchestrator agent); not duplicated here.
+- **Accurate combined conclusion**: the family_cap-driven deterministic
+  admission of dead/slow candidates, and separately the desynchronized
+  `max_tokens` on the post-`healthz` smoke request, are fixed and confirmed
+  by a real hosted run — that specific, previously 100%-reproducible
+  failure mode is closed. It is not true that `orchestrator/free` is now
+  reliable in general: with `family_cap=8` giving more provider diversity
+  per run, *which* candidate a given run draws varies, and at least one
+  candidate family has a live, separate, unfixed request-compatibility
+  gap that can still fail Strix (though evidently not every candidate —
+  contextual-orchestrator#921's `strix` run succeeded). Two permanently
+  -retired `google/gemma-3-*-it` model ids are also still admitted into
+  the pool (see the family-cap entry above) and will still individually
+  fail when the alphabetical sort reaches them. None of this changes the
+  scope of what was actually fixed in this pass; it means "the outage is
+  over" would overclaim, while "the two diagnosed root causes are fixed
+  and verified, one further known gap remains open elsewhere" is accurate.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
