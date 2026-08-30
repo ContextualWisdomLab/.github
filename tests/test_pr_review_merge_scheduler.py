@@ -2605,6 +2605,34 @@ def test_missing_independent_approval_blocks_and_disarms_auto_merge():
     assert inspect(armed, merge_mode="direct").action == "disable_auto_merge"
 
 
+def test_outdated_unapproved_branch_disarms_stale_auto_merge_instead_of_updating():
+    """A stale auto-merge request must not survive an unapproved branch update.
+
+    ``autoMergeRequest`` can still be armed from before a new, as-yet-unreviewed
+    push landed (GitHub does not always dismiss stale approvals on push). If the
+    branch is also behind base, silently requesting a branch update while
+    leaving that auto-merge request queued would let GitHub's own native
+    auto-merge complete the merge once the updated head's required checks pass
+    -- without this scheduler ever getting a chance to require a fresh
+    independent approval on the new head. The scheduler must disarm auto-merge
+    instead of preserving it through the branch-update wait path.
+    """
+    outdated_unapproved_armed = make_pr(
+        mergeStateStatus="BEHIND",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": []},
+    )
+
+    decision = inspect(outdated_unapproved_armed)
+
+    assert decision.action == "disable_auto_merge"
+    assert "no live current-head approval" in decision.reason
+    assert "branch is 1 commit(s) behind base" in decision.reason
+    # The prior behavior's literal wording documented the bug: it kept the
+    # stale auto-merge request queued instead of disarming it.
+    assert "remains queued" not in decision.reason
+
+
 def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
     head = "a" * 40
     fallback_review = {
@@ -3008,6 +3036,48 @@ def test_coverage_evidence_state_prefers_newest_rerun():
     )
 
     assert sched.coverage_evidence_state(pr) == "complete"
+
+
+def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run():
+    """A freshly queued rerun with no startedAt outranks an older completed run.
+
+    GitHub's ``CheckRun.startedAt`` is legitimately null while a check is
+    still ``QUEUED``. A newly dispatched coverage-evidence rerun (appearing
+    later in the rollup than the run it replaces) must not lose to that
+    older, already-completed run just because it has not started yet --
+    otherwise the scheduler could authorize a redispatch decision based on a
+    stale conclusion while the real, currently-relevant rerun is still
+    pending.
+    """
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-08-24T01:00:00Z",
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "coverage-evidence",
+                        "status": "QUEUED",
+                        "conclusion": None,
+                        "startedAt": None,
+                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
+                    },
+                ]
+            }
+        }
+    )
+
+    check_runs = sched.latest_check_runs(pr)
+    assert len(check_runs) == 1
+    assert check_runs[0]["status"] == "QUEUED"
+    assert sched.coverage_evidence_state(pr) == "running"
 
 
 def test_coverage_evidence_state_prefers_newest_run_across_workflows():
@@ -5243,13 +5313,16 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
             }
         },
     )
+    disabled.clear()
     blocked_without_opencode_decision = inspect(blocked_failed_behind_auto_without_opencode_approval)
-    assert blocked_without_opencode_decision.action == "update_branch"
-    assert "auto-merge already enabled" in blocked_without_opencode_decision.reason
-    assert "base branch is 2 commit(s) ahead" in blocked_without_opencode_decision.reason
-    assert "existing auto-merge request remains queued" in blocked_without_opencode_decision.reason
-    assert called == [("owner/repo", 1, True)]
+    assert blocked_without_opencode_decision.action == "disable_auto_merge"
+    assert "branch is 2 commit(s) behind base" in blocked_without_opencode_decision.reason
+    assert "GitHub mergeability is BLOCKED" in blocked_without_opencode_decision.reason
+    assert "no live current-head approval" in blocked_without_opencode_decision.reason
+    assert called == []
+    assert disabled == [("owner/repo", 1, True)]
     called.clear()
+    disabled.clear()
     blocked_compare_behind_auto = make_pr(
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",
@@ -5265,12 +5338,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         },
     )
     blocked_compare_behind_decision = inspect(blocked_compare_behind_auto)
-    assert blocked_compare_behind_decision.action == "update_branch"
-    assert "auto-merge already enabled" in blocked_compare_behind_decision.reason
-    assert "base branch is 1 commit(s) ahead" in blocked_compare_behind_decision.reason
-    assert "existing auto-merge request remains queued" in blocked_compare_behind_decision.reason
-    assert called == [("owner/repo", 1, True)]
+    assert blocked_compare_behind_decision.action == "disable_auto_merge"
+    assert "branch is 1 commit(s) behind base" in blocked_compare_behind_decision.reason
+    assert "GitHub mergeability is BLOCKED" in blocked_compare_behind_decision.reason
+    assert "no live current-head approval" in blocked_compare_behind_decision.reason
+    assert called == []
+    assert disabled == [("owner/repo", 1, True)]
     called.clear()
+    disabled.clear()
     diverged_failed_auto = make_pr(
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",
@@ -5288,12 +5363,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         },
     )
     diverged_failed_decision = inspect(diverged_failed_auto)
-    assert diverged_failed_decision.action == "update_branch"
-    assert "auto-merge already enabled" in diverged_failed_decision.reason
-    assert "base branch is 184 commit(s) ahead" in diverged_failed_decision.reason
-    assert "existing auto-merge request remains queued" in diverged_failed_decision.reason
-    assert called == [("owner/repo", 1, True)]
+    assert diverged_failed_decision.action == "disable_auto_merge"
+    assert "branch is 184 commit(s) behind base" in diverged_failed_decision.reason
+    assert "GitHub mergeability is BLOCKED" in diverged_failed_decision.reason
+    assert "no live current-head approval" in diverged_failed_decision.reason
+    assert called == []
+    assert disabled == [("owner/repo", 1, True)]
     called.clear()
+    disabled.clear()
     unknown_compare_behind_auto = make_pr(
         mergeStateStatus="UNKNOWN",
         restMergeableState="UNKNOWN",
@@ -5309,29 +5386,38 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         },
     )
     unknown_compare_behind_decision = inspect(unknown_compare_behind_auto)
-    assert unknown_compare_behind_decision.action == "update_branch"
-    assert "auto-merge already enabled" in unknown_compare_behind_decision.reason
-    assert "base branch is 1 commit(s) ahead" in unknown_compare_behind_decision.reason
+    assert unknown_compare_behind_decision.action == "disable_auto_merge"
+    assert "branch is 1 commit(s) behind base" in unknown_compare_behind_decision.reason
     assert "GitHub mergeability is UNKNOWN" in unknown_compare_behind_decision.reason
-    assert "existing auto-merge request remains queued" in unknown_compare_behind_decision.reason
-    assert called == [("owner/repo", 1, True)]
+    assert "no live current-head approval" in unknown_compare_behind_decision.reason
+    assert called == []
+    assert disabled == [("owner/repo", 1, True)]
     called.clear()
     disabled.clear()
-    assert (
-        inspect(blocked_failed_behind_auto_without_opencode_approval, update_branches=False).reason
-        == "auto-merge already enabled; branch update disabled"
+    # An unapproved, outdated PR with auto-merge already armed is disarmed
+    # regardless of the update_branches flag -- disarming a stale
+    # authorization is a safety action, not a branch mutation, so it is not
+    # gated behind the same feature flag that controls branch updates.
+    update_branches_disabled_decision = inspect(
+        blocked_failed_behind_auto_without_opencode_approval, update_branches=False
     )
+    assert update_branches_disabled_decision.action == "disable_auto_merge"
+    assert "branch is 2 commit(s) behind base" in update_branches_disabled_decision.reason
+    assert "no live current-head approval" in update_branches_disabled_decision.reason
     assert called == []
-    assert disabled == []
+    assert disabled == [("owner/repo", 1, True)]
+    disabled.clear()
     behind_auto_without_opencode_approval = make_pr(
         mergeStateStatus="BEHIND",
         autoMergeRequest={"enabledAt": "now"},
     )
     behind_without_opencode_decision = inspect(behind_auto_without_opencode_approval)
-    assert behind_without_opencode_decision.action == "update_branch"
-    assert behind_without_opencode_decision.reason.startswith("auto-merge already enabled; branch update requested")
-    assert "existing auto-merge request remains queued" in behind_without_opencode_decision.reason
-    assert called == [("owner/repo", 1, True)]
+    assert behind_without_opencode_decision.action == "disable_auto_merge"
+    assert "branch is 1 commit(s) behind base" in behind_without_opencode_decision.reason
+    assert "GitHub mergeability is BEHIND" in behind_without_opencode_decision.reason
+    assert "no live current-head approval" in behind_without_opencode_decision.reason
+    assert called == []
+    assert disabled == [("owner/repo", 1, True)]
 
 
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
@@ -6296,6 +6382,8 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
             mergeStateStatus="BLOCKED",
             restMergeableState="BLOCKED",
             compareBehindBy=2,
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
             autoMergeRequest={"enabledAt": "now"},
         ),
         make_pr(
@@ -6303,6 +6391,8 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
             mergeStateStatus="BLOCKED",
             restMergeableState="BLOCKED",
             compareBehindBy=3,
+            reviewDecision="APPROVED",
+            reviews=merge_approved_reviews(),
             autoMergeRequest={"enabledAt": "now"},
         ),
     ]

@@ -1249,6 +1249,20 @@ def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         previous_started_at, previous_index, _ = previous
         if started_at is None and previous_started_at is not None:
+            # A rerun that has not started yet has no startedAt, so it can
+            # never win a chronological comparison against an
+            # already-started predecessor -- even though GitHub only ever
+            # creates it after that predecessor. Fall back to the check
+            # run's own actively-pending status (QUEUED/IN_PROGRESS/etc, the
+            # same predicate ``running_check_state`` uses) as the recency
+            # signal in that case: within one (workflow, name) key, a
+            # currently-pending run always supersedes a predecessor that
+            # already has a result, regardless of timestamps. A node with no
+            # startedAt and no pending status (e.g. cancelled before it
+            # started) carries no such signal and keeps deferring to the
+            # timestamped predecessor.
+            if running_check_state(node) == "running":
+                latest[key] = (started_at, index, node)
             continue
         if previous_started_at is None and started_at is not None:
             latest[key] = (started_at, index, node)
@@ -3170,25 +3184,40 @@ def inspect_pr(
 
     behind_by = branch_outdated_by_base(pr, merge_state)
     if behind_by and (current_head_approved or auto_merge_enabled):
+        if not current_head_approved:
+            # auto_merge_enabled must be True to have reached this branch (the
+            # outer condition requires current_head_approved or
+            # auto_merge_enabled). An outdated branch is routine and does not
+            # by itself justify disarming auto-merge -- but an auto-merge
+            # request armed with no live current-head approval is exactly the
+            # stale authorization this scheduler exists to catch, and simply
+            # requesting a branch update here would leave it queued: once the
+            # updated head's required checks pass, GitHub's own native
+            # auto-merge could merge it without this scheduler ever getting a
+            # chance to require a fresh independent approval on that new
+            # head. Disarm before requesting the update rather than after.
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=(
+                        f"branch is {behind_by} commit(s) behind base (GitHub mergeability is "
+                        f"{merge_state}) with no live current-head approval to authorize "
+                        "auto-merge; obtain fresh independent approval before re-enabling auto-merge"
+                    ),
+                )
+            )
         if not update_branches:
-            if current_head_approved:
-                return decide("wait", "current-head OpenCode review approved; branch update disabled")
-            return decide("wait", "auto-merge already enabled; branch update disabled")
+            return decide("wait", "current-head OpenCode review approved; branch update disabled")
         if not can_update_pr_head(repo, pr):
             return decide("wait", non_mutable_head_reason(repo, pr))
         suffix = "; existing auto-merge request remains queued" if auto_merge_enabled else ""
-        if current_head_approved and merge_state == "BEHIND":
+        if merge_state == "BEHIND":
             freshness_reason = "current-head OpenCode review approved"
-        elif current_head_approved:
-            freshness_reason = (
-                "current-head OpenCode review approved; "
-                f"base branch is {behind_by} commit(s) ahead even though GitHub mergeability is {merge_state}"
-            )
-        elif merge_state == "BEHIND":
-            freshness_reason = "auto-merge already enabled"
         else:
             freshness_reason = (
-                "auto-merge already enabled; "
+                "current-head OpenCode review approved; "
                 f"base branch is {behind_by} commit(s) ahead even though GitHub mergeability is {merge_state}"
             )
         return request_branch_update(freshness_reason, suffix=suffix)
