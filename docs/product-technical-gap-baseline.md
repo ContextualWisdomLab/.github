@@ -455,6 +455,107 @@ flowchart LR
   way this pass found #1417's, and consider merging `main` into #1394's head
   to get it off its stale base.
 
+## 2026-08-30 orchestrator/free pool exhausted by upstream ZDR hardening
+
+- **Root cause (verified by live, end-to-end local reproduction, not log
+  inference).** After #1422 bumped `ORCHESTRATOR_PIN_SHA` to
+  `5f2753ace756ddd81049a5221d55e8977572a416`, the first hosted `noema-review`
+  run on the new pin (`.github` PR #1423, head
+  `954d57b46fd8896ba0fb572a4fc662aa6a684c0a`) failed with `sidecar exited
+  before healthz (status 1); stderr: omitted_unstructured_lines=1` — a new
+  failure signature, distinct from the stale-pin HTTP 502/413 class the
+  2026-08-30 entry above describes. Between the old pin
+  (`b21645116b352967e50fc497b87eb745b9cc8c61`) and the new one, upstream
+  `contextual-orchestrator` commit `952996ec` ("fix(discovery): keep
+  OpenRouter catalog evidence-only") deliberately set
+  `ProviderModelSource(provider_name="openrouter", ...).evidence_only=True`
+  (previously `False`) — an intentional, ZDR-privacy-motivated hardening
+  (OpenRouter routes to many third-party backends with varying retention
+  policies, so it may no longer be used as a *serving* agent, only as a
+  source of per-model ZDR evidence for other providers' matching canonical
+  ids). This is a correct fix on the orchestrator side and must not be
+  reverted or weakened.
+- The org's sidecar (`scripts/ci/contextual_orchestrator_review_launcher.py`)
+  builds the `orchestrator/free` pool only from `is_free=True` routes among
+  the five credentialed providers (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`).
+  `openrouter` was, and had always been, the *only* one of those five whose
+  discovery response carries genuine per-model pricing (`contextual_orchestrator/model_discovery.py`'s `_parse_openai_compatible` reads `row["pricing"]`, present only in OpenRouter's `/v1/models`
+  response shape). NVIDIA NIM, OpenAI, and Bytez publish no pricing via their
+  list-models endpoints at all — confirmed by an unauthenticated live probe
+  of `https://integrate.api.nvidia.com/v1/models` in this session, which
+  returns only `{id, object, created, owned_by}` per model, and by
+  `contextual_orchestrator`'s own `_parse_bytez` docstring ("Bytez prices by
+  GPU-second ... leaving per-1k pricing unset is more honest than a
+  misleading estimate"). `.github`'s own
+  `tests/test_contextual_orchestrator_review_live_discovery_contract.py`
+  already encoded this as `cost_evidence == "unknown"` for openai/nvidia_nim/
+  nvidia_nim_sub/bytez in its live-shape fixture — this was a known,
+  pre-existing structural dependency on OpenRouter for the free pool, not a
+  new assumption. With `openrouter` now `evidence_only`, the launcher's
+  `_routable_discovered_models()` filter drops all 540 OpenRouter rows before
+  the free-pool selection ever runs, so `selected_models` is empty and
+  `main()` raises `SystemExit("review sidecar discovered no eligible models;
+  orchestrator/free would fail closed")` — exit 1, before `serve()`, hence
+  before `/healthz`.
+- **Live reproduction** (this session, real network calls, fake-but-present
+  values for the five secrets, pinned commit `5f2753ac…` installed from its
+  own `requirements.lock`): `discover_all_models()` returned 682 models —
+  `openrouter`: 540 total, 60 genuinely free, but 540/540 `evidence_only`;
+  `nvidia_nim` and `nvidia_nim_sub`: 71 each, 0 free; `openai`/`bytez`:
+  `http_status_401` (fake key, but note neither provider's list endpoint
+  carries pricing regardless of auth outcome). Routable (non-evidence-only)
+  free models: **0**. Running
+  `scripts/ci/contextual_orchestrator_review_launcher.py` directly end-to-end
+  reproduced the exact hosted signature: raw stderr
+  `review sidecar discovered no eligible models; orchestrator/free would
+  fail closed`, exit 1. This is deterministic and structural, not a
+  transient provider/network fluke — every future `noema-review` run with
+  this exact five-secret credential set will fail identically until the free
+  pool gets a real, non-OpenRouter zero-cost source, so this blocks PR review
+  org-wide, not just PR #1423.
+- **Independent bug found and fixed in this pass (safe, no policy
+  tradeoff):** `scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py`'s
+  `_PREFIX_SUMMARIES` allowlist still matched the launcher's *old* wording
+  ("no zero-cost models"), not the current "no eligible models" text, and had
+  no entry at all for the launcher's missing-auth-token or
+  missing-provider-credential `SystemExit` messages. All three fell through
+  to `omitted_unstructured_lines=N`, which is exactly why PR #1423's hosted
+  log showed only `omitted_unstructured_lines=1` instead of the actionable
+  cause above — the redaction was hiding a real, non-secret diagnostic, not
+  protecting a secret. Fixed the three prefixes/summaries and the matching
+  pinned assertions in
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`; full
+  `.github` suite (1875 passed, 1 skipped, 25 subtests), `coverage report`
+  (the changed file itself is 100%; the pre-existing repo-wide 99% is the
+  already-tracked `scripts/ci/pingora_edge_policy.py:274` gap owned by
+  #1398, not introduced here), and `interrogate` (100.0%) all pass on this
+  change alone.
+- **What is intentionally NOT fixed by this pass, and needs a product/human
+  decision, not a unilateral code change:** restoring a non-empty
+  `orchestrator/free` pool. Two candidate paths, neither exercised or
+  authorized here: (a) accept real provider spend by pointing
+  `CONTEXTUAL_ORCHESTRATOR_POOL` at `auto` (already fully implemented in the
+  launcher as a priced fallback) — this trades away the "fail-closed
+  zero-cost" guarantee `docs/CWL-MASTER-CONTEXT.md`/`CLAUDE.md` describe for
+  every PR review org-wide, a budget-owner call; or (b) wire in a genuine
+  zero-cost provider — `contextual_orchestrator`'s `opencode_zen` source
+  already cross-references real Models.dev pricing (not a self-reported
+  flag) to compute `is_free` honestly, and its credential
+  (`OPENCODE_ZEN_API_KEY`) already exists as an org secret (used today only
+  by `opencode-review.yml`'s separate OpenCode Zen GitHub Models config, not
+  passed to this sidecar) — but wiring it in also needs a new
+  `scripts/ci/zdr_policy.py` `PROVIDER_ZDR_SCOPE["opencode_zen"]` attestation
+  entry (that table currently `KeyError`s on an unknown provider name by
+  design, so skipping this would crash every ZDR-required — i.e.
+  private/internal-repo — review instead of just noema-review's current
+  public-repo failure) and live verification, with a real key, that
+  opencode.ai/zen's discovered free models are actually
+  general-chat/tool-call-capable and pass the sidecar's runtime preflight —
+  none of which this pass could validate without provisioning real
+  credentials. Neither option is a small, obviously-safe patch, so it is
+  left open here rather than forced.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
