@@ -8,6 +8,17 @@ Semantic Versioning where the repository publishes a release.
 - Run npm workspace coverage installs from the nearest validated ancestor lock
   while keeping tests scoped to the changed package; regular non-symlink lock
   files remain hash-bounded by the existing materialization manifest.
+- Keep the required OpenCode bootstrap's Pingora policy step unconditional
+  within its pull-request-only workflow, so the static bootstrap contract does
+  not depend on event payload fields. (Ported from #1414, not yet merged, to
+  unblock this PR's own `exact-head-path-policy` check.)
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `b2164511` (103 commits stale) to current `main` `5f2753a`, so the
+  gateway's model-discovery/ZDR/pool-selection fixes landed since the old pin
+  reach `opencode-review`/`noema-review`. The stale pin's discovery logic was
+  failing the sidecar's own preflight with a gateway 502 before any review
+  could post, which is why `opencode-review` and `noema-review` were failing
+  closed on most `contextual-orchestrator` PRs and several `.github` PRs.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.
