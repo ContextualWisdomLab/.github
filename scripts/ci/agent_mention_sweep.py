@@ -32,8 +32,8 @@ REPOSITORY_ROTATION_SECONDS = 5 * 60
 # the sweep exits cleanly and reports what it completed.
 #
 # Returning early only stops NEW work: list_recent_pull_requests' generator
-# cleanup still blocks (executor.shutdown(wait=True)) until every currently
-# RUNNING repository fetch finishes on its own. GitHubClient's rate-limit
+# cleanup (executor.shutdown(wait=False)) returns immediately without waiting
+# for every currently RUNNING repository fetch to finish on its own. GitHubClient's rate-limit
 # retry costs up to ~255s worst case for one repository (six attempts, each
 # up to the 30s subprocess timeout, plus ~75s of backoff between them), and
 # up to max_workers of those can be running concurrently at the moment the
@@ -254,7 +254,7 @@ def list_recent_pull_requests(
         stop_event.set()
         for future in futures:
             future.cancel()
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def list_recent_comments(
@@ -370,8 +370,8 @@ def sweep(
     # matters: it closes this generator, whose `finally` block sets
     # stop_event and cancels every future, so any repository whose fetch
     # had not yet started (queued behind the worker cap) never begins one
-    # more retry-with-backoff cycle. Already-running fetches (up to
-    # max_workers) still run to completion during that cancellation/wait.
+    # more retry-with-backoff cycle. Due to wait=False, the generator does
+    # not block waiting for max_workers running fetches to finish.
     #
     # The initial organization repository listing (list_accessible_
     # repositories, called once at the top of list_recent_pull_requests,

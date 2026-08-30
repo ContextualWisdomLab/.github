@@ -677,3 +677,51 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["lookback_hours"] == 48
     assert captured[0]["max_dispatches"] == 3
     assert captured[0]["dry_run"] is True
+
+def test_list_recent_pull_requests_threadpool_no_hang() -> None:
+    """Test that generator termination does not wait for all futures to complete."""
+    sweep = module()
+
+    class SlowClient:
+        def request(self, args: Sequence[str]) -> list[Any]:
+            import time
+            time.sleep(0.5)
+            if "repos/ContextualWisdomLab/slow-1/pulls" in args:
+                return [{"number": 1, "updated_at": "2099-01-01T00:00:00Z"}]
+            if "repos/ContextualWisdomLab/slow-2/pulls" in args:
+                return [{"number": 2, "updated_at": "2099-01-01T00:00:00Z"}]
+            if "repos/ContextualWisdomLab/slow-3/pulls" in args:
+                return [{"number": 3, "updated_at": "2099-01-01T00:00:00Z"}]
+            return []
+
+    client = SlowClient()
+
+    # We patch list_accessible_repositories to return 3 repos
+    # We use a wrapper function that swaps out the original implementation temporarily
+    original_list_accessible = sweep.list_accessible_repositories
+    sweep.list_accessible_repositories = lambda *args, **kwargs: ["ContextualWisdomLab/slow-1", "ContextualWisdomLab/slow-2", "ContextualWisdomLab/slow-3"]
+
+    try:
+        gen = sweep.list_recent_pull_requests(
+            client,
+            organization="ContextualWisdomLab",
+            repository_source="organization",
+            since="2000-01-01T00:00:00Z",
+        )
+
+        # Pull exactly 1 item, which will cause one future to return and the others to be still sleeping/queued
+        next(gen)
+
+        # Now explicitly close the generator to invoke the finally block
+        # If executor.shutdown(wait=True) was still present, gen.close() would block for 0.5s or more.
+        # With wait=False, it should return instantly.
+        import time
+        start = time.monotonic()
+        gen.close()
+        end = time.monotonic()
+
+        # Using wait=False should make the close take far less than the sleep duration (0.5s).
+        assert end - start < 0.2, "generator.close() hung, likely due to wait=True"
+
+    finally:
+        sweep.list_accessible_repositories = original_list_accessible

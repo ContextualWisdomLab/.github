@@ -51,3 +51,6 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+## 2024-11-23 - 제너레이터 내 ThreadPoolExecutor 종료 지연
+**Learning:** 파이썬 제너레이터(`agent_mention_sweep.py`의 `list_recent_pull_requests`) 내에서 병렬로 `ThreadPoolExecutor`를 사용하여 항목을 yield할 때, `with` 컨텍스트 매니저를 피하고 `finally` 블록에서 수동으로 `executor.shutdown(wait=True)`를 호출하는 것은 제너레이터가 조기 종료되거나 예외가 발생했을 때 파이프라인 전체를 멈추게(Hang) 만듭니다. 이미 대기열에 있거나 실행 중인 작업들을 모두 완료할 때까지 기다리기 때문입니다.
+**Action:** 제너레이터 내에서 수동으로 `ThreadPoolExecutor`를 관리할 때는 항상 `finally` 블록에서 `executor.shutdown(wait=False, cancel_futures=True)`를 호출하여 불필요한 스레드가 제너레이터 종료를 지연시키지 않도록 설정하십시오.
