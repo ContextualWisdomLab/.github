@@ -17,8 +17,10 @@
 - Removed `scripts/ci/select_nvidia_nim_model.py` and `tests/test_select_nvidia_nim_model.py`.
 - `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s `CATALOG_FAMILY_CAP` comment referenced
   this file by path as a worked example of a live-provider-catalog cross-check pattern a future,
-  more complete fix could reuse; updated to point at git history by commit SHA (durable across branch
-  deletion) instead of a path that no longer exists.
+  more complete fix could reuse; updated to point at this PR (`#1442`) instead of a path that no
+  longer exists. A PR reference, not a raw pre-merge commit SHA or the removing branch's name, is
+  used because a squash merge would leave a raw commit unreachable in plain git once the branch is
+  deleted, while the PR and its full commit history stay permanently resolvable on GitHub.
 - `docs/product-technical-gap-baseline.md`'s existing, dated historical entries describing this file
   (from `#1434`'s own investigation) are left as-is per this repo's "append a dated note,
   don't rewrite history" convention; a new §5.1 increment item records the removal itself.
@@ -34,8 +36,8 @@ workflow YAML, no `scripts/ci/*.py`, and no `scripts/ci/*.sh` file referenced it
 production code path referenced it by path. Grepping the whole repository for
 `select_nvidia_nim_model` after this removal returns historical doc mentions, this doctoring record,
 and exactly one intentional code comment (`scripts/ci/contextual_orchestrator_review_sidecar.sh`'s
-`CATALOG_FAMILY_CAP` note, which names the file on purpose as a searchable pointer to a worked
-example still in git history) — no executable reference remains.
+`CATALOG_FAMILY_CAP` note, which names the file on purpose as a searchable pointer to this PR's own
+history, where a worked example of the pattern remains visible) — no executable reference remains.
 
 ## Audit trail
 
