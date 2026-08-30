@@ -172,6 +172,7 @@ def _preflight_review_agents(
         ReviewPreflightError: If no provider route returns usable text.
     """
     def probe_agent(agent: object) -> tuple[object, dict[str, object]]:
+        """Send one bounded preflight probe and return its sanitized row."""
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
