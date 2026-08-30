@@ -5034,6 +5034,8 @@ def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data("password: my secret; keep this") == "password: ***; keep this"
     assert sched.scrub_sensitive_data("api_key='my secret value'") == "api_key=***"
     assert sched.scrub_sensitive_data("api_key : 'mysecret'") == "api_key : ***"
+    assert sched.scrub_sensitive_data("api_key=Bearer secret-value; keep this") == "api_key=***; keep this"
+    assert sched.scrub_sensitive_data("client_secret=token secret-value") == "client_secret=***"
     assert sched.scrub_sensitive_data("No secrets here") == "No secrets here"
     assert sched.scrub_sensitive_data("") == ""
     assert sched.scrub_sensitive_data(None) is None
