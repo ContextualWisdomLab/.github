@@ -767,6 +767,33 @@ def test_parse_args_rejects_empty_commands(option, capsys):
     assert "Traceback" not in captured.err
 
 
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-cmd", "--frontend-cmd", "--e2e-cmd"],
+)
+def test_parse_args_rejects_malformed_command_quoting(option, capsys):
+    """An unmatched quote in a command fails in argument parsing without a traceback."""
+    commands = {"--backend-cmd": "backend", "--frontend-cmd": "frontend", "--e2e-cmd": "e2e"}
+    commands[option] = 'unterminated "quote'
+
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                commands["--backend-cmd"],
+                "--frontend-cmd",
+                commands["--frontend-cmd"],
+                "--e2e-cmd",
+                commands["--e2e-cmd"],
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} is invalid" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_module_main_entrypoint_parse_error(monkeypatch):
     """The module entrypoint reaches main and propagates argument errors."""
     runpy.run_path(str(Path(sandboxed_web_e2e.__file__)), run_name="not_main")

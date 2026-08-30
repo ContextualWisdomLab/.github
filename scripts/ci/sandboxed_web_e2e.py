@@ -131,7 +131,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ("--frontend-cmd", args.frontend_cmd),
         ("--e2e-cmd", args.e2e_cmd),
     ):
-        if not shlex.split(command):
+        try:
+            tokens = shlex.split(command)
+        except ValueError as error:
+            parser.error(f"{option} is invalid: {error}")
+        if not tokens:
             parser.error(f"{option} must not be empty")
     try:
         args.output_limit_bytes = bounded_subprocess.validate_output_limit(
