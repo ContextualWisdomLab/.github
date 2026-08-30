@@ -108,25 +108,21 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
 
 
 def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
-    """Small helper branches handle empty URLs, exited services, and hard cleanup."""
+    """Small helper branches handle empty URLs, loopback readiness, and hard cleanup."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
     assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://localhost./health", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:1/health", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("HTTP://[::ffff:127.0.0.1]:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("https://127.0.0.1:1/", 1, exited_service) is False
     with pytest.raises(ValueError, match=re.escape("URL must start with http:// or https://")):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
-    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: external.example.com")):
-        sandboxed_web_e2e.wait_for_url("http://external.example.com/ready", 1, exited_service)
-    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: app.localhost")):
-        sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
-    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: 169.254.169.254")):
-        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
-    with pytest.raises(ValueError, match=re.escape("URL cannot target external hostname: 0.0.0.0")):
-        sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
 
@@ -242,6 +238,83 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert len(attempts) == 3
     assert sleeps == [1, 1]
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
+
+
+def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
+    """Readiness polling must fail closed on public, metadata, and userinfo targets."""
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited.wait(timeout=5)
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
+
+    with pytest.raises(ValueError, match="URL cannot target external hostname: example\\.com"):
+        sandboxed_web_e2e.wait_for_url("http://example.com/health", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: app\\.localhost"):
+        sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 169\\.254\\.169\\.254"):
+        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 0\\.0\\.0\\.0"):
+        sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: ::"):
+        sandboxed_web_e2e.wait_for_url("http://[::]/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: ::ffff:8\\.8\\.8\\.8"):
+        sandboxed_web_e2e.wait_for_url("http://[::ffff:8.8.8.8]/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot include userinfo"):
+        sandboxed_web_e2e.wait_for_url("http://user@127.0.0.1/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot include userinfo"):
+        sandboxed_web_e2e.wait_for_url("http://:pass@127.0.0.1/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL must include a loopback hostname"):
+        sandboxed_web_e2e.wait_for_url("http:///health", 1, exited_service)
+    sandboxed_web_e2e.stop_service(exited_service)
+
+
+def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
+    """Literal localhost is allowed only when every resolved address is loopback."""
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited.wait(timeout=5)
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("8.8.8.8", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", lambda host, port: [])
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    def _unresolved(host, port):
+        raise socket.gaierror("name not known")
+
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", _unresolved)
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("not-an-ip", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("::ffff:8.8.8.8", 0))],
+    )
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
+        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("::ffff:127.0.0.1", 0))],
+    )
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
+    sandboxed_web_e2e.stop_service(exited_service)
 
 
 def test_no_redirect_handler_raises_httperror_without_following():

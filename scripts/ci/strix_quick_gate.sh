@@ -320,6 +320,31 @@ is_vertex_model() {
 	esac
 }
 
+is_contextual_orchestrator_model() {
+	case "$1" in
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_contextual_orchestrator_api_base() {
+	# The sidecar deliberately binds this fixed process-local origin; accepting
+	# an environment override here would make the gateway trust boundary ambiguous.
+	local contextual_orchestrator_loopback_origin="http://127.0.0.1:18080"
+	case "$1" in
+	"$contextual_orchestrator_loopback_origin" | "$contextual_orchestrator_loopback_origin"/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 is_gemini_model() {
 	case "$1" in
 	gemini/*)
@@ -402,6 +427,18 @@ STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
 if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
 	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
 	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY_FILE="${STRIX_OPENROUTER_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ] && ! STRIX_OPENROUTER_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENROUTER_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENROUTER_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
 fi
 if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
 	exit 2
@@ -2439,7 +2476,10 @@ resolved_llm_api_base_for_model() {
 	fi
 	local api_base_file="${LLM_API_BASE_FILE:-}"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+	if [[ "$model" == openrouter/* ]] && [ -n "${STRIX_OPENROUTER_FALLBACK_API_BASE_FILE:-}" ]; then
+		api_base_file="$STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+	elif is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: openai-direct/* candidates must reach the
 		# direct OpenAI API even when the primary provider selected a
 		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
@@ -2459,6 +2499,10 @@ resolved_llm_api_base_for_model() {
 	fi
 
 	if [ -z "$api_base_file" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require LLM_API_BASE_FILE to select the pinned loopback gateway." >&2
+			return 2
+		fi
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
 			return 2
@@ -2476,13 +2520,23 @@ resolved_llm_api_base_for_model() {
 	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
 	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
 	if [ -z "$llm_api_base_value" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require a non-empty pinned loopback API base." >&2
+			return 2
+		fi
 		return 0
+	fi
+	if is_contextual_orchestrator_model "$model" &&
+		! is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		echo "ERROR: contextual-orchestrator Strix scans require the pinned loopback API base." >&2
+		return 2
 	fi
 	if [[ "$llm_api_base_value" =~ [[:space:][:cntrl:]] ]]; then
 		echo "ERROR: LLM_API_BASE must not contain whitespace or control characters." >&2
 		return 2
 	fi
-	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]]; then
+	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]] &&
+		! { is_contextual_orchestrator_model "$model" && is_contextual_orchestrator_api_base "$llm_api_base_value"; }; then
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
 	fi
@@ -2505,6 +2559,18 @@ resolved_llm_api_base_for_model() {
 child_model_for_api_base() {
 	local model="$1"
 	local llm_api_base_value="$2"
+
+	# LiteLLM requires an explicit provider prefix even when the gateway is an
+	# OpenAI-compatible local endpoint. Strip only the connector-facing alias so
+	# the selected orchestrator/free virtual pool reaches contextual-orchestrator
+	# unchanged.
+	if is_contextual_orchestrator_model "$model" &&
+		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		local contextual_orchestrator_model
+		contextual_orchestrator_model="${model#contextual-orchestrator/}"
+		printf 'openai/%s\n' "$contextual_orchestrator_model"
+		return 0
+	fi
 
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
@@ -2551,6 +2617,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2574,8 +2641,29 @@ run_strix_once() {
 		return 2
 	fi
 	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	# Strix uses function tools. Direct OpenAI chat-completions rejects those
+	# tools when reasoning_effort is non-none, so scope the supported value to
+	# this provider attempt without weakening reasoning on other providers.
+	if is_explicit_openai_model "$model" &&
+		{ [ -z "$llm_api_base_value" ] || [ "${llm_api_base_value%/}" = "https://api.openai.com/v1" ]; }; then
+		child_reasoning_effort="none"
+	fi
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
+	fi
+	# contextual-orchestrator's gateway deliberately rejects any request that
+	# combines stream_options.include_usage=true with tools (a correctness
+	# guarantee against silently-incomplete usage accounting; out of scope to
+	# change here). Strix's agent loop always streams and always sends tools,
+	# so every call through that gateway hits the rejection immediately.
+	# Strix itself ships an opt-in for exactly this: LLM_DISABLE_STREAMING=true
+	# makes each turn a single non-streaming get_response (stream:false on the
+	# wire, so stream_options is never sent) replayed as one terminal stream
+	# event; nothing else about the run loop changes. Scope it narrowly to the
+	# contextual-orchestrator loopback so other providers keep real streaming.
+	local strix_disable_streaming="false"
+	if is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		strix_disable_streaming="true"
 	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
@@ -2593,10 +2681,14 @@ run_strix_once() {
 			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
 			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
 		fi
+		if [[ "$model" == openrouter/* ]] && [ -n "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
+		fi
 	fi
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
+	STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort" \
 	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
@@ -2604,6 +2696,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
+	STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming" \
 python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
@@ -2658,6 +2751,12 @@ child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
     child_env["LLM_API_KEY"] = os.environ["STRIX_CHILD_LLM_API_KEY"]
 child_env["STRIX_REPORTS_DIR"] = os.environ["STRIX_CHILD_REPORTS_DIR"]
+if os.environ.get("STRIX_CHILD_DISABLE_STREAMING", "").strip().lower() == "true":
+    # See the comment above strix_disable_streaming's assignment in bash:
+    # this routes only the contextual-orchestrator gateway through Strix's
+    # own non-streaming fallback so stream_options is never sent alongside
+    # tools, without touching how Strix talks to any other provider.
+    child_env["LLM_DISABLE_STREAMING"] = "true"
 for key, value in os.environ.items():
     if key.startswith("FAKE_STRIX_") and value:
         child_env[key] = value
@@ -2682,6 +2781,8 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+if os.environ.get("STRIX_CHILD_REASONING_EFFORT"):
+    child_env["STRIX_REASONING_EFFORT"] = os.environ["STRIX_CHILD_REASONING_EFFORT"]
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")
 if llm_api_base:
     child_env["LLM_API_BASE"] = llm_api_base
@@ -2890,6 +2991,18 @@ is_llm_service_unavailable_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
 		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
 		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	# OpenRouter's dynamic free route can wrap one upstream 502 over several
+	# terminal lines. Join only the bounded LiteLLM error block so unrelated
+	# target-app output elsewhere in the log cannot assemble a retry signature.
+	if awk '
+		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
+		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG" |
+		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
 		return 0
 	fi
 
@@ -4212,7 +4325,10 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
+			return 1
+		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
@@ -4249,6 +4365,10 @@ run_current_target_scan() {
 
 	if ! is_model_retryable_error "$PRIMARY_MODEL"; then
 		echo "Strix quick scan failed with a non-recoverable error." >&2
+		return 1
+	fi
+	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
 		return 1
 	fi
 
