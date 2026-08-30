@@ -5,6 +5,27 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix 2 more Devin Review findings from a third review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `docs/adr/0005-sidecar-preflight-token-budget.md`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`): an
+  escalated-attempt HTTP rejection (401 auth, 429 throttle, 5xx server error)
+  was unconditionally labeled `escalated_probe_rejected`, wrongly implying
+  every one of those was evidence the token budget specifically was too large
+  -- no status code alone is that evidence, and this codebase deliberately
+  never captures raw provider error text that could validate the distinction.
+  Extracted a shared `_record_provider_exception` helper so the escalated
+  attempt now gets the exact same sanitized exception-type/HTTP-status
+  classification the base probe already used, with parametrized 401/429/5xx
+  test coverage; the ADR's own text (which originally claimed this
+  attribution) is corrected in place. Separately, `finish_reason`/
+  `reasoning_without_content` were only ever populated on failure/escalation
+  outcomes, never on an ordinary successful probe (the most common case) --
+  now populated on every outcome, in both the launcher and the sidecar
+  script's successful-gateway-evidence writer, so future tuning has a real
+  "normal" baseline to compare against. 1920 tests pass; 100% coverage and
+  100% docstring coverage on `scripts/ci/`.
 - Fix 3 more Devin Review findings from a second review pass on PR #1452
   (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`,

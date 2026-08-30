@@ -262,6 +262,33 @@ def _response_finish_reason(response: object) -> str | None:
     return finish_reason
 
 
+def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
+    """Record one sanitized, bounded classification of a provider exception.
+
+    Never overclaims a specific root cause from an HTTP status alone: an
+    auth failure (401), rate limit (429), or server error (5xx) is not
+    evidence of a token-budget problem, and this codebase has no validated
+    signal today (evidence deliberately never carries raw provider error
+    text) that distinguishes a genuinely budget-specific rejection from any
+    other non-2xx response -- so this records the exception's own sanitized
+    type name (or a bounded placeholder when that name is unsafe to log)
+    plus an optional numeric HTTP status, identically regardless of which
+    probe attempt (base or escalated) raised it. Mutates ``row`` in place.
+
+    Args:
+        row: The in-progress per-route evidence row to update.
+        exc: The exception a probe attempt raised.
+    """
+    row["status"] = "rejected"
+    error_type = type(exc).__name__
+    row["error_type"] = (
+        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
+    )
+    http_status = _safe_http_status(exc)
+    if http_status is not None:
+        row["http_status"] = http_status
+
+
 def _response_has_reasoning_without_content(response: object) -> bool:
     """Return whether a response matches the vendored "reasoning, no content" signature.
 
@@ -314,23 +341,25 @@ def _preflight_review_agents(
     non-2xx, or empty content matching neither signature) is not retried: a
     genuinely-down candidate never reaches the escalation path, so it cannot
     produce a false "healthy" read.
-    A non-2xx rejection specifically on the escalated attempt is recorded as
-    ``escalated_probe_rejected`` -- distinguishable evidence the escalated
-    budget itself exceeds that one candidate's real ceiling, genuinely
-    attributable since the candidate object is pinned throughout -- and is
-    not retried further. An escalated-attempt exception with no HTTP status
-    (a transport failure, e.g. a timeout) is never labeled this way: that
-    would falsely attribute a connectivity failure to the token budget, so it
-    instead records the sanitized exception type, same as the base probe.
+    An exception on the escalated attempt (transport failure, auth failure,
+    rate limit, server error, or a genuine budget rejection) is recorded via
+    ``_record_provider_exception`` -- the SAME sanitized classification the
+    base probe uses, regardless of attempt. An HTTP status alone does not
+    distinguish "this candidate's real ceiling is below the escalated
+    budget" from any other cause (401/429/5xx are not budget evidence); this
+    codebase has no validated signal today that does, so it does not invent
+    one via an over-specific label.
 
     The report deliberately records only stable route identity, a bounded
     exception class name, an optional numeric HTTP status, attempt count, and
     a bounded ``finish_reason``. Provider response bodies, exception
     messages, URLs, prompts, and credentials are never copied into evidence.
-    ``finish_reason`` and ``reasoning_without_content`` always describe the
-    same, most recent attempt for a route (the base attempt when only one was
-    made; the escalated attempt when a second was made) -- never a mix of the
-    two attempts' state.
+    ``finish_reason`` and ``reasoning_without_content`` are populated on
+    every outcome -- success included, not just failure/escalation, so
+    future tuning has a real "normal" baseline to compare against -- and
+    always describe the same, most recent attempt for a route (the base
+    attempt when only one was made; the escalated attempt when a second was
+    made) -- never a mix of the two attempts' state.
 
     Args:
         agents: Selected zero-cost model agents.
@@ -370,14 +399,7 @@ def _preflight_review_agents(
         try:
             response = client.proxy_send_once(agent, "chat/completions", base_payload)
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
-            row["status"] = "rejected"
-            error_type = type(exc).__name__
-            row["error_type"] = (
-                error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
-            )
-            http_status = _safe_http_status(exc)
-            if http_status is not None:
-                row["http_status"] = http_status
+            _record_provider_exception(row, exc)
             routes.append(row)
             continue
         if _chat_response_has_text(response):
@@ -396,6 +418,12 @@ def _preflight_review_agents(
             # per-request failover/circuit-breaker, which this preflight
             # does not replace.
             row["status"] = "ready"
+            # Populated on every outcome, including this most-common,
+            # ordinary success path -- not just failure/escalation --  so
+            # future tuning has a real "normal" baseline to compare against,
+            # not just evidence of what went wrong.
+            row["finish_reason"] = _response_finish_reason(response) or "unknown"
+            row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
             routes.append(row)
             viable.append(agent)
             continue
@@ -420,24 +448,14 @@ def _preflight_review_agents(
                 agent, "chat/completions", escalated_payload
             )
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
-            row["status"] = "rejected"
-            http_status = _safe_http_status(exc)
-            if http_status is not None:
-                # Distinguishable evidence the *escalated* budget itself
-                # exceeds this candidate's real ceiling -- genuinely
-                # attributable, since the candidate object is pinned
-                # throughout. A transport failure (no HTTP status) is never
-                # labeled this way; it falls through to the same sanitized
-                # exception-type recording the base probe uses, below.
-                row["error_type"] = "escalated_probe_rejected"
-                row["http_status"] = http_status
-            else:
-                error_type = type(exc).__name__
-                row["error_type"] = (
-                    error_type
-                    if error_type.isidentifier() and len(error_type) <= 64
-                    else "provider_error"
-                )
+            # An HTTP status alone (401 auth, 429 throttle, 5xx server
+            # error, ...) is not evidence the escalated *budget* specifically
+            # caused the rejection -- only that some request failed. Record
+            # the same sanitized classification the base probe uses, rather
+            # than the previous "escalated_probe_rejected" label, which
+            # over-claimed budget-specific attribution this codebase has no
+            # validated signal to actually support.
+            _record_provider_exception(row, exc)
             routes.append(row)
             continue
         if _chat_response_has_text(escalated_response):

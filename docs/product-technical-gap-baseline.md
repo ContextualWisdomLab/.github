@@ -1485,6 +1485,35 @@ needs its own evidence-based design pass (per this org's convergence convention 
 precedent, refinement from telemetry, never from inspection alone) before a specific number or mechanism
 is chosen.
 
+**Decision (same pass): both #1454 and #1455 accepted as known, tracked residual risks — not blocking
+PR #1452.** This design is a genuine, verified improvement over the status quo it replaces (no diagnostic
+retry at all, the 120s-timeout bug reproducing repeatedly); it does not need to close every residual
+failure mode to be worth merging. #1454's risk is partially mitigated today by `TaskOrchestrator`'s
+existing per-request failover/circuit-breaker. #1455's failure mode requires two unlikely conditions to
+coincide in one run (discovery near its own worst case *and* probing separately needing close to its full
+escalation budget) — a tail case, not the common path. Both stay open, decision and reasoning recorded on
+the issues themselves, cross-referenced from the ADR's Consequences section and both source files.
+
+**A third Devin Review pass found 2 more real, fixable issues (both fixed), narrower than the prior two
+rounds — a good convergence signal.** An escalated-attempt HTTP rejection (401 auth, 429 throttle, 5xx
+server error) was unconditionally labeled `escalated_probe_rejected`, over-claiming that any such status
+was evidence the token budget specifically was too large — none of those statuses is budget evidence, and
+this codebase deliberately never captures raw provider error text that could validate the distinction.
+Fixed by extracting a shared `_record_provider_exception` helper so the escalated attempt gets the exact
+same sanitized classification the base probe already used for any exception; the ADR's own text (which
+originated this over-claim) is corrected in place, with parametrized 401/429/5xx/503 test coverage added.
+Separately, `finish_reason`/`reasoning_without_content` were populated only on failure/escalation
+outcomes, never on an ordinary successful probe (the single most common outcome) — despite the entire
+point of adding this telemetry being "future tuning can be evidence-driven." Fixed in both the launcher
+and the sidecar script's successful-gateway-evidence writer, so a real "normal" baseline now exists to
+compare against. Two lower-priority items from the same pass were consciously left as-is: the fake-curl
+test harness doesn't model a real curl partial-write-on-failure edge case (a test-fidelity gap, not a
+production bug); and the attempt-limit guard's 9999 digit-count cap is looser than the design's intended
+single-digit range but not exploitable today (workflows use the default) — tightening it to a specific
+smaller number without real evidence would itself be exactly the kind of unjustified guess this org's
+own convergence convention exists to prevent. 1920 tests pass; 100% coverage and 100% docstring coverage
+on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

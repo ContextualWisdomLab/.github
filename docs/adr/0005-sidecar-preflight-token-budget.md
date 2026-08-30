@@ -207,12 +207,16 @@ revisited then (a natural extension of `ContextualWisdomLab/contextual-orchestra
 does not invent that mechanism speculatively.
 - **Both triggers draw from one small, shared, explicit retry budget per layer** (Decision §3), not
   "one retry per route" unconditionally.
-- **A non-2xx rejection on a Layer 1 escalated (Trigger-B) retry** is distinguishable evidence the
-  *escalated* budget specifically — not the base one — exceeds that one candidate's real ceiling
-  (genuinely attributable, since the candidate is pinned). Recorded as its own outcome,
-  `escalated_probe_rejected`, and that candidate is not retried further this run. The complete fix
-  (knowing each model's real ceiling in advance) is `ContextualWisdomLab/contextual-orchestrator#927`,
-  not this ADR.
+- **A non-2xx rejection on a Layer 1 escalated (Trigger-B) retry** is recorded with the same sanitized
+  exception-type/HTTP-status evidence the base probe uses, and that candidate is not retried further this
+  run — **revised during implementation** (PR #1452, a later Devin Review pass): this ADR originally
+  claimed such a rejection was "distinguishable evidence the escalated budget specifically exceeds that
+  candidate's real ceiling," labeled `escalated_probe_rejected`. That over-claimed attribution — an HTTP
+  status alone (401 auth, 429 throttle, 5xx server error, ...) is not evidence the token budget caused the
+  rejection, only that some request failed, and this codebase deliberately never captures raw provider
+  error text that could validate the distinction. The complete fix (knowing each model's real ceiling in
+  advance, so a genuine budget-ceiling rejection could be told apart from any other) is
+  `ContextualWisdomLab/contextual-orchestrator#927`, not this ADR.
 - **A non-2xx rejection on a Layer 2 Trigger-A retry** is recorded as `gateway_retry_rejected` —
   deliberately **not** named or described as candidate-ceiling evidence, because Layer 2 structurally
   cannot confirm which candidate served the rejected attempt.
@@ -285,8 +289,9 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   loop. Not blocking for §1-3.
 - **Track `ContextualWisdomLab/contextual-orchestrator#927`** (real, separately-provenanced
   `max_output_tokens`/`context_window` fields, fail-closed when unknown) so `max_tokens` selection can
-  eventually be derived from real per-model data, including resolving the `escalated_probe_rejected`
-  case in §1 properly instead of just recording it. Not blocking for §1-3.
+  eventually be derived from real per-model data, including telling a genuine budget-ceiling rejection
+  on an escalated attempt (§1) apart from any other cause with real evidence, instead of the generic,
+  honestly-unattributed classification used today. Not blocking for §1-3.
 - **Explicitly reject** further tuning of one global `max_tokens` constant, or of a single generic
   "retry," as a terminal fix for either layer. Every single-constant value tried so far (16, 4096) has
   failed for a different, evidenced reason tied to pool heterogeneity, and a single undifferentiated
@@ -321,6 +326,28 @@ outcome already observed in production.**
   `ContextualWisdomLab/contextual-orchestrator#927` lands. Layer 2's retry-diversity limitation
   (Decision §1) is accepted the same way, for the same reason: no verified mechanism exists today to
   do better.
+- **Two more known, accepted, documented residual limitations, verified during implementation (PR #1452)
+  and decided not to block it**, for the same reason as the two immediately above — this design is a
+  genuine, verified improvement over the status quo it replaces, and does not need to close every
+  residual failure mode to be worth shipping:
+  - A Layer 1 candidate that succeeds at the cheap `REVIEW_PREFLIGHT_BASE_TOKENS` (`16`) base probe is
+    admitted without ever being confirmed at the real serving budget
+    (`REVIEW_MAX_OUTPUT_TOKENS`, `4096`) — escalation only fires on evidence of *failure*, not to
+    *confirm* success at the real budget, so a candidate whose real ceiling sits strictly between the two
+    could pass here and only fail later, on real review traffic. Mitigated in production (not eliminated)
+    by `TaskOrchestrator`'s existing per-request failover and per-agent circuit breaker. Tracked as
+    `ContextualWisdomLab/.github#1454`.
+  - Layer 1's `160s` worst case (Decision §3) accounts only for probing/escalation, not for
+    `discover_all_models()`'s own sequential network time, which runs first inside the *same* 180s
+    healthz-readiness watchdog — verified against the vendored `contextual_orchestrator.model_discovery`
+    source at up to ~7 sequential HTTP calls, each up to `DISCOVERY_TIMEOUT_SECONDS = 15s` (~105s worst
+    case), for a combined real worst case of up to ~265s. This requires two unlikely conditions to
+    coincide (discovery near its own worst case *and* probing separately needing close to its full
+    escalation budget) to actually exceed the watchdog, making it a tail case rather than the common
+    path; no real timing telemetry exists yet to justify a specific fix (a shared deadline, scaled-down
+    probing, or an evidence-justified watchdog extension), consistent with this ADR's own rejection of
+    picking a number from inspection alone (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). Tracked as
+    `ContextualWisdomLab/.github#1455`.
 - Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues, and
   would remain explicitly not closed by this ADR even once the sidecar-side implementation lands.
 - No production routing default changes are proposed; this is scoped to the sidecar's own liveness

@@ -621,12 +621,27 @@ try:
     first = choices[0] if isinstance(choices, list) and choices else None
     message = first.get("message") if isinstance(first, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
+    # Bounded to a short, stable enum token (never raw provider text), and
+    # computed once so both the success and rejected outcomes below record
+    # the SAME evidence shape -- populated on success too (not just
+    # failure), so future tuning has a real "normal" baseline to compare
+    # against, not just evidence of what went wrong.
+    finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = None
+    elif len(finish_reason) > 32 or not all(
+        character.isalnum() or character == "_" for character in finish_reason
+    ):
+        finish_reason = "unknown"
+    reasoning_without_content = isinstance(message, dict) and bool(message.get("reasoning"))
     if isinstance(content, str) and content.strip():
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report["gateway"] = {
             "endpoint": "chat/completions",
             "status": "ready",
             "attempts": attempts,
+            "finish_reason": finish_reason or "unknown",
+            "reasoning_without_content": reasoning_without_content,
         }
         temporary = report_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -636,14 +651,6 @@ try:
     # comment above the curl loop): record which budget-too-small signature,
     # if any, matched -- for diagnosis only, since this response is a
     # terminal outcome here regardless of which one it is.
-    finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
-    if not isinstance(finish_reason, str) or not finish_reason:
-        finish_reason = None
-    elif len(finish_reason) > 32 or not all(
-        character.isalnum() or character == "_" for character in finish_reason
-    ):
-        finish_reason = "unknown"
-    reasoning_without_content = isinstance(message, dict) and bool(message.get("reasoning"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
     report["gateway"] = {
         "endpoint": "chat/completions",

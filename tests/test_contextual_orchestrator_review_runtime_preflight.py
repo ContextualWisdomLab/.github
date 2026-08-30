@@ -197,6 +197,17 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
     assert report["routes"][1]["error_type"] == "invalid_chat_response"
     assert secret not in repr(report)
 
+    # Regression for Devin Review's successful-probes-omit-diagnostics
+    # finding: the ordinary, most-common outcome (an immediate base-probe
+    # success, no escalation needed) must still populate finish_reason and
+    # reasoning_without_content -- not just failure/escalation outcomes --
+    # so there is a real "normal" baseline to compare future telemetry
+    # against.
+    ready_row = report["routes"][2]
+    assert ready_row["status"] == "ready"
+    assert ready_row["finish_reason"] == "unknown"
+    assert ready_row["reasoning_without_content"] is False
+
     for agent, endpoint, payload in client.calls:
         assert endpoint == "chat/completions"
         assert payload["model"] == agent.model
@@ -505,8 +516,16 @@ def test_gateway_retry_loop_accepts_the_maximum_allowed_attempt_limit(tmp_path: 
 
 
 def test_gateway_retry_loop_succeeds_on_the_first_attempt(tmp_path: Path) -> None:
-    """A clean 200 on the very first curl call needs no retry at all."""
-    success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
+    """A clean 200 on the very first curl call needs no retry at all.
+
+    Also covers Devin Review's successful-probes-omit-diagnostics finding:
+    ``finish_reason``/``reasoning_without_content`` must be populated on
+    success too, not just on rejection -- so a real "normal" response is
+    recorded here, not just left absent.
+    """
+    success_body = json.dumps(
+        {"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}
+    )
     result, report = _run_gateway_retry_loop(
         tmp_path, max_attempts=3, plan=[f"200\n{success_body}"]
     )
@@ -517,6 +536,8 @@ def test_gateway_retry_loop_succeeds_on_the_first_attempt(tmp_path: Path) -> Non
         "endpoint": "chat/completions",
         "status": "ready",
         "attempts": 1,
+        "finish_reason": "stop",
+        "reasoning_without_content": False,
     }
 
 
@@ -527,7 +548,9 @@ def test_gateway_retry_loop_recovers_from_one_transport_failure(tmp_path: Path) 
     (job 99253418179): a curl timeout with no response used to abort the
     sidecar outright with no recovery path at all.
     """
-    success_body = json.dumps({"choices": [{"message": {"content": "OK"}}]})
+    success_body = json.dumps(
+        {"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}
+    )
     result, report = _run_gateway_retry_loop(
         tmp_path, max_attempts=3, plan=["FAIL", f"200\n{success_body}"]
     )
@@ -539,6 +562,8 @@ def test_gateway_retry_loop_recovers_from_one_transport_failure(tmp_path: Path) 
         "endpoint": "chat/completions",
         "status": "ready",
         "attempts": 2,
+        "finish_reason": "stop",
+        "reasoning_without_content": False,
     }
 
 
@@ -779,47 +804,56 @@ def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
     assert len(client.calls) == max_escalations * 2 + 1
 
 
-def test_escalated_probe_rejection_is_recorded_distinctly_and_not_retried() -> None:
-    """A non-2xx rejection specifically on the escalated attempt is
-    distinguishable evidence the escalated budget exceeds that candidate's
-    real ceiling -- recorded as ``escalated_probe_rejected``, not conflated
-    with a generic empty-content rejection, and not retried again.
+@pytest.mark.parametrize(
+    ("http_status", "exception_type_name"),
+    [
+        (401, "_UnauthorizedError"),
+        (429, "_ThrottledError"),
+        (500, "_ServerError"),
+        (503, "_UnavailableError"),
+    ],
+)
+def test_escalated_probe_http_rejection_never_overclaims_budget_attribution(
+    http_status: int, exception_type_name: str
+) -> None:
+    """Regression for Devin Review's HTTP-failures-receive-false-diagnosis
+    finding: an escalated-attempt HTTP rejection previously became the
+    blanket ``escalated_probe_rejected`` label for ANY status code, wrongly
+    implying every one of these (auth failure, rate limit, server error) was
+    evidence the token budget specifically was too large. None of these
+    statuses is budget evidence -- only that some request failed. The
+    escalated attempt now gets the exact same sanitized classification the
+    base probe already uses for any exception, with no special budget-
+    specific label invented from a status code alone.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
 
-    low_ceiling = SimpleNamespace(
+    exception_type = type(exception_type_name, (RuntimeError,), {"code": http_status})
+    flaky = SimpleNamespace(
         id="nvidia_nim_low_ceiling", provider_name="nvidia_nim", model="low/free"
     )
-
-    class _HttpError(RuntimeError):
-        """A synthetic exception carrying an HTTP status, like a real client's."""
-
-        code = 429
-
     client = _SequencedClient(
         [
             {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
-            _HttpError("max_tokens exceeds this model's ceiling"),
+            exception_type("provider rejected the request"),
         ]
     )
 
     with pytest.raises(namespace["ReviewPreflightError"]) as failure:
-        preflight([low_ceiling], client=client)
+        preflight([flaky], client=client)
 
     assert len(client.calls) == 2
     row = failure.value.report["routes"][0]
-    assert row["error_type"] == "escalated_probe_rejected"
-    assert row["http_status"] == 429
+    assert row["error_type"] == exception_type_name
+    assert row["http_status"] == http_status
     assert row["attempts"] == 2
 
 
 def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() -> None:
     """A transport failure (no HTTP status at all) on the escalated attempt
-    must never become ``escalated_probe_rejected`` -- that label is reserved
-    for a genuine provider rejection of the escalated budget specifically.
-    A bare connection timeout is a different root cause and gets the same
-    sanitized exception-type recording the base probe uses.
+    gets the same sanitized exception-type recording the base probe uses --
+    no HTTP status means even less basis for any budget-specific label.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
