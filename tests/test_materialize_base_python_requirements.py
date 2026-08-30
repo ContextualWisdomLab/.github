@@ -326,17 +326,44 @@ def test_materialize_downloads_every_archive_when_no_target_python_is_given(
         ("extra", "3.14", False),
         # python_full_version is patch-sensitive: a major.minor-only target
         # (as the coverage workflow genuinely only ever has) must NOT be
-        # zero-padded into a confident patch value. Every one of these must
-        # fail open (never exclude/skip the download), regardless of operator
-        # or of whether the zero-padded guess would have happened to match.
+        # zero-padded into a confident patch value *when the literal shares
+        # the target's own major.minor series* -- the outcome then genuinely
+        # depends on the interpreter's real, unknown patch digit, so these
+        # must fail open (never exclude/skip the download) regardless of
+        # operator or of whether the zero-padded guess would have happened
+        # to match.
         ("python_full_version == '3.14.0'", "3.14", False),
-        ("python_full_version == '3.9.0'", "3.14", False),
         ("python_full_version != '3.14.0'", "3.14", False),
         ("python_full_version >= '3.14.1'", "3.14", False),
         ("python_full_version > '3.14.0'", "3.14", False),
         ("python_full_version < '3.14.5'", "3.14", False),
+        # But a literal whose major.minor falls OUTSIDE the target's series
+        # is decidable for every possible patch of the target's minor series
+        # -- the major.minor mismatch alone settles it, so these must now
+        # resolve confidently instead of failing open.
+        # Cross-minor equality: 3.14.x is never version 3.9.0.
+        ("python_full_version == '3.9.0'", "3.14", True),
+        # Below the target's entire minor series: 3.14.x is never < 3.0.0.
+        ("python_full_version < '3.0.0'", "3.14", True),
+        # Above the target's entire minor series: 3.14.x is never >= 4.0.0.
+        ("python_full_version >= '4.0.0'", "3.14", True),
+        # A cross-minor literal with the variable on the left of the compare.
+        ("'3.9.0' == python_full_version", "3.14", True),
+        # A literal with fewer components than the target still resolves
+        # confidently once zero-padded, provided the padded major.minor
+        # differs from the target's.
+        ("python_full_version == '3'", "3.14", True),
         (
             "python_full_version >= '3.10.0' and python_full_version < '3.15.0'",
+            "3.14",
+            False,
+        ),
+        # A same-minor-series operand alongside a decidable one: the overall
+        # marker still must not be resolved confidently, because ``and``
+        # cannot decide without the ambiguous operand's true value, and
+        # ``_evaluate_marker_node`` propagates the ambiguity by raising.
+        (
+            "python_full_version >= '3.14.1' and python_full_version < '3.15.0'",
             "3.14",
             False,
         ),

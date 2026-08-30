@@ -950,8 +950,11 @@ _SUPPORTED_MARKER_VARIABLES = frozenset({"python_version", "python_full_version"
 # sensitive): padding "3.14" into "3.14.0" would silently assume the patch
 # component is zero, which is not something the target string actually says.
 # Only variables in this set may have their missing components zero-padded
-# for a comparison; a ``python_full_version`` comparison is only trusted when
-# the target string itself already carries patch precision (3+ components).
+# for a comparison against an equal-or-shorter target; a ``python_full_version``
+# comparison against a major.minor-only target is trusted only when the
+# literal's own major.minor already falls outside the target's series (see
+# ``_python_full_version_comparison_is_ambiguous``) -- otherwise it needs the
+# target string to carry patch precision (3+ components) itself.
 _PATCH_INSENSITIVE_MARKER_VARIABLES = frozenset({"python_version"})
 
 
@@ -988,6 +991,44 @@ def _compare_marker_versions(left: str, operator: type, right: str) -> bool:
     raise _UnsupportedMarkerError("unsupported marker comparison operator")
 
 
+def _python_full_version_comparison_is_ambiguous(
+    target_python_version: str, literal: str
+) -> bool:
+    """Return whether a ``python_full_version`` comparison needs the unknown patch.
+
+    ``target_python_version`` is only known to major.minor precision; the real
+    interpreter's trailing components (patch, and beyond) are genuinely
+    unknown. ``literal`` is a fully specified PEP 440 version constant, so
+    treating any of *its* missing trailing components as zero is exact, not a
+    guess -- that is standard version-comparison normalization, not an
+    assumption about the target.
+
+    Comparing the two, element by element, up to the target's known length:
+    if a real difference already shows up within that shared, fully-known
+    prefix, the comparison is decided right there and no later component --
+    real or unknown -- can change it, because ordinary tuple/lexicographic
+    comparison stops at the first differing position. That covers both kinds
+    of confidently-decidable case: a different minor (``3.9`` vs. ``3.14``)
+    and a minor entirely outside the target's series (``3.0`` or ``4.0`` vs.
+    ``3.14``).
+
+    The comparison is ambiguous only when the literal's prefix, truncated (or
+    zero-padded, if shorter) to the target's known length, exactly equals the
+    target's known prefix -- i.e. the literal shares the target's major.minor
+    series and therefore the outcome hinges on the interpreter's real,
+    not-yet-known trailing components. That is the only case left to fail
+    open, regardless of which operator is being evaluated (``==``, ``!=``,
+    ``<``, ``<=``, ``>``, ``>=`` all depend on the unknown patch digit once
+    the known prefix already matches).
+    """
+    target_tuple = _marker_version_tuple(target_python_version)
+    literal_tuple = _marker_version_tuple(literal)
+    known_length = len(target_tuple)
+    literal_prefix = literal_tuple[:known_length]
+    literal_prefix = literal_prefix + (0,) * (known_length - len(literal_prefix))
+    return literal_prefix == target_tuple
+
+
 def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
     """Evaluate one parsed marker expression node against a fixed Python version.
 
@@ -998,10 +1039,13 @@ def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
     (``sys_platform``, ``extra``, ``in``/``not in``, function calls, chained
     comparisons, and so on) raises ``_UnsupportedMarkerError`` so the caller
     fails open and still downloads the archive. A ``python_full_version``
-    comparison is patch-sensitive and additionally requires ``target_python_version``
-    itself to carry patch precision (3+ dotted components) to be resolved
-    confidently; given only a major.minor target it also raises
-    ``_UnsupportedMarkerError`` rather than assume the missing patch is ``.0``.
+    comparison is patch-sensitive: given only a major.minor
+    ``target_python_version``, it resolves confidently when the literal's
+    major.minor differs from the target's (the outcome cannot depend on the
+    target's unknown patch digit in that case -- see
+    ``_python_full_version_comparison_is_ambiguous``), and otherwise raises
+    ``_UnsupportedMarkerError`` rather than assume the missing patch is
+    ``.0``.
     """
     if isinstance(node, ast.Expression):
         return _evaluate_marker_node(node.body, target_python_version)
@@ -1022,12 +1066,18 @@ def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
         if (
             variable_node.id not in _PATCH_INSENSITIVE_MARKER_VARIABLES
             and len(_marker_version_tuple(target_python_version)) < 3
+            and _python_full_version_comparison_is_ambiguous(
+                target_python_version, literal_node.value
+            )
         ):
-            # ``python_full_version`` is patch-sensitive, but the target is
-            # only major.minor -- the real interpreter's patch component is
-            # genuinely unknown here, so this comparison cannot be resolved
-            # confidently in either direction. Fail open rather than assume
-            # the missing patch is ".0" (see the module docstring above).
+            # ``python_full_version`` is patch-sensitive, and the target is
+            # only major.minor -- but that only makes a comparison unknown
+            # when the literal shares the target's major.minor series (see
+            # ``_python_full_version_comparison_is_ambiguous``). A literal in
+            # a different minor series is decidable for every possible patch
+            # and falls through to the ordinary comparison below instead.
+            # Fail open rather than assume the missing patch is ".0" (see the
+            # module docstring above).
             raise _UnsupportedMarkerError(
                 "python_full_version comparison requires a patch-precise target version"
             )
