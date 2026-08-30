@@ -1862,6 +1862,40 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
    가시성 라인이 향후 축적할 실제 transience 증거가 나오기 전까지 보류한다 — 지금 다시 시도하는 것은
    추측에 기반한 재작업일 뿐이다.
 
+## 2026-08-30 시간별 재개: 4개 PR 재확인 + `.github#1347` 실제 수정 착수 + G-15 착수
+
+네 PR(`naruon#1486`, `.github#1438`, `contextual-orchestrator#923`, `.github#1347`)의 현재 head에서
+`get_check_runs`/`get_reviews`/`get_review_comments`를 전부 다시 읽었다. 결과:
+
+- `naruon#1486`(head `a5cebe53`): review thread 17/17 resolved. `opencode-review`와
+  `metadata-only gate evaluation` 둘 다 `failure`이지만, 이 head에 대한 opencode-agent verdict가
+  아직 게시되지 않은 것뿐(같은 head에 대한 Devin/CodeRabbit/OpenCode 코멘트가 전무) — 이미 문서화된
+  비동기 대기 패턴이지 코드 결함이 아니다. Merge 조건 미충족, 다음 pass에서 재확인.
+- `.github#1438`(head `a1c2ba50`): review thread 1건만 unresolved — Devin이 `86f4bd9b` push 이후
+  §5.1 item 3이 여전히 `naruon#1486`의 stale head `7c20155f`를 가리킨다고 지적(정확한 지적). 그 사이
+  `naruon#1486`은 두 라운드(no-op override 수정, doctoring 문서 자기모순 정정)를 더 거쳐 `a5cebe53`까지
+  진행한 상태였다. §5.1 item 3을 현재 head(`a5cebe53`)와 전체 review 이력(1차 6건 + 2차 6건[workspace_id
+  보안 수정 포함] + 3차 no-op override 수정 + 4차 문서 정정, thread 17/17 resolved)으로 재작성해 커밋
+  `c2013d02`로 push. `PYTHONPATH=. pytest tests/test_product_technical_gap_baseline.py` 5 passed로
+  contract 유지 확인.
+- `contextual-orchestrator#923`(head `eb453448`): review thread 5/5 resolved, 남은 건 없음.
+  `opencode-review`만 동일한 비동기 대기 패턴으로 `failure`.
+- `.github#1347`(head `6ed44666`): review thread 25개 중 **6개가 unresolved** — Devin의 최신 라운드
+  (commit `7ac8298b`)가 남긴 findings로, 그중 하나는 🟥 최고 심각도(**workspace 내 symlink가 파일시스템
+  isolation을 우회할 수 있음** — 호스트 경로를 가리키는 repo 내 symlink가 sandbox로 복사되는 워킹 카피에
+  살아있는 채로 남아, 샌드박스 명령이 그 symlink를 따라가 sandbox 밖 호스트 파일을 읽거나 쓸 수 있다는
+  주장), 나머지는 🟡🟡🟨(malformed readiness port가 검증을 우회, bwrap이 PATH에는 있지만 실제 namespace
+  생성 권한이 없는 host를 오분류, `isolated_command`가 `shutil.which`로 못 찾은 실행 파일을 검증 없이
+  통과시킴) + 📝 info 2건. 이전 pass에서 "conflict 해소 완료"로 기록했던 것은 main과의 3파일 merge
+  conflict였을 뿐, 이번 6건은 그 이후 새 Devin 라운드가 실제 코드에 대해 제기한 별개의 주장들이다 — 아직
+  검증도 수정도 하지 않은 상태였다. 이번 pass에서 이 6건을 현재 코드 기준으로 직접 검증하고 실제 결함만
+  최소 범위로 고치는 백그라운드 에이전트를 별도로 기동했다(worktree 격리, `fix/sandboxed-web-e2e-isolation-clean`
+  브랜치, 6개 thread 각각에 회신+resolve, 기존 SSRF/isolation 테스트 재실행 후 push). 결과는 다음 pass에서
+  커밋/thread 상태로 확인한다.
+- naruon G-15(첨부파일 parser registry) 실제 구현에 착수 — 기존 `Attachment` 모델, `_PARSER_MANIFEST`,
+  산재한 1MB/20MB/64MB 상한 위치, ADR 번호 체계를 먼저 정찰하는 탐색 에이전트를 병행 기동했다. 결과는
+  다음 pass에서 실제 코드 증분으로 이어간다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
