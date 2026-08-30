@@ -6,6 +6,8 @@ from pathlib import Path
 from scripts.ci import audit_central_required_workflows as audit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
     workflow_paths = (
@@ -79,6 +81,64 @@ def inherited_ruleset_payload() -> dict:
     return payload
 
 
+def stacked_ruleset_payload() -> dict:
+    """Return the workflow-only non-default-branch ruleset shape."""
+    return {
+        "id": 21732164,
+        "name": "CWL Stacked OpenCode required workflow",
+        "target": "branch",
+        "enforcement": "evaluate",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]},
+        },
+        "rules": [
+            {
+                "type": "workflows",
+                "parameters": {
+                    "do_not_enforce_on_create": True,
+                    "workflows": [
+                        {
+                            "repository_id": 1274066402,
+                            "path": ".github/workflows/opencode-review.yml",
+                            "ref": "refs/heads/main",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def repository_ruleset_payload() -> dict:
+    """Return the expected strong default-branch policy for the owner repo."""
+
+    return {
+        "id": 17921150,
+        "name": "Lock default branch",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "ContextualWisdomLab/.github",
+        "enforcement": "active",
+        "conditions": {
+            "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
+        },
+        "rules": [
+            {
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": 2,
+                    "dismiss_stale_reviews_on_push": True,
+                    "require_last_push_approval": True,
+                    "required_review_thread_resolution": True,
+                    "allowed_merge_methods": ["merge", "squash"],
+                },
+            },
+            {"type": "deletion"},
+            {"type": "non_fast_forward"},
+        ],
+    }
+
+
 def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(ruleset_payload())))
 
@@ -91,6 +151,81 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
+
+
+def test_expected_repository_ruleset_passes() -> None:
+    assert hasattr(audit, "audit_repository_ruleset"), (
+        "the central audit must inspect the repository ruleset that protects .github"
+    )
+    assert audit.audit_repository_ruleset(repository_ruleset_payload()) == []
+
+
+def test_repository_ruleset_rejects_live_weakened_review_controls() -> None:
+    assert hasattr(audit, "audit_repository_ruleset"), (
+        "the central audit must inspect the repository ruleset that protects .github"
+    )
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_approving_review_count"] = 0
+    review_rule["parameters"]["require_last_push_approval"] = False
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset does not require exactly two approving reviews",
+        "repository ruleset last-push approval protection is disabled",
+    ]
+
+
+def test_repository_ruleset_reports_structural_and_protection_drift() -> None:
+    payload = {
+        "id": 0,
+        "name": "drifted",
+        "source_type": "Organization",
+        "source": "ContextualWisdomLab",
+        "target": "tag",
+        "enforcement": "disabled",
+        "conditions": None,
+        "rules": "not-a-list",
+    }
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "expected repository ruleset id 17921150",
+        "expected repository ruleset name Lock default branch",
+        "repository ruleset source is not ContextualWisdomLab/.github",
+        "repository ruleset target is not branch",
+        "repository ruleset enforcement is not active",
+        "repository ruleset ref scope must be exactly the default branch",
+        "expected one repository pull_request rule, found 0",
+        "repository default-branch deletion protection is missing",
+        "repository default-branch non-fast-forward protection is missing",
+    ]
+
+
+def test_repository_ruleset_rejects_malformed_review_parameters() -> None:
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"] = None
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset does not require exactly two approving reviews",
+        "repository ruleset stale-review dismissal on push is disabled",
+        "repository ruleset last-push approval protection is disabled",
+        "repository ruleset review-thread resolution protection is disabled",
+        "repository ruleset does not allow both merge and squash",
+    ]
+
+
+def test_repository_ruleset_cli_reports_passing_policy(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        audit.sys,
+        "stdin",
+        StringIO(json.dumps(repository_ruleset_payload())),
+    )
+
+    assert audit.main(["--repository"]) == 0
+    assert (
+        "PASS: repository ruleset 17921150 protects the default branch"
+        in capsys.readouterr().out
+    )
 
 
 def test_ref_scope_rejects_all_branch_and_extra_proposal_branch_targets() -> None:
@@ -147,6 +282,70 @@ def test_multiple_workflow_rules_do_not_invent_create_transition_drift() -> None
 
     assert "expected one workflows rule, found 2" in errors
     assert "central required workflows block the branch create transition" not in errors
+def test_expected_stacked_ruleset_passes(monkeypatch, capsys) -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"][0]["parameters"]["workflows"][0]["sha"] = "a" * 40
+    monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(payload)))
+
+    assert audit.main(["--stacked"]) == 0
+    assert (
+        "PASS: ruleset 21732164 audits 1 central required workflows in evaluate mode"
+        in capsys.readouterr().out
+    )
+
+
+def test_stacked_ruleset_rejects_merge_policy_and_wrong_scope() -> None:
+    payload = stacked_ruleset_payload()
+    payload["conditions"]["ref_name"] = {"include": ["~DEFAULT_BRANCH"], "exclude": []}
+    payload["rules"].append({"type": "pull_request", "parameters": {}})
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset does not include all branches",
+        "stacked ruleset does not exclude only default branches",
+        "stacked ruleset has forbidden rule types: ['pull_request']",
+    ]
+
+
+def test_stacked_ruleset_rejects_additional_excluded_refs() -> None:
+    payload = stacked_ruleset_payload()
+    payload["conditions"]["ref_name"]["exclude"].append("refs/heads/release/**")
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset does not exclude only default branches"
+    ]
+
+
+def test_stacked_ruleset_rejects_wrong_workflow_contract() -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"][0]["parameters"] = None
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked OpenCode workflow does not exempt branch creation",
+        "stacked ruleset must require only the central OpenCode workflow",
+    ]
+
+
+def test_stacked_ruleset_reports_typeless_rules_as_drift() -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"].append({"parameters": {}})
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset has forbidden rule types: ['<missing>']"
+    ]
+
+
+def test_stacked_ruleset_reports_structural_drift() -> None:
+    assert audit.audit_stacked_ruleset({"rules": "invalid"}) == [
+        "expected stacked ruleset id 21732164",
+        "expected stacked ruleset name CWL Stacked OpenCode required workflow",
+        "stacked ruleset target is not branch",
+        "stacked ruleset enforcement is not evaluate",
+        "stacked ruleset does not include all branches",
+        "stacked ruleset does not exclude only default branches",
+        "expected one stacked workflows rule, found 0",
+        "stacked OpenCode workflow does not exempt branch creation",
+        "stacked ruleset must require only the central OpenCode workflow",
+    ]
 
 
 def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
@@ -338,6 +537,16 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert "HTTP 404" in workflow
     assert "audit_central_required_workflows.py" in workflow
     assert "Ruleset audit could not read inherited organization ruleset" in workflow
+    assert 'STACKED_RULESET_ID: "21732164"' in workflow
+    assert "audit_central_required_workflows.py --stacked" in workflow
+    assert 'REPOSITORY_RULESET_ID: "17921150"' in workflow
+    assert (
+        "repos/${ORG_LOGIN}/.github/rulesets/${REPOSITORY_RULESET_ID}"
+        in workflow
+    )
+    assert "audit_central_required_workflows.py --repository" in workflow
+    assert "CWL Stacked OpenCode required workflow" in rollout
+    assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
 

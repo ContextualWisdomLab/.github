@@ -40,6 +40,8 @@ jobs:
         env:
           ORG_LOGIN: ContextualWisdomLab
           RULESET_ID: "18156473"
+          STACKED_RULESET_ID: "21732164"
+          REPOSITORY_RULESET_ID: "17921150"
           RULESET_SENTINEL_REPOSITORY: naruon
         run: |
           set -euo pipefail
@@ -89,3 +91,23 @@ jobs:
             '. + {"_audit_repository_scope": $scope[0]}' \
             "$ruleset_json" >"$ruleset_with_scope_json"
           python3 scripts/ci/audit_central_required_workflows.py "$ruleset_with_scope_json"
+
+          repository_ruleset_json="$RUNNER_TEMP/owner-repository-ruleset.json"
+          repository_ruleset_error="$RUNNER_TEMP/owner-repository-ruleset.error"
+          repository_ruleset_endpoint="repos/${ORG_LOGIN}/.github/rulesets/${REPOSITORY_RULESET_ID}?includes_parents=true"
+          if ! gh api "$repository_ruleset_endpoint" >"$repository_ruleset_json" 2>"$repository_ruleset_error"; then
+            echo "::error::Ruleset audit could not read owner repository ruleset ${REPOSITORY_RULESET_ID}."
+            sed 's/^/    /' "$repository_ruleset_error"
+            exit 1
+          fi
+          python3 scripts/ci/audit_central_required_workflows.py --repository "$repository_ruleset_json"
+
+          stacked_ruleset_json="$RUNNER_TEMP/stacked-opencode-ruleset.json"
+          stacked_ruleset_error="$RUNNER_TEMP/stacked-opencode-ruleset.error"
+          stacked_endpoint="repos/${ORG_LOGIN}/${RULESET_SENTINEL_REPOSITORY}/rulesets/${STACKED_RULESET_ID}?includes_parents=true"
+          if ! gh api "$stacked_endpoint" >"$stacked_ruleset_json" 2>"$stacked_ruleset_error"; then
+            echo "::error::Ruleset audit could not read inherited stacked OpenCode ruleset ${STACKED_RULESET_ID}."
+            sed 's/^/    /' "$stacked_ruleset_error"
+            exit 1
+          fi
+          python3 scripts/ci/audit_central_required_workflows.py --stacked "$stacked_ruleset_json"

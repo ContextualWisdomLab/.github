@@ -32,6 +32,187 @@ jobs:
           echo "Required OpenCode workflow materialized without checking out or
           executing pull-request content."
 
+      - name: Resolve immutable central policy source
+        id: trusted_source
+        env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              job_context = json.loads(os.environ.get("JOB_CONTEXT_JSON") or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"::error::Could not parse GitHub workflow context JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+
+          expected_repository = "ContextualWisdomLab/.github"
+          expected_file = ".github/workflows/opencode-review.yml"
+          workflow_sha = str(
+              job_context.get("workflow_sha") or os.environ.get("WORKFLOW_SHA") or ""
+          ).strip()
+          workflow_ref = str(
+              job_context.get("workflow_ref") or os.environ.get("WORKFLOW_REF") or ""
+          ).strip()
+          workflow_ref_head, separator, _ = workflow_ref.partition("@")
+          if not separator:
+              print("::error::Required workflow ref is missing its immutable ref separator.", file=sys.stderr)
+              raise SystemExit(1)
+          ref_parts = workflow_ref_head.split("/", 2)
+          if len(ref_parts) < 2 or not ref_parts[0] or not ref_parts[1]:
+              print("::error::Required workflow ref does not identify a repository.", file=sys.stderr)
+              raise SystemExit(1)
+          workflow_repository = "/".join(ref_parts[:2])
+          workflow_file_path = str(job_context.get("workflow_file_path") or "").strip()
+
+          if not workflow_file_path:
+              prefix = f"{expected_repository}/{expected_file}@"
+              if workflow_ref.startswith(prefix):
+                  workflow_file_path = expected_file
+
+          if workflow_repository != expected_repository:
+              print(
+                  f"::error::Required workflow repository resolved to {workflow_repository}, expected {expected_repository}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          if not re.fullmatch(r"[0-9a-fA-F]{40}", workflow_sha):
+              print("::error::Required workflow SHA is missing or malformed.", file=sys.stderr)
+              raise SystemExit(1)
+          if workflow_file_path != expected_file:
+              print("::error::Required workflow file path is missing or unexpected.", file=sys.stderr)
+              raise SystemExit(1)
+          expected_ref_prefix = f"{expected_repository}/{expected_file}@"
+          if not workflow_ref.startswith(expected_ref_prefix):
+              print("::error::Required workflow ref is missing or inconsistent.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"repository={workflow_repository}")
+          print(f"sha={workflow_sha}")
+          print(f"workflow_file_path={workflow_file_path}")
+          PY
+
+      - name: Materialize trusted central policy source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Trusted central policy source ref must resolve to the immutable workflow commit SHA before archive materialization."
+            exit 1
+          fi
+          trusted_archive="${RUNNER_TEMP}/trusted-opencode-policy-source.tar.gz"
+          trusted_source_dir="${GITHUB_WORKSPACE}/.cwl-required-source"
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          mkdir -p "$trusted_source_dir"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o "$trusted_archive" \
+            "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          python3 - "$trusted_archive" "$trusted_source_dir" <<'PY'
+          import shutil
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive_path = Path(sys.argv[1])
+          root = Path(sys.argv[2])
+          try:
+              if root.is_symlink():
+                  raise ValueError("trusted source directory must not be a symlink")
+              if root.exists():
+                  shutil.rmtree(root)
+              root.mkdir(parents=True)
+              with tarfile.open(archive_path, "r:gz") as archive:
+                  members = archive.getmembers()
+                  top_levels: set[str] = set()
+                  targets: set[str] = set()
+                  directories: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+                  files: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+                  for member in members:
+                      name = member.name
+                      if not name or name.startswith("/") or "\x00" in name or "\\" in name:
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      parts = PurePosixPath(name).parts
+                      if not parts or parts[0] in {".", ".."}:
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      top_levels.add(parts[0])
+                      relative_parts = parts[1:]
+                      if not relative_parts:
+                          if not member.isdir():
+                              raise ValueError("archive root must be a directory")
+                          continue
+                      if any(part in {"", ".", ".."} for part in relative_parts):
+                          raise ValueError(f"unsafe archive member path: {name!r}")
+                      relative_key = "/".join(relative_parts)
+                      if relative_key in targets:
+                          raise ValueError(f"duplicate archive member path: {relative_key}")
+                      targets.add(relative_key)
+                      if member.isdir():
+                          directories.append((member, relative_parts))
+                      elif member.isfile():
+                          files.append((member, relative_parts))
+                      else:
+                          raise ValueError(f"unsupported archive member type: {name!r}")
+                  if len(top_levels) != 1:
+                      raise ValueError("archive must contain exactly one top-level directory")
+                  for _member, relative_parts in sorted(
+                      directories, key=lambda item: len(item[1])
+                  ):
+                      (root / Path(*relative_parts)).mkdir(parents=True, exist_ok=True)
+                  for member, relative_parts in files:
+                      destination = root / Path(*relative_parts)
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      source = archive.extractfile(member)
+                      if source is None:
+                          raise ValueError(f"archive member is not readable: {member.name!r}")
+                      with source, destination.open("xb") as output:
+                          shutil.copyfileobj(source, output)
+          except (OSError, tarfile.TarError, ValueError) as exc:
+              raise SystemExit(f"trusted source archive failed closed: {exc}") from exc
+          PY
+
+      - name: Verify immutable central policy source
+        env:
+          EXPECTED_FILE: ${{ steps.trusted_source.outputs.workflow_file_path }}
+        run: |
+          set -euo pipefail
+          trusted_source_dir="$GITHUB_WORKSPACE/.cwl-required-source"
+          if [ ! -f "$trusted_source_dir/$EXPECTED_FILE" ] || [ -L "$trusted_source_dir/$EXPECTED_FILE" ]; then
+            printf '::error::Required workflow source file is missing or symlinked: %s.\n' \
+              "$EXPECTED_FILE"
+            exit 1
+          fi
+          if [ ! -f "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ] || [ -L "$trusted_source_dir/scripts/ci/pingora_edge_policy.py" ]; then
+            echo "::error::Trusted Pingora edge policy helper is missing or symlinked."
+            exit 1
+          fi
+
+      - name: Enforce Cloudflare Pingora edge policy
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_ACTION: ${{ github.event.action || 'unknown' }}
+        run: |
+          set -euo pipefail
+          python3 .cwl-required-source/scripts/ci/pingora_edge_policy.py \
+            --repository "$TARGET_REPOSITORY" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --head-sha "$PULL_REQUEST_HEAD_SHA" \
+            --event-action "$EVENT_ACTION" \
+            --api-url "https://api.github.com"
+
   coverage-source-tree:
     name: coverage-source-tree
     needs: [required-workflow-bootstrap]
