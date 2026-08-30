@@ -306,13 +306,11 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
 
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
-        """Both gateway pools accept only the pinned process-local HTTP base."""
+        """The free gateway pool accepts only the pinned process-local HTTP base."""
 
         for model in (
             "orchestrator/free",
             "contextual-orchestrator/orchestrator/free",
-            "orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto",
         ):
             with self.subTest(model=model):
                 rc, api_base = _resolve_api_base(
@@ -324,6 +322,16 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
 
         rc, _ = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 2)
+
+        # 2026-08-30: orchestrator/auto is no longer a recognized Strix gateway
+        # model (owner decision superseding ADR-0003's auto default) -- the
+        # gate must now reject it rather than resolve it, the same as any
+        # other unrecognized virtual pool.
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
             "orchestrator/auto",
         )
         self.assertEqual(rc, 2)
@@ -335,13 +343,11 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_gateway_child_model_preserves_selected_virtual_pool(self) -> None:
-        """LiteLLM qualification must not rewrite auto back to free."""
+        """LiteLLM qualification must not rewrite the selected free pool."""
 
         expected_child_models = {
             "orchestrator/free": "openai/orchestrator/free",
             "contextual-orchestrator/orchestrator/free": "openai/orchestrator/free",
-            "orchestrator/auto": "openai/orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto": "openai/orchestrator/auto",
         }
         for model, expected_child_model in expected_child_models.items():
             with self.subTest(model=model):
