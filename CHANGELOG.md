@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Document a structural CodeRabbit gap in `docs/product-technical-gap-baseline.md`
+  (2026-08-30 entry): every ContextualWisdomLab repo is below CodeRabbit's
+  10-GitHub-star automatic-review threshold, so CodeRabbit never reviews a new
+  commit without an explicit `@coderabbitai review` trigger comment — this was
+  surfacing as a `naruon` PR-governance metadata-gate block that looked like a
+  blocking finding but was actually CodeRabbit's own "not reviewed yet" state.
+  No code change; a central auto-trigger workflow is a candidate follow-up,
+  deliberately deferred pending a review of its required-workflow-ruleset
+  blast radius.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
