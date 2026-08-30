@@ -1227,43 +1227,55 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def check_run_supersedes(
-    started_at: datetime | None,
-    node: dict[str, Any],
-    index: int,
-    previous_started_at: datetime | None,
-    previous_index: int,
-) -> bool:
-    """Return whether a check run is newer than the current best-known run.
+def check_run_recency_key(
+    node: dict[str, Any], started_at: datetime | None, index: int
+) -> tuple[int, datetime, int]:
+    """Return a single comparable recency key for one same-purpose check run.
 
-    Shared recency rule for folding a sequence of same-purpose check runs
-    (either the reruns sharing one (workflow, name) key in
-    ``latest_check_runs``, or the coverage-evidence runs
-    ``latest_coverage_evidence_index`` compares across workflow names) down
-    to the single newest one. A rerun that has not started yet has no
-    ``startedAt``, so it can never win a chronological comparison against an
-    already-started predecessor -- even though GitHub only ever creates it
-    after that predecessor. Fall back to the check run's own actively-pending
-    status (QUEUED/IN_PROGRESS/etc, the same predicate ``running_check_state``
-    uses) as the recency signal in that case: a currently-pending run always
-    supersedes a predecessor that already has a result, regardless of
-    timestamps. A node with no startedAt and no pending status (e.g.
-    cancelled before it started) carries no such signal and keeps deferring
-    to the timestamped predecessor. Ties fall back to the later index.
+    Ranking a sequence of same-purpose check runs (either the reruns sharing
+    one (workflow, name) key in ``latest_check_runs``, or the
+    coverage-evidence runs ``latest_coverage_evidence_index`` compares across
+    workflow names) down to the single newest one used to be done by folding
+    a pairwise "does B supersede A" predicate left-to-right across the
+    candidates. That is only valid when the predicate is a transitive total
+    order, and it was not: a queued/null-``startedAt`` candidate could
+    legitimately supersede an older completed predecessor, but a later,
+    differently-timestamped completed candidate could then override that
+    queued winner too -- purely because "a timestamped candidate beats a
+    null-timestamp current-best" -- even when the later candidate was itself
+    older than whichever run the queued candidate had already displaced.
+
+    Building one derived key per candidate instead, and comparing those keys
+    directly, cannot go non-transitive: Python tuple ordering is already a
+    valid total order, so ``max()``/``sorted()`` over these keys give a
+    result that does not depend on candidate order.
+
+    Three tiers, low to high:
+
+    * ``0`` -- no recency signal at all: no ``startedAt`` and not currently
+      pending (e.g. cancelled before it ever started).
+    * ``1`` -- a real ``startedAt``: ranked by that timestamp.
+    * ``2`` -- no ``startedAt`` yet, but actively pending (queued/in
+      progress/etc, via ``running_check_state``): GitHub only ever creates
+      such a row after any run it might supersede, so it is presumed newer
+      than every already-resolved run, regardless of that run's timestamp.
+
+    Ties within a tier fall back to the later index, matching the order
+    ``context_nodes`` returns them in.
     """
     epoch = datetime.min.replace(tzinfo=timezone.utc)
-    if started_at is None and previous_started_at is not None:
-        return running_check_state(node) == "running"
-    if previous_started_at is None and started_at is not None:
-        return True
-    return (started_at or epoch, index) >= (previous_started_at or epoch, previous_index)
+    if started_at is not None:
+        return (1, started_at, index)
+    if running_check_state(node) == "running":
+        return (2, epoch, index)
+    return (0, epoch, index)
 
 
 def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the newest check run for each workflow and check-name pair."""
     latest: dict[
         tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
+        tuple[tuple[int, datetime, int], dict[str, Any]],
     ] = {}
     for index, node in enumerate(context_nodes(pr)):
         if node.get("__typename") != "CheckRun":
@@ -1274,14 +1286,11 @@ def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
         )
         key = (workflow, node.get("name") or "check-run")
         started_at = parse_github_datetime(node.get("startedAt"))
+        recency_key = check_run_recency_key(node, started_at, index)
         previous = latest.get(key)
-        if previous is None:
-            latest[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if check_run_supersedes(started_at, node, index, previous_started_at, previous_index):
-            latest[key] = (started_at, index, node)
-    return [node for _, _, node in sorted(latest.values(), key=lambda item: item[1])]
+        if previous is None or recency_key >= previous[0]:
+            latest[key] = (recency_key, node)
+    return [node for _, node in sorted(latest.values(), key=lambda item: item[0][2])]
 
 
 def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
@@ -1618,25 +1627,27 @@ def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]
 def latest_coverage_evidence_index(check_runs: Sequence[dict[str, Any]]) -> int | None:
     """Return the newest coverage-evidence index across workflow names.
 
-    Folds the candidates through the same ``check_run_supersedes`` recency
-    rule ``latest_check_runs`` uses within one (workflow, name) key, so a
-    freshly QUEUED coverage-evidence rerun (``startedAt: null``) in one
-    workflow correctly outranks an older, already-completed coverage-evidence
-    run in a *different* workflow instead of losing a naive timestamp
-    comparison because it has not started yet.
+    Ranks every coverage-evidence candidate with ``check_run_recency_key``
+    and picks the single largest key via ``max()``, so a freshly QUEUED
+    coverage-evidence rerun (``startedAt: null``) in one workflow correctly
+    outranks an older, already-completed coverage-evidence run in a
+    *different* workflow instead of losing a naive timestamp comparison
+    because it has not started yet -- and, unlike folding a pairwise
+    supersession predicate two at a time, the answer does not depend on how
+    many other candidates are present or what order they arrive in, because
+    each candidate's key depends only on its own timestamp/pending status.
     """
     coverage_indices = coverage_evidence_indices(check_runs)
     if not coverage_indices:
         return None
-    best_index = coverage_indices[0]
-    best_started_at = parse_github_datetime(check_runs[best_index].get("startedAt"))
-    for item in coverage_indices[1:]:
-        node = check_runs[item]
-        started_at = parse_github_datetime(node.get("startedAt"))
-        if check_run_supersedes(started_at, node, item, best_started_at, best_index):
-            best_index = item
-            best_started_at = started_at
-    return best_index
+    return max(
+        coverage_indices,
+        key=lambda item: check_run_recency_key(
+            check_runs[item],
+            parse_github_datetime(check_runs[item].get("startedAt")),
+            item,
+        ),
+    )
 
 
 def coverage_evidence_state(pr: dict[str, Any]) -> str:

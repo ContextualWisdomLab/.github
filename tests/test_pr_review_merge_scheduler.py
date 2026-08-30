@@ -3252,6 +3252,72 @@ def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run_a
     assert sched.coverage_evidence_state(pr) == "running"
 
 
+def _coverage_check(workflow: str, status: str, conclusion: str | None, started_at: str | None) -> dict:
+    """Build a minimal coverage-evidence CheckRun node for fold-order tests."""
+    return {
+        "__typename": "CheckRun",
+        "name": "coverage-evidence",
+        "status": status,
+        "conclusion": conclusion,
+        "startedAt": started_at,
+        "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+    }
+
+
+def test_latest_coverage_evidence_index_stays_transitive_across_three_candidates():
+    """A left-to-right pairwise fold over 3+ candidates must not go non-transitive.
+
+    Regression test for the exact scenario a GitHub bot reviewer ("Devin")
+    identified on this PR: folding ``check_run_supersedes`` two at a time
+    across MORE than two coverage-evidence candidates is only valid if the
+    relation it applies is a transitive total order. It was not: a
+    queued/null-``startedAt`` candidate legitimately supersedes an older
+    completed predecessor in isolation, but a THIRD, differently-timestamped
+    completed candidate arriving later in fold order could silently override
+    that queued winner just because "a timestamped candidate beats a
+    null-timestamp current-best" -- even though that third candidate is
+    itself OLDER than the timestamped run the queued candidate had already
+    displaced.
+
+    Candidate order: completed@02:00, queued(startedAt=None), completed@01:00,
+    each in a different workflow so all three survive into
+    ``latest_coverage_evidence_index`` unchanged. A currently-pending rerun
+    is presumed newer than any already-resolved run (the same rule the
+    queued-vs-single-completed-run tests above already lock in), so the
+    queued candidate must win outright -- and, either way, the stale 01:00
+    completed run (older than the 02:00 run it never legitimately beat) must
+    never be the answer.
+    """
+    check_runs = [
+        _coverage_check("Workflow A", "COMPLETED", "SUCCESS", "2026-08-24T02:00:00Z"),
+        _coverage_check("Workflow B", "QUEUED", None, None),
+        _coverage_check("Workflow C", "COMPLETED", "FAILURE", "2026-08-24T01:00:00Z"),
+    ]
+
+    latest_index = sched.latest_coverage_evidence_index(check_runs)
+
+    assert latest_index != 2, "the stale 01:00 completed run must never win the fold"
+    assert check_runs[latest_index]["status"] == "QUEUED"
+
+
+def test_latest_coverage_evidence_index_prefers_queued_when_it_appears_first():
+    """A queued rerun ranks correctly regardless of its position in the fold.
+
+    Sibling of the reordering check above: places the queued/null-``startedAt``
+    candidate FIRST instead of last, so a left-to-right fold cannot lean on
+    "the queued run happened to already be the running best" to get the
+    right answer by accident.
+    """
+    check_runs = [
+        _coverage_check("OpenCode Review Dispatch", "QUEUED", None, None),
+        _coverage_check("Required OpenCode Review", "COMPLETED", "SUCCESS", "2026-08-24T02:00:00Z"),
+    ]
+
+    latest_index = sched.latest_coverage_evidence_index(check_runs)
+
+    assert check_runs[latest_index]["status"] == "QUEUED"
+
+
 def test_central_coverage_placeholder_cannot_mask_dispatch_failure(monkeypatch):
     """Central metadata-only coverage success cannot hide failed dispatch evidence."""
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
