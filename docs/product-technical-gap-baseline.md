@@ -1993,6 +1993,191 @@ record and the CHANGELOG's terse pointer entries, not a duplicate of either).
 (`.github#1347`: 커밋 `583af50b`, 전체 스위트 1930 passed 재확인; task 브랜치/`.github#1438`: 커밋
 `c76e5a24`, 전체 스위트 1898 passed 재확인). Force-push 없음.
 
+- **Implemented** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`): Layer 1's `_preflight_review_agents` now
+  probes each candidate at a new `REVIEW_PREFLIGHT_BASE_TOKENS = 16`, escalating that same candidate
+  once to `REVIEW_PREFLIGHT_ESCALATED_TOKENS` (`= REVIEW_MAX_OUTPUT_TOKENS`, `4096`) only on the widened
+  Trigger B signature, bounded by a shared `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` across the whole run.
+  Layer 2 keeps its existing `4096`/`120s` budget unchanged and retries only on Trigger A (transport
+  failure/non-2xx), up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`, with a retry-specific rejection
+  labeled `gateway_retry_rejected` rather than implying candidate-ceiling attribution it cannot support.
+  1901 tests pass, 100% coverage and 100% docstring coverage on `scripts/ci/`.
+
+**Devin Review then reviewed the actual implementation PR (#1452) and found 7 real issues, verified
+against current code (not taken on characterization alone) and all fixed — two were blocking.** (1)
+`_preflight_review_agents` initialized its escalation counter fresh on every call, so
+`_preflight_with_fallback` calling it twice (up to 8 primary routes, then up to 4 fallback routes) could
+spend the full `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` budget in *each* stage — up to 8 escalations total,
+200s worst case, exceeding Layer 1's own 180s healthz-readiness watchdog and directly contradicting the
+160s worst case computed above. Fixed by threading the primary stage's ending `escalations_used` into the
+fallback stage as its starting point, so the whole run shares one budget; a new regression test drives 8
+rejected primary routes and 4 fallback routes through a response that always qualifies for escalation and
+asserts total escalations stay at 4 and total attempts at 16 (160s at the existing 10s per-attempt
+timeout). (2) A non-numeric, empty, zero, or negative `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` made the
+shell script's `[ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]` integer comparison
+error out (which bash reports as the condition being false, not a fatal error, inside an `if`), so the
+retry loop would never detect it had reached the limit and would retry until the surrounding CI job's own
+timeout, instead of failing closed on bad configuration — fixed with an explicit `case` guard
+(`''|*[!0-9]*|0`) before the loop starts.
+
+Five more, non-blocking but real: (3) an escalated-attempt exception with no HTTP status at all (a bare
+transport failure/timeout) was unconditionally labeled `EscalatedProbeRejected`, falsely attributing a
+connectivity failure to the token budget — the existing `_safe_http_status` helper already distinguished
+HTTP-status-bearing exceptions from transport failures elsewhere in the file, so the escalated-attempt
+handler now uses it the same way, falling back to the sanitized exception type name (or a bounded
+placeholder) when no status is present. (4) Layer 2 exhausting every `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`
+attempts with no usable HTTP response ever wrote to the gateway evidence report before calling `fail` and
+exiting — the exact failure case telemetry matters most for left zero trace of attempt count or trigger;
+fixed by writing a bounded `gateway_transport_exhausted` classification first, via the identical
+sanitize-then-atomic-replace pattern the non-2xx and invalid-content paths already used. (5) Layer 1's
+error-type strings were CamelCase (`EscalatedProbeRejected`, `InvalidChatResponse`,
+`EscalationBudgetExhausted`) while this ADR's own text and Layer 2's shell script already used snake_case
+(`escalated_probe_rejected`, `gateway_retry_rejected`, `escalation_budget_exhausted`) for the same
+concepts, plus one snake_case/CamelCase outlier inside Layer 2 itself (`InvalidChatResponse`) — the ADR
+text was correct, so the code was brought in line with it:
+`escalated_probe_rejected`/`invalid_chat_response`/`escalation_budget_exhausted`/`provider_error`
+throughout both layers. (6) The Layer 2 gateway retry-loop test only asserted source literals (e.g. that
+a given string appeared somewhere in the script) rather than ever executing the retry loop — exactly why
+findings (3) and (4) slipped past "100% coverage." Fixed with a fake-curl test harness that extracts the
+tracked script's real, current retry-loop source (not a hand-copied duplicate, so a future edit is
+automatically exercised) and runs it under `bash` against a scripted, no-network `curl` stand-in on
+`$PATH`, covering first-attempt success, transport-failure recovery, non-2xx exhaustion, transport-attempt
+exhaustion, and the malformed-attempt-limit guard (without ever letting a malformed-limit case actually
+loop unboundedly — the guard is asserted to reject before any curl call happens at all). (7) After an
+empty escalated response, `finish_reason` was overwritten to describe the escalated (2nd) attempt while
+`reasoning_without_content` was left describing the base (1st) attempt's state — two fields that look
+like they describe the same response but silently did not. Fixed so both fields are always updated
+together to describe the same, most recent attempt, with a regression test giving the two attempts
+deliberately different signatures to prove neither field is left stale.
+
+**Implemented and verified** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+`scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+`tests/test_contextual_orchestrator_review_runtime_preflight.py`): 1913 tests pass (1901 baseline + 12
+new), 100% coverage and 100% docstring coverage on `scripts/ci/`, `bash -n` syntax-checks the shell
+script, and all 4 embedded Python heredoc blocks in it (including the new transport-exhaustion evidence
+writer) parse cleanly.
+
+**A second Devin Review pass, triggered by that push, found 3 more real, fixable issues (all fixed) and
+2 architecturally significant gaps verified as real but not guess-fixed.** Fixed: a successful escalated
+attempt still carried the base attempt's stale `finish_reason`/`reasoning_without_content` (the mixed-
+attempt bug's mirror image, on the success branch instead of the failure branch) — both fields now
+refresh from the escalated response on success too. The `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` `case`
+guard rejected non-numeric values but not oversized all-digit ones — reproduced directly that a 55-digit
+value hits the identical `[ -ge ]` integer-overflow failure the guard exists to prevent — so the guard now
+also caps digit count (at most 4 digits, 9999). Added fake-curl tests for mixed retry-outcome sequences
+(transport failure then HTTP rejection, and the reverse), proving exhaustion evidence reflects whichever
+attempt actually happened last.
+
+**Verified real but left open, tracked as `ContextualWisdomLab/.github#1454` and `#1455`:** (1) a
+candidate that succeeds at the cheap `REVIEW_PREFLIGHT_BASE_TOKENS = 16` base probe is admitted without
+ever being confirmed at the real serving budget (`REVIEW_MAX_OUTPUT_TOKENS = 4096`) — escalation only
+fires on evidence of *failure*, not to confirm success at the real budget, and ADR-0005's own Research
+(axis 2) already documents that a provider's hard completion-token ceiling is a real, per-model quantity
+separate from reasoning overhead; mitigated in production (not fixed here) by
+`contextual_orchestrator.orchestrator.TaskOrchestrator`'s own per-request failover/circuit-breaker, which
+this preflight does not replace. (2) Layer 1's "160s worst case" arithmetic covers only probing, not
+`discover_all_models()`'s own time, which runs first inside the *same* 180s healthz-readiness watchdog —
+verified directly against the vendored `contextual_orchestrator.model_discovery` source: up to ~7
+sequential HTTP calls (shared models.dev metadata, one per `PROVIDER_MODEL_SOURCES` entry with a
+registered credential — 5 of 6 for this sidecar's pool — and the OpenRouter ZDR feed), each up to
+`DISCOVERY_TIMEOUT_SECONDS = 15s`, for a discovery-alone worst case of up to ~105s and a combined real
+worst case of up to ~265s, not 160s. Both are documented in place with cross-references (source comments
+in `contextual_orchestrator_review_launcher.py` and `contextual_orchestrator_review_sidecar.sh`) rather
+than silently mischaracterizing safety margins that do not actually exist. Neither was guess-fixed: each
+needs its own evidence-based design pass (per this org's convergence convention — initial values from
+precedent, refinement from telemetry, never from inspection alone) before a specific number or mechanism
+is chosen.
+
+**Decision (same pass): both #1454 and #1455 accepted as known, tracked residual risks — not blocking
+PR #1452.** This design is a genuine, verified improvement over the status quo it replaces (no diagnostic
+retry at all, the 120s-timeout bug reproducing repeatedly); it does not need to close every residual
+failure mode to be worth merging. #1454's risk is partially mitigated today by `TaskOrchestrator`'s
+existing per-request failover/circuit-breaker. #1455's failure mode requires two unlikely conditions to
+coincide in one run (discovery near its own worst case *and* probing separately needing close to its full
+escalation budget) — a tail case, not the common path. Both stay open, decision and reasoning recorded on
+the issues themselves, cross-referenced from the ADR's Consequences section and both source files.
+
+**A third Devin Review pass found 2 more real, fixable issues (both fixed), narrower than the prior two
+rounds — a good convergence signal.** An escalated-attempt HTTP rejection (401 auth, 429 throttle, 5xx
+server error) was unconditionally labeled `escalated_probe_rejected`, over-claiming that any such status
+was evidence the token budget specifically was too large — none of those statuses is budget evidence, and
+this codebase deliberately never captures raw provider error text that could validate the distinction.
+Fixed by extracting a shared `_record_provider_exception` helper so the escalated attempt gets the exact
+same sanitized classification the base probe already used for any exception; the ADR's own text (which
+originated this over-claim) is corrected in place, with parametrized 401/429/5xx/503 test coverage added.
+Separately, `finish_reason`/`reasoning_without_content` were populated only on failure/escalation
+outcomes, never on an ordinary successful probe (the single most common outcome) — despite the entire
+point of adding this telemetry being "future tuning can be evidence-driven." Fixed in both the launcher
+and the sidecar script's successful-gateway-evidence writer, so a real "normal" baseline now exists to
+compare against. Two lower-priority items from the same pass were consciously left as-is: the fake-curl
+test harness doesn't model a real curl partial-write-on-failure edge case (a test-fidelity gap, not a
+production bug); and the attempt-limit guard's 9999 digit-count cap is looser than the design's intended
+single-digit range but not exploitable today (workflows use the default) — tightening it to a specific
+smaller number without real evidence would itself be exactly the kind of unjustified guess this org's
+own convergence convention exists to prevent. 1920 tests pass; 100% coverage and 100% docstring coverage
+on `scripts/ci/`.
+
+**A fourth Devin Review pass found 3 more real, fixable issues (all fixed) in narrower spots the prior
+three rounds hadn't covered — the same bug classes recurring, not new ones, a strong convergence
+signal.** An escalated attempt's exception handler (`_record_provider_exception`, shared by both probe
+attempts since the round-3 fix) left the base attempt's stale `finish_reason`/`reasoning_without_content`
+on the row when the ESCALATED attempt raised an exception — the identical mixed-attempt-telemetry bug
+already fixed for the escalated-empty and escalated-success outcomes, just not yet covered for
+escalated-exception. Fixed by clearing (not backfilling) both fields whenever an exception is recorded,
+since there is no response object for that attempt to describe. Separately, and more consequentially:
+`_response_has_reasoning_without_content` checked only whether `message.reasoning` was truthy, never
+whether `message.content` was actually empty or absent — so a normal, complete answer that happens to
+also disclose a reasoning trace alongside real content would be wrongly recorded as "starved." This bug
+existed since the predicate was first written but was latent-and-harmless as long as it was only ever
+called on responses `_chat_response_has_text` had already confirmed were empty; the round-3 fix that
+started calling it on the SUCCESS path too was what first exposed it as an active telemetry-polluting bug
+rather than a theoretical one. Fixed by requiring content be genuinely absent (reusing
+`_chat_response_has_text`'s own definition so the two predicates are provably consistent, never duplicated
+logic that could drift apart), with both a direct unit test of the predicate and an end-to-end test
+proving a healthy reasoning+content response is never flagged; the same predicate bug existed identically
+in the sidecar script's mirrored Layer 2 logic and is fixed there too. Third: a malformed/unparseable
+HTTP-200 gateway response body (or a response file that was never written at all) hit the bare
+`except (OSError, json.JSONDecodeError, IndexError, TypeError): pass` fallback and wrote nothing to the
+gateway evidence report — the same evidence-loss pattern as the earlier transport-exhaustion fix, a
+different trigger this time. Fixed with a bounded `gateway_invalid_response` classification via the same
+atomic-write pattern already used everywhere else; the fake-curl test harness gained a `NOFILE:<status>`
+plan marker and malformed-JSON-body coverage for both triggers.
+
+Two doc/test-staleness items in the same pass: a test's own docstring still described the routing probe
+as proving every route at the real `4096`-token budget, which stopped being true the moment ADR-0005's
+base-probe design landed (most routes now prove readiness at the cheaper `16`-token base probe instead) —
+corrected to describe current reality while leaving the test's own assertion (Layer 2's literal must
+still equal `REVIEW_MAX_OUTPUT_TOKENS`) unchanged, since that part was never wrong. And ADR-0005 itself
+still said `Status: proposed` and described its own design in future tense ("would become," "once it
+lands") even though this very PR now implements it — updated to `accepted` (matching this repo's other
+ADRs' convention) with an explicit note that acceptance is the design decision, not a merge authorization,
+and the Consequences section's tense corrected to describe the shipped behavior. 1926 tests pass; 100%
+coverage and 100% docstring coverage on `scripts/ci/`.
+
+**Reconciliation note (post-merge):** this `Status: accepted` edit was made on PR #1452's own,
+by-then-diverged copy of `docs/adr/0005-sidecar-preflight-token-budget.md`, not on the ADR-only PR #1449
+branch, which continued independently through its own rounds 5-9 and kept `Status: proposed` throughout.
+When #1449 merged into `main` (squash `6ffd8f8a`), #1452 was rebased onto that ADR text via a regular
+merge commit, so the ADR file now reads `Status: proposed` again — the round-4 edit described above is
+superseded, not currently reflected in the file. Acceptance remains a process decision distinct from
+merge authorization either way; nothing about the shipped implementation depends on this field's value.
+
+**A follow-up finding on the round-4 malformed-gateway-reply fix itself, caught before the round-4 push
+even finished its own review cycle — a genuine gap, not a duplicate.** `json.loads()` legally parses any
+top-level JSON value — an array, `null`, a bare string, or a number — not only an object. The very next
+line, `response.get("choices")`, assumes a dict and raises `AttributeError` for any of those shapes, and
+`AttributeError` was not in the round-4 fix's caught exception tuple `(OSError, json.JSONDecodeError,
+IndexError, TypeError)`. So a `200` response whose body is valid-but-wrong-shaped JSON (e.g. `[]` or
+`null` instead of `{"choices": [...]}`) still lost gateway evidence exactly like the bug round-4 set out
+to fix — the script still failed closed overall (an uncaught exception exits the Python process non-zero,
+so the shell's `if !` still caught it and called `fail`), but wrote nothing to the report first. Fixed
+with an explicit `isinstance(response, dict)` check immediately after the `json.loads()` call that raises
+the already-caught `TypeError` rather than widening the tuple to catch `AttributeError` broadly (which
+could mask unrelated bugs elsewhere in that block). Parametrized regression tests (`[]`, `null`, a bare
+string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 'gateway'`, the same
+signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
+100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
