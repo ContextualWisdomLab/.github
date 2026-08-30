@@ -72,19 +72,32 @@ PROVIDER_ZDR_SCOPE: Mapping[str, ProviderZdrScope] = {
     "nvidia_nim": ProviderZdrScope(
         provider_name="nvidia_nim",
         zero_data_retention=False,
-        source="https://openrouter.ai/docs/guides/privacy/provider-logging",
-        as_of="2026-08-27",
-        note="Direct NVIDIA NIM hosted API (integrate.api.nvidia.com) is not "
-        "attested as zero-retention; treat as retained unless a dated provider "
-        "attestation is added.",
+        source="https://assets.ngc.nvidia.com/products/api-catalog/legal/"
+        "NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf",
+        as_of="2026-08-30",
+        note="Not just unattested -- affirmatively NOT zero-retention. "
+        "NVIDIA's own current NVIDIA API Trial Terms of Service (v. September "
+        "19, 2025, the terms governing this org's free/trial "
+        "integrate.api.nvidia.com key; confirmed still the live document as "
+        "of this citation date), Section 3.3(iv), states NVIDIA collects "
+        "'User Content and Generated Content to improve NVIDIA products and "
+        "services, including AI models' -- i.e. prompts and completions ARE "
+        "used for training. Section 2.3's 'will not store or use User "
+        "Content or Generated Content at the end of each API Service "
+        "session' does not override this: 3.3 is the operative carve-out. "
+        "Do not reclassify this provider as ZDR without a superseding, "
+        "dated NVIDIA document that repeals or narrows Section 3.3(iv) for "
+        "this specific API Service.",
     ),
     "nvidia_nim_sub": ProviderZdrScope(
         provider_name="nvidia_nim_sub",
         zero_data_retention=False,
-        source="https://openrouter.ai/docs/guides/privacy/provider-logging",
-        as_of="2026-08-27",
-        note="Secondary NVIDIA NIM key shares the nvidia_nim scope and is not "
-        "attested as zero-retention.",
+        source="https://assets.ngc.nvidia.com/products/api-catalog/legal/"
+        "NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf",
+        as_of="2026-08-30",
+        note="Secondary NVIDIA NIM key is the same integrate.api.nvidia.com "
+        "trial API and shares the nvidia_nim scope above verbatim -- see "
+        "that entry's note for the Section 3.3(iv) training-use citation.",
     ),
     "openai": ProviderZdrScope(
         provider_name="openai",

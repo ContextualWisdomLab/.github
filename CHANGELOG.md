@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Strengthen `scripts/ci/zdr_policy.py`'s `nvidia_nim`/`nvidia_nim_sub` ZDR
+  attestation with a direct primary-source citation: NVIDIA's own current
+  *NVIDIA API Trial Terms of Service* (v. September 19, 2025), Section
+  3.3(iv), states User Content and Generated Content are collected "to
+  improve NVIDIA products and services, including AI models" — affirmative
+  evidence against zero data retention, not just an absence of attestation.
+  `zero_data_retention` stays `False` as it already was; only the citation
+  and note change. See the 2026-08-30 ZDR/NIM-routing gap-baseline entry for
+  the full architecture review this citation was part of.
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
