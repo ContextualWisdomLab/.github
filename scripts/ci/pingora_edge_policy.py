@@ -176,16 +176,11 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     (one GitHub *can* diff, meaning it could carry inspectable content) is
     never exempted here.
 
-    ``tests/test_pingora_edge_policy.py`` is exempted the same way this
-    module's own source is: a scanner's regression suite necessarily
-    contains the denied Nginx runtime forms it verifies detection of as
-    fixture strings, so a PR whose diff to that file happens to add a line
-    matching a ``CONTENT_RULES`` pattern (triggering `_needs_content_scan`'s
-    "nginx" in the patch heuristic) does not then get the file's *entire*
-    content -- full of intentional denied forms throughout -- scanned and
-    rejected. A ``.py`` test file cannot itself be deployed as an active
-    Nginx runtime artifact, unlike the config/Dockerfile/service forms this
-    policy actually guards against.
+    Only the trusted scanner source itself and dedicated inert samples under
+    ``tests/fixtures`` receive a source-fixture exemption. Executable test
+    modules remain runtime candidates under the binding policy; regression
+    samples that contain denied forms must live in the dedicated fixture
+    boundary rather than exempting the whole test module.
     """
 
     pure = PurePosixPath(path)
@@ -194,10 +189,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_SUFFIXES
     ):
         return True
-    if pure.as_posix() in (
-        "scripts/ci/pingora_edge_policy.py",
-        "tests/test_pingora_edge_policy.py",
-    ):
+    if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
         return True
     lower_parts = tuple(part.lower() for part in pure.parts)
     is_tests_fixture = len(lower_parts) >= 2 and lower_parts[:2] == ("tests", "fixtures")
