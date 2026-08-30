@@ -2339,18 +2339,25 @@ interrogate 100%). `.github#1347`에는 또 새 Devin 라운드가 도착해 실
 있는 명령이 코드화된 실패 대신 처리되지 않은 예외로 새던 문제, `shutil.which("sh")`가 호출자 PATH를 써
 bwrap mount 안에 없는 셸을 잘못 통과시키던 문제) 별도 hardening(`bd0697aa`, symlink 순환 탐지를 재귀
 active-set 방식으로 교체)까지 push했음을 발견 — 에이전트는 자신의 중복 draft를 버리고 `git merge
---ff-only`로만 재조정했다(새 커밋 없음, force-push 없음). 나머지 5건: 2건은 정보성 확인(이미 정확,
-조치 불필요), 1건(readiness probe가 bwrap의 `--unshare-net` 부재로 같은 runner의 다른 서비스를 오탐할
-수 있음)은 이미 다른 세션이 PR 코멘트로 3가지 옵션을 제시한 진짜 아키텍처 결정 사항이라 그대로 유지,
-나머지 2건은 이번 세션이 직접 검증해 처리: (a) "rejected copy 유지" — `copy_workspace`의 symlink-escape
-`ValueError`를 `sandboxed_verify.py`/`sandboxed_web_e2e.py` 양쪽 `main()` 모두 잡지 않아 코드화된 실패
-대신 raw traceback이 새던 실재 버그를 확인·수정(exit 125, 기존 다른 ValueError 거부와 동일 관례) —
-`--keep-sandbox`가 rejected copy도 유지하는 것 자체는 "디버깅용 보존"이라는 플래그의 명시된 목적과
-일치해 정책 문제가 아니라고 판단, 변경하지 않음; (b) "`sandboxed`: true가 isolation 비활성 상태를
-가린다" — 별도 `isolation`/`isolation_backend` 필드가 이미 실제 구분을 담당하고, 어떤 스크립트도
-`sandboxed`를 프로그램적으로 파싱하지 않으며, sibling 모듈(`sandboxed_verify.py`)에서 이 필드는 애초에
-OS 격리 개념이 없어 의미가 다르므로 스키마 변경 없이 그대로 둠. 커밋 `528a1eae`로 push, 전체 스위트
-1980 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%, ruff clean.
+--ff-only`로만 재조정했다(새 커밋 없음, force-push 없음). 남은 것 중 (a) "rejected copy 유지" —
+`copy_workspace`의 symlink-escape `ValueError`를 `sandboxed_verify.py`/`sandboxed_web_e2e.py` 양쪽
+`main()` 모두 잡지 않아 코드화된 실패 대신 raw traceback이 새던 실재 버그를 확인·수정(exit 125, 기존
+다른 ValueError 거부와 동일 관례; `--keep-sandbox`가 rejected copy도 유지하는 것은 "디버깅용 보존"이라는
+플래그의 명시된 목적과 일치해 정책 문제가 아니라고 판단, 변경하지 않음) — 커밋 `528a1eae`로 push.
+
+이후 Devin이 새 라운드에서 finding 2건을 더 남겨(총 unresolved 7건으로 증가) — "명시적 `--ignore
+.env.example`가 env-template allowlist에 의해 무시당함"과 "PATH의 relative entry가 wrapper 자신의
+cwd 기준으로 해석돼 valid한 workspace-local 도구가 격리에서 거부됨" — 둘 다 직접 검증해 고치고 push
+직전 재확인했더니, 이번엔 다른 세션이 **동일한 두 버그를 독립적으로, 동등하거나 더 방어적인 방식으로**
+이미 고쳐 push해 있었다(`5b96f849`/`3c32d3ca` — PATH 수정은 relative entry가 sandbox_root 밖으로
+나가는 경우 파일시스템을 건드리기도 전에 걸러내는 추가 방어까지 포함). 내 uncommitted 중복 edit을
+버리고 `git merge --ff-only`로 재조정(새 커밋 없음). 나머지 2건은 정보성 확인(이미 정확, 조치 불필요),
+1건(readiness probe가 bwrap의 `--unshare-net` 부재로 같은 runner의 다른 서비스를 오탐할 수 있음)은
+다른 세션이 PR 코멘트(`issuecomment-5469492897`)로 3가지 옵션(잔여 위험 수용 / `/proc` 기반 포트-소유권
+검증 / 전체 network-namespace 재설계)을 제시한 진짜 아키텍처 결정 사항이라 thread를 열어둔 채 유지.
+review thread 7건 중 6건 코멘트+resolve, 1건(아키텍처 결정)은 의도적으로 open 유지. 최종 push된 tip
+(`3c32d3ca`) 검증: 전체 스위트 1984 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%,
+ruff clean.
 
 ## 6. Compliance and data boundary
 
