@@ -1816,20 +1816,28 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
    전환 완료. stderr tail 확장(`SIDECAR_STDERR_TAIL_LINES`) + gap-baseline correction(Bytez/413 오귀속
    정정, family_cap 수정이 진짜 root cause임을 반영)의 required Checks·독립 승인을 재확인하고, 조건 충족
    시 merge한다.
-3. ContextualWisdomLab/naruon#1486 — develop과 이미 동기화됨, ready-for-review로 전환 완료. 새로 추가된
-   Noema `check_calendar_conflict` 도구의 naruon 자체 required Checks(OpenCode/Strix/merge-scheduler)를
-   current head에서 재확인하고, 조건 충족 시 merge한다.
-4. ContextualWisdomLab/.github#1347 — **아직 손대지 않음, 다음 pass 전용 작업.** web-E2E isolation/SSRF
-   수정이 8일 이상 stale한 상태이고, 그 사이 `main`이 정확히 같은 파일(`sandboxed_web_e2e.py`)에 독립적인
-   SSRF 강화를 상당량 추가했다 — 기계적 merge가 아니라 실제 로직을 읽고 대조하는 작업이 필요하다(위
-   2026-08-30 항목에서도 "same-file, overlapping-logic" 사례로 이미 플래그됨). ordinary merge commit(no
-   rebase)으로 conflict를 해소하되, 서두르지 말고 전용 pass에서 진행한다.
-5. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon
-   ecosystem 소비 증거(부분적으로 #1486이 G-06/PRD-02에 기여), G-15는 대용량·미지원 첨부파일 parser
-   registry의 소유 저장소 PR로 연결한다. completion warm-up probe(`proxy_send_once`) 자체의 재시도
-   여부는 이미 merge된 family_cap/gateway-timeout 수정의 실제 hosted-run 결과와, `main`에 이미 병합된
-   `log "sidecar preflight route evidence: ..."` 가시성 라인이 향후 축적할 실제 transience 증거가
-   나오기 전까지 보류한다 — 지금 다시 시도하는 것은 추측에 기반한 재작업일 뿐이다.
+3. ContextualWisdomLab/naruon#1486 — develop과 이미 동기화됨, ready-for-review로 전환 완료. `check_calendar_conflict`
+   도구 위에 G-06의 human-correction 슬라이스(judgment 영속화 + 정정 API 3개, Alembic `0018`)를 추가
+   배포했고, 그 위에 도착한 Devin Review 5건 + github-code-quality 1건을 모두 실제로 고치고 6개 thread를
+   전부 코멘트+resolve했다(row lock, decision/reason/action 일관성, list 상한, 공유 상수 통합, import 정리).
+   naruon 자체 required Checks(OpenCode/Strix/merge-scheduler)를 current head(`7c20155f`)에서 재확인하고,
+   조건 충족 시 merge한다.
+4. ContextualWisdomLab/.github#1347 — **conflict 해소 완료** (더 이상 "아직 손대지 않음"이 아니다). web-E2E
+   isolation/SSRF 수정을 `main`과 merge해 정확히 예상된 3개 파일 충돌을 해소했고(main의 DNS-rebind 방지
+   validator 채택 + PR의 bubblewrap isolation 유지), 그 과정에서 실제 회귀(빈 readiness URL 처리 누락)도
+   고쳤다. push 직전 다른 세션이 이미 동일한 merge를 독립적으로 push한 것을 발견해 force-push 없이
+   재조정했다(위 2026-08-30 "G-06 증분 배포 + `.github#1347` conflict 해소" 항목 참조). 현재
+   `mergeable_state`는 `dirty`가 아니라 `blocked`(required Checks/리뷰 대기, 나머지 세 PR과 동일한 정상
+   상태)다. required Checks·독립 승인을 재확인하고 조건 충족 시 merge한다.
+5. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제다. G-06은 `#1486`이 이제
+   `check_calendar_conflict`(temporal commitment/conflict) + judgment/correction API(human correction)
+   두 다리를 모두 갖춘 실질적 증분을 배포했다 — 남은 것은 thread/sender ontology 다리뿐이다. G-15(대용량·
+   미지원 첨부파일 parser registry)는 정찰만 끝났고(MIME sniffing + quarantine status + `attachment_uid` +
+   reparse-intent API로 슬라이스 특정) 아직 구현하지 않았다 — 다음 pass 최우선 구현 대상이다.
+   completion warm-up probe(`proxy_send_once`) 자체의 재시도 여부는 이미 merge된 family_cap/gateway-timeout
+   수정의 실제 hosted-run 결과와, `main`에 이미 병합된 `log "sidecar preflight route evidence: ..."`
+   가시성 라인이 향후 축적할 실제 transience 증거가 나오기 전까지 보류한다 — 지금 다시 시도하는 것은
+   추측에 기반한 재작업일 뿐이다.
 
 ## 6. Compliance and data boundary
 
