@@ -2359,6 +2359,14 @@ review thread 7건 중 6건 코멘트+resolve, 1건(아키텍처 결정)은 의�
 (`3c32d3ca`) 검증: 전체 스위트 1984 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%,
 ruff clean.
 
+**추가**: `naruon#1486`(head `dcc9fcd0`)의 required `strix` check가 실패해 job 로그를 직접 확인 —
+"Strix run failed for model 'orchestrator/free' after 5404s (exit code 124)", 즉 스캐너 자체가
+contextual-orchestrator 게이트웨이 backend를 기다리다 타임아웃한 것이지 이 PR의 diff에 대한 스캔
+결과가 아니었다(`.github#1438` PR 설명에 이미 별도 추적 중인 "healthz는 통과하지만 실제 completion
+요청이 0바이트로 120초 행"과 동일 시그니처). PR에 근거와 함께 standing-down 코멘트를 남기고
+`rerun_failed_jobs`로 1회 재실행 — **재실행 성공**(`conclusion: success`), 진단이 맞았음을 확인.
+naruon#1486에 남은 유일한 required-check 실패는 여전히 opencode-review의 비동기 verdict 대기뿐.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
