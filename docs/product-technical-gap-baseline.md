@@ -700,6 +700,98 @@ recurrence" section below out of the file entirely; both are restored here.)
   each of the 15 PRs' current-head checks and reviews, and merge whichever
   come back green and approved with `--match-head-commit` per §5.
 
+## 2026-08-30 discovery-error visibility gap in the review sidecar launcher
+
+- While investigating the "2026-08-30 orchestrator/free pool exhausted by
+  upstream ZDR hardening" entry above, the repo owner asked why a local
+  reproduction of that incident showed only 3 of the 5 configured providers
+  (`openrouter`, `nvidia_nim`, `nvidia_nim_sub`) and never `bytez`/`openai`,
+  despite all 5 credentials being registered.
+- Traced to a real, separate bug in this repo (not `contextual-orchestrator`):
+  `scripts/ci/contextual_orchestrator_review_launcher.py`'s `main()` called
+  `discovered, _ = discover_all_models()`, discarding the second tuple
+  element entirely. `discover_all_models()` itself correctly isolates and
+  returns each provider's failure as a `ProviderDiscoveryError` (bounded,
+  secret-free: a `provider_name` plus a stable `error_code` classification
+  such as `http_status_401`/`timeout`/`transport_error`/`invalid_response`,
+  confirmed by reading `_provider_discovery_error_code` and
+  `ProviderDiscoveryError.__init__` directly) — the launcher simply never
+  looked at them. An operator reading CI logs could not tell "this provider
+  legitimately has zero free models" from "this provider's credential or
+  discovery request is silently broken", which is exactly the ambiguity that
+  made the earlier ad hoc reproduction inconclusive about bytez/openai.
+- Fixed by adding `_log_discovery_errors()` to the launcher, called
+  immediately after `discover_all_models()`, printing one
+  `provider_discovery_failed provider=<name> code=<code>` line per error to
+  stderr (non-fatal, matching `discover_all_models()`'s own "one provider's
+  failure never blocks the others" contract). Extended
+  `scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py` with a
+  matching bounded regex (mirroring the existing `request_failed` pattern)
+  so this new diagnostic is allowlisted through to CI evidence instead of
+  falling into `omitted_unstructured_lines=N` — the same class of redaction
+  gap the "2026-08-30 sidecar-diagnostics gap baseline" fix (#1425) closed
+  for the fail-closed exit message.
+- This does not by itself restore `orchestrator/free`; it only makes any
+  future bytez/openai discovery failure (credential expiry, API changes,
+  etc.) visible instead of silently indistinguishable from "no free models
+  today". Root cause and fix for the free-pool exhaustion itself remain
+  tracked in the entry above.
+- Validation: `PYTHONPATH=. python3 -m coverage run -m pytest tests -q` —
+  1878 passed, 1 skipped, 25 subtests; `interrogate` 100.0%; `git diff
+  --check` clean. `scripts/ci/contextual_orchestrator_review_launcher.py`
+  remains outside the coverage gate per this repo's pre-existing, documented
+  `pyproject.toml` `[tool.coverage.run]` omission (it imports the vendored
+  orchestrator library, installed only inside the sidecar's own runtime);
+  the new `_log_discovery_errors` helper is still covered by two new
+  regression tests exercising it directly via `runpy.run_path`, consistent
+  with this file's existing test pattern for the same module's other
+  runtime-only helpers.
+
+## 2026-08-30 orchestrator/free root-cause fix landed; sidecar pin bumped
+
+- Root cause of the "orchestrator/free pool exhausted by upstream ZDR
+  hardening" entry above is now fixed upstream:
+  `ContextualWisdomLab/contextual-orchestrator#919` generalized the
+  ADR-0032 Models.dev cost cross-reference from `opencode_zen`-only to also
+  cover `nvidia_nim`/`nvidia_nim_sub`/`openai`, and — the actual blocker
+  found during that PR's own review — fixed `_fetch_json` sending no
+  `User-Agent` header, which caused `models.dev` (Cloudflare-fronted) to
+  reject every discovery request with HTTP 403 error 1010. That 403 had been
+  silently breaking the Models.dev join for **all** providers, including the
+  pre-existing `opencode_zen` path, since before this incident was first
+  observed; without it, no provider could ever populate `orchestrator/free`
+  regardless of the OpenRouter `evidence_only` hardening this baseline
+  previously identified as the proximate cause.
+- Merged into `contextual-orchestrator` `main` as squash commit
+  `30c6d71680e659f25a0a433d4726ad0d437f9757`, with owner-authorized admin
+  bypass past `opencode-review`/`noema-review`/`strix` — those three required
+  checks run this org's central review pipeline against `.github`'s
+  *current* `main` pin, which (before this PR bump) still pointed at the
+  broken pre-fix commit, so they failed on the exact chicken-and-egg this fix
+  resolves: the PR that restores `orchestrator/free` cannot itself pass a
+  required review that depends on `orchestrator/free`. All 5 review threads
+  (Devin, CodeRabbit) were independently resolved before merge; local suite
+  was 2676 passed.
+- This PR bumps `ORCHESTRATOR_PIN_SHA` from
+  `5f2753ace756ddd81049a5221d55e8977572a416` (the #1422 pin) to
+  `30c6d71680e659f25a0a433d4726ad0d437f9757` in the same three places #1422
+  established as the contract: the sidecar script default
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
+  test's `ORCH_PIN_SHA`
+  (`tests/test_contextual_orchestrator_review_sidecar_contract.py`), and
+  `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
+  reference. `requirements.lock` needs no separate sync for the same reason
+  #1422 recorded — the sidecar installs it fresh from the freshly
+  checked-out pinned commit.
+- Acceptance is open the same way #1422's entry describes: this closes the
+  reproduced root cause (live-verified against the real `models.dev/api.json`
+  endpoint both before the fix, HTTP 403, and after, HTTP 200) and all
+  static contract tests pass, but only a fresh post-merge hosted
+  `noema-review`/`opencode-review` run against this new pin is proof the live
+  gateway path actually discovers a free model and posts a verdict.
+  Following up on that hosted-run confirmation is the concrete next check for
+  this entry, not a new code change.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

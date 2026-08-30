@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "5f2753ace756ddd81049a5221d55e8977572a416"
+ORCH_PIN_SHA = "30c6d71680e659f25a0a433d4726ad0d437f9757"
 
 
 def _read(path: Path) -> str:
@@ -419,6 +419,29 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     exited_branch = text.index("sidecar exited before healthz")
     drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
     assert drain_call < exited_branch
+
+
+def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
+    """A partial provider failure must reach the visible log even when the sidecar still starts."""
+    text = _read(SIDECAR)
+    assert 'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"' in text
+    # Must wait for the launcher's own completion sentinel to pass through the
+    # async sanitizer -- a plain `[ -s "$sidecar_stderr" ]` check would race a
+    # slow sanitizer and silently show nothing even when warnings exist.
+    assert 'grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    assert 'grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    # `grep -v` exits 1 when every line was filtered out (the common, healthy
+    # case with zero warnings); under `set -o pipefail` that would abort the
+    # whole script unless explicitly tolerated.
+    assert "sed -n '1,20p' || true)\"" in text
+    assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
+    # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
+    # after a successful healthz, so its sanitizer never sees EOF and doing
+    # so would hang the workflow forever.
+    healthz_confirmed = text.index("healthz and provider-route preflight confirmed")
+    warnings_line = text.index("sidecar startup warnings (non-fatal)")
+    assert healthz_confirmed < warnings_line
+    assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
 
 
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
