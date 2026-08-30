@@ -5629,12 +5629,12 @@ jobs:
             }
 
             emit_known_missing_string_finding \
-              "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" \
-              "Strix PR scans must use contextual-orchestrator/orchestrator/auto" \
+              "STRIX_MODEL: contextual-orchestrator/orchestrator/free" \
+              "Strix PR scans must use contextual-orchestrator/orchestrator/free" \
               ".github/workflows/strix.yml" \
               "scripts/ci/strix_required_workflow_smoke.sh"
             emit_known_missing_string_finding \
-              "Strix model overrides are limited to contextual-orchestrator/orchestrator/auto." \
+              "Strix model overrides are limited to contextual-orchestrator/orchestrator/free." \
               "Strix model overrides must remain gateway-only" \
               ".github/workflows/strix.yml" \
               "scripts/ci/strix_required_workflow_smoke.sh"
