@@ -69,25 +69,28 @@ PROVIDER_ZDR_SCOPE: Mapping[str, ProviderZdrScope] = {
         "authoritative per-endpoint membership source.",
         openrouter_endpoints_feed=True,
     ),
+    # Full citation for the two NVIDIA entries below: NVIDIA's own current
+    # *NVIDIA API Trial Terms of Service* (v. September 19, 2025 -- the terms
+    # governing this org's free/trial integrate.api.nvidia.com key; confirmed
+    # still the live document as of the as_of date on these entries), Section
+    # 3.3(iv), states NVIDIA collects "User Content and Generated Content to
+    # improve NVIDIA products and services, including AI models" -- i.e.
+    # prompts and completions ARE used for training. This is not merely an
+    # absence of attestation; it is an affirmative not-ZDR fact. Section 2.3's
+    # "will not store or use User Content or Generated Content at the end of
+    # each API Service session" does not override this: 3.3 is the operative
+    # carve-out. Do not reclassify either provider as ZDR without a
+    # superseding, dated NVIDIA document that repeals or narrows Section
+    # 3.3(iv) for this specific API Service.
     "nvidia_nim": ProviderZdrScope(
         provider_name="nvidia_nim",
         zero_data_retention=False,
         source="https://assets.ngc.nvidia.com/products/api-catalog/legal/"
         "NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf",
         as_of="2026-08-30",
-        note="Not just unattested -- affirmatively NOT zero-retention. "
-        "NVIDIA's own current NVIDIA API Trial Terms of Service (v. September "
-        "19, 2025, the terms governing this org's free/trial "
-        "integrate.api.nvidia.com key; confirmed still the live document as "
-        "of this citation date), Section 3.3(iv), states NVIDIA collects "
-        "'User Content and Generated Content to improve NVIDIA products and "
-        "services, including AI models' -- i.e. prompts and completions ARE "
-        "used for training. Section 2.3's 'will not store or use User "
-        "Content or Generated Content at the end of each API Service "
-        "session' does not override this: 3.3 is the operative carve-out. "
-        "Do not reclassify this provider as ZDR without a superseding, "
-        "dated NVIDIA document that repeals or narrows Section 3.3(iv) for "
-        "this specific API Service.",
+        note="NVIDIA API Trial Terms of Service Section 3.3(iv) states User "
+        "Content and Generated Content are used to improve NVIDIA products "
+        "and services, including AI models -- affirmatively not ZDR.",
     ),
     "nvidia_nim_sub": ProviderZdrScope(
         provider_name="nvidia_nim_sub",
@@ -96,8 +99,8 @@ PROVIDER_ZDR_SCOPE: Mapping[str, ProviderZdrScope] = {
         "NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf",
         as_of="2026-08-30",
         note="Secondary NVIDIA NIM key is the same integrate.api.nvidia.com "
-        "trial API and shares the nvidia_nim scope above verbatim -- see "
-        "that entry's note for the Section 3.3(iv) training-use citation.",
+        "trial API and shares the nvidia_nim entry's Section 3.3(iv) "
+        "training-use scope verbatim.",
     ),
     "openai": ProviderZdrScope(
         provider_name="openai",
