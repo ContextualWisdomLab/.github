@@ -71,6 +71,21 @@ def test_sidecar_adr_names_the_current_vendored_revision() -> None:
     assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
+def test_sidecar_and_adr_pin_the_bounded_preflight_contract() -> None:
+    """Runtime defaults and the accepted prose must describe one startup budget."""
+    launcher = _read(LAUNCHER)
+    sidecar = _read(SIDECAR)
+    adr = _read(SIDECAR_ADR)
+
+    assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
+    assert 'CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-24}"' in sidecar
+    assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24" in launcher
+    assert "REVIEW_PREFLIGHT_BATCH_SIZE = 4" in launcher
+    assert "at most 24" in adr
+    assert "concurrent batches of four" in adr
+    assert "fails closed before healthz" in adr
+
+
 def test_sidecar_requires_the_five_provider_secrets() -> None:
     """At least one of the five secrets must be present as bootstrap transport."""
     text = _read(SIDECAR)
