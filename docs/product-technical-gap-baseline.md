@@ -1737,6 +1737,45 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
    `scripts/ci/sandboxed_web_e2e.py`의 SSRF 방어 로직을 정확히 대조하고, ordinary merge
    commit(no rebase)으로 결합할 정확한 hunk별 해소안을 정찰.
 
+## 2026-08-30 시간별 재개: G-06 증분 배포 + `.github#1347` conflict 해소(동시 작업 병합 포함)
+
+세 배경 조사(위 §5.1)가 모두 완료되어 다음을 실행했다.
+
+- **naruon G-06 증분 배포**: 조사 결론(사람 정정 슬라이스가 sender ontology보다 작고 실질적인
+  다음 조각)에 따라, `evaluate_calendar_conflicts`의 결정을 `calendar_conflict_judgments`
+  테이블에 판단(judgment)으로 영속화하고 `project_graph_corrections`와 동일한 before/after
+  감사 흔적 패턴으로 사람이 그 판단을 정정할 수 있는 API 3개
+  (`POST /judgments`, `GET /judgments`, `POST /judgments/{uid}/corrections`)를
+  `naruon`에 추가했다(Alembic `0018_calendar_conflict_judgments`, 구조화 op). `/evaluate`
+  자체의 무상태 계약은 바꾸지 않았다. 검증: 신규 테스트 8 passed, 전체 백엔드 스위트 1821
+  passed/32 skipped(신규 skip 없음), ruff clean, `alembic heads`가 단일 head로 수렴. `naruon#1486`에
+  같은 브랜치로 push했다(#1486은 이미 이 세션이 연 PR이라 새 커밋이 자동으로 같은 PR에 반영됨).
+- **`.github#1347`(SSRF/isolation) conflict 해소**: PR 브랜치를 로컬에 체크아웃해 `origin/main`을
+  merge하니 사전 조사대로 정확히 3개 파일(`CHANGELOG.md`, `scripts/ci/sandboxed_web_e2e.py`,
+  `tests/test_sandboxed_web_e2e.py`)에서 충돌했다. `main`의 `require_loopback_readiness_url`
+  계열(DNS-rebind 방지, userinfo 거부, IPv4-mapped IPv6 unwrap)을 정본으로 채택하고 PR
+  브랜치의 bubblewrap isolation 코드와 "서비스 시작 전에 조기 실패"하는 `main()` 흐름은 그대로
+  유지했다. 이 과정에서 실제 회귀를 하나 발견해 직접 고쳤다: `main()`의 조기 검증 호출부는
+  `wait_for_url`과 달리 빈 문자열 URL을 건너뛰는 가드가 없어, `--backend-ready-url`/
+  `--frontend-ready-url`(기본값 `""`, "readiness 체크 없음"을 의미하는 흔한 경우)을 그대로
+  넘기면 `require_loopback_readiness_url("")`이 항상 실패하는 회귀가 생길 뻔했다 — 호출부에
+  `if args.backend_ready_url:` 가드를 추가해 막았다.
+  **동시 작업 충돌**: 이 merge를 push하려는 순간, 같은 PR 브랜치에 이미 다른 세션이 정확히
+  동일한 `origin/main` merge를 독립적으로 수행해 먼저 push했음을 발견했다(동일한 3개 파일
+  conflict, 동일 시각대). 지시문의 "동시 remote-agent 커밋을 경쟁으로 취급해 force-push하지
+  않는다"에 따라, 그 원격 커밋을 로컬에 merge해 재조정했다: `scripts/ci/sandboxed_web_e2e.py`는
+  두 세션의 해소가 완전히 동일해 자동 merge됐고(빈 문자열 가드 fix 포함, 서로 다른 세션이 같은
+  회귀를 각자 발견해 같은 방식으로 고쳤음을 확인) — `CHANGELOG.md`는 상대 세션이 쓴 더 완결된
+  단일 문단을 채택했으며, `tests/test_sandboxed_web_e2e.py`의 사소한 중복 assertion 2줄은
+  상대 세션 쪽(중복 없는 버전)을 채택했다. 재검증: PR 자체 명시 테스트 113 passed, 전체 스위트
+  1912 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%. Push 완료 —
+  `mergeable_state`가 `dirty`에서 `blocked`(required Checks/리뷰 대기, 정상)로 전환됨을 확인했다.
+- **naruon G-15**: 이번 pass에서는 정찰만 완료(현재 1MB/20MB/64MB로 흩어진 상한 위치, 이미
+  존재하는 MIME 키 parser registry(`_PARSER_MANIFEST`), zip-bomb 방어가 첨부 경로에는 전혀
+  없음을 확인). 가장 작은 실질적 슬라이스로 "MIME sniffing + 불일치 시 명시적
+  quarantine 상태 + `attachment_uid` 부여 + reparse-intent API"를 특정했으나, 아직 구현하지
+  않았다 — 다음 pass 최우선.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
