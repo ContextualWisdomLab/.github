@@ -198,7 +198,7 @@ _SENSITIVE_DATA_SCRUB_RE = re.compile(
 )
 
 def _sensitive_data_repl(match: re.Match[str]) -> str:
-    """Replace a matched credential while preserving only safe prefixes."""
+    """Return the masked string based on the matching group."""
     idx = match.lastindex
     if idx in (1, 2, 6, 7):
         return match.group(idx) + "***"

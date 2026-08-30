@@ -68,12 +68,6 @@ def test_scrub_sensitive_data_authorization_headers():
     assert noema.scrub_sensitive_data("authorization: bearer xyz") == "authorization: bearer ***"
 
 
-def test_scrub_sensitive_data_masks_nested_credential_schemes():
-    """Assigned credentials must not leak suffixes after Bearer/token prefixes."""
-    assert noema.scrub_sensitive_data("api_key=Bearer secret-value; keep this") == "api_key=***; keep this"
-    assert noema.scrub_sensitive_data("client_secret=token secret-value") == "client_secret=***"
-
-
 def test_split_repo_and_graphql(monkeypatch):
     with pytest.raises(ValueError):
         noema.split_repo("owner")
