@@ -1350,6 +1350,34 @@ the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
   provider's API, not a candidate-selection or token-budget problem.
   Root-causing this has been delegated to a separate, already-in-flight
   investigation (contextual-orchestrator agent); not duplicated here.
+- **A third, distinct failure mode, also verified directly, also not yet
+  fixed**: `noema-review` on `ContextualWisdomLab/.github#1441` (job
+  `99249903390`, head `d877886b`) reached `healthz and provider-route
+  preflight confirmed after 41s` — the launcher's own internal preflight
+  found a viable route, past the family-cap fix's stage entirely — logged
+  the same non-fatal `provider_discovery_failed provider=bytez
+  code=http_status_500` warning seen elsewhere in this investigation, and
+  then the shell script's own separate post-`healthz` gateway smoke
+  request (the one #1436 fixed the `max_tokens` on, now `4096`, up from
+  `16`) got **zero bytes back for the full 120-second `curl` timeout**:
+  `curl: (28) Operation timed out after 120002 milliseconds with 0 bytes
+  received` → `gateway preflight request could not reach the local
+  sidecar`. Distinct from both defects above: not a bad-request rejection
+  (no error response at all, just silence) and not Strix's own client code
+  path (this is the sidecar script's own `curl` probe). Plausible causes,
+  none confirmed: (a) `max_tokens=4096` now lets a route legitimately spend
+  much longer generating (heavy internal reasoning, no early return) than
+  the old `16`-token budget ever could, genuinely exceeding a 120s ceiling
+  that was never re-examined when the token budget grew 256x; (b) a real
+  hang/deadlock in the orchestrator server for a specific request shape;
+  (c) unrelated transient network flakiness. Not pursued further this pass
+  — noted as evidence for whoever picks this up next. If this recurs across
+  multiple runs, the 120s `curl --max-time` in
+  `contextual_orchestrator_review_sidecar.sh`'s gateway-preflight step may
+  need raising alongside `max_tokens` (same reasoning #1436 already
+  applied: a bigger token budget can legitimately need more wall-clock
+  time), or the specific route it lands on needs identifying and
+  deprioritizing.
 - **Accurate combined conclusion**: the family_cap-driven deterministic
   admission of dead/slow candidates, and separately the desynchronized
   `max_tokens` on the post-`healthz` smoke request, are fixed and confirmed
