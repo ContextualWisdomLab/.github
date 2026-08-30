@@ -1378,22 +1378,37 @@ the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
   applied: a bigger token budget can legitimately need more wall-clock
   time), or the specific route it lands on needs identifying and
   deprioritizing.
+- **Correction (Devin Review finding on this PR, verified directly before
+  editing): the conclusion below previously undercounted the open gaps as
+  "one further known gap" when the same entry already documented two
+  separate, unfixed failure modes** (the `stream_options` 400 and the
+  120s-timeout gap, both documented above). Also checked directly rather than assumed:
+  `ContextualWisdomLab/contextual-orchestrator#924` (opened after this
+  entry was first written, proposing to fix the `stream_options` gap by
+  removing the upfront rejection since `stream_options` was already
+  stripped before every upstream provider call) is **still open and
+  `mergeable_state: blocked` as of this correction — not merged** — so
+  that gap is not closed yet either, only diagnosed with a fix proposed.
 - **Accurate combined conclusion**: the family_cap-driven deterministic
   admission of dead/slow candidates, and separately the desynchronized
   `max_tokens` on the post-`healthz` smoke request, are fixed and confirmed
   by a real hosted run — that specific, previously 100%-reproducible
   failure mode is closed. It is not true that `orchestrator/free` is now
   reliable in general: with `family_cap=8` giving more provider diversity
-  per run, *which* candidate a given run draws varies, and at least one
-  candidate family has a live, separate, unfixed request-compatibility
-  gap that can still fail Strix (though evidently not every candidate —
-  contextual-orchestrator#921's `strix` run succeeded). Two permanently
-  -retired `google/gemma-3-*-it` model ids are also still admitted into
-  the pool (see the family-cap entry above) and will still individually
-  fail when the alphabetical sort reaches them. None of this changes the
-  scope of what was actually fixed in this pass; it means "the outage is
-  over" would overclaim, while "the two diagnosed root causes are fixed
-  and verified, one further known gap remains open elsewhere" is accurate.
+  per run, *which* candidate a given run draws varies, and **two further,
+  independent, unfixed gaps remain open**: (1) at least one candidate
+  family has the live `stream_options`/`tools`/`response_format`
+  request-compatibility rejection above, with a fix proposed but not yet
+  merged in `contextual-orchestrator#924` (though evidently not every
+  candidate hits it — contextual-orchestrator#921's `strix` run
+  succeeded); and (2) the separate 120s-timeout-with-zero-bytes gap below,
+  cause unconfirmed. Two permanently-retired `google/gemma-3-*-it` model
+  ids are also still admitted into the pool (see the family-cap entry
+  above) and will still individually fail when the alphabetical sort
+  reaches them. None of this changes the scope of what was actually fixed
+  in this pass; it means "the outage is over" would overclaim, while "the
+  two diagnosed root causes are fixed and verified, two further known
+  gaps remain open elsewhere" is accurate.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
