@@ -7,12 +7,20 @@
   `free_family_diversity >= 2`, falling back to `orchestrator/auto`
   otherwise. Neither pool is retired: `orchestrator/auto` remains the
   fail-closed default whenever the free catalog cannot show independent
-  provider-family coverage. The rest of this ADR (vendoring, discovery,
-  ZDR-first policy, the family-diverse catalog) remains in force unchanged.
-  See the Amendment below.
+  provider-family coverage. **This corrects an intervening unconditional
+  flip to `orchestrator/free`** (bypass-merged directly to `main` as #1434,
+  ~2026-08-30T10:46 UTC, with the single-outage-domain risk explicitly
+  accepted rather than mitigated) that this ADR's own amendment history
+  below records but does not treat as superseding authority — see
+  `docs/pr-review-and-merge-procedure.md` and the exact-head governance
+  review on `ContextualWisdomLab/.github#1437` for why an administrator
+  bypass merge is not, by itself, operational acceptance of the approach it
+  merged. The rest of this ADR (vendoring, discovery, ZDR-first policy, the
+  family-diverse catalog) remains in force unchanged. See the Amendment
+  below.
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema retain the fail-closed zero-cost virtual model id `orchestrator/free`; authoritative Strix security analysis uses the provider-diverse `orchestrator/auto` pool. Strix is intentionally correctness-first rather than zero-cost. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema use the fail-closed zero-cost virtual model id `orchestrator/free` unconditionally. Strix uses `orchestrator/free` only when live `free_family_diversity` evidence is `>= 2`, otherwise the provider-diverse `orchestrator/auto` pool (see [ADR-0020](0020-strix-orchestrator-free-pool.md)). **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -177,36 +185,91 @@ heuristics without evidence" convention (`docs/product-goal-directive.md`
 follow-up (`strix.yml` is a `pull_request_target` required workflow needing
 its own reviewed, same-head-checked change).
 
-## Amendment (2026-08-30): Strix wired to the diversity gate (ADR-0020, #1437)
+## Amendment (2026-08-30, ~10:46 UTC, PR #1434): Strix switched to `orchestrator/free` unconditionally, risk accepted
+
+**This amendment records a decision that was itself corrected roughly two
+hours later (see the next Amendment below) — kept in full as history, not
+deleted, per this ADR's own convention.**
+
+The org owner explicitly directed Strix off the paid-inclusive
+`orchestrator/auto` pool and onto the same zero-cost `orchestrator/free` pool
+OpenCode and Noema already use, so no central review path executes a paid
+model. This was a deliberate, informed override of the original decision
+above, not an oversight of it: the trade-off the original decision recorded —
+"the 2026-08-29 exact-head DiskSage scan proved that four discovered free
+routes all shared the OpenRouter outage domain, which the gateway correctly
+collapsed to one provider attempt... Strix has no external fallback" — was
+surfaced to the owner explicitly, including a live 2026-08-30 reproduction of
+that same single-family-collapse pattern (a `strix` run's `orchestrator/auto`
+primary/free stage rejected 4/4 candidates — 2 timeouts, 2 HTTP 404s from
+retired NVIDIA-hosted models — and only the `auto` pool's paid fallback kept
+that run alive; see `docs/product-technical-gap-baseline.md`'s 2026-08-30
+sidecar-preflight entries for the full evidence trail). The owner's response,
+verbatim in substance: implement the free-only directive as originally
+instructed. **Accepted consequence, as recorded at the time**: Strix has no
+external fallback and can go fully dark (rather than degraded-but-running)
+during the exact class of incident this ADR originally used
+`orchestrator/auto` to survive, until the free-catalog's stale-model and
+provider-diversity gaps documented alongside this amendment are separately
+closed. Landed via administrator bypass merge
+(`ContextualWisdomLab/.github#1434`, structurally deadlocked required
+reviews per the same `pull_request_target` trust-boundary class as #1430) —
+`scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
+stopped accepting `orchestrator/auto`; `strix.yml`'s `STRIX_MODEL`/
+`CONTEXTUAL_ORCHESTRATOR_POOL` defaulted to `orchestrator/free`; and
+`scripts/ci/strix_required_workflow_smoke.sh`/`AGENTS.md` were updated to
+match, including deleting the smoke assertion that had rejected exactly this
+unconditional flip.
+
+## Amendment (2026-08-30, corrected): evidence-gated conditional, not an accepted-risk unconditional flip (ADR-0020, #1437)
+
+**The amendment immediately above is corrected by this one, on exact-head
+governance review** (`ContextualWisdomLab/.github#1437`): an administrator
+bypass merge — even one made with the risk explicitly surfaced and
+consciously accepted — is not, by itself, treated as operational acceptance
+of the underlying approach once a real review actually happens.
+Per that review: *"The source itself acknowledges that the 2026-08-29
+single-family outage-domain condition is not eliminated... A per-family cap
+does not create a second family. Moving required Strix from the
+correctness-first `orchestrator/auto` pool to `orchestrator/free` before
+current evidence proves at least two independent available families
+therefore reintroduces the exact availability regression ADR-0003 was
+adopted to prevent."*
 
 [ADR-0020: Evidence-gated `orchestrator/free` for Strix](0020-strix-orchestrator-free-pool.md)
-is the follow-up #1433 tracked and the corrected form of #1437's first draft.
-It wires `strix.yml`'s model-resolution step to read `free_family_diversity`
-from the sidecar's policy report (`CONTEXTUAL_ORCHESTRATOR_EVIDENCE`) and
-select `orchestrator/free` only when it is `>= 2` (the free catalog spans at
-least two independent outage domains, so one provider's outage cannot black
-out Strix review); otherwise it falls back to `orchestrator/auto`, the same
-pool Decision §4 above originally pinned. A negative fixture
-(`tests/test_strix_contextual_orchestrator_contract.py`) proves a diversity
-of 0 or 1 keeps the resolved model on `orchestrator/auto` rather than
-weakening it to `orchestrator/free` — the regression this whole mechanism
-exists to prevent.
+is the corrected decision, built on the evidence
+`ContextualWisdomLab/.github#1433` added (the Addendum above) rather than a
+bare unconditional pin. It wires `strix.yml`'s model-resolution step to read
+`free_family_diversity` from the sidecar's policy report
+(`CONTEXTUAL_ORCHESTRATOR_EVIDENCE`) and select `orchestrator/free` only when
+it is `>= 2` (the free catalog spans at least two independent outage
+domains, so one provider's outage cannot black out Strix review); otherwise
+it falls back to `orchestrator/auto`, the same pool Decision §4 above
+originally pinned. A negative fixture
+(`tests/test_strix_contextual_orchestrator_contract.py`) and a structural
+smoke-test assertion (`scripts/ci/strix_required_workflow_smoke.sh`'s
+`assert_free_pool_gated_by_diversity`, replacing rather than merely deleting
+the assertion #1434 removed) prove a diversity of 0 or 1 keeps the resolved
+model on `orchestrator/auto` rather than weakening it to
+`orchestrator/free` — the exact regression both the unconditional-flip
+amendment above and this ADR's own original (also-rejected) first draft
+would have reintroduced.
 
 This is a refinement of Decision §4, not a supersession: `orchestrator/auto`
 is not retired, and neither is the correctness-first fallback OpenCode/Noema
 never needed but Strix still might. ADR-0020 records the residual risk this
 refinement does not claim to fully close (which providers currently publish a
 free tier is a live-market condition; a passing diversity count is necessary
-but not sufficient evidence of resilience) and a separate, orthogonal
-reliability gap — request-time failover when a selected `orchestrator/free`
-route errors, as opposed to catalog-time family diversity — that a dedicated
-fix in `contextual-orchestrator` is addressing independently of this
-repository; ADR-0020 states plainly whether that fix has landed as of this
-PR.
+but not sufficient evidence of resilience) and a request-time-failover gap in
+`contextual-orchestrator` that is partially, not fully, addressed as of this
+change — see ADR-0020 for the exact upstream PR status and what remains
+open. `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
+once again accepts `orchestrator/auto`.
 
-These two additions are the conflict-resolution artifacts
-`docs/product-goal-directive.md` requires when the directive and an existing
-accepted decision disagree: neither silently kept the old pin nor silently
-adopted the new instruction, and
+These three additions (the Addendum and both Amendments above) are the
+conflict-resolution artifacts `docs/product-goal-directive.md` requires when
+the directive and an existing accepted decision disagree: none of them
+silently kept the old pin, silently adopted a new instruction, or silently
+treated a bypass merge as settling the question, and
 `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
 records the trail.

@@ -585,6 +585,19 @@ jobs:
           # computed identically either way; see
           # docs/adr/0020-strix-orchestrator-free-pool.md.
           CONTEXTUAL_ORCHESTRATOR_POOL: auto
+          # CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY is
+          # deliberately NOT set here yet. The launcher supports it (see
+          # docs/adr/0020-strix-orchestrator-free-pool.md's "Runtime
+          # backstop" section), but analysis while building it found that
+          # today's live "auto" catalog's own PRIMARY (non-fallback) served
+          # set is drawn from the same free-first candidates as "free" mode
+          # -- so under the currently-documented single-family-dominated
+          # discovery snapshot, enabling this unconditionally would make the
+          # sidecar refuse to boot even into the safe orchestrator/auto
+          # fallback, which is a worse availability regression than what
+          # this ADR exists to prevent. Enabling it needs either confirmed
+          # live diversity >= 2, or a follow-up that scopes the check to the
+          # free-serving path specifically; tracked as a separate decision.
         run: |
           set -euo pipefail
           bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"

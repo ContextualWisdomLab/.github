@@ -14,13 +14,63 @@ Semantic Versioning where the repository publishes a release.
   alias for the same catalog — otherwise. A negative fixture and a
   structural smoke-test assertion (`assert_free_pool_gated_by_diversity`)
   prove a diversity of 0 or 1 can never resolve to `orchestrator/free`. This
-  corrects an earlier draft of this change that flipped the pool
-  unconditionally; see `docs/adr/0020-strix-orchestrator-free-pool.md`
-  (refining, not superseding, `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
-  Strix-specific wiring bullet) for the full decision, the rejected draft,
+  corrects `#1434`'s bypass-merged unconditional flip of the same pool to
+  `orchestrator/free` (see below) — an administrator bypass merge that is
+  not treated as operational acceptance of the unconditional approach, per
+  the exact-head governance review on this change — and this repository's
+  own earlier draft that attempted the same unconditional flip first. See
+  `docs/adr/0020-strix-orchestrator-free-pool.md` (refining, not
+  superseding, `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  Strix-specific wiring bullet) for the full decision, both rejected drafts,
   and its documented residual risk (live-market free-tier availability and a
-  separately tracked, not-yet-confirmed-merged request-time-failover gap in
-  `contextual-orchestrator`).
+  request-time-failover gap in `contextual-orchestrator` that is partially,
+  not fully, addressed as of this change — see that ADR for specifics).
+- Add an opt-in, off-by-default runtime floor to
+  `contextual_orchestrator_review_launcher.py`: `--require-minimum-serving-diversity`
+  (`CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY` in the
+  sidecar script) refuses to `serve()` a post-preflight agent pool spanning
+  fewer than 2 independent outage-domain provider families. This is a
+  runtime backstop distinct from `strix.yml`'s own decision-time
+  `free_family_diversity` gate: preflight narrows the served pool to
+  whatever survives a per-route probe, and neither pool's catalog
+  construction guarantees that survivors span more than one family, so even
+  a caller that correctly gated its decision to request this sidecar on
+  live evidence could still end up served from a single point of failure by
+  the time `serve()` is reached. Not yet enabled for any caller (including
+  Strix): today's documented single-family-dominated free-route catalog
+  means enabling it unconditionally would make even the safe
+  `orchestrator/auto` fallback refuse to boot. See
+  `docs/adr/0020-strix-orchestrator-free-pool.md`.
+- Bound `contextual_orchestrator_review_launcher.py`'s own preflight probe
+  loop with one retry on a retryable transport failure
+  (`_is_retryable_preflight_error`): previously each candidate got exactly
+  one attempt with no retry of its own, so a single transient blip across
+  every discovered candidate in one run could exit the sidecar before
+  healthz regardless of how good the gateway's own request-time failover
+  is. Classified by exception type/HTTP status alone, never response text;
+  preserves the exact same preflight report/row shape.
+- Raise `contextual_orchestrator_review_sidecar.sh`'s
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
+  live "no provider route passed the Strix plain-chat preflight" outage
+  blocking `noema-review`/`opencode-review`/`strix` org-wide to
+  `contextual_orchestrator_review_policy.py`'s family-cap candidate
+  selection deterministically admitting the same 4 alphabetically-first
+  `nvidia_nim`/`nvidia_nim_sub` free-model candidates on every run — 2 of
+  which are confirmed NVIDIA-retired model ids returning HTTP 404 forever —
+  while ~19 other healthy free candidates in the same discovery report
+  never got a chance. See the 2026-08-30 sidecar-preflight gap-baseline
+  entry for the full evidence trail, the exact trade-off reasoned through
+  (not live-verified, since this session lacks provider credentials), and
+  the more complete fix if this proves insufficient.
+- Strengthen `scripts/ci/zdr_policy.py`'s `nvidia_nim`/`nvidia_nim_sub` ZDR
+  attestation with a direct primary-source citation: NVIDIA's own current
+  *NVIDIA API Trial Terms of Service* (v. September 19, 2025), Section
+  3.3(iv), states User Content and Generated Content are collected "to
+  improve NVIDIA products and services, including AI models" — affirmative
+  evidence against zero data retention, not just an absence of attestation.
+  `zero_data_retention` stays `False` as it already was; only the citation
+  and note change. See the 2026-08-30 ZDR/NIM-routing gap-baseline entry for
+  the full architecture review this citation was part of.
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the

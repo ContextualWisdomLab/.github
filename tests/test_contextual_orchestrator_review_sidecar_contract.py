@@ -428,6 +428,32 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     assert drain_call < exited_branch
 
 
+def test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected() -> None:
+    """A total preflight rejection must print real route evidence, not just a generic message.
+
+    The launcher writes agent_id/provider/model/status/error_type/http_status
+    (schema-bounded, never raw provider content or secrets -- the same shape
+    Strix's own artifact already publishes) to ``--preflight-out`` before it
+    raises. Before this evidence line existed, every workflow except Strix's
+    separate artifact-upload step was blind to *why* every candidate route
+    was rejected -- the generic exception message never carries per-route
+    detail, only a fixed "no provider route passed..." string.
+    """
+    text = _read(SIDECAR)
+    assert 'if [ -s "$preflight_report" ]; then' in text
+    assert (
+        'log "sidecar preflight route evidence: $(sed -n \'1,80p\' "$preflight_report" | tr \'\\n\' \' \')"'
+        in text
+    )
+    # Must be printed before the fail() call in the same branch, using the
+    # already-drained (sanitizer-waited) state -- not a bare, possibly racy
+    # read of a still-draining stream.
+    exited_branch = text.index("sidecar exited before healthz")
+    evidence_line = text.rindex("sidecar preflight route evidence", 0, exited_branch)
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < evidence_line < exited_branch
+
+
 def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
     """A partial provider failure must reach the visible log even when the sidecar still starts."""
     text = _read(SIDECAR)
@@ -481,6 +507,41 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     assert "--require-zdr" in sidecar
     assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
     assert "require_zdr=args.require_zdr" in launcher
+
+
+def test_minimum_serving_diversity_flag_is_wired_end_to_end_and_off_by_default() -> None:
+    """The opt-in runtime floor is plumbed from env var through to the launcher call.
+
+    docs/adr/0020-strix-orchestrator-free-pool.md: off by default (mirrors
+    --require-zdr's own opt-in shape exactly) because unconditionally
+    enabling it today would immediately fail closed for any caller relying
+    on this sidecar's default pool, including callers that have not asked
+    for or gated on this guarantee.
+    """
+    sidecar = _read(SIDECAR)
+    launcher = _read(LAUNCHER)
+
+    assert 'case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY:-false}" in' in sidecar
+    assert "diversity_args=(--require-minimum-serving-diversity)" in sidecar
+    assert "diversity_args=()" in sidecar
+    assert '"${diversity_args[@]}"' in sidecar
+    # The array must actually reach the launcher invocation, not just be
+    # built and discarded.
+    assert sidecar.index('"${diversity_args[@]}"') > sidecar.index(
+        'launch_sidecar.py" \\'
+    )
+
+    assert (
+        'parser.add_argument("--require-minimum-serving-diversity", action="store_true")'
+        in launcher
+    )
+    assert "if args.require_minimum_serving_diversity:" in launcher
+    assert "_require_minimum_serving_diversity(agents)" in launcher
+    # Must be checked on the FINAL agents list (after any fallback
+    # substitution), not the pre-fallback primary result.
+    assert launcher.index("_write_json(args.preflight_out, preflight_report)") < launcher.index(
+        "_require_minimum_serving_diversity(agents)"
+    )
 
 
 def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosis() -> None:

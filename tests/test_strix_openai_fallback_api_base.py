@@ -317,7 +317,12 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
 
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
-        """Both gateway pools accept only the pinned process-local HTTP base."""
+        """Both gateway pools accept only the pinned process-local HTTP base.
+
+        docs/adr/0020-strix-orchestrator-free-pool.md: orchestrator/auto is
+        the permanent, evidence-gated fallback alongside orchestrator/free,
+        not a retired route -- both must resolve identically here.
+        """
 
         for model in (
             "orchestrator/free",
@@ -335,6 +340,12 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
 
         rc, _ = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 2)
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
             "orchestrator/auto",
         )
         self.assertEqual(rc, 2)
@@ -346,7 +357,7 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_gateway_child_model_preserves_selected_virtual_pool(self) -> None:
-        """LiteLLM qualification must not rewrite auto back to free."""
+        """LiteLLM qualification must not rewrite the selected free pool."""
 
         expected_child_models = {
             "orchestrator/free": "openai/orchestrator/free",

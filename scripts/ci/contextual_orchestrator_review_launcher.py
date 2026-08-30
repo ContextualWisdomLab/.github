@@ -405,6 +405,70 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
             )
 
 
+MINIMUM_SERVING_FAMILY_DIVERSITY = 2
+
+
+def _served_family_diversity(agents: list[object]) -> int:
+    """Return the count of distinct outage-domain provider families being served.
+
+    Uses the exact same ``provider_family()`` grouping
+    (``scripts.ci.contextual_orchestrator_review_policy``, a repository-local
+    module with no dependency on the vendored ``contextual_orchestrator``
+    package) that ``free_family_diversity`` is computed with in the policy
+    report, so a decision-time check (a caller's own gate on a discovery
+    snapshot) and this runtime check (evaluated on the actual served pool,
+    after preflight has already narrowed it) agree on what counts as an
+    independent family.
+    """
+    from scripts.ci.contextual_orchestrator_review_policy import provider_family
+
+    return len(
+        {
+            provider_family(str(getattr(agent, "provider_name", "") or ""))
+            for agent in agents
+        }
+    )
+
+
+def _require_minimum_serving_diversity(agents: list[object]) -> None:
+    """Fail closed before ``serve()`` if the post-preflight pool cannot fail over.
+
+    ``scripts/ci/contextual_orchestrator_review_policy.py``'s
+    ``build_zdr_prioritized_catalog`` builds ``pool=="free"``'s catalog from
+    free rows only -- there is no priced fallback tier at all when
+    ``pool=="free"``, and even ``pool=="auto"``'s own priced-fallback catalog
+    is only substituted in when EVERY primary route rejects preflight, not
+    when a single-family remainder survives it (see
+    ``_preflight_with_fallback``). ``_preflight_review_agents`` then narrows
+    the served agent list to only the routes that survived a bounded,
+    per-route probe. Even a perfect request-time failover implementation
+    cannot "advance to another admitted route" if this already-narrowed pool
+    contains only one outage-domain provider family by the time ``serve()``
+    is reached: there is nothing left to fail over to. This is a runtime
+    safety net independent of and in addition to any caller's own
+    decision-time diversity gate (e.g. ``strix.yml``'s
+    ``free_family_diversity`` check), which only observes a discovery
+    snapshot and cannot see preflight-time narrowing.
+
+    Args:
+        agents: The final, post-preflight (and post-fallback-substitution,
+            if applicable) agent list about to be passed to ``serve()``.
+
+    Raises:
+        SystemExit: If the served pool spans fewer than
+            ``MINIMUM_SERVING_FAMILY_DIVERSITY`` independent provider
+            families.
+    """
+    diversity = _served_family_diversity(agents)
+    if diversity < MINIMUM_SERVING_FAMILY_DIVERSITY:
+        raise SystemExit(
+            "review sidecar refuses to serve a single-point-of-failure pool: "
+            f"only {diversity} independent provider family(ies) survived preflight "
+            f"(minimum {MINIMUM_SERVING_FAMILY_DIVERSITY} required so request-time "
+            "failover has another route to advance to)"
+        )
+
+
 def _write_json(path: str, payload: object) -> None:
     """Write one deterministic UTF-8 JSON evidence file."""
     Path(path).write_text(
@@ -513,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
+    parser.add_argument("--require-minimum-serving-diversity", action="store_true")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
@@ -670,6 +735,8 @@ def main(argv: list[str] | None = None) -> int:
         result["report"]["fallback_reason"] = "primary_routes_unavailable"
         _write_json(args.report_out, result["report"])
     _write_json(args.preflight_out, preflight_report)
+    if args.require_minimum_serving_diversity:
+        _require_minimum_serving_diversity(agents)
 
     client = ModelClient(
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import io
 import json
+import re
 import runpy
 import socket
 from pathlib import Path
@@ -415,6 +416,106 @@ def test_log_preflight_rejections_ignores_malformed_report(
     assert captured.err == ""
 
 
+def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -> None:
+    """The bash script's end-to-end gateway check must not retest a route the
+    Python routing probe already proved ready with a stricter token budget.
+
+    Regression for the 2026-08-30 sidecar-preflight-max-tokens incident: the
+    routing probe (`_preflight_review_agents`, tested above) already uses
+    `REVIEW_MAX_OUTPUT_TOKENS` and correctly marked a reasoning-capable
+    nvidia_nim route "ready". The separate end-to-end gateway check in
+    ``contextual_orchestrator_review_sidecar.sh`` used to hardcode
+    ``"max_tokens":16`` for that same virtual-model request -- far too small
+    for a reasoning model to emit any answer content after its internal
+    reasoning tokens, so the gateway rejected a route its own routing probe
+    had just proven healthy. This asserts the two budgets stay numerically
+    identical so that mismatch cannot silently return; it fails on the
+    pre-fix literal (16) and passes once the gateway request is synchronized
+    with the routing probe's budget.
+    """
+    namespace = _load_launcher()
+    review_max_output_tokens = namespace["REVIEW_MAX_OUTPUT_TOKENS"]
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(
+        r'gateway_virtual_model.*?"max_tokens":(\d+)', sidecar, re.DOTALL
+    )
+    assert match, "sidecar must send one JSON gateway preflight request with an explicit max_tokens"
+    gateway_preflight_max_tokens = int(match.group(1))
+
+    assert gateway_preflight_max_tokens == review_max_output_tokens, (
+        "gateway preflight max_tokens "
+        f"({gateway_preflight_max_tokens}) must equal the routing probe's "
+        f"REVIEW_MAX_OUTPUT_TOKENS ({review_max_output_tokens}); a smaller "
+        "budget here can reject a route the routing probe already proved "
+        "ready"
+    )
+
+
+def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
+    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+
+    Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
+    evidence reproduction (Strix run 33306775025 on
+    ContextualWisdomLab/contextual-orchestrator#921, job 99244624298) showed
+    the routing probe marking a DeepSeek NIM route "ready" in 18s, then the
+    identical gateway request against that same healthy route being cut off
+    at exactly curl's configured bound -- "gateway preflight request could
+    not reach the local sidecar" was that timeout, not a real connectivity
+    failure. This asserts the bound is generous enough to tolerate a real
+    reasoning generation (well above the routing probe's own 10s
+    per-candidate budget) rather than the previous 30s, which rejected a
+    route the routing probe had just proven healthy.
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
+    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
+    gateway_preflight_timeout_seconds = int(match.group(1))
+
+    assert gateway_preflight_timeout_seconds >= 120, (
+        "gateway preflight curl --max-time "
+        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
+        "completion latency; 30s was observed cutting off a route the routing probe "
+        "had just proven ready"
+    )
+
+
+def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() -> None:
+    """A genuinely broken model must still fail closed at the full 4096-token
+    budget -- proving the sidecar-preflight-max-tokens fix widens the budget
+    without weakening the routing probe's fail-closed content check.
+
+    Negative control for the same incident: raising the budget must never be
+    mistaken for making every response acceptable. A route whose reply is
+    reasoning-only (present ``reasoning``, empty ``content``) -- the exact
+    shape ``contextual_orchestrator.orchestrator._response_content`` raises
+    ``ProviderResponseError`` for -- is simulated at the routing-probe layer
+    and must still be classified "rejected", never reclassified as a
+    healthy "ready" route just because the token budget grew.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    reasoning_only = SimpleNamespace(
+        id="nvidia_nim_reasoning_only", provider_name="nvidia_nim", model="reasoning/free"
+    )
+    client = _ProbeClient(
+        {
+            reasoning_only.id: {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "internal reasoning tokens only"}}
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed"):
+        preflight([reasoning_only], client=client)
+
+    assert client.calls[0][2]["max_tokens"] == namespace["REVIEW_MAX_OUTPUT_TOKENS"]
+
+
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
     """A healthy HTTP process is not review-ready without one live LLM route."""
     namespace = _load_launcher()
@@ -476,6 +577,80 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
         preflight([primary], [fallback], client=failing_client)
     assert failure.value.report["ready_count"] == 0
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
+
+
+def test_served_family_diversity_counts_distinct_outage_domain_families() -> None:
+    """Diversity is computed from the same provider_family() grouping as the policy report.
+
+    nvidia_nim and nvidia_nim_sub share one outage-domain family (see
+    scripts/ci/contextual_orchestrator_review_policy.py's PROVIDER_FAMILIES);
+    every other provider is its own family.
+    """
+    namespace = _load_launcher()
+    served_family_diversity = namespace.get("_served_family_diversity")
+    assert callable(served_family_diversity)
+
+    single_family_agents = [
+        SimpleNamespace(id="a", provider_name="nvidia_nim"),
+        SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
+        SimpleNamespace(id="c", provider_name="nvidia_nim"),
+    ]
+    assert served_family_diversity(single_family_agents) == 1
+
+    two_family_agents = [
+        SimpleNamespace(id="a", provider_name="nvidia_nim"),
+        SimpleNamespace(id="b", provider_name="openrouter"),
+    ]
+    assert served_family_diversity(two_family_agents) == 2
+
+    assert served_family_diversity([]) == 0
+
+
+def test_require_minimum_serving_diversity_fails_closed_below_threshold() -> None:
+    """A collapsed single-family served pool must refuse to boot, not silently serve.
+
+    Regression coverage for the finding that even a perfect request-time
+    failover implementation cannot "advance to another admitted route" if
+    preflight has already narrowed the served pool to one outage-domain
+    family: there is nothing left to fail over to. This is a runtime
+    backstop distinct from any caller's own decision-time diversity gate.
+    """
+    namespace = _load_launcher()
+    require_minimum = namespace.get("_require_minimum_serving_diversity")
+    assert callable(require_minimum)
+
+    single_family_agents = [
+        SimpleNamespace(id="a", provider_name="nvidia_nim"),
+        SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
+    ]
+    with pytest.raises(SystemExit, match="single-point-of-failure"):
+        require_minimum(single_family_agents)
+
+    # Zero agents (should never happen post-preflight, since preflight
+    # itself already raises when nothing is viable) is still fail-closed,
+    # not a division-by-zero or a silent pass.
+    with pytest.raises(SystemExit, match="single-point-of-failure"):
+        require_minimum([])
+
+
+def test_require_minimum_serving_diversity_passes_at_or_above_threshold() -> None:
+    """Two or more independent families must be allowed to serve."""
+    namespace = _load_launcher()
+    require_minimum = namespace.get("_require_minimum_serving_diversity")
+    assert callable(require_minimum)
+
+    two_family_agents = [
+        SimpleNamespace(id="a", provider_name="nvidia_nim"),
+        SimpleNamespace(id="b", provider_name="openrouter"),
+    ]
+    require_minimum(two_family_agents)  # must not raise
+
+    three_family_agents = [
+        SimpleNamespace(id="a", provider_name="nvidia_nim"),
+        SimpleNamespace(id="b", provider_name="openrouter"),
+        SimpleNamespace(id="c", provider_name="openai"),
+    ]
+    require_minimum(three_family_agents)  # must not raise
 
 
 def test_preflight_stage_limits_share_one_startup_budget() -> None:
