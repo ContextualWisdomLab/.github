@@ -387,8 +387,11 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # already proved "ready" fail this separate end-to-end check with a spurious
 # "response did not contain assistant content" -> 502 invalid_structured_output
 # (contextual_orchestrator.orchestrator._response_content), even though the
-# model itself is healthy. See the 2026-08-30 sidecar-preflight-max-tokens gap
-# baseline entry for the exact-evidence reproduction (strix-reports artifact).
+# model itself is healthy. See "2026-08-30 sidecar preflight max_tokens
+# desynchronized from the routing probe" in
+# ContextualWisdomLab/contextual-orchestrator's own
+# docs/product-technical-gap-baseline.md for the exact-evidence reproduction
+# (downloaded strix-reports artifact, PR #912 run 33304076516).
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
 if ! gateway_http_status="$(
