@@ -442,6 +442,7 @@ def _run_gateway_retry_loop(
     *,
     max_attempts: int | str,
     plan: list[str],
+    sidecar_alive: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
     """Execute the sidecar's real gateway curl retry loop against a fake curl.
 
@@ -458,6 +459,16 @@ def _run_gateway_retry_loop(
             regression test.
         plan: One entry per expected curl call, each either ``"FAIL"`` (a
             transport failure) or ``"<status>\\n<response body>"``.
+        sidecar_alive: When True (default), ``$sidecar_pid`` names a process
+            that is genuinely running for the harness's whole lifetime (the
+            harness script itself, via ``$$``) -- the common case, and what
+            every pre-existing test in this module implicitly assumed before
+            the dead-sidecar branch existed. When False, a short-lived child
+            is spawned and the harness deterministically polls (via `kill
+            -0`, never `wait`, so the real exit status stays retrievable)
+            until it has actually exited before the retry loop starts,
+            simulating a sidecar that crashed between readiness and gateway
+            preflight.
 
     Returns:
         The completed harness process and the resulting preflight report
@@ -486,12 +497,37 @@ def _run_gateway_retry_loop(
     gateway_preflight_response = work_dir / "gateway-preflight.json"
     preflight_report = work_dir / "preflight.json"
     preflight_report.write_text("{}", encoding="utf-8")
+    sidecar_stderr = work_dir / "sidecar.stderr.log"
+    sidecar_stderr.write_text("synthetic sidecar stderr tail\n", encoding="utf-8")
+
+    if sidecar_alive:
+        sidecar_pid_setup = 'sidecar_pid="$$"\n'
+    else:
+        # Spawn a child that exits almost immediately, then poll `kill -0`
+        # (never `wait`) until it is confirmed gone -- this only asserts,
+        # never consumes, so the retry block's own later `wait "$sidecar_pid"`
+        # still retrieves this child's real exit status, exactly like it
+        # would for a genuinely crashed sidecar.
+        sidecar_pid_setup = (
+            "(exit 7) &\n"
+            "sidecar_pid=$!\n"
+            "sidecar_dead_wait=0\n"
+            'while kill -0 "$sidecar_pid" 2>/dev/null; do\n'
+            "  sidecar_dead_wait=$((sidecar_dead_wait + 1))\n"
+            '  if [ "$sidecar_dead_wait" -ge 500 ]; then\n'
+            "    echo 'test setup: child never exited' >&2\n"
+            "    exit 99\n"
+            "  fi\n"
+            "  sleep 0.01\n"
+            "done\n"
+        )
 
     harness = tmp_path / "harness.sh"
     harness.write_text(
         "set -euo pipefail\n"
         "log() { printf '[test-sidecar] %s\\n' \"$*\"; }\n"
         'fail() { log "error: $*" >&2; exit 1; }\n'
+        "wait_for_sidecar_sanitizers() { :; }\n"
         'orchestrator_pool="free"\n'
         'ORCHESTRATOR_TOKEN="synthetic-test-bearer"\n'
         'ORCHESTRATOR_HOST="127.0.0.1"\n'
@@ -500,6 +536,9 @@ def _run_gateway_retry_loop(
         f'gateway_preflight_request="{gateway_preflight_request}"\n'
         f'gateway_preflight_response="{gateway_preflight_response}"\n'
         f'preflight_report="{preflight_report}"\n'
+        f'sidecar_stderr="{sidecar_stderr}"\n'
+        'SIDECAR_STDERR_TAIL_LINES=60\n'
+        + sidecar_pid_setup
         + retry_block
         + "\n",
         encoding="utf-8",
@@ -704,6 +743,41 @@ def test_gateway_retry_loop_records_transport_exhaustion_evidence_before_failing
         "endpoint": "chat/completions",
         "error_type": "gateway_transport_exhausted",
         "attempts": 2,
+        "status": "rejected",
+    }
+
+
+def test_gateway_retry_loop_diagnoses_a_sidecar_that_died_after_readiness(
+    tmp_path: Path,
+) -> None:
+    """Exact-head evidence (Strix run/job 33341290448/99337282309 for
+    ContextualWisdomLab/.github#1460 target 2cc819a9): the sidecar passed
+    healthz/provider-route readiness after 23s, then six minutes later all 3
+    gateway-preflight attempts failed to reach it at all -- with the
+    pre-existing code, that is indistinguishable from a sidecar that was
+    still running the whole time but merely unreachable over the network.
+
+    When every attempt fails transport-wise AND the sidecar process itself
+    has already exited, the failure must be reported and recorded distinctly
+    from `gateway_transport_exhausted`, carrying the process's own exit
+    status -- the one piece of evidence that tells an operator the sidecar
+    crashed rather than the network being flaky.
+    """
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=1, plan=["FAIL"], sidecar_alive=False
+    )
+
+    assert result.returncode == 1
+    assert (
+        "sidecar process exited after readiness, before gateway preflight "
+        "completed (status 7); stderr: synthetic sidecar stderr tail"
+        in result.stderr
+    )
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "error_type": "sidecar_process_exited",
+        "attempts": 1,
+        "sidecar_exit_status": 7,
         "status": "rejected",
     }
 

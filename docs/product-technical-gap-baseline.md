@@ -2461,6 +2461,51 @@ retry.")만 확인했을 뿐, NVIDIA NIM 쪽의 실제 원본 에러 바디는 �
 정확한 원인을 규명해야 하며, 그 전까지는 모달리티 불일치나 family_cap 연관을 확정된 root
 cause로 취급하지 않는다.
 
+**4번째 서로 다른 sidecar 실패 서브 증상 발견 및 근본 수정 — "readiness 통과 후 sidecar
+프로세스 자체가 종료"**: 다른 동시 실행 AI 에이전트(issue #1399, PR #1460 — PR #1460 본문
+자체가 "PR created automatically by Jules for task ... started by @seonghobae"라고 밝혀
+Google Jules가 이 계정으로 동작 중임을 스스로 증명함)가 남긴 교차-에이전트 협업 코멘트를
+issue #1399/PR #1460 원문 대조로 먼저 진위를 확인한 뒤 착수했다. 근거(exact-head): Strix
+run/job `33341290448`/`99337282309`, `ContextualWisdomLab/.github#1460` target `2cc819a9`
+— healthz/provider-route readiness가 23초 만에 통과했으나, 6분 뒤 gateway-preflight 3회
+시도가 전부 sidecar에 도달하지 못했다. 기존 코드는 이 실패를 "gateway_transport_exhausted"로
+뭉뚱그려, sidecar가 여전히 살아있는 네트워크 문제인지 이미 완전히 종료했는지를 구분할 유일한
+단서인 프로세스 종료 상태(exit status)를 그냥 버리고 있었다.
+
+수정(`scripts/ci/contextual_orchestrator_review_sidecar.sh`): gateway-preflight 재시도
+루프의 `[ -z "$gateway_http_status" ]` 분기 맨 앞에, 기존 healthz 분기가 이미 쓰던 것과
+동일한 `kill -0 "$sidecar_pid"` 판정을 추가했다 — 이 프로세스는 이 bash 스크립트 자신이
+백그라운드로 띄운 job이므로, `kill -0`이 실패하면 bash 자신의 SIGCHLD 기반 job-table이
+이미 비동기로 reap을 완료했다는 뜻이고, 그 뒤에 부르는 `wait "$sidecar_pid"`는 새로
+`waitpid()`를 시도하는 게 아니라 job-table에 캐시된 진짜 종료 상태를 그대로 돌려주는
+것이 보장된다(healthz 분기가 이미 의존해온 것과 같은 안전한 패턴). 종료가 확인됐으면
+`wait_for_sidecar_sanitizers`로 stderr를 온전히 비우고, 기존 "transport exhausted"
+증거 대신 별도의 `{"endpoint": "chat/completions", "error_type":
+"sidecar_process_exited", "attempts": N, "sidecar_exit_status": <int>, "status":
+"rejected"}`를 기록하며, exit status와 stderr tail을 포함한 별도 fail 메시지로
+실패한다 — sidecar가 여전히 살아있는 경우에만 기존 "transport exhausted" 경로로
+진행한다.
+
+TDD: `tests/test_contextual_orchestrator_review_sidecar_contract.py`에 구조 계약 테스트
+`test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one` 추가(첫
+시도에서 `kill -0` 탐색 경계를 잘못 잡아 무관한 healthz 분기의 기존 occurrence에 우연히
+매치해버리는 false positive를 스스로 발견·수정한 뒤에야 진짜 RED를 확인). 실제 스크립트
+슬라이스를 bash 서브프로세스로 실행하는
+`tests/test_contextual_orchestrator_review_runtime_preflight.py`에는
+`_run_gateway_retry_loop`에 `sidecar_alive` 파라미터를 추가한 새 테스트
+`test_gateway_retry_loop_diagnoses_a_sidecar_that_died_after_readiness`를 추가했다
+— `sidecar_alive=False`일 때 `(exit 7) &`로 진짜로 죽는 자식 프로세스를 만들고
+`wait`를 절대 먼저 부르지 않은 채 `kill -0`만으로 폴링해, 코드 아래의 `wait`가 진짜
+종료 상태(7)를 그대로 받아오도록 설계했다. 이 변경으로 두 파일에서 각각 회귀 2건씩
+발견돼 함께 고쳤다 — contract 파일 쪽은 두 기존 테스트의 검색 범위를 좁혀 실제 불변식은
+그대로 두면서 새 코드로 인해 넓어진 매치 범위만 바로잡았고, runtime-preflight 파일 쪽은
+이 스크립트 슬라이스의 최소 하네스가 애초에 `sidecar_pid`/`wait_for_sidecar_sanitizers`/
+`sidecar_stderr`/`SIDECAR_STDERR_TAIL_LINES`를 정의한 적이 없어(이전까지는 그 슬라이스
+안에서 아무도 참조하지 않았으므로) `set -u` 아래 "unbound variable"로 깨졌던 것을
+`sidecar_alive` 기본값(`True` → 회귀 없이 기존 동작 보존)으로 고쳤다. 검증: 전체
+스위트 1935 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%, `bash -n`
+OK.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.

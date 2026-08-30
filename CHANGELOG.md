@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s gateway-preflight
+  retry loop: when every configured attempt exhausted with no usable HTTP
+  response, the script always recorded generic "transport exhausted" evidence
+  even when the sidecar process itself had already exited after passing
+  readiness -- discarding the single most useful diagnostic (the process's own
+  exit status and stderr). Now checks `kill -0 "$sidecar_pid"` first (safe for
+  a bash-owned background job: a failing `kill -0` means bash's own job table
+  has already reaped it, so the following `wait` retrieves the real cached
+  exit status, not a fresh `waitpid()` on an already-gone zombie -- the same
+  pattern the pre-existing healthz branch already used) and, when the sidecar
+  has exited, records distinct evidence (`error_type:
+  "sidecar_process_exited"`, exit status, attempts) and fails with a distinct
+  message including the exit status and stderr tail, instead of the generic
+  transport-exhausted path. Exact-head evidence: Strix run/job
+  `33341290448`/`99337282309` for `ContextualWisdomLab/.github#1460` target
+  `2cc819a9` (reported via a cross-agent coordination comment, verified
+  against issue #1399 and PR #1460 before acting on it). New tests:
+  `tests/test_contextual_orchestrator_review_sidecar_contract.py::test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one`
+  and
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py::test_gateway_retry_loop_diagnoses_a_sidecar_that_died_after_readiness`.
+  See the 2026-08-30 gap-baseline entry for the full diagnosis and the two
+  pairs of pre-existing-test regressions this surfaced and fixed along the
+  way.
 - Fix `scripts/ci/pingora_edge_policy.py`'s `_load_changed_files`: the
   post-loop pagination-exhaustion `PolicyError` was unreachable dead code
   (proven: 31 full 100-item pages always trip the in-loop `len(files) >

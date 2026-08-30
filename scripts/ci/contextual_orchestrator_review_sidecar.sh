@@ -544,11 +544,57 @@ while :; do
   fi
   if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then
     if [ -z "$gateway_http_status" ]; then
-      # Every configured attempt exhausted with no usable HTTP response at
-      # all (Trigger A never resolved) -- record that before failing closed,
-      # using the same sanitize-then-atomic-replace pattern as the non-2xx
-      # and invalid-content paths below, so this exact failure case (the one
-      # telemetry matters most for) does not leave zero evidence trail.
+      # A transport failure on every attempt has two structurally different
+      # causes that "could not reach the sidecar" alone cannot distinguish:
+      # the sidecar process is still running (a real network/gateway issue),
+      # or it has already exited (its own bug/crash/OOM, unrelated to the
+      # network at all). Check which one this is before recording generic
+      # transport-exhausted evidence, so a died sidecar is never
+      # misclassified as merely unreachable -- exact-head evidence: Strix
+      # run/job 33341290448/99337282309 for ContextualWisdomLab/.github#1460
+      # target 2cc819a9 passed healthz/provider-route readiness after 23s,
+      # then six minutes later all 3 gateway-preflight attempts failed to
+      # reach the sidecar at all, with no evidence of whether it had died.
+      if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+        sidecar_exit_status=0
+        wait "$sidecar_pid" 2>/dev/null || sidecar_exit_status=$?
+        # The sidecar has fully exited (confirmed above), so draining here
+        # cannot hang, and it guarantees $sidecar_stderr holds everything the
+        # sidecar wrote before we read it -- the same discipline the healthz
+        # branch above uses for the same reason.
+        wait_for_sidecar_sanitizers
+        "$sidecar_python" - "$preflight_report" "$gateway_attempt" "$sidecar_exit_status" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+report_path = Path(sys.argv[1])
+attempts = int(sys.argv[2]) if sys.argv[2].isdecimal() else 0
+exit_status_arg = sys.argv[3]
+exit_status = int(exit_status_arg) if exit_status_arg.lstrip("-").isdecimal() else None
+try:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    report = {}
+report["gateway"] = {
+    "endpoint": "chat/completions",
+    "error_type": "sidecar_process_exited",
+    "attempts": attempts,
+    "sidecar_exit_status": exit_status,
+    "status": "rejected",
+}
+temporary = report_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+temporary.replace(report_path)
+PY
+        fail "sidecar process exited after readiness, before gateway preflight completed (status ${sidecar_exit_status}); stderr: $(sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" "$sidecar_stderr")"
+      fi
+      # Sidecar still running -- every configured attempt exhausted with no
+      # usable HTTP response at all (Trigger A never resolved) -- record that
+      # before failing closed, using the same sanitize-then-atomic-replace
+      # pattern as the non-2xx and invalid-content paths below, so this exact
+      # failure case (the one telemetry matters most for) does not leave zero
+      # evidence trail.
       "$sidecar_python" - "$preflight_report" "$gateway_attempt" <<'PY'
 import json
 from pathlib import Path

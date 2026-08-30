@@ -461,13 +461,23 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     # whole script unless explicitly tolerated.
     assert 'sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" || true)"' in text
     assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
-    # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
-    # after a successful healthz, so its sanitizer never sees EOF and doing
-    # so would hang the workflow forever.
+    # Must not `wait_for_sidecar_sanitizers` in this immediate post-healthz
+    # warning-surfacing block: the sidecar keeps serving after a successful
+    # healthz, so its sanitizer never sees EOF and doing so would hang the
+    # workflow forever. Scoped to end at the gateway-preflight section (not
+    # end of file): that later section has its own, differently-gated
+    # `wait_for_sidecar_sanitizers` call for a sidecar already confirmed dead
+    # (a legitimate, distinct case -- see
+    # test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one),
+    # which this assertion must not flag.
     healthz_confirmed = text.index("healthz and provider-route preflight confirmed")
     warnings_line = text.index("sidecar startup warnings (non-fatal)")
-    assert healthz_confirmed < warnings_line
-    assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
+    gateway_preflight_start = text.index("gateway_virtual_model=")
+    assert healthz_confirmed < warnings_line < gateway_preflight_start
+    assert (
+        "wait_for_sidecar_sanitizers"
+        not in text[healthz_confirmed:gateway_preflight_start]
+    )
 
 
 def test_sidecar_stderr_tail_covers_discovery_and_preflight_diagnostics() -> None:
@@ -477,10 +487,15 @@ def test_sidecar_stderr_tail_covers_discovery_and_preflight_diagnostics() -> Non
     diagnostics (up to ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` routes) plus a
     couple of summary lines can together exceed the old fixed 20-line cap,
     silently truncating exactly the evidence a fail-closed incident needs.
+
+    Four uses total: the two healthz-branch failures, the post-healthz
+    non-fatal-warnings summary, and the dead-sidecar-during-gateway-preflight
+    failure (see
+    test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one).
     """
     text = _read(SIDECAR)
     assert "SIDECAR_STDERR_TAIL_LINES=60" in text
-    assert text.count('sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p"') == 3
+    assert text.count('sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p"') == 4
     assert "sed -n '1,20p'" not in text
 
 
@@ -550,3 +565,54 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
         "Provision contextual-orchestrator Strix sidecar"
     )
     assert "STRIX_FALLBACK_MODELS: \"\"" in workflow
+
+
+def test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one() -> None:
+    """A sidecar that dies between readiness and gateway preflight gets its own
+    diagnosis (exit status + stderr tail), not the generic transport-exhausted
+    message a merely-unreachable-but-still-running sidecar gets.
+
+    Exact-head evidence (Strix run/job 33341290448/99337282309 for
+    ContextualWisdomLab/.github#1460 target 2cc819a9): the sidecar passed
+    healthz/provider-route readiness after 23s, then six minutes later all 3
+    gateway-preflight attempts failed to reach it at all. The existing
+    ``gateway_transport_exhausted`` branch cannot tell that case apart from a
+    sidecar that is still running but merely unreachable over the network --
+    it reports the same generic message either way, discarding the one piece
+    of evidence (the process's own exit status) that would tell an operator
+    whether the sidecar crashed.
+    """
+    text = _read(SIDECAR)
+    exhausted_branch = text.index("gateway_transport_exhausted")
+    # Scope strictly to this branch's own opening condition so the search
+    # cannot accidentally match the unrelated, textually-earlier "sidecar
+    # exited before healthz" branch's own `kill -0 "$sidecar_pid"` check.
+    unreachable_branch_start = text.rindex(
+        'if [ -z "$gateway_http_status" ]; then', 0, exhausted_branch
+    )
+    dead_sidecar_check = text.index(
+        'kill -0 "$sidecar_pid"', unreachable_branch_start, exhausted_branch
+    )
+    # The dead-sidecar diagnosis must run BEFORE the generic
+    # transport-exhausted evidence is recorded, so a died sidecar is never
+    # misclassified as merely unreachable.
+    assert dead_sidecar_check < exhausted_branch
+    dead_sidecar_message = text.index(
+        "sidecar process exited after readiness, before gateway preflight completed"
+    )
+    assert dead_sidecar_check < dead_sidecar_message < exhausted_branch
+    # Must reuse the same drain-then-read discipline as the healthz branch:
+    # wait() for the confirmed-dead child before reading its stderr tail, and
+    # drain the sanitizer first so the tail is not read mid-flight.
+    wait_call = text.index('wait "$sidecar_pid"', dead_sidecar_check)
+    assert wait_call < dead_sidecar_message
+    drain_call = text.index("wait_for_sidecar_sanitizers", wait_call)
+    assert wait_call < drain_call < dead_sidecar_message
+    assert f'sed -n "1,${{SIDECAR_STDERR_TAIL_LINES}}p" "$sidecar_stderr"' in text[
+        dead_sidecar_message : dead_sidecar_message + 200
+    ]
+    # The preflight evidence JSON must carry a distinct error_type so a reader
+    # of contextual-orchestrator-preflight.json can tell the two cases apart
+    # without parsing job-log prose.
+    assert '"error_type": "sidecar_process_exited"' in text
+    assert "sidecar_exit_status" in text
