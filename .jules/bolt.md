@@ -51,3 +51,6 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+## 2024-05-24 - Secret Scrubbing Regex Optimization
+**Learning:** Combining mutually exclusive `re.compile` patterns that are run sequentially on the same string via iteration into a single `|` alternated pattern using a dynamic replacement function based on `match.lastindex` reduces scanning overhead from O(M*N) to O(N).
+**Action:** When seeing sequential `re.sub` calls over a fixed tuple of patterns, consolidate them into a single compiled pattern and a callback replacement function to dramatically improve string processing speed.

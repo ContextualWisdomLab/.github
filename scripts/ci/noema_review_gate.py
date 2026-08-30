@@ -47,24 +47,29 @@ ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
-SENSITIVE_DATA_SCRUB_PATTERNS = (
-    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
-    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
-    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
-    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
-    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
-    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
-    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
-    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
+_SENSITIVE_DATA_SCRUB_RE = re.compile(
+    r'(?i)'
+    r'(bearer\s+)[^\s"\'\\]+|'
+    r'(token\s+)[^\s"\'\\]+|'
+    r'\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b|'
+    r'\b(sk-[A-Za-z0-9_-]+)|'
+    r'\b(xox[baprs]-[A-Za-z0-9-]+)|'
+    r'\b(AKIA[0-9A-Z]{16})|'
+    r'((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?|'
+    r'((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'
 )
+
+def _sensitive_data_repl(match: re.Match[str]) -> str:
+    idx = match.lastindex
+    if idx in (1, 2, 6, 7):
+        return match.group(idx) + "***"
+    return "***"
 
 def scrub_sensitive_data(text: str | None) -> str | None:
     """Mask sensitive tokens in text to prevent secret leakage."""
     if not text:
         return text
-    for pattern, repl in SENSITIVE_DATA_SCRUB_PATTERNS:
-        text = pattern.sub(repl, text)
-    return text
+    return _SENSITIVE_DATA_SCRUB_RE.sub(_sensitive_data_repl, text)
 
 
 def run(args: Sequence[str], *, stdin: str | None = None) -> str:
