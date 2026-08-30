@@ -166,11 +166,12 @@ def test_copy_workspace_rejects_directory_symlink_escaping_sandbox_root(tmp_path
 
 
 def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
-    """A symlink cycle that cannot be resolved fails closed instead of crashing.
+    """A symlink cycle that never terminates fails closed instead of hanging.
 
-    Resolving a symlink cycle raises ``RuntimeError`` on some Python versions
-    and ``OSError`` (ELOOP) on others; either way it must become the same
-    ``ValueError`` every other escape case in this function raises.
+    The chain walk tracks every path it has already followed; revisiting one
+    without ever leaving the sandbox root means the chain cannot be resolved
+    to a real, bounded target, so it becomes the same ``ValueError`` every
+    other unresolvable case in this function raises.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -192,6 +193,63 @@ def test_copy_workspace_keeps_internal_symlinks_intact(tmp_path):
 
     assert (copied / "link.txt").is_symlink()
     assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tmp_path):
+    """A symlink whose target was never present is accepted, not treated as an escape.
+
+    A dangling target is not evidence of an escape attempt: the link's own
+    normalized path still lands inside the sandbox root, it simply names a
+    file that does not exist. Verification must still run against the rest
+    of the copy instead of aborting the whole copy over a broken link.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dangling.txt").symlink_to("does-not-exist.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "dangling.txt").is_symlink()
+    assert not (copied / "dangling.txt").exists()
+
+
+def test_copy_workspace_rejects_symlink_chain_past_the_hop_limit(tmp_path):
+    """A long, never-repeating, never-escaping symlink chain still fails closed.
+
+    Purely lexical normalization means a chain of distinct symlink names can
+    walk forever without ever revisiting a path or leaving the sandbox root;
+    the hop limit exists precisely to bound that case instead of hanging.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    chain_length = sandboxed_verify.MAXIMUM_SYMLINK_HOPS + 5
+    for index in range(chain_length):
+        (repo / f"hop-{index}").symlink_to(f"hop-{index + 1}")
+    (repo / f"hop-{chain_length}").write_text("payload", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="workspace symlink could not be resolved"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_keeps_symlink_whose_target_was_excluded_from_the_copy(tmp_path):
+    """A symlink into a directory excluded by DEFAULT_IGNORE is accepted, not an escape.
+
+    ``shutil.copytree``'s ignore patterns can omit a symlink's target from
+    the copy (for example a link into ``node_modules``) while the link
+    itself, sitting outside the ignored directory, is still copied. The
+    resulting dangling link is workspace-bound and must not abort the copy.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "leaf.js").write_text("module.exports = {}", encoding="utf-8")
+    (repo / "bin-link.js").symlink_to("node_modules/leaf.js")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert not (copied / "node_modules").exists()
+    assert (copied / "bin-link.js").is_symlink()
+    assert not (copied / "bin-link.js").exists()
 
 
 def test_timeout_output_text_normalizes_subprocess_payloads():

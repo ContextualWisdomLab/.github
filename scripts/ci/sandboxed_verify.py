@@ -75,6 +75,7 @@ SAFE_ENV_ALLOWLIST = (
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAXIMUM_SYMLINK_HOPS = 40
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -166,29 +167,60 @@ def _reject_escaping_symlinks(destination: Path) -> None:
     sandboxing or, in ``--isolation disabled`` debugging mode, directly on the
     host — must never be able to follow such a link to read or write a file
     outside the workspace boundary, defeating the isolation this module
-    exists to provide. Every symlink under ``destination`` is therefore fully
-    resolved and checked against the workspace root before the copy is
-    trusted; the first symlink found to escape aborts the whole copy rather
-    than being silently dropped or repaired, since a repository author who
-    plants one such link cannot be assumed not to have planted others.
+    exists to provide. Every symlink under ``destination`` is walked hop by
+    hop purely lexically (see ``_reject_escaping_symlink_chain``), so a link
+    whose own target was itself excluded from the copy by ``DEFAULT_IGNORE``
+    or ``extra_ignores`` -- or is simply broken -- is not confused with one
+    that escapes; the first symlink found to actually escape, or whose chain
+    cannot be resolved, aborts the whole copy rather than being silently
+    dropped or repaired, since a repository author who plants one such link
+    cannot be assumed not to have planted others.
     """
-    root = destination.resolve()
+    root = destination.resolve(strict=True)
     for path in destination.rglob("*"):
-        if not path.is_symlink():
-            continue
+        if path.is_symlink():
+            _reject_escaping_symlink_chain(path, root)
+
+
+def _reject_escaping_symlink_chain(candidate: Path, root: Path) -> None:
+    """Walk one symlink's target chain lexically, raising on escape or cycle.
+
+    Uses ``os.readlink`` plus ``os.path.normpath`` at every hop instead of
+    ``Path.resolve()``, which requires the fully-resolved path to exist
+    (``strict=True``) or is unreliable for detecting a cycle across Python
+    versions (``strict=False``, the default) -- either way conflating a
+    symlink escape with a symlink that merely points at a target this
+    function never had to check for existence. A dangling target -- for
+    example one whose file was excluded from the copy by ``DEFAULT_IGNORE``
+    -- is therefore accepted as long as it still lexically resolves inside
+    ``root``: verification must still run despite the broken link. Only an
+    absolute target, a target that normalizes outside ``root``, or a chain
+    that revisits a path it has already followed (an unresolvable cycle)
+    raises. The hop count is bounded so a chain that never repeats (due to
+    purely lexical, not real-path, normalization) still fails closed instead
+    of walking forever.
+    """
+    visited: set[Path] = set()
+    current = candidate
+    for _ in range(MAXIMUM_SYMLINK_HOPS):
+        if current in visited:
+            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+        visited.add(current)
+        if not current.is_symlink():
+            return
+        target = Path(os.readlink(current))
+        if target.is_absolute():
+            raise ValueError(
+                f"workspace symlink escapes the sandbox root: {candidate} -> {target}"
+            )
+        current = Path(os.path.normpath(current.parent / target))
         try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
-            # strict=True forces resolve() to confirm the fully-resolved path
-            # actually exists, so both a symlink cycle (a -> b -> a) and a
-            # plain dangling target reliably raise OSError (ELOOP/ENOENT) here
-            # across Python versions. Non-strict resolve() is not sufficient:
-            # some CPython versions detect a cycle and silently return a
-            # partially-resolved path instead of raising, which would let an
-            # unresolvable symlink slip past this check.
-            raise ValueError(f"workspace symlink could not be resolved: {path}") from exc
-        if resolved != root and root not in resolved.parents:
-            raise ValueError(f"workspace symlink escapes the sandbox root: {path} -> {resolved}")
+            current.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(
+                f"workspace symlink escapes the sandbox root: {candidate} -> {target}"
+            ) from exc
+    raise ValueError(f"workspace symlink could not be resolved: {candidate}")
 
 
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
