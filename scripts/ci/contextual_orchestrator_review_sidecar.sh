@@ -432,15 +432,15 @@ fi
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
-# max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own per-agent
-# routing probe budget): observed behavior was an agent the routing probe
-# already proved "ready" at that budget failing this separate end-to-end check
-# with a spurious 502 invalid_structured_output at a much smaller budget, even
-# though the model itself is healthy. The exact field-level cause was never
-# captured (the sidecar's log sanitizer strips raw provider payloads by
-# design), so treat any specific mechanism as a hypothesis, not fact. See
-# "2026-08-30 sidecar preflight max_tokens desynchronized from the routing
-# probe" (and its 2026-08-30 correction) in
+# max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own escalated
+# per-agent routing-probe budget, ADR-0005): observed behavior was an agent the
+# routing probe already proved "ready" at that budget failing this separate
+# end-to-end check with a spurious 502 invalid_structured_output at a much
+# smaller budget, even though the model itself is healthy. The exact
+# field-level cause was never captured (the sidecar's log sanitizer strips raw
+# provider payloads by design), so treat any specific mechanism as a
+# hypothesis, not fact. See "2026-08-30 sidecar preflight max_tokens
+# desynchronized from the routing probe" (and its 2026-08-30 correction) in
 # ContextualWisdomLab/contextual-orchestrator's own
 # docs/product-technical-gap-baseline.md for the evidence that is actually
 # captured (downloaded strix-reports artifact,
@@ -460,21 +460,55 @@ printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful 
 # favor of accuracy over speed -- a 30s bound on one preflight self-check
 # contradicted that policy and rejected a route the routing probe had just
 # proven healthy. 120s keeps this a bounded, fail-closed check while giving
-# a real reasoning generation room to finish.
-if ! gateway_http_status="$(
-  curl -sS --max-time 120 \
-    -o "$gateway_preflight_response" \
-    -w '%{http_code}' \
-    -X POST \
-    -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    --data-binary "@$gateway_preflight_request" \
-    "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"
-)"; then
-  fail "gateway preflight request could not reach the local sidecar"
-fi
-if [ "$gateway_http_status" != "200" ]; then
-  "$sidecar_python" - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" <<'PY'
+# a real reasoning generation room to finish. This value is deliberately kept
+# unchanged by ADR-0005 -- shortening it would regress the fix just described.
+#
+# ADR-0005 Trigger A: this request goes to the virtual pool, not one pinned
+# candidate, so a transport failure or non-2xx status here (unreachable
+# process, timeout, upstream error) is retried with a fresh attempt at the
+# SAME budget, up to REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS total attempts --
+# a same-budget retry may or may not land on a different underlying candidate
+# (route diversity here is a best-effort hope, not a verified guarantee: the
+# gateway's internal routing behavior on a failed attempt is not confirmed),
+# but it is strictly better than one unconditional attempt with no recovery
+# path, which is what let a single transient hang block every required review
+# org-wide (live reproduction: ContextualWisdomLab/.github#1449, job
+# 99253418179, curl timing out at exactly 120002ms with zero bytes received).
+# Trigger B (a response IS received, empty content, finish_reason=="length" or
+# a populated reasoning field) is deliberately NOT retried here: that response
+# is still HTTP 200, so the gateway's own routing already recorded that
+# attempt as "successful" before this script inspects content -- a same-budget
+# retry is more likely to repeat the same candidate than diversify away from
+# it, so retrying would not help (Devin Review's 4th-round finding on
+# ADR-0005; verified directly against contextual-orchestrator's server.py,
+# which exposes no parameter to exclude or deprioritize a specific candidate
+# on a retry).
+REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-3}"
+gateway_attempt=1
+gateway_http_status=""
+while :; do
+  if gateway_http_status="$(
+    curl -sS --max-time 120 \
+      -o "$gateway_preflight_response" \
+      -w '%{http_code}' \
+      -X POST \
+      -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
+      -H 'Content-Type: application/json' \
+      --data-binary "@$gateway_preflight_request" \
+      "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"
+  )"; then
+    :
+  else
+    gateway_http_status=""
+  fi
+  if [ "$gateway_http_status" = "200" ]; then
+    break
+  fi
+  if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then
+    if [ -z "$gateway_http_status" ]; then
+      fail "gateway preflight request could not reach the local sidecar after ${gateway_attempt} attempts"
+    fi
+    "$sidecar_python" - "$preflight_report" "$gateway_preflight_response" "$gateway_http_status" "$gateway_attempt" <<'PY'
 import json
 from pathlib import Path
 import re
@@ -483,6 +517,7 @@ import sys
 report_path = Path(sys.argv[1])
 response_path = Path(sys.argv[2])
 status_text = sys.argv[3]
+attempts = int(sys.argv[4]) if sys.argv[4].isdecimal() else 0
 try:
     report = json.loads(report_path.read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError):
@@ -498,46 +533,83 @@ if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):
 status = int(status_text) if status_text.isdecimal() else 0
 report["gateway"] = {
     "endpoint": "chat/completions",
+    # ADR-0005: a non-2xx on a retry (attempts > 1) is not honestly
+    # attributable to any one candidate's ceiling -- the virtual pool's
+    # routing is not pinned across separate HTTP calls -- so it is
+    # recorded distinctly from a first-attempt rejection instead of
+    # implying candidate-ceiling evidence it cannot support.
+    "error_type": "gateway_retry_rejected" if attempts > 1 else "gateway_rejected",
     "error_code": code,
     "http_status": status,
+    "attempts": attempts,
     "status": "rejected",
 }
 temporary = report_path.with_suffix(".tmp")
 temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 temporary.replace(report_path)
 PY
-  fail "gateway preflight returned HTTP ${gateway_http_status}"
-fi
-if ! "$sidecar_python" - "$gateway_preflight_response" "$preflight_report" <<'PY'
+    fail "gateway preflight returned HTTP ${gateway_http_status} after ${gateway_attempt} attempts"
+  fi
+  log "gateway preflight attempt ${gateway_attempt} did not reach the sidecar cleanly (status=${gateway_http_status:-unreachable}); retrying (up to ${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS} attempts)"
+  gateway_attempt=$((gateway_attempt + 1))
+done
+if ! "$sidecar_python" - "$gateway_preflight_response" "$preflight_report" "$gateway_attempt" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 response_path = Path(sys.argv[1])
 report_path = Path(sys.argv[2])
+attempts = int(sys.argv[3]) if sys.argv[3].isdecimal() else 0
 try:
     response = json.loads(response_path.read_text(encoding="utf-8"))
     choices = response.get("choices")
     first = choices[0] if isinstance(choices, list) and choices else None
     message = first.get("message") if isinstance(first, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("missing chat content")
+    if isinstance(content, str) and content.strip():
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["gateway"] = {
+            "endpoint": "chat/completions",
+            "status": "ready",
+            "attempts": attempts,
+        }
+        temporary = report_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.replace(report_path)
+        raise SystemExit(0)
+    # ADR-0005 Trigger B, deliberately not retried at this layer (see the
+    # comment above the curl loop): record which budget-too-small signature,
+    # if any, matched -- for diagnosis only, since this response is a
+    # terminal outcome here regardless of which one it is.
+    finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = None
+    elif len(finish_reason) > 32 or not all(
+        character.isalnum() or character == "_" for character in finish_reason
+    ):
+        finish_reason = "unknown"
+    reasoning_without_content = isinstance(message, dict) and bool(message.get("reasoning"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
-except (OSError, ValueError, json.JSONDecodeError, IndexError, TypeError):
-    raise SystemExit(1)
-report["gateway"] = {
-    "endpoint": "chat/completions",
-    "status": "ready",
-}
-temporary = report_path.with_suffix(".tmp")
-temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-temporary.replace(report_path)
+    report["gateway"] = {
+        "endpoint": "chat/completions",
+        "status": "rejected",
+        "error_type": "InvalidChatResponse",
+        "finish_reason": finish_reason or "unknown",
+        "reasoning_without_content": reasoning_without_content,
+        "attempts": attempts,
+    }
+    temporary = report_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(report_path)
+except (OSError, json.JSONDecodeError, IndexError, TypeError):
+    pass
+raise SystemExit(1)
 PY
 then
   fail "gateway preflight returned unusable chat content"
 fi
-log "gateway chat/completions preflight confirmed"
+log "gateway chat/completions preflight confirmed (attempt ${gateway_attempt}/${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS})"
 
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {

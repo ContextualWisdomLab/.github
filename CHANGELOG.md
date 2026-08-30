@@ -5,6 +5,26 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Implement ADR-0005's diagnostic, bounded-retry sidecar preflight
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`). A 5th Devin
+  Review pass on the ADR found the escalation predicate
+  (`finish_reason == "length"` alone) missed the vendored
+  `ModelClient._response_content`'s own broader "reasoning without
+  content" signature -- the exact original PR #1436 failure mode --
+  verified directly against current orchestrator.py before fixing.
+  Layer 1's per-candidate probe now starts at a new
+  `REVIEW_PREFLIGHT_BASE_TOKENS = 16` and escalates the same candidate
+  once to the existing `REVIEW_MAX_OUTPUT_TOKENS` (4096) only when the
+  response is empty and either `finish_reason == "length"` or a
+  populated `reasoning` field is present, bounded by a shared
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` across the whole run. Layer 2
+  keeps its existing 4096/120s budget unchanged and retries only on
+  transport failure/non-2xx, up to
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`, labeling a
+  retry-specific rejection `gateway_retry_rejected` rather than
+  implying candidate-ceiling attribution it cannot support. 1901 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
 - Add `docs/adr/0005-sidecar-preflight-token-budget.md`, an evidence-based
   design decision responding to the owner's direct critique that a single
   hardcoded `max_tokens` cannot fit a heterogeneous `orchestrator/free` pool.

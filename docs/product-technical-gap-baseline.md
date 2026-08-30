@@ -1380,6 +1380,25 @@ Summary of the current ADR:
 - Two upstream `contextual-orchestrator` asks are now real tracked issues (`#926`: inference-scoped
   readiness probe; `#927`: real per-model `max_output_tokens`/`context_window` discovery data,
   correctly modeled as two separate fields), not just prose. Neither blocks the sidecar-side fix.
+- **A 5th Devin Review pass found one more real, distinct gap** (detection accuracy, not
+  retry-diversity): Trigger B's predicate (`finish_reason == "length"`) missed the vendored
+  `ModelClient._response_content`'s own broader signature for this exact failure — a populated
+  `message.reasoning` field with empty `content`, which a reasoning model can hit under a *different*
+  `finish_reason` (provider `finish_reason` semantics for this case are not verified as uniform across
+  the pool). Verified directly against current `contextual_orchestrator/orchestrator.py` before fixing.
+  This was the exact original PR #1436 failure mode — a fixed predicate this narrow would have missed
+  the very case the whole investigation started from. Fixed: Trigger B now escalates on
+  `finish_reason == "length"` **or** a populated `reasoning` field with no content, matching the
+  vendored detection logic exactly rather than inferring it from one field alone.
+- **Implemented** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`): Layer 1's `_preflight_review_agents` now
+  probes each candidate at a new `REVIEW_PREFLIGHT_BASE_TOKENS = 16`, escalating that same candidate
+  once to `REVIEW_PREFLIGHT_ESCALATED_TOKENS` (`= REVIEW_MAX_OUTPUT_TOKENS`, `4096`) only on the widened
+  Trigger B signature, bounded by a shared `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` across the whole run.
+  Layer 2 keeps its existing `4096`/`120s` budget unchanged and retries only on Trigger A (transport
+  failure/non-2xx), up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`, with a retry-specific rejection
+  labeled `gateway_retry_rejected` rather than implying candidate-ceiling attribution it cannot support.
+  1901 tests pass, 100% coverage and 100% docstring coverage on `scripts/ci/`.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

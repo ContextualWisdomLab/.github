@@ -38,6 +38,31 @@ class _ProbeClient:
         return outcome
 
 
+class _SequencedClient:
+    """Return one outcome per call, in order, ignoring which agent asked.
+
+    Used for ADR-0005 escalation tests where the same candidate is called
+    twice (base probe, then escalated retry) and each call must see a
+    different, explicitly ordered outcome -- unlike ``_ProbeClient``, whose
+    per-agent dict lookup always returns the same outcome for repeat calls.
+    """
+
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = iter(outcomes)
+        self.calls: list[tuple[object, str, dict[str, object]]] = []
+
+    def proxy_send_once(
+        self, agent: object, endpoint: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        """Capture one request and return or raise the next configured outcome."""
+        self.calls.append((agent, endpoint, payload))
+        outcome = next(self._outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert isinstance(outcome, dict)
+        return outcome
+
+
 def _load_launcher() -> dict[str, object]:
     """Execute the dependency-lazy launcher and return its module namespace."""
     return runpy.run_path(str(_LAUNCHER))
@@ -174,7 +199,7 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         assert endpoint == "chat/completions"
         assert payload["model"] == agent.model
         assert payload["stream"] is False
-        assert payload["max_tokens"] == 4096
+        assert payload["max_tokens"] == 16
         assert payload["temperature"] == 1.0
         assert payload["messages"] == [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -248,18 +273,49 @@ def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> No
     )
 
 
-def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() -> None:
-    """A genuinely broken model must still fail closed at the full 4096-token
-    budget -- proving the sidecar-preflight-max-tokens fix widens the budget
-    without weakening the routing probe's fail-closed content check.
+def test_gateway_preflight_retries_transport_failures_up_to_a_bounded_attempt_count() -> None:
+    """ADR-0005 Decision SS1/SS3: Layer 2 retries only on Trigger A (no usable
+    response), up to an explicit, bounded attempt count -- not on Trigger B
+    (empty content with a budget-too-small signature), which the gateway's
+    own routing may have already recorded as a "successful" attempt.
+
+    Regression for Devin Review's 4th-round finding on this ADR (a live
+    reproduction on ContextualWisdomLab/.github#1449, job 99253418179,
+    hung the full 120s with zero bytes -- Trigger A -- and the pre-fix
+    script had no recovery path at all).
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    assert 'REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-3}"' in sidecar
+    assert "gateway_attempt=1" in sidecar
+    assert 'if [ "$gateway_http_status" = "200" ]; then' in sidecar
+    assert 'if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then' in sidecar
+    assert "gateway_attempt=$((gateway_attempt + 1))" in sidecar
+    # Trigger A retries are distinguishable from a first-attempt rejection --
+    # the virtual pool's routing is not pinned across separate HTTP calls, so
+    # a rejection on a retry is never described as candidate-ceiling evidence.
+    assert '"gateway_retry_rejected" if attempts > 1 else "gateway_rejected"' in sidecar
+    # Trigger B (a response was received) is a terminal outcome here, not
+    # retried, with its budget-too-small signature preserved for diagnosis.
+    assert "reasoning_without_content" in sidecar
+    assert "gateway preflight returned unusable chat content" in sidecar
+
+
+def test_reasoning_without_content_escalates_then_still_fails_closed_if_unresolved() -> None:
+    """ADR-0005 round 5 (Devin Review): escalation must key off the vendored
+    ``ModelClient._response_content``'s own "reasoning, no content" signature,
+    not only ``finish_reason == "length"`` -- a reasoning model can exhaust its
+    budget under a different (or absent) ``finish_reason``, and this is the
+    exact original failure mode PR #1436 responded to. This response has no
+    ``finish_reason`` at all, so it would NOT have escalated under the
+    finish_reason-only predicate; it must escalate here because
+    ``message.reasoning`` is populated with empty ``content``.
 
     Negative control for the same incident: raising the budget must never be
-    mistaken for making every response acceptable. A route whose reply is
-    reasoning-only (present ``reasoning``, empty ``content``) -- the exact
-    shape ``contextual_orchestrator.orchestrator._response_content`` raises
-    ``ProviderResponseError`` for -- is simulated at the routing-probe layer
-    and must still be classified "rejected", never reclassified as a
-    healthy "ready" route just because the token budget grew.
+    mistaken for making every response acceptable. The escalated attempt
+    reproduces the identical reasoning-only shape here, so the route must
+    still end up "rejected", never reclassified as healthy just because an
+    escalation was attempted.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -277,10 +333,112 @@ def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() 
         }
     )
 
-    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed"):
+    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed") as failure:
         preflight([reasoning_only], client=client)
 
-    assert client.calls[0][2]["max_tokens"] == namespace["REVIEW_MAX_OUTPUT_TOKENS"]
+    assert [call[2]["max_tokens"] for call in client.calls] == [
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+    ]
+    row = failure.value.report["routes"][0]
+    assert row["attempts"] == 2
+    assert row["reasoning_without_content"] is True
+    assert row["finish_reason"] == "unknown"
+    assert failure.value.report["escalations_used"] == 1
+
+
+def test_finish_reason_length_escalates_and_can_succeed() -> None:
+    """The OpenAI-documented ``finish_reason == "length"`` signature also
+    escalates, independent of the ``reasoning`` field, and a candidate that
+    only needed a bigger budget is correctly marked ready on the retry.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    slow_starter = SimpleNamespace(
+        id="openrouter_slow_starter", provider_name="openrouter", model="slow/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            _openai_text("OK, here is the answer."),
+        ]
+    )
+
+    viable, report = preflight([slow_starter], client=client)
+
+    assert viable == [slow_starter]
+    assert [call[2]["max_tokens"] for call in client.calls] == [
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+    ]
+    row = report["routes"][0]
+    assert row["status"] == "ready"
+    assert row["attempts"] == 2
+    assert row["escalated"] is True
+    assert row["finish_reason"] == "length"
+    assert row["reasoning_without_content"] is False
+    assert report["escalations_used"] == 1
+
+
+def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
+    """Once ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` is spent, a further candidate
+    that would otherwise qualify is rejected immediately, without a second
+    call -- the shared budget is per-run, not per-candidate.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
+
+    length_response = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+    agents = [
+        SimpleNamespace(id=f"budget_user_{index}", provider_name="openrouter", model="x/free")
+        for index in range(max_escalations)
+    ]
+    exhausted = SimpleNamespace(
+        id="budget_exhausted", provider_name="openrouter", model="x/free"
+    )
+    client = _ProbeClient(
+        {agent.id: dict(length_response) for agent in agents}
+        | {exhausted.id: dict(length_response)}
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([*agents, exhausted], client=client)
+
+    exhausted_row = failure.value.report["routes"][-1]
+    assert exhausted_row["attempts"] == 1
+    assert exhausted_row["error_type"] == "EscalationBudgetExhausted"
+    assert failure.value.report["escalations_used"] == max_escalations
+    assert len(client.calls) == max_escalations * 2 + 1
+
+
+def test_escalated_probe_rejection_is_recorded_distinctly_and_not_retried() -> None:
+    """A non-2xx rejection specifically on the escalated attempt is
+    distinguishable evidence the escalated budget exceeds that candidate's
+    real ceiling -- recorded as ``EscalatedProbeRejected``, not conflated
+    with a generic empty-content rejection, and not retried again.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    low_ceiling = SimpleNamespace(
+        id="nvidia_nim_low_ceiling", provider_name="nvidia_nim", model="low/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            RuntimeError("max_tokens exceeds this model's ceiling"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([low_ceiling], client=client)
+
+    assert len(client.calls) == 2
+    row = failure.value.report["routes"][0]
+    assert row["error_type"] == "EscalatedProbeRejected"
+    assert row["attempts"] == 2
 
 
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
