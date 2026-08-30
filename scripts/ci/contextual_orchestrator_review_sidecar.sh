@@ -72,9 +72,11 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 # runs show this is still insufficient (all 8 still failing) or the added
 # latency itself becomes the bottleneck, the more complete fix is a live
 # provider /v1/models cross-check at discovery time to drop retired model ids
-# before they ever reach preflight (scripts/ci/select_nvidia_nim_model.py
-# already implements that exact pattern for a different, currently-unwired
-# caller) rather than raising this further.
+# before they ever reach preflight -- see git history's now-removed
+# select_nvidia_nim_model.py (fix/remove-orphaned-nim-model-resolver) for a
+# worked example of that exact query-the-provider-catalog pattern, applied
+# there to a different, direct-provider caller -- rather than raising this
+# further.
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
