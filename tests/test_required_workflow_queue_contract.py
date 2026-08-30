@@ -584,7 +584,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/auto",
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -593,12 +593,12 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/auto",
+        "strix_model=contextual-orchestrator/orchestrator/free",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/auto"
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
         in workflow_text("strix.yml")
     )
     assert (
