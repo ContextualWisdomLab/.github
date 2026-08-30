@@ -1557,11 +1557,20 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
     `inspect_pr()`가 OpenCode dispatch를 Strix evidence 뒤에 순서화하는데(Strix가
     `"completed"`가 아니면 OpenCode를 아예 호출하지 않음), 이 PR의 스케줄러 실행(11:49Z)이
     동시에 `"this scheduler run has no cross-repository repository-dispatch credential"`을
-    로그에 남겼다 — 다른 저장소(`contextual-orchestrator`)에서 트리거된 스케줄러 컨텍스트가
-    `.github`로의 cross-repo dispatch에 필요한 자격 증명을 갖지 못한 것으로 보인다. 이것이
-    비밀 값 만료/누락(사람이 로테이션해야 함)인지, 아니면 workflow 배선 누락(코드로 고칠 수
-    있음)인지는 아직 미확인 — 다음 pass에서 `.github/workflows/pr-review-merge-scheduler.yml`의
-    cross-repo 토큰 배선을 직접 확인해야 한다.
+    로그에 남겼다 — **원인을 정확히 특정했다**: `pr-review-merge-scheduler.yml`(501/798행)은
+    `SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH`를
+    `(secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '')`로만 `true`로
+    설정한다. 요구된 워크플로우 ruleset이 이 스케줄러를 "각 대상 저장소의 컨텍스트에서" 실행하므로
+    (`GITHUB_REPOSITORY`가 대상 저장소가 됨), 이 두 secret 중 하나가 **`contextual-orchestrator`
+    저장소(또는 조직) 레벨에 설정되어 있지 않으면** 이 플래그는 항상 `false`가 되고
+    `repository_dispatch_wait_reason()`(`pr_review_merge_scheduler.py:680-701`)은
+    `execution_repo == dispatch_repo`(스케줄러가 `.github` 자신의 컨텍스트에서 실행될 때만
+    참)도 만족하지 못하므로 항상 wait를 반환한다 — 즉 이 두 secret 중 하나가
+    `contextual-orchestrator`에 없는 한 이 저장소의 어떤 PR도 영원히 이 gate를 통과하지 못한다.
+    이것은 코드로 고칠 수 없다 — **사람이 organization 또는 `contextual-orchestrator` repository
+    설정에서 `PR_REVIEW_MERGE_TOKEN` 또는 `OPENCODE_APPROVE_TOKEN` secret이 실제로 존재하고
+    유효한지 확인해야 한다.** (PR #939는 제목만 비슷할 뿐 실제로는 Strix/Inkspan scanner
+    오탐·uv materialization에 관한 무관한 작업이므로, 겹치는 범위가 아님을 확인했다.)
   - `ContextualWisdomLab/.github#1438`: dispatch는 실제로 실행되었다(run `33310753001`,
     12:09:57Z 트리거). 하지만 이 저장소 자신의 `coverage-evidence` job이
     `scripts/ci/pingora_edge_policy.py`의 `_load_changed_files` 함수 끝의 방어적 post-loop
