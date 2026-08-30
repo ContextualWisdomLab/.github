@@ -54,11 +54,12 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 # 2026-08-30 sidecar-preflight entries for the full evidence, including the
 # exact discovery/preflight artifact this comment is based on).
 # 8 is a deliberately moderate raise, not a wholesale removal of the cap:
-# REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x up to 8 sequential candidates adds
-# up to ~80s more worst-case preflight time versus the previous 4-candidate
-# ceiling, bounded by (not exceeding on its own) the sidecar's existing 180s
-# readiness-wait budget in the common case; this was reasoned from, not
-# verified against, live provider timing, since this session has no access to
+# REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x up to 8 sequential candidates is
+# up to ~80s worst-case preflight time total -- ~40s more than the previous
+# 4-candidate ceiling's own ~40s worst case -- bounded by (not exceeding on
+# its own) the sidecar's existing 180s readiness-wait budget in the common
+# case; this was reasoned from, not verified against, live provider timing,
+# since this session has no access to
 # the five provider credentials the sidecar's KV requires. If real hosted
 # runs show this is still insufficient (all 8 still failing) or the added
 # latency itself becomes the bottleneck, the more complete fix is a live

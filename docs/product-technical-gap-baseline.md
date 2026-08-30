@@ -993,11 +993,12 @@ then a 502 on the actual gateway request).
     remove the two permanently-dead `gemma-3` candidates from the pool —
     they will still be tried and still fail, just alongside more real
     chances rather than crowding out all of them. The trade-off made
-    explicitly, not silently: up to ~80s more worst-case sequential preflight
-    time (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS=10` × up to 8 candidates now vs.
-    4 before), reasoned to stay within the sidecar's existing 180s
-    readiness-wait ceiling in the common case but not verified against real
-    provider latency, since this session cannot exercise that path live.
+    explicitly, not silently: up to ~80s worst-case sequential preflight time
+    total (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS=10` × up to 8 candidates now,
+    vs. up to ~40s total with 4 before — i.e. ~40s more, not ~80s more),
+    reasoned to stay within the sidecar's existing 180s readiness-wait
+    ceiling in the common case but not verified against real provider
+    latency, since this session cannot exercise that path live.
   - **Not implemented, and the more complete fix if 8 turns out
     insufficient or the added latency itself becomes the new bottleneck**:
     cross-check discovered "free" model ids against the provider's live
