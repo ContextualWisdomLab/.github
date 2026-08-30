@@ -1,9 +1,9 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-26 10:35 KST**
+작성 기준일: **2026-08-30 08:40 UTC**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
+현재 보호된 `main`: `ccc1004eb0b1319a7c6047e5a605e1b15891792d`
+현재 열린 PR 수: **69** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -746,6 +746,47 @@ recurrence" section below out of the file entirely; both are restored here.)
   regression tests exercising it directly via `runpy.run_path`, consistent
   with this file's existing test pattern for the same module's other
   runtime-only helpers.
+
+## 2026-08-30 orchestrator free-cost discovery needs Models.dev metadata for all providers
+
+- After `scripts/ci/contextual_orchestrator_review_launcher.py` was fixed to
+  log per-provider discovery errors, the hosted `strix` run on
+  `ContextualWisdomLab/contextual-orchestrator#919` produced a bounded diagnostic:
+  `provider_discovery_failed provider=bytez code=http_status_500`. The bytez
+  provider's `/models/v2/list/models?task=chat` endpoint is returning HTTP 500,
+  so the `orchestrator/free` pool loses its only inference-capable source and
+  the sidecar fails closed at `selected_models`.
+- The same `strix` job first logged `request_failed status=413
+  code=request_too_large` and fell back to the OpenRouter ZDR endpoint feed.
+  OpenRouter supplies 60 genuinely free models in discovery, but every openrouter
+  row is `evidence_only=True`, so it cannot serve `orchestrator/free` directly.
+  Free models must therefore come from OpenAI, NVIDIA NIM, or opencode_zen —
+  providers whose free-cost classification previously relied only on the
+  per-provider `/v1/models` payload. That payload alone marks zero-dollar prices
+  inconsistently, so most rows were treated as priced and dropped from the free
+  pool.
+- `ContextualWisdomLab/contextual-orchestrator#919`
+  (`43a5c91955df9794c9f8d3679d3ca38265e22928`) generalizes the Models.dev
+  free-cost join from `opencode_zen` to every provider that carries a
+  `models_dev_provider_id`, fetches `https://models.dev/api.json` exactly once,
+  and passes the parsed metadata into `discover_provider_models`. This lets
+  OpenAI/NVIDIA/opencode_zen free models be recognized even when bytez is
+  unavailable, breaking the single-provider-of-free-models dependency.
+- Fix for `.github`: bump `ORCHESTRATOR_PIN_SHA` in
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`, the contract constant
+  in `tests/test_contextual_orchestrator_review_sidecar_contract.py`, and the
+  ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to
+  `43a5c91955df9794c9f8d3679d3ca38265e22928`.
+- Catch-22: because `opencode-review`/`strix`/`noema-review` are required
+  `pull_request_target` checks, a `.github` PR that updates the sidecar pin is
+  tested with the *base* sidecar (old pin). That base sidecar still cannot boot,
+  so the required checks on the `.github` PR itself will fail until the base
+  branch already contains the new pin. This is an accepted, documented trust
+  boundary for `.github` workflow changes (see CLAUDE.md), but it means the
+  `.github` PR needs either (a) a base-branch direct update by an owner-level
+  actor, or (b) a `repository_dispatch`/manual Strix run that materializes the
+  new pin separately. The PR is opened with the correct code change and evidence
+  so the next pass can land it.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
