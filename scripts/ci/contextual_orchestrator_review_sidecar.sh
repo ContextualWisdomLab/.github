@@ -273,6 +273,36 @@ case "$orchestrator_pool" in
     ;;
 esac
 
+# Opt-in runtime floor, off by default: preflight already narrows the served
+# agent list down to whatever survived a per-route probe (see
+# contextual_orchestrator_review_launcher.py's _preflight_review_agents), and
+# neither pool's catalog construction guarantees that surviving set spans
+# more than one outage-domain provider family -- pool=="free" builds no
+# priced fallback tier at all, and pool=="auto"'s own priced-fallback catalog
+# is only substituted in when EVERY primary route rejects preflight, not when
+# a single-family remainder survives it. A caller that has already gated its
+# own decision to request this sidecar on live family-diversity evidence
+# (docs/adr/0020-strix-orchestrator-free-pool.md) may opt into this
+# additional runtime backstop so a stale discovery snapshot or unlucky
+# preflight outcome cannot silently narrow it to a single point of failure by
+# the time serve() is reached. Off by default because it is a new, stricter
+# failure mode: unconditionally enabling it today would immediately fail
+# closed for any caller currently relying on this sidecar's default pool
+# ("free"), including callers that have not asked for or gated on this
+# guarantee.
+case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY:-false}" in
+  true)
+    diversity_args=(--require-minimum-serving-diversity)
+    log "opted into the minimum-serving-diversity runtime floor"
+    ;;
+  false|"")
+    diversity_args=()
+    ;;
+  *)
+    fail "CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY must be true or false"
+    ;;
+esac
+
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
