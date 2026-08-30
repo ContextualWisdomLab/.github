@@ -214,6 +214,13 @@ def build_zdr_prioritized_catalog(
     family alone (e.g. every free route sharing a single upstream provider,
     as recorded for Strix in ADR-0003) means that provider's outage takes
     the whole free catalog down with it.
+
+    This counts routes discovery reports as free, not routes runtime
+    preflight has confirmed are actually serving requests: a value of two or
+    more is evidence that a family-outage cannot immediately empty the free
+    catalog, not proof that either family is presently reachable. A caller
+    needing readiness, not just discovery-time diversity, must combine this
+    with the runtime preflight report the sidecar already produces.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")

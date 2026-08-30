@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.ci import contextual_orchestrator_review_policy as policy
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 _SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -232,10 +234,14 @@ def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
         "preflight_route_rejected provider=nvidia_nim "
         "error_type=ProviderUpstreamError http_status=429"
     ) in captured.err
-    # An error_type value is only ever a Python identifier in real callers
-    # (see _preflight_review_agents' own isidentifier() guard), so an
-    # unexpected non-identifier string like this one prints as-is here --
-    # the bound that actually protects evidence is upstream of this helper.
+    # The openrouter route's error_type ("RuntimeError <secret>") is not a
+    # Python identifier, so _log_preflight_rejections' own isidentifier()
+    # guard replaces it with the bounded placeholder "UnknownError" rather
+    # than printing it as-is -- this helper is itself the bound that keeps
+    # an unexpected, non-identifier error_type (and anything embedded in it,
+    # such as the secret above) out of the job log.
+    assert "preflight_route_rejected provider=openrouter error_type=UnknownError" in captured.err
+    assert "RuntimeError" not in captured.err
     assert "ready_one" not in captured.err
 
 
@@ -491,16 +497,44 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
     namespace = _load_launcher()
     base = {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     rows = [
-        {"cost_evidence": "free"},
-        {"cost_evidence": "priced"},
-        {"cost_evidence": "priced"},
-        {"cost_evidence": "unknown"},
+        {"cost_evidence": "free", "provider": "nvidia_nim"},
+        {"cost_evidence": "priced", "provider": "openai"},
+        {"cost_evidence": "priced", "provider": "openai"},
+        {"cost_evidence": "unknown", "provider": "bytez"},
     ]
-    enriched = namespace["_with_discovery_counts"](base, rows)
+    enriched = namespace["_with_discovery_counts"](
+        base, rows, provider_family=policy.provider_family
+    )
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
+    assert enriched["free_family_diversity"] == 1
+
+
+def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
+    """A stage report's own narrower free-route set must not be trusted.
+
+    Regression for a real bug: the ``auto``-pool primary stage only sees
+    ZDR-admitted free rows, and the priced-fallback stage sees no free rows
+    at all, so either stage's internally computed ``free_family_diversity``
+    (whatever ``build_zdr_prioritized_catalog`` returned from its own
+    narrower input) would undercount or read zero even when the full
+    discovery has multi-family free-route diversity.
+    """
+    namespace = _load_launcher()
+    stage_report_from_priced_only_rows = {"free_family_diversity": 0}
+    full_discovery_rows = [
+        {"cost_evidence": "free", "provider": "nvidia_nim"},
+        {"cost_evidence": "free", "provider": "openrouter"},
+        {"cost_evidence": "priced", "provider": "openai"},
+    ]
+    enriched = namespace["_with_discovery_counts"](
+        stage_report_from_priced_only_rows,
+        full_discovery_rows,
+        provider_family=policy.provider_family,
+    )
+    assert enriched["free_family_diversity"] == 2
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:

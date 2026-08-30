@@ -377,9 +377,23 @@ def _bounded_fallback_catalog_limit(
 
 
 def _with_discovery_counts(
-    report: dict[str, object], rows: list[dict[str, Any]]
+    report: dict[str, object],
+    rows: list[dict[str, Any]],
+    *,
+    provider_family: Any,
 ) -> dict[str, object]:
-    """Copy a stage report while restoring full discovery-tier counts."""
+    """Copy a stage report while restoring full discovery-tier counts.
+
+    ``free_family_diversity`` is recomputed here from the full discovery-wide
+    ``rows``, not trusted from the stage report: the primary ``auto``-pool
+    stage may have selected only ZDR-admitted free rows (undercounting
+    diversity whenever ``--require-zdr`` excludes some free routes) and the
+    priced-fallback stage selects only priced rows (so its own internally
+    computed diversity is always zero) -- either stage report's
+    ``free_family_diversity``, as returned by ``build_zdr_prioritized_catalog``
+    from whatever narrower row set it was given, would otherwise contradict
+    that field's documented "among *all* discovered free routes" contract.
+    """
     enriched = dict(report)
     enriched.update(
         {
@@ -387,6 +401,13 @@ def _with_discovery_counts(
             "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+            "free_family_diversity": len(
+                {
+                    provider_family(str(row["provider"]))
+                    for row in rows
+                    if row.get("cost_evidence") == "free"
+                }
+            ),
         }
     )
     return enriched
@@ -470,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         build_zdr_prioritized_catalog,
         is_zdr_model,
         parse_discovery_report,
+        provider_family,
     )
 
     registered = register_review_credentials(os.environ)
@@ -542,7 +564,9 @@ def main(argv: list[str] | None = None) -> int:
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
-    result["report"] = _with_discovery_counts(result["report"], normalized_rows)
+    result["report"] = _with_discovery_counts(
+        result["report"], normalized_rows, provider_family=provider_family
+    )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -575,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows
+                fallback_result["report"], normalized_rows, provider_family=provider_family
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"
