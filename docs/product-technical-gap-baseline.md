@@ -1788,6 +1788,26 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
   Postgres-스킵 스모크 테스트와 동일한 한계임을 코멘트로 남기고 resolve했다. 6개 thread 모두
   코멘트+resolve 완료. 검증: 신규 테스트 4개 추가, 전체 백엔드 스위트 1825 passed/32 skipped,
   ruff clean.
+- **추가(2차 Devin Review, 보안 finding 포함)**: 위 fix가 push되자 Devin이 같은 head에 6건을
+  더 지적했다. 가장 중요한 것은 **[보안, 최우선]** "workspace 경계를 넘어 판단을 열람·정정할
+  수 있다"는 finding이었다 — `calendar_conflict_judgments`/`corrections`가 `user_id`+
+  `organization_id`만으로 범위를 제한하고 `workspace_id`를 빠뜨렸는데, `AuthContext.workspace_id`는
+  세션 토큰의 독립 claim(`api/auth.py`의 `_required_string_claim(payload, "workspace")`)이라
+  테스트 스텁만 편의상 user_id/org에서 파생할 뿐, 실제로는 동일 user_id+organization_id가
+  서로 다른 workspace를 오갈 수 있어 실제 인가 우회였다. 검증 후 `naruon`의 기존
+  `project_graph` 모듈이 이미 확립한 workspace_id 스코핑 관례를 그대로 따라 두 테이블·모든
+  scoped 쿼리·API 4개 경로에 `workspace_id`를 추가했다(Alembic `0018`은 아직 어떤 DB에도
+  적용되지 않은 이번 PR 자체 마이그레이션이라 새 마이그레이션 대신 직접 수정). 나머지 5건도
+  모두 고쳤다: `list_judgments`의 200건 상한 이후 접근 불가 문제는 전체 페이지네이션 대신
+  `GET /judgments/{judgment_uid}` 단건 조회로, correction rationale이 recommended_action으로
+  둔갑하는 문제는 `calendar_conflict_policy.py`에 새로 추가한
+  `default_recommended_action()`(정책 자체의 단일 소스, `evaluate_calendar_conflicts`도 재사용)로,
+  status_code/decision_code 모순 조합은 API 모델 validator + 서비스 계층 이중 검증으로,
+  ICS 파서의 별도 500건 하드코딩은 공유 상수로, Noema 도구의 스킵된 행 개수 미공개는
+  `skipped_existing_count` 필드 추가로 해소했다. 6개 thread 모두 코멘트+resolve 완료. 검증:
+  전체 백엔드 스위트 1835 passed/32 skipped(무관한 process-group 타이밍 테스트 1건이 전체
+  스위트 동시 실행에서만 간헐적으로 실패, 단독 실행 시 통과 확인 — 이번 변경과 무관), ruff
+  clean, `alembic heads` 단일 head 유지. push 완료(86f4bd9b).
 
 ## 5. 실행 루프와 고객의 다음 행동
 
