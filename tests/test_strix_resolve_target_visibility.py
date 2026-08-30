@@ -711,8 +711,13 @@ def test_noema_and_opencode_visibility_paths_stay_untouched() -> None:
         REPO_ROOT / ".github" / "workflows" / "opencode-review.yml"
     ).read_text(encoding="utf-8")
 
-    assert 'is_private="$(gh api "repos/${TARGET_REPOSITORY}" --jq \'.private\')"' in (
-        noema
-    )
+    # Noema independently gained its own retry-with-backoff visibility lookup
+    # (bounded `gh api` loop keyed on `.visibility`) on `main` while this PR
+    # was in flight; the invariant this slice must preserve is that Noema
+    # keeps its own inline resolution rather than adopting the Strix helper.
+    assert (
+        'gh api "/repos/${TARGET_REPOSITORY}" --jq '
+        "'.visibility // (if .private then \"private\" else \"public\" end)'"
+    ) in noema
     assert "strix_resolve_target_visibility.py" not in noema
     assert "strix_resolve_target_visibility.py" not in opencode
