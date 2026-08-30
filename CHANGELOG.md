@@ -5,12 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Web verification now runs backend, frontend, and E2E commands in an isolated
-  workspace and accepts only local readiness URLs. Run it on a supported Linux
-  runner; trusted local debugging may opt out with `--isolation disabled`.
-- Invalid readiness URLs and unavailable isolation now fail with clear
-  diagnostics before services start, so update the URL or runner instead of
-  retrying the same setup.
+- Web verification now runs backend, frontend, and E2E commands inside an
+  isolated Linux bubblewrap workspace by default (`--isolation required`),
+  mounting a read-only runtime root with a single writable `/workspace`
+  bind; trusted local debugging may opt out with `--isolation disabled`.
+  Isolation-backend resolution and the existing loopback readiness-URL
+  boundary are now both checked before any service starts, so an
+  unavailable isolation backend or an invalid readiness URL fails closed
+  with a clear diagnostic (exit code 126/125) instead of after services are
+  already running.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
