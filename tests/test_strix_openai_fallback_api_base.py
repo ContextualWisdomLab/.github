@@ -284,6 +284,30 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
 
+    def test_workflow_gateway_base_accepts_auto_pool_model(self) -> None:
+        """The auto pool (CONTEXTUAL_ORCHESTRATOR_POOL=auto) is a recognized
+        contextual-orchestrator model, not just the legacy free pool.
+
+        Regression for the #1401 rename (orchestrator/free -> orchestrator/auto
+        in strix.yml) that left is_contextual_orchestrator_model() only
+        recognizing the old free-pool spelling, which made every PR-scoped
+        Strix scan fail its https-only LLM_API_BASE check against the pinned
+        http://127.0.0.1:18080 loopback sidecar.
+        """
+
+        rc, api_base = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
+            "orchestrator/auto",
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(api_base, "http://127.0.0.1:18080/v1")
+
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/auto",
+        )
+        self.assertEqual(rc, 2)
+
     def test_manual_status_job_has_status_write_permission(self) -> None:
         """OIDC target-app exchange may request the target commit status scope."""
 

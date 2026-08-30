@@ -3334,6 +3334,18 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 		echo "scan ok through contextual-orchestrator gateway"
 		exit 0
 		;;
+	contextual-orchestrator-gateway-model-qualification-auto)
+		if [ "${STRIX_LLM:-}" != "openai/orchestrator/auto" ]; then
+			echo "gateway auto-pool model was not provider-qualified for LiteLLM" >&2
+			exit 10
+		fi
+		if [ "${LLM_API_BASE:-}" != "http://127.0.0.1:18080/v1" ]; then
+			echo "gateway API base was not preserved" >&2
+			exit 11
+		fi
+		echo "scan ok through contextual-orchestrator gateway"
+		exit 0
+		;;
 	scan-working-directory-isolated)
 		if [ "$PWD" = "$target_path" ] || [[ "$PWD" == "$target_path"/* ]]; then
 			echo "Error: Strix process inherited the untrusted scan target as cwd" >&2
@@ -6101,6 +6113,18 @@ run_filtered_gate_case_if_requested() {
 			"scan ok through contextual-orchestrator gateway" \
 			"1" \
 			"openai/orchestrator/free" \
+			"http://127.0.0.1:18080/v1" \
+			"contextual_orchestrator" \
+			"http://127.0.0.1:18080/v1"
+		;;
+	contextual-orchestrator-gateway-model-qualification-auto)
+		run_gate_case "contextual-orchestrator-gateway-model-qualification-auto" \
+			"orchestrator/auto" \
+			"" \
+			"0" \
+			"scan ok through contextual-orchestrator gateway" \
+			"1" \
+			"openai/orchestrator/auto" \
 			"http://127.0.0.1:18080/v1" \
 			"contextual_orchestrator" \
 			"http://127.0.0.1:18080/v1"
@@ -9802,6 +9826,17 @@ run_gate_case "contextual-orchestrator-gateway-model-qualification" \
 	"scan ok through contextual-orchestrator gateway" \
 	"1" \
 	"openai/orchestrator/free" \
+	"http://127.0.0.1:18080/v1" \
+	"contextual_orchestrator" \
+	"http://127.0.0.1:18080/v1"
+
+run_gate_case "contextual-orchestrator-gateway-model-qualification-auto" \
+	"orchestrator/auto" \
+	"" \
+	"0" \
+	"scan ok through contextual-orchestrator gateway" \
+	"1" \
+	"openai/orchestrator/auto" \
 	"http://127.0.0.1:18080/v1" \
 	"contextual_orchestrator" \
 	"http://127.0.0.1:18080/v1"

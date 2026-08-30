@@ -322,7 +322,8 @@ is_vertex_model() {
 
 is_contextual_orchestrator_model() {
 	case "$1" in
-	orchestrator/free | contextual-orchestrator/orchestrator/free)
+	orchestrator/free | contextual-orchestrator/orchestrator/free | \
+		orchestrator/auto | contextual-orchestrator/orchestrator/auto)
 		return 0
 		;;
 	*)
@@ -2562,11 +2563,16 @@ child_model_for_api_base() {
 
 	# LiteLLM requires an explicit provider prefix even when the gateway is an
 	# OpenAI-compatible local endpoint. Keep the public gateway model name, but
-	# qualify only the child process model so the request still carries
-	# orchestrator/free to contextual-orchestrator.
+	# qualify only the child process model so the request still carries the
+	# resolved orchestrator pool (orchestrator/free or orchestrator/auto) to
+	# contextual-orchestrator. Echoing $model (rather than hardcoding one pool
+	# name) keeps this in sync with whichever pool CONTEXTUAL_ORCHESTRATOR_POOL
+	# actually selected -- see contextual_orchestrator/orchestrator.py's
+	# TaskOrchestrator.AUTO_MODEL / FREE_MODEL sentinels, which the gateway
+	# itself distinguishes by this exact string.
 	if is_contextual_orchestrator_model "$model" &&
 		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
-		printf '%s\n' 'openai/orchestrator/free'
+		printf 'openai/%s\n' "$model"
 		return 0
 	fi
 
@@ -4303,7 +4309,7 @@ run_current_target_scan() {
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
 		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
-			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
+			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/$PRIMARY_MODEL exhausted; the gateway owns provider discovery and failover." >&2
 			return 1
 		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
@@ -4345,7 +4351,7 @@ run_current_target_scan() {
 		return 1
 	fi
 	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
-		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/$PRIMARY_MODEL exhausted; no external fallback is permitted." >&2
 		return 1
 	fi
 
