@@ -1892,9 +1892,23 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
   최소 범위로 고치는 백그라운드 에이전트를 별도로 기동했다(worktree 격리, `fix/sandboxed-web-e2e-isolation-clean`
   브랜치, 6개 thread 각각에 회신+resolve, 기존 SSRF/isolation 테스트 재실행 후 push). 결과는 다음 pass에서
   커밋/thread 상태로 확인한다.
-- naruon G-15(첨부파일 parser registry) 실제 구현에 착수 — 기존 `Attachment` 모델, `_PARSER_MANIFEST`,
-  산재한 1MB/20MB/64MB 상한 위치, ADR 번호 체계를 먼저 정찰하는 탐색 에이전트를 병행 기동했다. 결과는
-  다음 pass에서 실제 코드 증분으로 이어간다.
+- **naruon G-15 첫 슬라이스를 실제로 배포했다** (`naruon#1486`의 같은 브랜치에 push, 커밋 `ee83effd`).
+  정찰 에이전트가 확인한 사실(`Attachment`에 opaque id 부재, `_PARSER_MANIFEST`가 튜플 기반 정적
+  디스크립터, 상한이 1MB/20MB/64MB 세 곳에 흩어져 있으나 각각 다른 게이트, quarantine 개념 전무,
+  Alembic 최신 head `0018`, `docs/adr/`가 0001-0004까지 존재)를 바탕으로 구현: (1)
+  `services/attachment_parser.py`가 첨부파일의 실제 바이트를 알려진 매직 바이트(PDF/PNG/JPEG/GIF/ZIP)로
+  스니핑해 선언된/추론된 content_type과 다르면 파싱·보류·unsupported 분류 대신
+  `parse_status=parse_error_code="content_type_mismatch_quarantined"`으로 격리(원본 바이트는 기존
+  20MB 상한 재사용해 base64 보존, 새 컬럼 없이 기존 `content_type`/`parse_content_type` 두 컬럼
+  비교만으로 declared-vs-actual을 드러냄), (2) `Attachment.attachment_uid` 오파크 id 추가(Alembic
+  `0019_attachment_uid`, 기존 행 백필하는 구조적 마이그레이션), (3) `POST
+  /api/data/attachments/{attachment_uid}/reparse-intent`가 quarantine된 첨부파일을
+  `reparse_pending`으로 전환하는 intent만 기록(기존 hwp-conversion-intent/pdf-dom-recognition-intent와
+  동일 패턴 — 실제 재파싱 워커는 별도 후속 슬라이스로 명시적으로 미룸), (4)
+  `docs/adr/0005-attachment-content-type-quarantine.md` 신설 + README 색인 갱신. 검증: 신규 테스트
+  8개(파서 5 + API 3) 추가, 전체 백엔드 스위트 1842 passed/33 skipped(회귀 없음), ruff clean,
+  `alembic heads`가 `0019_attachment_uid` 단일 head로 수렴. 다음 슬라이스 후보: `reparse_pending`을
+  실제로 소비하는 워커, HWP/HWPX 지원, 단일 첨부파일 upload-accept 상한(현재 부재).
 
 ## 6. Compliance and data boundary
 
