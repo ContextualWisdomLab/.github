@@ -45,7 +45,20 @@ Semantic Versioning where the repository publishes a release.
   as an unverified best effort rather than a guarantee. Layer 1 (which pins
   one specific candidate per attempt) is unaffected. Consequences corrected
   from present tense to prospective, matching the ADR's `proposed` status.
-  No code change in this PR; the sidecar migration is tracked separately.
+  A fifth Devin Review pass found Trigger B's definition itself was too
+  narrow: `finish_reason == "length"` alone misses the vendored
+  `ModelClient._response_content`'s own broader "reasoning, no content"
+  signature (a populated `message.reasoning` field with no string
+  `content`, already anticipated in the codebase's own error message) --
+  exactly the original PR #1436 failure mode, since a reasoning model can
+  exhaust its budget under a different or absent `finish_reason`, and
+  provider `finish_reason` semantics for this case aren't verified as
+  uniform across a pool this heterogeneous. Trigger B is now defined as
+  `finish_reason == "length"` OR that reasoning-without-content signature,
+  consistently through Decision §1 and §3 and the "every other outcome"
+  fallback case; Layer 2's "no retry on Trigger B" applies to both halves
+  of the signature, not just the finish_reason one. No code change in this
+  PR; the sidecar migration is tracked separately.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

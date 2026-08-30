@@ -1381,6 +1381,25 @@ Summary of the current ADR:
   readiness probe; `#927`: real per-model `max_output_tokens`/`context_window` discovery data,
   correctly modeled as two separate fields), not just prose. Neither blocks the sidecar-side fix.
 
+**A fifth Devin Review pass found Trigger B's own definition was too narrow, missing the exact failure
+mode this whole ADR responds to.** Verified directly against `contextual_orchestrator/orchestrator.py`:
+`ModelClient._response_content` treats *either* `choices[0].finish_reason == "length"` *or* a populated
+`message.reasoning` field with no string `content` as the same "budget too small" signature — already
+anticipated in the codebase's own error message (*"provider {agent.id} returned reasoning without
+content ... increase max_output_tokens"*), and directly citing the reasoning-without-content half is
+what a purely `finish_reason`-based predicate cannot express. This matters because provider
+`finish_reason` semantics for this specific case are not verified as uniform across a pool this
+heterogeneous (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`, `openrouter`, ...) — a reasoning model
+can exhaust its budget mid-reasoning under a different or absent `finish_reason`, so a `finish_reason ==
+"length"`-only Trigger B would silently misclassify a genuinely healthy reasoning-capable candidate as
+down, exactly the false-negative class this ADR's two-trigger split exists to prevent, just resurfacing
+one level deeper. **Fixed by widening Trigger B's definition** to the two-part OR-condition throughout
+Decision §1 and §3 (the escalation predicate, the worst-case arithmetic prose, and the "every other
+outcome" fallback case) and the implementation-telemetry requirement (both `finish_reason` and the
+reasoning-without-content signal must be emitted, not only the former) — Layer 2's "no retry on Trigger
+B" now explicitly covers both signatures, not only the `finish_reason` one, since the same "already
+recorded as successful by the gateway's routing" reasoning applies equally to either.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

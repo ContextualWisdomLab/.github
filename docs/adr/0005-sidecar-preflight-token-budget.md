@@ -170,23 +170,36 @@ correctly caught in an earlier revision of this text):**
     slot and the loop moves to the next candidate, exactly as it does today. A same-candidate retry
     here would add latency without adding resilience Layer 1's own multi-candidate design does not
     already provide.
-- **Trigger B — a response was received, content is empty, and `choices[0].finish_reason == "length"`**
-  (the OpenAI-documented signature of "budget too small," cited above).
+- **Trigger B — a response was received, content is empty, and EITHER `choices[0].finish_reason ==
+  "length"` (the OpenAI-documented signature of "budget too small," cited above) OR the vendored
+  `ModelClient._response_content`'s own broader signature: a populated `message.reasoning` field with
+  no string `content`** (already anticipated in the codebase's own error message, quoted in the
+  Evidence trail: *"provider {agent.id} returned reasoning without content ... increase
+  max_output_tokens"*). **This second condition is not optional — it is the exact original failure
+  mode PR #1436 responded to** ("empty content at 16 tokens" moving to a materially larger budget), and
+  a `finish_reason`-only predicate would miss it entirely: a reasoning model can exhaust its budget
+  mid-reasoning under a `finish_reason` other than `"length"`, or with no `finish_reason` field present
+  at all — provider `finish_reason` semantics for this specific case are not verified as uniform across
+  a pool this heterogeneous (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`, `openrouter`, ...), so
+  relying on `finish_reason` alone would silently leave a genuinely healthy reasoning-capable candidate
+  misclassified as down — the same class of false-negative Decision §1's Trigger-A/B split already
+  exists to prevent, just for a different code path (a real response object this time, not a hang).
   - **Layer 1**: retry that *same* candidate (`client.proxy_send_once(agent, ...)` pins the exact agent
     object, so this retry is genuinely attributable to that one candidate) once at a **materially
     larger** budget — `REVIEW_PREFLIGHT_ESCALATED_TOKENS` (`4096`, reusing `REVIEW_MAX_OUTPUT_TOKENS`),
     up from a `16`-token base probe (`REVIEW_PREFLIGHT_BASE_TOKENS` — a **new, smaller** value than the
     `4096` Layer 1 uses today; see Decision §3). This is the only place in either layer where the
     budget itself changes.
-  - **Layer 2**: **no retry — this is a deliberate simplification made across this ADR's review, not an
-    oversight.** Devin Review's fourth pass found the reason directly: a `finish_reason == "length"`
-    response is still `HTTP 200` — the gateway's own routing layer already recorded that as a
-    *successful* attempt before the sidecar ever inspects the content, so a subsequent identical
-    request is not a fresh, independent draw against the pool; the gateway's routing is more likely to
-    *repeat* the same "successful" candidate than to diversify away from it. Retrying at the same
-    budget against the same likely candidate has no principled reason to produce a different outcome,
-    so Layer 2 does not attempt it: an empty response with `finish_reason == "length"` at Layer 2 is
-    recorded as not-ready immediately, with that `finish_reason` preserved in the report for diagnosis.
+  - **Layer 2**: **no retry on EITHER half of Trigger B — this is a deliberate simplification made
+    across this ADR's review, not an oversight.** Devin Review's fourth pass found the reason directly:
+    a Trigger-B response (whichever signature matched) is still `HTTP 200` — the gateway's own routing
+    layer already recorded that as a *successful* attempt before the sidecar ever inspects the content,
+    so a subsequent identical request is not a fresh, independent draw against the pool; the gateway's
+    routing is more likely to *repeat* the same "successful" candidate than to diversify away from it.
+    Retrying at the same budget against the same likely candidate has no principled reason to produce a
+    different outcome, so Layer 2 does not attempt it for either signature: an empty response matching
+    Trigger B at Layer 2 is recorded as not-ready immediately, with whichever signature matched
+    (`finish_reason` and/or the reasoning-without-content signal) preserved in the report for diagnosis.
 
 **Route diversity on Layer 2's Trigger-A retry is a best-effort hope, not a verified guarantee, and
 this ADR stops trying to force it.** This is the fourth time a version of "does the retry actually
@@ -216,9 +229,10 @@ does not invent that mechanism speculatively.
 - **A non-2xx rejection on a Layer 2 Trigger-A retry** is recorded as `gateway_retry_rejected` —
   deliberately **not** named or described as candidate-ceiling evidence, because Layer 2 structurally
   cannot confirm which candidate served the rejected attempt.
-- **Every other outcome is not retried**: a non-2xx or empty-with-a-different-`finish_reason` result on
-  an attempt that is not eligible for Trigger A or B for that layer (i.e., already the layer's one
-  retry, or already past its shared budget) is recorded as not-ready immediately.
+- **Every other outcome is not retried**: a non-2xx result, or an empty response matching neither of
+  Trigger B's two signatures (`finish_reason == "length"` nor a populated `message.reasoning` with no
+  content), on an attempt that is not eligible for Trigger A or B for that layer (i.e., already the
+  layer's one retry, or already past its shared budget) is recorded as not-ready immediately.
 
 ### 2. Keep both existing layers — neither replaces the other
 
@@ -243,7 +257,8 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   by design, because the escalation path below corrects for it being wrong, unlike today where a wrong
   first (and only) guess is fatal. Trigger A does not need its own retry allowance here (see Decision
   §1). Trigger B (escalate to `REVIEW_PREFLIGHT_ESCALATED_TOKENS = 4096`, reusing today's
-  `REVIEW_MAX_OUTPUT_TOKENS`, on `finish_reason == "length"`) is capped by a new shared counter,
+  `REVIEW_MAX_OUTPUT_TOKENS`, on `finish_reason == "length"` OR a populated `message.reasoning` with no
+  content — see Decision §1's full Trigger B definition) is capped by a new shared counter,
   `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4`, across the whole Layer 1 run (not per-candidate) — once 4
   candidates have consumed an escalation attempt, any further candidate that would otherwise qualify
   for Trigger B is instead recorded not-ready immediately with an explicit
@@ -256,8 +271,9 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   escalates** (already proven working on a real hosted run, `contextual-orchestrator#921`; see Decision
   §1 for why an escalation tier was considered and dropped here). Allow up to
   `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3` total attempts, consumed only by Trigger A (transport
-  failure/hang/non-2xx) — Trigger B (empty + `finish_reason == "length"`) is not retried at Layer 2 at
-  all (Decision §1). **Worst case**: 3 × 120s = **360s (6 minutes)** —
+  failure/hang/non-2xx) — Trigger B (empty + either its `finish_reason == "length"` or
+  reasoning-without-content signature) is not retried at Layer 2 at all (Decision §1). **Worst case**:
+  3 × 120s = **360s (6 minutes)** —
   explicit, bounded, and small relative to the job's 120-minute ceiling; the previous design's worst
   case was already 120s for one unconditional attempt with no chance of recovery, so this trades a
   bounded amount of additional worst-case latency for surviving exactly the transient-hang class of
@@ -269,9 +285,10 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   minimum of 16"* for the deprecated `max_tokens` field). The two new counters
   (`REVIEW_PREFLIGHT_MAX_ESCALATIONS`, `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`) are chosen to keep each
   layer's worst case under its own already-established ceiling, shown above, not picked by inspection
-  of "what feels right." The implementation must have both preflight layers emit `finish_reason`,
-  attempt count, and which trigger fired in their structured reports (`_preflight_review_agents`'s
-  `routes[]`; the shell script's `preflight_report`/`gateway` JSON) — this ADR does not implement that
+  of "what feels right." The implementation must have both preflight layers emit `finish_reason`, the
+  reasoning-without-content signal (Trigger B's other half), attempt count, and which trigger fired in
+  their structured reports (`_preflight_review_agents`'s `routes[]`; the shell script's
+  `preflight_report`/`gateway` JSON) — this ADR does not implement that
   itself (see Status) — specifically so that a **follow-up, evidence-driven pass** — after
   observing real hosted runs with this telemetry — can adjust these two counters and the base/escalated
   token budgets from real data, which is the methodology this ADR commits to for future tuning: initial
