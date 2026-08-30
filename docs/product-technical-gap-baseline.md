@@ -792,6 +792,61 @@ recurrence" section below out of the file entirely; both are restored here.)
   Following up on that hosted-run confirmation is the concrete next check for
   this entry, not a new code change.
 
+## 2026-08-30 hourly pass: §5.1 next-increment list was stale; naruon Noema role clarified
+
+- Re-verified the three §5.1 items from the previous pass against their current state rather than
+  assuming they still apply (per this document's own "병합 판단에는 재사용하지 않는다" rule):
+  - **#1297 is already merged** (`merged_at` 2026-08-26T21:47:16Z, into `main` at
+    `31e5f5337d8a8d844c456fe03f123c51b62416c9`+). No action remains; the item should not have still
+    been listed as pending.
+  - **#1345 is closed, unmerged** (`mergeable_state: dirty`, closed 2026-08-28T17:03:18Z without
+    merging). Its normalizer-linear-scan fix duplicates what #1417 already landed on `main` per the
+    2026-08-30 entry above ("Bolt: label_section 탐색 로직 최적화"); treat as superseded, not a live
+    candidate.
+  - **#1326 is closed, unmerged** (`mergeable_state: behind`, closed 2026-08-27T11:59:18Z). The
+    appguardrail/macos_utility_packs hourly-caller onboarding it proposed was not carried forward by
+    this pass; if still wanted, it needs a fresh PR rebased on current `main`, not a reopen of #1326.
+  - **#1347 remains open** (SSRF/isolation hardening for `sandboxed_web_e2e.py`), `mergeable_state:
+    dirty` against current `main`. Its only review signal is CodeRabbit/Devin bot commentary (one
+    nitpick, several addressed rounds) — no human or required-check-independent `APPROVED` verdict
+    yet. Not touched this pass (time budget went to the naruon increment below instead); next pass
+    should merge current `main` into its head as an ordinary merge commit (never rebase) and re-check.
+- **naruon-side Noema role clarified and widened (this pass's concrete increment, not just an
+  audit).** The user's directive for this loop specifically flagged that Noema is the central
+  `.github` review/CI agent, but naruon needs its own suited role rather than a copy of that one.
+  Investigation found naruon already has a *separate*, correctly-scoped agent identity —
+  `noema-general-agent` in `ContextualWisdomLab/naruon` `backend/services/noema_agent.py` — that
+  reasons over mail/content-graph/tasks on the **tenant's own configured LLM provider** (never routed
+  through the org's shared `contextual-orchestrator` review gateway; doing so would mix customer
+  prompts into shared org infrastructure and defeat the ZDR/cost-isolation boundary
+  `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` establishes for CI review). This is the
+  correct design, not a gap — the note in `ContextualWisdomLab/noema`'s `CLAUDE.md` that "every LLM
+  path ... naruon judgments — calls contextual-orchestrator" is imprecise about this and should be
+  read as covering a distinct, not-yet-built internal-governance use of Noema, not the customer-facing
+  workspace assistant.
+  - The actual, concrete gap: naruon's Noema was scoped to mail/tasks/calendar-*writeback-only* with
+    no scheduling-conflict judgment, even though naruon already has a stateless, deterministic,
+    fully-tested conflict policy (`services/calendar_conflict_policy.py::evaluate_calendar_conflicts`,
+    status-weighted confirmed > tentative > desired, RFC 5545 `STATUS:CANCELLED`-aware) behind
+    `POST /api/calendar/conflicts/evaluate` — directly serving PRD-02 ("일정 이동과 RSVP/commitment
+    충돌을 놓치지 않는다") but not reachable from the agent.
+  - Fix: `ContextualWisdomLab/naruon#1486` adds a `check_calendar_conflict` tool to
+    `noema_agent.py` that calls the *same* `evaluate_calendar_conflicts` function the REST endpoint
+    uses (no second conflict policy invented), so the agent's judgment and the customer-facing API can
+    never diverge. Naruon does not persist provider calendar events server-side, so the tool evaluates
+    only commitments the caller already supplies (e.g. ones the LLM read from mail/tasks earlier in
+    the same run) rather than fetching a provider calendar itself; malformed `existing` rows are
+    skipped rather than raised. `registered_agents.json`/`task_agent_mapping.json` updated to list the
+    new `calendar.conflict_check` capability and to state explicitly that naruon's Noema and the
+    central `.github` review-bot Noema are two separate agents that intentionally share only a name.
+  - Validation (naruon repo): `PYTHONPATH=. python -m pytest backend/tests/test_noema_agent.py -q` →
+    21 passed (6 new, including the pre-existing full-agent-run `TestModel` test that now also
+    exercises this tool end-to-end); full backend suite `python -m pytest -q` → 1808 passed, 32
+    skipped; `ruff check` clean on both changed files.
+  - Acceptance open until `#1486` clears naruon's own required Checks (OpenCode/Strix/merge-scheduler,
+    central-workflow-sourced same as every other consumer repo) and merges; this snapshot is
+    implementation + local-evidence only, not merge authorization.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
@@ -810,10 +865,15 @@ recurrence" section below out of the file entirely; both are restored here.)
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1297 — current-head Strix serialization과 scoped close cleanup의 hosted Checks·독립 승인을 재확인한 뒤 보호된 auto-merge를 기다린다.
-2. ContextualWisdomLab/.github#1345/#1347 — 각각 normalizer 선형 스캔과 web-E2E isolation/SSRF 수정의 terminal Checks·Strix·Noema 증거를 같은 HEAD에서 재확인한다.
-3. ContextualWisdomLab/.github#1326 — Appguardrail/macOS hourly caller를 current CodeRabbit finding 및 APA citation evidence와 함께 재검토한다.
-4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
+1. ContextualWisdomLab/.github#1347 — web-E2E isolation/SSRF 수정을 current `main`으로 merge-conflict
+   해소(ordinary merge commit, no rebase) 후 terminal Checks·독립 승인을 재확인한다. (#1297은 이미
+   병합됨; #1345/#1326은 closed·unmerged로 확인되어 더 이상 후보가 아니다 — 위 2026-08-30 항목 참고.)
+2. ContextualWisdomLab/naruon#1486 — 새로 추가된 Noema `check_calendar_conflict` 도구의 naruon 자체
+   required Checks(OpenCode/Strix/merge-scheduler)를 current head에서 재확인하고, 조건 충족 시
+   merge한다.
+3. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon
+   ecosystem 소비 증거(부분적으로 #1486이 G-06/PRD-02에 기여), G-15는 대용량·미지원 첨부파일 parser
+   registry의 소유 저장소 PR로 연결한다.
 
 ## 6. Compliance and data boundary
 

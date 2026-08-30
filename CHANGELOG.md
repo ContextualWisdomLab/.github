@@ -5,6 +5,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Refresh `docs/product-technical-gap-baseline.md`'s §5.1 next-increment list,
+  which had gone stale: #1297 was already merged, and #1345/#1326 were closed
+  unmerged, yet all three were still listed as pending candidates. Replaced
+  with the current state (#1347 still open/dirty; `ContextualWisdomLab/naruon#1486`
+  added as this pass's naruon increment) and recorded the naruon-side Noema
+  role clarification: naruon's `noema-general-agent` is a separate, correctly
+  BYO-LLM-scoped agent from this repo's central review-bot Noema — they
+  intentionally share only a name — and it now has a `check_calendar_conflict`
+  tool (PRD-02) that reuses naruon's existing deterministic conflict policy
+  instead of inventing a second one.
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
