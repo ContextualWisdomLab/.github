@@ -1038,6 +1038,30 @@ then a 502 on the actual gateway request).
     which would mean the dead/slow fraction of this provider's free catalog
     is larger than assumed and the live-catalog cross-check above is the
     real fix, not a further family_cap increase.
+  - **A second, independent, complementary fix landed on `main` mid-pass**:
+    PR #1436 ("give the gateway preflight probe a real reasoning budget"),
+    authored elsewhere in parallel, fixes `contextual_orchestrator_review_
+    sidecar.sh`'s own post-`healthz` gateway smoke request — it previously
+    used a `max_tokens` value desynchronized from
+    `REVIEW_MAX_OUTPUT_TOKENS`, so a reasoning-capable free-tier route (e.g.
+    a DeepSeek NIM model) that the launcher's own internal preflight had
+    already proved "ready" could still spend its whole budget on internal
+    reasoning before any visible answer, making the shell script's separate
+    end-to-end smoke request see empty assistant content and fail closed
+    with `502 invalid_structured_output`. This is the precise mechanism
+    behind the PR #1433 "healthz reached, then 502" signature this entry's
+    earlier revision (see the superseded framing note above) described
+    without yet knowing the cause — it is a genuinely different bug from
+    this entry's own family-cap/stale-model finding (that one is about
+    *which* candidates ever reach a preflight attempt; #1436's is about the
+    *separate*, later smoke-test step that re-checks whichever candidate
+    the server ends up actually routing to), not a duplicate or a
+    correction of it. Both fixes are now in this branch's ancestry
+    (merged `main` into `fix/zdr-nim-nvidia-citation-20260830` mid-pass);
+    a hosted run against the combined state is the next real test of
+    whether the outage is now closed or whether further work (the
+    live-catalog cross-check above, or something neither fix covers) is
+    still needed.
 - **Strix `orchestrator/auto` → `orchestrator/free`: implemented, per the
   owner's explicit, informed decision.** This pass first drafted the switch,
   then reverted it unpushed on discovering `docs/adr/0003-contextual-
