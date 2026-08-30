@@ -19,6 +19,15 @@ Semantic Versioning where the repository publishes a release.
 - Keep exact-head Python coverage materialization enabled for every tracked
   `.txt` change because a bounded include cannot be identified safely from its
   path, and reject malformed base or HEAD SHAs before any Git read.
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
+  `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
+  Models.dev free-cost join beyond `opencode_zen` to `nvidia_nim`/
+  `nvidia_nim_sub`/`openai`, and fixes the actual root cause — `_fetch_json`
+  sent no `User-Agent`, so Cloudflare-fronted `models.dev` rejected every
+  discovery request with HTTP 403, silently breaking the Models.dev join for
+  every provider (including the pre-existing `opencode_zen` path). See the
+  2026-08-30 gap-baseline entry for the merge/bypass rationale.
 - Keep the required OpenCode bootstrap's Pingora policy step unconditional
   within its pull-request-only workflow, so the static bootstrap contract does
   not depend on event payload fields. (Ported from #1414, not yet merged, to
