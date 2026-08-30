@@ -1316,22 +1316,48 @@ missing external citations for provider-behavior claims (added, fetched live fro
 OpenRouter's own current docs), and untracked follow-ups (now real issues:
 `ContextualWisdomLab/contextual-orchestrator#926`, `#927`).
 
+**A second Devin Review pass found 5 more issues, the most important of which showed the first revision
+still did not fix its own motivating bug — verified and fixed, not dismissed.** Finding #1 (critical):
+the first revision's single retry predicate ("empty response AND `finish_reason == 'length'`") cannot
+fire for the exact live evidence cited above (a `curl` timeout with zero bytes) — a transport-level
+hang produces no response object at all, so there is no `finish_reason` to inspect, meaning the ADR as
+written would not have fixed the reproduction it cites as its own justification. Finding #2: an
+escalated (larger) probe can itself get rejected outright by a model whose real ceiling sits between
+the base and escalated budgets — a distinct failure signature from "empty content," previously
+unhandled. Finding #3: an unconditional "one retry per candidate" across up to 12 candidates plus the
+gateway check is an unbounded-looking worst case against Layer 1's own 180s readiness ceiling. Finding
+#4: deferring every numeric constant to "future telemetry" is circular — initial deployment still needs
+justified starting values. Finding #5: citations to this repo's own source by line number rot as the
+file changes; needs SHA-pinned permalinks.
+
+**Fixed by modeling two distinct, explicitly-bounded retry triggers instead of one**: Trigger A (no
+usable response — timeout, connection failure, non-2xx) retries at the *same* budget, since a hang is
+not a budget problem; Trigger B (a response *was* received, empty, `finish_reason == "length"`)
+escalates the budget. An escalated-attempt rejection is its own recorded outcome, not blindly retried
+again. Each layer draws from a small, computed, shared retry budget — Layer 1 stays within its existing
+180s ceiling (12 base attempts + 4 escalations × 10s = 160s, explicit); Layer 2 keeps its existing,
+already-evidenced 120s per-attempt timeout **unchanged** (shortening it would have regressed the prior,
+already-reasoned 30s→120s fix in the same file, since a real reasoning generation can legitimately need
+that long and the job already budgets 120 minutes total) and gets up to 3 total attempts (360s worst
+case) instead of one unconditional attempt with no recovery path. Initial numeric values (`16`, `4096`,
+`10s`, `120s`, and the two new attempt-count caps) are each either already deployed in this codebase or
+backed by direct external documentation (OpenRouter's own schema: *"some providers enforce a minimum of
+16"*), not fresh guesses — both preflight layers now also emit `finish_reason`/attempt-count/trigger
+telemetry specifically so a future pass can refine these from real data. Source citations are now
+SHA-pinned permalinks (`8b3235d2...`) instead of bare line numbers.
+
 Summary of the current ADR:
 
 - **No caller-facing lever separates a reasoning budget from a content budget on this gateway.**
   `ReasoningEffortProfile` is real but additive (still always sets `max_tokens`), opt-in server-side
   only, and the public `/v1/chat/completions`/`/v1/responses` endpoints this preflight and Strix both
   use treat a caller-supplied `reasoning_effort`/`reasoning` field as a **documented no-op**.
-- **Decision**: keep both existing preflight layers (per-candidate launcher probing; the shell script's
-  separate virtual-pool smoke request) — fix their shared flaw (a fixed `max_tokens` per attempt)
-  with a diagnostic, escalate-only-on-positive-evidence retry (only when a response is empty **and**
-  `finish_reason == "length"` — the provider-documented signature of "budget too small," not "down")
-  and short per-attempt timeouts, rather than picking a new fixed number. This ADR deliberately does
-  not commit to specific budget/timeout constants — those should come from real telemetry the
-  redesigned preflight itself will emit, not from inspection.
+- **Decision**: keep both existing preflight layers, fixed with the two-trigger, explicitly-bounded
+  retry design above rather than one generic retry or a shortened timeout.
 - **Live, current evidence this is an active defect, not theoretical**: `noema-review` failed on the
-  ADR's own PR (#1449, job `99253418179`) with exactly this bug while the ADR was being written —
-  Layer 1 passed in 30s, Layer 2 then hung the full 120s with zero bytes back.
+  ADR's own PR (#1449, job `99253418179`) with exactly the Trigger-A (no-response/hang) case — Layer 1
+  passed in 30s, Layer 2 then hung the full 120s with zero bytes back, confirming why the two triggers
+  had to be modeled separately.
 - Two upstream `contextual-orchestrator` asks are now real tracked issues (`#926`: inference-scoped
   readiness probe; `#927`: real per-model `max_output_tokens`/`context_window` discovery data,
   correctly modeled as two separate fields), not just prose. Neither blocks the sidecar-side fix.

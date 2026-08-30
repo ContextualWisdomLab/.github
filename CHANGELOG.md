@@ -16,14 +16,21 @@ Semantic Versioning where the repository publishes a release.
   cannot catch a virtual-pool dispatch bug (already documented live on
   PR #1433). The current decision keeps both existing preflight layers
   (`_preflight_review_agents`/`_preflight_with_fallback` in the launcher; the
-  shell script's virtual-pool request) and fixes their shared flaw with a
-  diagnostic retry that escalates only when a response is empty AND
-  `finish_reason == "length"`, plus short per-attempt timeouts, instead of
-  picking a new fixed number. Adds two real tracked upstream issues
-  (`ContextualWisdomLab/contextual-orchestrator#926`, `#927`) with external
-  citations (OpenAI, OpenRouter docs, fetched live) replacing prose-only
-  follow-ups. No code change in this PR; the sidecar migration is tracked
-  separately.
+  shell script's virtual-pool request). A second Devin Review pass then found
+  the first revision's single retry predicate could not fire for the exact
+  live evidence cited (a `curl` timeout with zero bytes has no `finish_reason`
+  to inspect), plus an unbounded-looking worst case and other gaps. Revised
+  again to model two distinct, explicitly-bounded retry triggers: no-response
+  (timeout/connection failure) retries at the same budget; a response with
+  `finish_reason == "length"` escalates the budget. Layer 2's existing,
+  already-evidenced 120s per-attempt timeout is kept unchanged (shortening it
+  would regress this file's own prior 30s→120s fix) and gets up to 3 bounded
+  attempts instead of one with no recovery path; Layer 1 stays within its
+  existing 180s ceiling via a computed, capped escalation budget. Adds two
+  real tracked upstream issues (`ContextualWisdomLab/contextual-orchestrator#926`,
+  `#927`) and SHA-pinned permalink citations (`8b3235d2...`) in place of both
+  prose-only follow-ups and line numbers that would otherwise rot. No code
+  change in this PR; the sidecar migration is tracked separately.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
