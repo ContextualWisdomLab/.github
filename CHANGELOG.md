@@ -17,7 +17,8 @@ Semantic Versioning where the repository publishes a release.
   rejected by at least one `orchestrator/free` candidate with `HTTP 400
   invalid_stream_options`, exhausting the pool — a fix is proposed in
   `ContextualWisdomLab/contextual-orchestrator#924` but that PR is not
-  merged yet. Second, a separate run (`.github#1441` job `99249903390`)
+  merged yet. Second, a separate run
+  (`ContextualWisdomLab/.github#1441` job `99249903390`)
   got past that stage entirely and instead hung for the full 120s `curl`
   timeout with zero bytes back on the sidecar's post-`healthz` gateway
   smoke request; cause unconfirmed. See the 2026-08-30 gap-baseline entry

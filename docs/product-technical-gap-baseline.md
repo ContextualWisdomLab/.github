@@ -1399,9 +1399,10 @@ the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
   independent, unfixed gaps remain open**: (1) at least one candidate
   family has the live `stream_options`/`tools`/`response_format`
   request-compatibility rejection above, with a fix proposed but not yet
-  merged in `contextual-orchestrator#924` (though evidently not every
-  candidate hits it — contextual-orchestrator#921's `strix` run
-  succeeded); and (2) the separate 120s-timeout-with-zero-bytes gap below,
+  merged in `ContextualWisdomLab/contextual-orchestrator#924` (though
+  evidently not every candidate hits it —
+  `ContextualWisdomLab/contextual-orchestrator#921`'s `strix` run
+  succeeded); and (2) the separate 120s-timeout-with-zero-bytes gap above,
   cause unconfirmed. Two permanently-retired `google/gemma-3-*-it` model
   ids are also still admitted into the pool (see the family-cap entry
   above) and will still individually fail when the alphabetical sort
