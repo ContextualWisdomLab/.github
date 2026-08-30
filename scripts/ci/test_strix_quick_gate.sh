@@ -313,8 +313,8 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$REPO_ROOT/tests/test_strix_repository_visibility_contract.py" "test_dispatch_api_visibility_preserves_internal_privacy" "strix visibility contract executes public, private, and internal dispatch fixtures"
 	assert_file_contains "$workflow_file" 'STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}' "strix workflow propagates the gate-selected fallback model to the scanner"
 	assert_file_not_contains "$workflow_file" "secrets.STRIX_LLM ||" "strix workflow must not let the legacy STRIX_LLM secret override PR defaults"
-	assert_file_contains "$workflow_file" "Strix model overrides are limited to contextual-orchestrator/orchestrator/auto" "strix workflow rejects non-gateway model overrides"
-	assert_file_contains "$workflow_file" "STRIX_LLM must select contextual-orchestrator/orchestrator/auto" "strix workflow accepts only the gateway model"
+	assert_file_contains "$workflow_file" "Strix model overrides are limited to contextual-orchestrator/orchestrator/free" "strix workflow rejects non-gateway model overrides"
+	assert_file_contains "$workflow_file" "STRIX_LLM must select contextual-orchestrator/orchestrator/free" "strix workflow accepts only the gateway model"
 	assert_file_contains "$workflow_file" 'STRIX_FALLBACK_MODELS: ""' "strix workflow disables external fallback models"
 	assert_file_contains "$workflow_file" 'STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"' "strix workflow fails closed on timeout, fatal, warning, denied, or provider failure signals"
 	assert_file_contains "$workflow_file" 'NPM_CONFIG_IGNORE_SCRIPTS: "true"' "strix workflow disables npm lifecycle scripts for untrusted PR scan data"
@@ -327,6 +327,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables pnpm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["YARN_ENABLE_SCRIPTS"] = "false"' "strix gate child process disables yarn lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"' "strix gate child env narrowly filters the known third-party Pydantic serializer warning"
+	assert_file_contains "$GATE_SCRIPT" 'if is_contextual_orchestrator_api_base "$llm_api_base_value"; then' "strix gate scopes the non-streaming opt-in to the contextual-orchestrator loopback gateway"
+	assert_file_contains "$GATE_SCRIPT" 'STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming"' "strix gate threads the streaming opt-in through to the child process environment"
+	assert_file_contains "$GATE_SCRIPT" 'child_env["LLM_DISABLE_STREAMING"] = "true"' "strix gate disables Strix's own SDK streaming for the contextual-orchestrator gateway, which rejects stream_options.include_usage alongside tools"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]' "strix gate detects nested backend Python files for PR-scoped import context"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
@@ -3289,7 +3292,7 @@ set -euo pipefail
 printf '%s\n' "${STRIX_LLM:-}" >> "${FAKE_STRIX_CALL_LOG:?}"
 printf '%s\n' "${LLM_API_BASE:-<unset>}" >> "${FAKE_STRIX_API_BASE_LOG:?}"
 if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
-	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s\n' \
+	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s;LLM_DISABLE_STREAMING=%s\n' \
 		"${LLM_TIMEOUT:-<unset>}" \
 		"${STRIX_MEMORY_COMPRESSOR_TIMEOUT:-<unset>}" \
 		"${STRIX_REASONING_EFFORT:-<unset>}" \
@@ -3299,7 +3302,8 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${NPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${PNPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${YARN_ENABLE_SCRIPTS:-<unset>}" \
-		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
+		"${UNRELATED_SECRET:-<unset>}" \
+		"${LLM_DISABLE_STREAMING:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
 target_path=""
@@ -5929,12 +5933,29 @@ PY
 			"$runtime_env_log" \
 			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;UNRELATED_SECRET=<unset>" \
 			"scenario=$scenario runtime env forwarding"
+		# Non-contextual-orchestrator providers (gemini here) never see the
+		# stream-disabling opt-in: it is scoped narrowly to the gateway that
+		# rejects stream_options.include_usage alongside tools.
+		assert_file_contains \
+			"$runtime_env_log" \
+			"LLM_DISABLE_STREAMING=<unset>" \
+			"scenario=$scenario non-gateway providers keep real streaming"
 	fi
 	if [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
 		assert_file_contains \
 			"$runtime_env_log" \
 			"STRIX_REASONING_EFFORT=minimal" \
 			"scenario=$scenario custom compatible endpoint effort"
+	fi
+	if [ "$scenario" = "contextual-orchestrator-gateway-model-qualification" ]; then
+		# contextual-orchestrator rejects stream_options.include_usage=true
+		# alongside tools; Strix's agent loop always sends both, so the gate
+		# routes this gateway through Strix's own LLM_DISABLE_STREAMING opt-in
+		# (single non-streaming get_response per turn) instead of streaming.
+		assert_file_contains \
+			"$runtime_env_log" \
+			"LLM_DISABLE_STREAMING=true" \
+			"scenario=$scenario contextual-orchestrator gateway disables SDK streaming to avoid the stream_options+tools rejection"
 	fi
 
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
