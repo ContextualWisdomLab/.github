@@ -177,6 +177,21 @@ def test_central_ruleset_rejects_rebase_merge_method() -> None:
     assert "only merge and squash may be allowed merge methods" in audit.audit_ruleset(payload)
 
 
+def test_central_ruleset_rejects_bypass_actors() -> None:
+    payload = ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": None,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset must not configure bypass actors",
+    ]
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 

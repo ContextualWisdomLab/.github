@@ -61,6 +61,8 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         errors.append("central ruleset target is not branch")
     if payload.get("enforcement") != "active":
         errors.append("central ruleset enforcement is not active")
+    if payload.get("bypass_actors", []) != []:
+        errors.append("central ruleset must not configure bypass actors")
 
     conditions = payload.get("conditions")
     conditions = conditions if isinstance(conditions, dict) else {}
