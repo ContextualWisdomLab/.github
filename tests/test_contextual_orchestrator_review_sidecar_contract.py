@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "5f2753ace756ddd81049a5221d55e8977572a416"
+ORCH_PIN_SHA = "30c6d71680e659f25a0a433d4726ad0d437f9757"
 
 
 def _read(path: Path) -> str:
@@ -348,7 +348,7 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
     """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -399,6 +399,49 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert "cleanup_sidecar_on_error" in text
     assert "trap cleanup_sidecar_on_error EXIT" in text
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
+
+
+def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() -> None:
+    """A bare `2> >(sanitizer)` races the failure-path read and can hide the diagnostic; the drain must close that race."""
+    text = _read(SIDECAR)
+    assert "exec {orchestrator_stdout_fd}> >(" in text
+    assert "stdout_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stderr_fd}> >(" in text
+    assert "stderr_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-" in text
+    assert "wait_for_sidecar_sanitizers" in text
+    # The old bare, unwaited process-substitution redirection must be gone.
+    assert '> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \\' not in text
+    assert '2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &' not in text
+    # The drain must happen strictly before the failure-path read, only in the
+    # branch where the sidecar has already exited (not the healthz-timeout
+    # branch, where it may still be running and draining would hang).
+    exited_branch = text.index("sidecar exited before healthz")
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < exited_branch
+
+
+def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
+    """A partial provider failure must reach the visible log even when the sidecar still starts."""
+    text = _read(SIDECAR)
+    assert 'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"' in text
+    # Must wait for the launcher's own completion sentinel to pass through the
+    # async sanitizer -- a plain `[ -s "$sidecar_stderr" ]` check would race a
+    # slow sanitizer and silently show nothing even when warnings exist.
+    assert 'grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    assert 'grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    # `grep -v` exits 1 when every line was filtered out (the common, healthy
+    # case with zero warnings); under `set -o pipefail` that would abort the
+    # whole script unless explicitly tolerated.
+    assert "sed -n '1,20p' || true)\"" in text
+    assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
+    # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
+    # after a successful healthz, so its sanitizer never sees EOF and doing
+    # so would hang the workflow forever.
+    healthz_confirmed = text.index("healthz and provider-route preflight confirmed")
+    warnings_line = text.index("sidecar startup warnings (non-fatal)")
+    assert healthz_confirmed < warnings_line
+    assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
 
 
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
@@ -454,7 +497,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
