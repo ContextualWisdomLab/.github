@@ -745,6 +745,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "--archives-only" in measure_step
     assert "RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
     assert "from packaging.markers import Marker, default_environment" in measure_step
+    assert (
+        'archive_manifest_path = requirements_root / "archive-manifest.json"'
+        in measure_step
+    )
+    assert (
+        "json.loads(archive_manifest_path.read_text(encoding=\"utf-8\"))\n"
+        "              if archive_manifest_path.exists()\n"
+        "              else []"
+    ) in measure_step
+    assert measure_step.index("archive_manifest_path.exists()") < measure_step.index(
+        "coverage_environment = default_environment()"
+    )
     assert "coverage_environment = default_environment()" in measure_step
     assert "not Marker(marker).evaluate(coverage_environment)" in measure_step
     assert measure_step.index("not Marker(marker).evaluate") < measure_step.index(

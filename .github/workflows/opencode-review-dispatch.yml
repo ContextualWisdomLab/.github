@@ -875,8 +875,11 @@ jobs:
 
           requirements_root = pathlib.Path("/tmp/base-python-requirements")
           source_root = pathlib.Path("/opt/base-python-archive-sources").resolve()
-          manifest = json.loads(
-              (requirements_root / "archive-manifest.json").read_text(encoding="utf-8")
+          archive_manifest_path = requirements_root / "archive-manifest.json"
+          manifest = (
+              json.loads(archive_manifest_path.read_text(encoding="utf-8"))
+              if archive_manifest_path.exists()
+              else []
           )
           coverage_environment = default_environment()
           for index, entry in enumerate(manifest):
@@ -941,9 +944,7 @@ jobs:
           RUN set -eu; \
               find /opt/base-python-archive-sources -name Cargo.toml -print0 \
                 | sort -z -u \
-                | while IFS= read -r -d "" manifest_path; do \
-                    cargo fetch --locked --manifest-path "$manifest_path"; \
-                  done
+                | xargs -0 -r -n1 cargo fetch --locked --manifest-path
           RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \
                 --archives-only \
