@@ -345,10 +345,17 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
 
 
 def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
-    """Gateway free-pool scans must not force unsupported provider controls."""
+    """Gateway scans must not force unsupported provider controls.
+
+    The sidecar always boots the richer "auto" catalog (see
+    docs/adr/0020-strix-orchestrator-free-pool.md): booting "free"-only
+    would leave no priced agents loaded, making any later fallback to
+    orchestrator/auto a fake alias for the exact same single-family
+    catalog rather than a real safety net.
+    """
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -493,11 +500,17 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
 
 
 def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
-    """Strix accepts only the gateway route and binds private scans to ZDR."""
+    """Strix accepts only the gateway route and binds private scans to ZDR.
+
+    The gate's static base model is the safe orchestrator/auto default;
+    orchestrator/free is reachable only through the evidence-gated
+    resolution step (docs/adr/0020-strix-orchestrator-free-pool.md).
+    """
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
+    assert "free_family_diversity" in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(

@@ -5,24 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Route required Strix scans through `orchestrator/free` instead of the
-  separate `orchestrator/auto` pool, so all three CI consumers (OpenCode,
-  Noema, Strix) share one fail-closed zero-cost pool. Verified first that
-  `scripts/ci/contextual_orchestrator_review_policy.py`'s provider-family cap
-  already applied identically to both pools (no policy/sidecar code change
-  needed). See `docs/adr/0020-strix-orchestrator-free-pool.md`, which
-  supersedes `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
-  Strix-specific wiring bullet only, for the decision and its documented
-  residual risk.
-- Remove `scripts/ci/select_nvidia_nim_model.py`: an orphaned helper that
-  called `integrate.api.nvidia.com` directly to resolve a live NVIDIA NIM
-  model id, wired into nothing since the ADR-0003 gateway migration. Removed
-  with its dedicated test. Correct stale pre-ADR-0003 "single NVIDIA NIM
-  credential" descriptions in `docs/doctoring/hourly-nvidia-nim-autofix.md`,
-  `docs/doctoring/originweave-hourly-review-caller.md`,
-  `docs/doctoring/nonnest2-hourly-review-caller.md`, and
-  `docs/automation/hourly-review-repair.md` to describe the current
-  five-secret `contextual-orchestrator`/`orchestrator/free` gateway routing.
+- Gate required Strix scans' access to `orchestrator/free` on live evidence
+  instead of pinning the pool statically: `strix.yml` now reads
+  `free_family_diversity` (added in #1433) from the sidecar's own discovery
+  run and selects `orchestrator/free` only when it is `>= 2`, falling back
+  to the correctness-first `orchestrator/auto` pool — which the sidecar
+  always boots, so the fallback is a genuine priced-route safety net, not an
+  alias for the same catalog — otherwise. A negative fixture and a
+  structural smoke-test assertion (`assert_free_pool_gated_by_diversity`)
+  prove a diversity of 0 or 1 can never resolve to `orchestrator/free`. This
+  corrects an earlier draft of this change that flipped the pool
+  unconditionally; see `docs/adr/0020-strix-orchestrator-free-pool.md`
+  (refining, not superseding, `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  Strix-specific wiring bullet) for the full decision, the rejected draft,
+  and its documented residual risk (live-market free-tier availability and a
+  separately tracked, not-yet-confirmed-merged request-time-failover gap in
+  `contextual-orchestrator`).
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the

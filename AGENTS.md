@@ -21,14 +21,25 @@ sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
-OpenCode, Noema, and authoritative Strix analysis all use the fail-closed
-zero-cost pool `orchestrator/free`. The `orchestrator/auto` provider-diverse,
-priced-fallback pool remains supported by the gateway policy for any future
-consumer that needs it, admitting non-free routes only with complete
-published prompt/completion price and currency evidence; private targets
-still require ZDR-compliant routes under
+OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`
+unconditionally. **Strix is evidence-gated, not unconditional:** `strix.yml`
+reads `free_family_diversity` (the count of distinct outage-domain provider
+families among all discovered free routes, reported by
+`scripts/ci/contextual_orchestrator_review_policy.py` on every discovery run)
+from the sidecar's policy report and selects `orchestrator/free` only when
+that count is `>= 2`; otherwise — including when the evidence is missing,
+unreadable, or malformed — it falls back to `orchestrator/auto`, never the
+other way around. A negative fixture
+(`tests/test_strix_contextual_orchestrator_contract.py`) pins that a
+diversity of 0 or 1 cannot weaken the resolved model to `orchestrator/free`.
+The `orchestrator/auto` provider-diverse, priced-fallback pool is therefore a
+permanent, load-bearing fallback for Strix, not a route being retired; it
+remains supported by the gateway policy for any other consumer too, admitting
+non-free routes only with complete published prompt/completion price and
+currency evidence. Private targets still require ZDR-compliant routes under
 [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
 See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
 and [`docs/adr/0020-strix-orchestrator-free-pool.md`](docs/adr/0020-strix-orchestrator-free-pool.md)
-(Strix's move off the separate `orchestrator/auto` pool onto `orchestrator/free`).
+(the evidence-gated conditional between Strix's two pools, its residual risk,
+and the separately tracked request-time-failover dependency).
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).

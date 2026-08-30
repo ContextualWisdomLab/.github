@@ -139,6 +139,83 @@ PY
 	fi
 }
 
+assert_free_pool_gated_by_diversity() {
+	local output
+
+	if ! output="$(python3 - "$workflow_file" 2>&1 <<'PY'
+from pathlib import Path
+import re
+import sys
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+step_name = "      - name: Resolve Strix model from free-route diversity evidence\n"
+start = workflow.find(step_name)
+if start == -1:
+    print("Strix workflow is missing the free-route diversity resolution step.", file=sys.stderr)
+    raise SystemExit(1)
+next_step = workflow.find("\n      - name:", start + len(step_name))
+step_text = workflow[start : next_step if next_step != -1 else len(workflow)]
+
+if "free_family_diversity" not in step_text:
+    print("Strix model-resolution step does not reference free_family_diversity evidence.", file=sys.stderr)
+    raise SystemExit(1)
+
+# The step must default to the gate's own base model (orchestrator/auto)
+# before any upgrade is even considered.
+default_match = re.search(r'resolved_model="\$GATE_STRIX_MODEL"', step_text)
+if default_match is None:
+    print(
+        "Strix resolution step must default resolved_model to the gate's base "
+        "(orchestrator/auto) model before considering any upgrade.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+# It may select orchestrator/free ONLY inside a diversity-threshold
+# comparison, and that comparison must come after the safe default above --
+# never unconditionally, and never before the default is set.
+free_assignment_pattern = re.compile(
+    r'if \[ "\$free_family_diversity" -ge "\$diversity_threshold" \]; then\n\s*'
+    r'resolved_model="contextual-orchestrator/orchestrator/free"\n\s*fi'
+)
+free_match = free_assignment_pattern.search(step_text)
+if free_match is None:
+    print(
+        "Strix resolution step must select orchestrator/free only inside a "
+        "free_family_diversity >= diversity_threshold conditional.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if free_match.start() < default_match.end():
+    print(
+        "Strix resolution step must set the safe orchestrator/auto default "
+        "before any diversity-gated upgrade, not after.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+# No OTHER occurrence of the free-pool literal may appear in this step --
+# e.g. a stray unconditional assignment bypassing the guarded block above.
+free_literal = "contextual-orchestrator/orchestrator/free"
+other_occurrences = [
+    match.start()
+    for match in re.finditer(re.escape(free_literal), step_text)
+    if not (free_match.start() <= match.start() < free_match.end())
+]
+if other_occurrences:
+    print(
+        "Strix resolution step references orchestrator/free outside the "
+        "diversity-gated conditional -- every free-pool selection must be "
+        "reachable only through the diversity check.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+	)"; then
+		record_failure "$output"
+	fi
+}
+
 for shell_script in "$gate_script" "$full_gate_test" "$sidecar_script" "$token_loader_script"; do
 	if ! bash -n -- "$shell_script"; then
 		record_failure "Strix gate script must pass bash syntax checks: $shell_script"
@@ -180,13 +257,21 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
+assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_POOL: auto" "Strix sidecar must boot the richer auto catalog so an auto fallback is a real fallback, not a same-catalog alias"
+assert_file_not_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_POOL: free" "Strix sidecar must not boot free-only (that would make any auto fallback fake)"
+# The gate's own static base model is the safe default (orchestrator/auto):
+# only steps.resolve_model, gated on evidence below, may ever select
+# orchestrator/free. This is deliberately NOT "must not retain orchestrator/auto"
+# (the pre-evidence-gate #1437 draft's assertion) -- auto is the required,
+# permanent fallback, not a route being retired.
 active_strix_models="$(sed -n -E 's/^[[:space:]]*STRIX_MODEL:[[:space:]]*([^#[:space:]]+)[[:space:]]*$/\1/p' "$workflow_file")"
-[ "$active_strix_models" = "contextual-orchestrator/orchestrator/free" ] || record_failure "Strix must define exactly one active zero-cost free default model"
-assert_file_not_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" "Strix must not retain the correctness-first auto default route"
-assert_file_contains "$decision_record" "superseded" "The prior ADR records that its Strix-specific auto-pool split was superseded"
-assert_file_contains "$decision_record" "ADR-0020" "The prior ADR links to the superseding decision"
+[ "$active_strix_models" = "contextual-orchestrator/orchestrator/auto" ] || record_failure "Strix gate must define exactly one static base model: the fail-closed orchestrator/auto default"
+assert_file_contains "$workflow_file" "Resolve Strix model from free-route diversity evidence" "Strix workflow gates any move to the free pool behind free-route diversity evidence"
+assert_file_contains "$workflow_file" "free_family_diversity" "Strix workflow reads free_family_diversity from the sidecar's own policy report"
+assert_free_pool_gated_by_diversity
+assert_file_contains "$decision_record" "ADR-0020" "The binding ADR points to the evidence-gated Strix pool decision"
 assert_file_contains "$decision_record" "Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets" "The binding ADR preserves private-target privacy"
-assert_file_contains "$agent_policy" "authoritative Strix analysis all use the fail-closed" "Repository guidance agrees with the current unified Strix route"
+assert_file_contains "$agent_policy" "free_family_diversity" "Repository guidance describes the evidence-gated Strix route, not a bare pool literal"
 assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
 assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
 assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"

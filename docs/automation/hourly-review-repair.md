@@ -12,15 +12,13 @@ engine**.
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
   repository and base branch.
 - `pr-review-autofix.yml` is the bounded write-capable worker. It uses OpenCode
-  routed through the vendored contextual-orchestrator gateway and does not
-  approve or merge pull requests.
+  with NVIDIA NIM and does not approve or merge pull requests.
 
-Every caller, including Clearfolio's, is provider-neutral by design. The model
-boundary is the contextual-orchestrator gateway: provider keys stay in its KV
-registry and automatic model discovery selects upstream models. A caller
-schedule is not evidence that gateway credentials, discovery, or a live
-OpenCode tool loop are available; those facts require exact worker-run
-evidence.
+Orgmetra's caller remains provider-neutral. The intended model boundary is the
+contextual-orchestrator gateway: provider keys stay in its KV registry and
+automatic model discovery selects upstream models. A caller schedule is not
+evidence that gateway credentials, discovery, or a live OpenCode tool loop are
+available; those facts require exact worker-run evidence.
 
 Merge eligibility remains owned by the separate merge scheduler, branch
 protection, required checks, independent review, and unresolved-thread policy.
@@ -46,10 +44,8 @@ not overlap its successor. At most one repair dispatch is created per run.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
-any of the five gateway provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-`NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`); those stay
-scoped exclusively to the contextual-orchestrator sidecar provisioning step in
-the separately reviewed autofix worker.
+`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
+OpenCode execution steps in the separately reviewed autofix worker.
 
 ## Orgmetra execution contract
 
@@ -203,8 +199,7 @@ organization-level queue inspection and bounded repair dispatch.
 When a scheduled run fails, classify the result before rerunning:
 
 - no actionable file-scoped feedback: expected no-op;
-- missing gateway provider secrets or an unprovisioned contextual-orchestrator
-  sidecar: central secret/configuration failure;
+- missing `NVIDIA_NIM_API_KEY`: central secret configuration failure;
 - head changed: safe optimistic-concurrency refusal; inspect the new head rather
   than retrying predecessor evidence;
 - out-of-scope or ignored-path change: treat as a security failure and preserve
@@ -230,8 +225,7 @@ Permanent tests prove:
 - the dispatch budget and same-head retry floor remain one;
 - caller and reusable-workflow secrets are explicit and never use
   `secrets: inherit`;
-- immutable source, gateway-only model authentication (no direct-provider
-  credential in the model child process), child-process credential
+- immutable source, NVIDIA-only model authentication, child-process credential
   stripping, live-head guards, and independent reviewer identity remain intact;
 - ordinary and conflict repair share the complete ignored-inclusive snapshot and
   NUL-delimited allowlist boundary;

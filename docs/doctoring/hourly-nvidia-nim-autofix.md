@@ -1,42 +1,5 @@
 # Hourly NVIDIA NIM Review-Autofix Boundary
 
-## Update (2026-08-30): model execution migrated to the contextual-orchestrator gateway
-
-This record's "Decision", "Provider contract", and "Credential boundary"
-sections below describe the worker's design **as it stood before**
-[ADR-0003](../adr/0003-contextual-orchestrator-vendored-free-zdr.md)
-(2026-08-27): a single direct NVIDIA NIM provider
-(`https://integrate.api.nvidia.com/v1`), the `mistralai/mistral-small-4-119b-2603`
-writer model, and a lone `NVIDIA_NIM_API_KEY` credential bound to the two
-OpenCode execution steps. That description is now superseded, not deleted —
-kept below as the historical record of the write-scope/security work this
-file documents, most of which (the allowlist, snapshot/verification, hook
-suppression, and explicit push-destination controls) is provider-independent
-and unchanged.
-
-What actually changed: `pr-review-autofix.yml`'s OpenCode execution now
-routes through the vendored `contextual-orchestrator` gateway sidecar
-(`scripts/ci/contextual_orchestrator_review_sidecar.sh`), provisioned with
-all five provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-`NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) and the
-fail-closed zero-cost virtual model `contextual-orchestrator/orchestrator/free`
-for both the primary and small model. There is no direct
-`https://integrate.api.nvidia.com/v1` base URL, no hardcoded
-`mistralai/mistral-small-4-119b-2603` or `nvidia/nemotron-3-nano-30b-a3b`
-model id, and no bare `NVIDIA_API_KEY`/`NVIDIA_NIM_API_KEY` environment
-variable read anywhere in the workflow's execution steps — enforced by
-`tests/test_pr_review_autofix_nvidia_nim_contract.py::test_scheduled_autofix_routes_through_contextual_orchestrator`,
-which asserts the gateway strings are present and the direct-NVIDIA base URL
-and legacy model ids are absent. Separately,
-`scripts/ci/select_nvidia_nim_model.py` — a standalone helper that resolved a
-live NVIDIA NIM model id by calling `integrate.api.nvidia.com` directly —
-was found wired into nothing (no workflow or script referenced it, only its
-own test) and removed as orphaned dead code predating this migration.
-
-This does not change contextual-orchestrator's own internal use of NVIDIA NIM
-as one of its five auto-discovered backend providers; that remains entirely
-the gateway's concern, not this worker's.
-
 ## Decision
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.

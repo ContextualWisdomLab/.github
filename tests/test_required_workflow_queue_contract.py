@@ -576,7 +576,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/auto",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -585,16 +585,22 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/free",
+        "strix_model=contextual-orchestrator/orchestrator/auto",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/auto"
+        in workflow_text("strix.yml")
+    )
+    # The gate's static base model feeds the evidence-gated resolution step,
+    # not the model-input-file step directly (docs/adr/0020-strix-orchestrator-free-pool.md).
+    assert (
+        "GATE_STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
         in workflow_text("strix.yml")
     )
     assert (
-        "STRIX_MODEL: ${{ steps.gate.outputs.strix_model }}"
+        "STRIX_MODEL: ${{ steps.resolve_model.outputs.strix_model }}"
         in workflow_text("strix.yml")
     )
 

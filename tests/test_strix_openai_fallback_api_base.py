@@ -4,10 +4,13 @@
 resolver that can, in principle, route direct-provider models (NVIDIA NIM,
 OpenRouter, GitHub Models, direct OpenAI). The central required workflow
 (`strix.yml`) never invokes it with anything other than the local
-contextual-orchestrator gateway's `orchestrator/free` virtual model —
-`STRIX_FALLBACK_MODELS: ""` and the dispatch-override allowlist in
-`strix.yml`'s "Gate Strix secrets" step structurally prevent any direct
-provider from being selected (see `WorkflowUsesContextualOrchestrator` below).
+contextual-orchestrator gateway's `orchestrator/auto` or `orchestrator/free`
+virtual model — the resolved pool depends only on `free_family_diversity`
+evidence (see docs/adr/0020-strix-orchestrator-free-pool.md), never on
+external input. `STRIX_FALLBACK_MODELS: ""` and the dispatch-override
+allowlist in `strix.yml`'s "Gate Strix secrets" step structurally prevent any
+direct provider from being selected (see `WorkflowUsesContextualOrchestrator`
+below).
 This file pins the resolver's own correctness as defense in depth (were a
 non-gateway model ever passed to it, a cross-provider fallback must never
 silently inherit another provider's API base — e.g. routing an OpenAI model

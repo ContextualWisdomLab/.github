@@ -78,22 +78,37 @@ fixed:
    `orchestrator/auto`; private/internal targets require an attested
    ZDR-only catalog.
 
-## Follow-up: Strix migrated to `orchestrator/free` (2026-08-30)
+## Follow-up: Strix's `orchestrator/free` access is now evidence-gated (2026-08-30)
 
 Finding 4 above recorded the CodeRabbit-flagged reconciliation note as of
 PR #1429: `Strix` was, at that time, the one CI consumer still on the
-provider-diverse `orchestrator/auto` pool. That split is now superseded by an
-explicit product decision, not a further reinterpretation of section 8:
-`Strix` also routes through `orchestrator/free`. See
+provider-diverse `orchestrator/auto` pool. A first attempt to close that gap
+(PR #1437, first draft) flipped the pool unconditionally, and a human
+exact-head governance review rejected it: an unconditional flip would have
+reintroduced the exact single-outage-domain availability regression
+ADR-0003's original `orchestrator/auto` pin existed to prevent, since a
+per-family cap cannot manufacture a second provider family the discovery run
+never found in the first place.
+
+The corrected decision is not a further reinterpretation of section 8, nor a
+reversion to the old static split: `strix.yml` now reads
+`free_family_diversity` (added by PR #1433, merged into #1437's branch to
+give the evidence code one owner) from the sidecar's own discovery run and
+selects `orchestrator/free` only when it is `>= 2`, falling back to
+`orchestrator/auto` — the pool this section's earlier note already
+authorized — in every other case. See
 [`docs/adr/0020-strix-orchestrator-free-pool.md`](../adr/0020-strix-orchestrator-free-pool.md)
-for the decision and its verification that the provider-family-diversity cap
-in `scripts/ci/contextual_orchestrator_review_policy.py` already applied
-identically to both pools (no code change was needed there), and for the
-residual risk this migration documents rather than hides. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
-keeps its original Strix-specific decision text as history, with a new
-Amendment section pointing to ADR-0020; `docs/product-goal-directive.md`'s
-own note (added for finding 4) got a matching dated follow-up paragraph
-rather than being rewritten in place.
+(refining, not superseding, ADR-0003's Strix-specific wiring bullet) for the
+decision, the rejected unconditional draft, the negative-fixture guarantee
+that a diversity of 0 or 1 can never resolve to `orchestrator/free`, and the
+residual risk (live-market free-tier availability; a separately tracked,
+not-yet-confirmed-merged request-time-failover gap in
+`contextual-orchestrator`) this migration documents rather than hides.
+`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` keeps its
+original Strix-specific decision text as history, with an Amendment section
+pointing to ADR-0020; `docs/product-goal-directive.md`'s own note (added for
+finding 4) got a matching dated follow-up paragraph rather than being
+rewritten in place.
 
 ## Audit trail
 

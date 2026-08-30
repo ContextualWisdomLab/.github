@@ -792,103 +792,79 @@ recurrence" section below out of the file entirely; both are restored here.)
   Following up on that hosted-run confirmation is the concrete next check for
   this entry, not a new code change.
 
-## 2026-08-30 Strix migrated onto the fail-closed `orchestrator/free` pool
+## 2026-08-30 Strix's `orchestrator/free` access gated on live diversity evidence (corrected)
 
-- **Explicit product decision, implemented:** Strix security analysis now
-  routes through `orchestrator/free`, the same pool OpenCode and Noema
-  already use, retiring its separate `orchestrator/auto` split. See
-  [ADR-0020](adr/0020-strix-orchestrator-free-pool.md), which supersedes
-  ADR-0003's Strix-specific wiring bullet (ADR-0003 itself keeps its original
-  decision text as history, with an Amendment section pointing here).
-- **Family-diversity verification performed before implementing, not
-  assumed:** read `scripts/ci/contextual_orchestrator_review_policy.py` in
-  full. `build_zdr_prioritized_catalog()`'s per-family cap
-  (`per_family`/`family_cap`) has no `pool`-conditional branch — it already
-  applied identically to `orchestrator/free` and `orchestrator/auto` catalog
-  construction before this change, and
-  `contextual_orchestrator_review_sidecar.sh` exports
-  `ORCHESTRATOR_CATALOG_FAMILY_CAP` before pool selection. No policy/sidecar
-  code changed for this migration; the cap uniformity ADR-0003 needed to
-  justify a free-pool move was already true.
-- **What the cap does not buy, stated plainly:** it bounds overrepresentation
-  within a discovery snapshot; it cannot manufacture a provider family that
-  has no free-priced candidate at all. The 2026-08-29 DiskSage finding
-  ADR-0003 cited (four free routes, all one family) is exactly a case the cap
-  would not have trimmed even if pool-uniform then, because there was no
-  other family among the free candidates to admit instead. The
-  `ContextualWisdomLab/contextual-orchestrator#919` Models.dev-cross-reference
-  generalization (nvidia_nim/nvidia_nim_sub/openai now join opencode_zen for
-  free-cost attestation — see the two entries above) widens which families
-  can plausibly appear in the free candidate set, reducing but not
-  eliminating this as a live-market-dependent residual risk. See ADR-0020's
-  Residual risk section for the full statement.
-- **A separate, orthogonal reliability gap, not conflated with the above:**
-  live `noema-review` job logs across recent `.github` PRs show
-  `orchestrator/free` preflight succeeding but the actual chat-completion
-  request against the selected route returning HTTP 502 (recurring across a
-  majority of the last ~15 `noema-review` runs), consistent with the gateway
-  not failing over to the next discovered free route at request time when
-  the primary one errors. This is a request-time behavior, not a
-  catalog-composition one, and `family_cap`/the Models.dev change do not
-  address it. A dedicated fix is in progress directly in
-  `ContextualWisdomLab/contextual-orchestrator` (out of this repository's
-  scope). Strix moving onto `orchestrator/free` inherits this exactly as
-  OpenCode/Noema already do — parity with the org's already-accepted
-  standard, not a new exposure this migration introduces.
-- Files touched: `.github/workflows/strix.yml` (pool + model + override
-  allowlist), `.github/workflows/opencode-review-dispatch.yml` (diagnosis
-  needle strings), `AGENTS.md`, `docs/adr/0003-...md` (Amendment),
-  `docs/adr/0020-strix-orchestrator-free-pool.md` (new),
-  `scripts/ci/strix_required_workflow_smoke.sh`, `CHANGELOG.md`, and the
-  contract tests that pinned the prior `orchestrator/auto` strings
+- **Human exact-head governance review rejected an earlier unconditional
+  draft.** A first attempt (`#1437`, first draft, head `a2ef0ea2…`) flipped
+  `strix.yml`'s pool unconditionally to `orchestrator/free`, reasoning that
+  the family-diversity cap already applied identically to both pools. The
+  reviewer correctly identified that a per-family cap cannot manufacture a
+  second family the discovery run never found, and that the source's own
+  text acknowledged the 2026-08-29 single-family finding was not eliminated
+  — an unconditional flip would have reintroduced the exact availability
+  regression ADR-0003's original `orchestrator/auto` pin existed to prevent.
+  The review pointed at `#1433` (already open, adding `free_family_diversity`
+  evidence without touching `strix.yml`) as the correct foundation.
+- **Corrected decision, implemented:** `#1433`'s branch was merged into
+  `#1437`'s (non-destructively, no force-push) to inherit the evidence code
+  with one owner. `strix.yml`'s model-resolution step now reads
+  `free_family_diversity` from the sidecar's own policy report on every run
+  and selects `orchestrator/free` **only when it is `>= 2`**, falling back
+  to `orchestrator/auto` — which the sidecar always boots regardless of the
+  resolved model name, so the fallback is a real priced-route safety net,
+  not an alias for the same single-family catalog — in every other case,
+  including any evidence that is missing, unreadable, or malformed. See
+  [ADR-0020](adr/0020-strix-orchestrator-free-pool.md) (refining, not
+  superseding, ADR-0003's Strix-specific wiring bullet).
+- **Negative fixture and structural smoke assertion, not just a string
+  check:** `tests/test_strix_contextual_orchestrator_contract.py` executes
+  the workflow's own resolution step via subprocess (the repo's established
+  pattern for testing embedded workflow-YAML behavior) and proves a
+  diversity of 0 or 1 — and every malformed-evidence shape tried — resolves
+  to `orchestrator/auto`, never `orchestrator/free`.
+  `scripts/ci/strix_required_workflow_smoke.sh`'s new
+  `assert_free_pool_gated_by_diversity` additionally proves, against the
+  tracked workflow text itself, that no code path can select the free pool
+  outside the diversity conditional. The smoke script's prior assertions
+  ("must define exactly one active provider-diverse auto default model" /
+  "must not retain the free default route") were extended into this
+  structural check, not deleted without replacement.
+- **Acceptance criteria 3 and 4 from the review are honestly unresolved by
+  this change, not assumed:** (3) the gateway's request-time failover gap
+  (`orchestrator/free`/`orchestrator/auto` route errors not advancing to the
+  next candidate — the HTTP 502 pattern recorded in the prior entry) has not
+  been confirmed merged in `contextual-orchestrator` as of this PR; a
+  matching in-progress local commit was found but is not part of any open
+  PR nor an ancestor of `origin/main`. `.github`'s vendored
+  `ORCHESTRATOR_PIN_SHA` is deliberately not bumped by this PR. (4) No
+  workflow, script, or doc names a dedicated "Strix canary" mechanism; the
+  closest match is `strix.yml`'s own `push`-trigger run on protected
+  branches (this repo's doctoring convention for "canary"), structurally
+  unchanged by this PR but not verified live since that requires an actual
+  merge, out of this PR's scope.
+- **Direct-NIM cleanup split out, per the review's fifth criterion:** the
+  unrelated `scripts/ci/select_nvidia_nim_model.py` removal and stale-doc
+  corrections `#1437`'s first draft bundled into this PR were extracted onto
+  `claude/noema-opencode-strix-orchestration-sexqzc-nim-cleanup` as its own
+  draft PR against `main`. (The file deletion itself remains inherited from
+  `#1433`'s own independent commit via the merge above — `#1433` is that
+  cleanup's other, earlier owner; the new branch carries only the doc
+  corrections and gap-baseline record `#1433` did not touch.)
+- Files touched (this corrected version): `.github/workflows/strix.yml` (new
+  "Resolve Strix model from free-route diversity evidence" step; the gate
+  and model-input-file steps updated to route through it, not a literal pool
+  swap), `AGENTS.md`, `docs/adr/0003-...md` (Amendment, reconciled with
+  `#1433`'s Addendum), `docs/adr/0020-strix-orchestrator-free-pool.md`
+  (rewritten), `scripts/ci/strix_required_workflow_smoke.sh`
+  (`assert_free_pool_gated_by_diversity`), `CHANGELOG.md`, and the contract
+  tests covering the resolution step's behavior
   (`tests/test_strix_contextual_orchestrator_contract.py`,
   `tests/test_contextual_orchestrator_review_sidecar_contract.py`,
   `tests/test_noema_orchestrator_workflow_contract.py`,
   `tests/test_required_workflow_queue_contract.py`,
-  `tests/test_strix_nvidia_nim_not_found_fallback.py`).
-  `scripts/ci/contextual_orchestrator_review_policy.py` and
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh` were **not** changed
-  — the family-cap verification above found no code gap to fix there.
-
-## 2026-08-30 direct-NVIDIA-NIM removal target: `select_nvidia_nim_model.py`
-
-- Found while auditing this repository for any CI consumer that talks to a
-  provider directly instead of through the vendored gateway (a separate,
-  explicit "direct NIM communication is a removal target" instruction).
-  `scripts/ci/select_nvidia_nim_model.py` opened a direct `HTTPSConnection`
-  to `integrate.api.nvidia.com` with a raw provider API key to resolve a
-  live NVIDIA NIM model id for the scheduled autofix worker — a real
-  direct-provider bypass, exactly the pattern ADR-0003 migrated
-  `pr-review-autofix.yml` away from. Confirmed by repository-wide search that
-  it was wired into nothing: `.github/workflows/pr-review-autofix.yml` (its
-  only plausible caller) has no reference to it, and no live NVIDIA/mistral
-  model id, base URL, or provider name — `test_scheduled_autofix_routes_through_contextual_orchestrator`
-  already pins `"https://integrate.api.nvidia.com/v1"` as a **forbidden**
-  string in that workflow. The only reference anywhere in the repository was
-  the script's own dedicated test. Orphaned dead code predating the ADR-0003
-  gateway migration; removed along with `tests/test_select_nvidia_nim_model.py`.
-  Not the same thing as `contextual-orchestrator`'s own legitimate internal
-  support for NVIDIA NIM as one of its five backend providers, which is
-  unmodified and out of this repository's scope.
-- `docs/doctoring/hourly-nvidia-nim-autofix.md`,
-  `docs/doctoring/originweave-hourly-review-caller.md`,
-  `docs/doctoring/nonnest2-hourly-review-caller.md`, and
-  `docs/automation/hourly-review-repair.md` predate ADR-0003 (2026-08-27) or
-  were only partially updated after it, and still described (in places) the
-  scheduled autofix worker's model credential as a single hardcoded
-  `NVIDIA_NIM_API_KEY` used directly, rather than the current five-secret
-  `contextual-orchestrator` gateway routed through `orchestrator/free`.
-  Corrected the stale sentences/sections in place (originweave/nonnest2: one
-  sentence each; `docs/automation/hourly-review-repair.md`: the summary
-  bullet and the Clearfolio credential paragraph, to match language its own
-  already-accurate Orgmetra section used) and added a dated addendum to
-  `docs/doctoring/hourly-nvidia-nim-autofix.md` rather than rewriting its
-  extensive historical detail wholesale. `opencode.jsonc`'s default
-  `model`/`small_model` and `enabled_providers` were checked and already
-  point only at the gateway; its unreachable `nvidia-nim`/`github-models`
-  provider catalog entries are locked out by `enabled_providers` and were
-  left alone (not a live bypass). `docs/doctoring/noema-orchestrator-free-zdr.md`
-  was checked and found already accurate — no change needed.
+  `tests/test_strix_nvidia_nim_not_found_fallback.py`,
+  `tests/test_strix_openai_fallback_api_base.py`,
+  `scripts/ci/test_strix_quick_gate.sh`).
 
 ## 5. 실행 루프와 고객의 다음 행동
 
