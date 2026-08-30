@@ -52,7 +52,6 @@ PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
 
-
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
@@ -190,7 +189,6 @@ def test_evaluate_pull_request_accepts_recognized_documentation_image() -> None:
         token="token",
         opener=opener,
     ) == ()
-
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
 def test_scan_content_does_not_treat_test_name_substrings_as_fixtures(

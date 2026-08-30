@@ -356,7 +356,6 @@ def _load_file_bytes(api_url: str, repository: str, path: str, head_sha: str, to
 
 def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
     """Load one final head file as bounded UTF-8 text from the Contents API."""
-
     try:
         return _load_file_bytes(api_url, repository, path, head_sha, token, opener).decode("utf-8")
     except UnicodeDecodeError as exc:
