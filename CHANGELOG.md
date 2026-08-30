@@ -53,8 +53,9 @@ Semantic Versioning where the repository publishes a release.
   `is_free`), and the `request_failed status=413` line is the sidecar's own unconditional self-test
   rather than a live ZDR-prefetch fallback. The incident's actual terminating message
   (`"review sidecar preflight failed"`, a live warm-up-probe rejection) is the same one the
-  `ORCHESTRATOR_CATALOG_FAMILY_CAP` fix above resolves — the two corrections converge on the same
-  real root cause rather than describing two different bugs. Also adds a bounded, one-retry
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` fix above mitigates (hosted confirmation remains pending) — the
+  two corrections converge on the same real root cause rather than describing two different bugs.
+  Also adds a bounded, one-retry
   resilience improvement to `contextual-orchestrator`'s provider *discovery* fetch (a different,
   non-overlapping call site from the family-cap/preflight fix above) in
   `ContextualWisdomLab/contextual-orchestrator#923`.

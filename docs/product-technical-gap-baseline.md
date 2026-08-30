@@ -1445,8 +1445,9 @@ candidate selection (`contextual_orchestrator_review_policy.py`'s `family_cap`) 
 reliability signal, and since `nvidia_nim`/`nvidia_nim_sub` was the *only* family populating the free
 pool, the same 4 alphabetically-first candidates were selected on every single run — 2 of which are
 NVIDIA-retired model ids returning HTTP 404 **forever**, not transiently, plus 2 that timed out. That is
-a deterministic selection defect, not a generic "one random transient failure" story, and it is already
-fixed (`ORCHESTRATOR_CATALOG_FAMILY_CAP` raised 4→8) alongside two further, genuinely independent bugs
+a deterministic selection defect, not a generic "one random transient failure" story, and it is
+mitigated (`ORCHESTRATOR_CATALOG_FAMILY_CAP` raised 4→8; hosted confirmation remains pending)
+alongside two further, genuinely independent bugs
 in the same call path (the gateway smoke-test's own `curl --max-time` was too tight for a real
 reasoning-model completion, and its `max_tokens` was desynchronized from the launcher's own probe
 budget) — see that entry for the full evidence trail and reasoning. None of this needed, and this
