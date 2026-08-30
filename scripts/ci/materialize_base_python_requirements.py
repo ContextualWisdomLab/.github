@@ -942,6 +942,18 @@ def _rewrite_materialized_includes(
 
 _SUPPORTED_MARKER_VARIABLES = frozenset({"python_version", "python_full_version"})
 
+# ``target_python_version`` is a plain "major.minor" string (e.g. "3.14") --
+# the coverage workflow genuinely cannot know the exact patch release of its
+# pinned interpreter ahead of time. That value is a confident, exact stand-in
+# for the ``python_version`` marker variable (which is itself major.minor),
+# but it is NOT a confident stand-in for ``python_full_version`` (patch-
+# sensitive): padding "3.14" into "3.14.0" would silently assume the patch
+# component is zero, which is not something the target string actually says.
+# Only variables in this set may have their missing components zero-padded
+# for a comparison; a ``python_full_version`` comparison is only trusted when
+# the target string itself already carries patch precision (3+ components).
+_PATCH_INSENSITIVE_MARKER_VARIABLES = frozenset({"python_version"})
+
 
 class _UnsupportedMarkerError(Exception):
     """Raised when a marker shape is outside the narrow supported subset."""
@@ -985,7 +997,11 @@ def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
     Python-version-gated organization archive sources. Any other marker shape
     (``sys_platform``, ``extra``, ``in``/``not in``, function calls, chained
     comparisons, and so on) raises ``_UnsupportedMarkerError`` so the caller
-    fails open and still downloads the archive.
+    fails open and still downloads the archive. A ``python_full_version``
+    comparison is patch-sensitive and additionally requires ``target_python_version``
+    itself to carry patch precision (3+ dotted components) to be resolved
+    confidently; given only a major.minor target it also raises
+    ``_UnsupportedMarkerError`` rather than assume the missing patch is ``.0``.
     """
     if isinstance(node, ast.Expression):
         return _evaluate_marker_node(node.body, target_python_version)
@@ -1003,6 +1019,18 @@ def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
             raise _UnsupportedMarkerError("unsupported marker variable")
         if not isinstance(literal_node, ast.Constant) or not isinstance(literal_node.value, str):
             raise _UnsupportedMarkerError("unsupported marker literal")
+        if (
+            variable_node.id not in _PATCH_INSENSITIVE_MARKER_VARIABLES
+            and len(_marker_version_tuple(target_python_version)) < 3
+        ):
+            # ``python_full_version`` is patch-sensitive, but the target is
+            # only major.minor -- the real interpreter's patch component is
+            # genuinely unknown here, so this comparison cannot be resolved
+            # confidently in either direction. Fail open rather than assume
+            # the missing patch is ".0" (see the module docstring above).
+            raise _UnsupportedMarkerError(
+                "python_full_version comparison requires a patch-precise target version"
+            )
         operator = type(node.ops[0])
         if variable_node is left:
             return _compare_marker_versions(target_python_version, operator, literal_node.value)
