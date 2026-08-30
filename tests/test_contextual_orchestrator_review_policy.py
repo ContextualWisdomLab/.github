@@ -274,6 +274,53 @@ def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
     assert result["report"]["priced_selected_count"] == 0
 
 
+def test_build_catalog_reports_free_family_diversity() -> None:
+    """Diversity counts distinct outage-domain families among all free routes."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()),
+        limit=12,
+        family_cap=4,
+        zdr_endpoints=ZDR_FEED,
+    )
+    # openrouter, nvidia_nim (+ its nvidia_nim_sub sibling), openai, bytez.
+    assert result["report"]["free_family_diversity"] == 4
+
+
+def test_build_catalog_reports_single_family_free_concentration() -> None:
+    """A free catalog sharing one outage domain reports diversity of one.
+
+    Regression coverage for the 2026-08-29 Strix finding recorded in
+    ADR-0003: every discovered free route sharing one upstream provider
+    means that provider's outage takes down the whole free catalog, which
+    is why Strix cannot safely run on a strict ``orchestrator/free`` pool
+    without this evidence showing at least two independent families.
+    """
+    single_family_report = {
+        "models": [
+            {
+                "provider": "nvidia_nim",
+                "model": "nvidia/nemotron-3-nano-30b-a3b",
+                "agent_id": "nim_nano_free",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+            {
+                "provider": "nvidia_nim_sub",
+                "model": "meta/llama-3.3-70b-instruct",
+                "agent_id": "nimsec_70b",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(single_family_report),
+        limit=12,
+        family_cap=4,
+    )
+    assert result["report"]["free_family_diversity"] == 1
+
+
 def test_build_catalog_rejects_unknown_pool() -> None:
     """An unrecognized virtual pool cannot silently widen model admission."""
     with pytest.raises(policy.PolicyError, match="unsupported review pool"):

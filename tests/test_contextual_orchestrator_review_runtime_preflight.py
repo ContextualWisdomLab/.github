@@ -182,6 +182,114 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         assert "tools" not in payload
 
 
+def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A ReviewPreflightError's report must reach the job log, not just the artifact.
+
+    Regression coverage for the gap that made the launcher's own internal
+    preflight (distinct from the sidecar script's external curl-based gateway
+    preflight) fail with only "review sidecar preflight failed" visible and
+    the real per-route rejection reasons hidden behind
+    omitted_unstructured_lines in the sanitized stream.
+    """
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace.get("_log_preflight_rejections")
+    assert callable(log_preflight_rejections)
+
+    secret = "sk-secret-must-not-enter-evidence"
+    report = {
+        "routes": [
+            {
+                "agent_id": "nim_nano_free",
+                "provider": "nvidia_nim",
+                "model": "nvidia/nemotron-3-nano-30b-a3b",
+                "status": "rejected",
+                "error_type": "ProviderUpstreamError",
+                "http_status": 429,
+            },
+            {
+                "agent_id": "or_ds_r1",
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-r1:free",
+                "status": "rejected",
+                "error_type": f"RuntimeError {secret}",
+            },
+            {
+                "agent_id": "ready_one",
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "status": "ready",
+            },
+        ],
+    }
+    log_preflight_rejections(report)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert secret not in captured.err
+    assert (
+        "preflight_route_rejected provider=nvidia_nim "
+        "error_type=ProviderUpstreamError http_status=429"
+    ) in captured.err
+    # An error_type value is only ever a Python identifier in real callers
+    # (see _preflight_review_agents' own isidentifier() guard), so an
+    # unexpected non-identifier string like this one prints as-is here --
+    # the bound that actually protects evidence is upstream of this helper.
+    assert "ready_one" not in captured.err
+
+
+def test_log_preflight_rejections_covers_nested_primary_attempt(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A fallback-pool failure must also surface the primary pool's rejections."""
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace.get("_log_preflight_rejections")
+    assert callable(log_preflight_rejections)
+
+    report = {
+        "routes": [
+            {
+                "provider": "openai",
+                "status": "rejected",
+                "error_type": "ProviderUpstreamError",
+                "http_status": 503,
+            },
+        ],
+        "primary_attempt": {
+            "routes": [
+                {
+                    "provider": "bytez",
+                    "status": "rejected",
+                    "error_type": "InvalidChatResponse",
+                },
+            ],
+        },
+    }
+    log_preflight_rejections(report)
+    captured = capsys.readouterr()
+    assert "preflight_route_rejected provider=bytez error_type=InvalidChatResponse" in captured.err
+    assert (
+        "preflight_route_rejected provider=openai error_type=ProviderUpstreamError http_status=503"
+        in captured.err
+    )
+
+
+def test_log_preflight_rejections_ignores_malformed_report(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A report missing the expected shape must not raise or print anything."""
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace.get("_log_preflight_rejections")
+    assert callable(log_preflight_rejections)
+
+    log_preflight_rejections({})
+    log_preflight_rejections({"routes": "not-a-list"})
+    log_preflight_rejections({"routes": ["not-a-dict"]})
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
     """A healthy HTTP process is not review-ready without one live LLM route."""
     namespace = _load_launcher()
@@ -358,6 +466,30 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
 
 
+def test_gateway_preflight_rejection_prints_bounded_evidence_to_the_job_log() -> None:
+    """A rejected gateway preflight must surface error_code/http_status directly.
+
+    Before this, the bounded ``error_code``/``http_status`` pair was written
+    only into the ``CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE`` artifact
+    file, invisible in the job log a CI operator reads first -- exactly the
+    gap that made a real "every free route rejected" failure look identical
+    to an opaque "gateway preflight returned HTTP 502" in normal CI output.
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    assert (
+        'print(f"[contextual-orchestrator-sidecar] gateway preflight rejected: '
+        'error_code={code} http_status={status}")'
+    ) in sidecar
+    # This print is not routed through the sanitizer, so its inputs must stay
+    # bounded: code is regex-validated and status is a plain int, never raw
+    # provider response text.
+    assert (
+        'if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):'
+        in sidecar
+    )
+
+
 def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     """Provider bodies, exception messages, URLs, and secrets never reach artifacts."""
     namespace = _load_sanitizer()
@@ -387,6 +519,13 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line(
         "provider_discovery_failed provider=bytez code=http_status_401"
     ) == "provider_discovery_failed provider=bytez code=http_status_401"
+    assert sanitize_line(
+        "preflight_route_rejected provider=nvidia_nim error_type=ProviderUpstreamError "
+        "http_status=429 upstream body sk-secret"
+    ) == "preflight_route_rejected provider=nvidia_nim error_type=ProviderUpstreamError http_status=429"
+    assert sanitize_line(
+        "preflight_route_rejected provider=bytez error_type=InvalidChatResponse"
+    ) == "preflight_route_rejected provider=bytez error_type=InvalidChatResponse"
     assert sanitize_line("provider response sk-secret") is None
 
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -291,6 +292,59 @@ def _preflight_with_fallback(
         return viable, report, True
 
 
+def _log_preflight_rejections(report: dict[str, object]) -> None:
+    """Print one bounded diagnostic line per rejected preflight route to stderr.
+
+    ``report["routes"]`` rows are already sanitized by ``_preflight_review_agents``
+    (stable route identity, a bounded exception class name, an optional numeric
+    HTTP status -- never provider response bodies, exception messages, URLs,
+    prompts, or credentials). Before this, that bounded evidence reached only
+    the ``--preflight-out`` artifact file, invisible in the job log an operator
+    reads first, so a real "every free route rejected" failure was
+    indistinguishable from any other cause of ``review sidecar preflight
+    failed`` in normal CI output. This is printed to stderr (not stdout) so it
+    reaches the sidecar's sanitized stderr stream the same way discovery and
+    gateway diagnostics already do.
+    """
+    primary_attempt = report.get("primary_attempt")
+    if isinstance(primary_attempt, dict):
+        _log_preflight_rejections(primary_attempt)
+    routes = report.get("routes")
+    if not isinstance(routes, list):
+        return
+    for row in routes:
+        if not isinstance(row, dict) or row.get("status") != "rejected":
+            continue
+        # Re-validate rather than trust the caller's own sanitization: this
+        # print reaches the sidecar's sanitized stderr stream unchanged, so an
+        # out-of-contract value here (not a plain identifier) must degrade to
+        # a safe placeholder instead of ever being formatted into the line.
+        provider_value = row.get("provider")
+        provider = (
+            provider_value
+            if isinstance(provider_value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider_value)
+            else "unknown"
+        )
+        error_type_value = row.get("error_type")
+        error_type = (
+            error_type_value
+            if isinstance(error_type_value, str) and error_type_value.isidentifier() and len(error_type_value) <= 64
+            else "UnknownError"
+        )
+        http_status = row.get("http_status")
+        if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
+            print(
+                f"preflight_route_rejected provider={provider} "
+                f"error_type={error_type} http_status={http_status}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"preflight_route_rejected provider={provider} error_type={error_type}",
+                file=sys.stderr,
+            )
+
+
 def _write_json(path: str, payload: object) -> None:
     """Write one deterministic UTF-8 JSON evidence file."""
     Path(path).write_text(
@@ -544,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
+        _log_preflight_rejections(exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
     if fallback_used and fallback_result is not None:
         Path(args.catalog_out).write_text(

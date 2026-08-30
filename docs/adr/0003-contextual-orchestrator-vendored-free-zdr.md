@@ -1,11 +1,15 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
 - Status: accepted; **the Strix-specific `orchestrator/auto` split (Decision
-  §4, the `strix.yml` wiring bullet) is superseded 2026-08-30 by
-  [ADR-0020](0020-strix-orchestrator-free-pool.md)** — Strix now routes
-  through `orchestrator/free`, the same pool as OpenCode and Noema. The rest
-  of this ADR (vendoring, discovery, ZDR-first policy, the family-diverse
-  catalog) remains in force unchanged. See the Amendment below.
+  §4, the `strix.yml` wiring bullet) is refined 2026-08-30 by
+  [ADR-0020](0020-strix-orchestrator-free-pool.md)** into an evidence-gated
+  conditional — Strix routes through `orchestrator/free` only when
+  `free_family_diversity >= 2`, falling back to `orchestrator/auto`
+  otherwise. Neither pool is retired: `orchestrator/auto` remains the
+  fail-closed default whenever the free catalog cannot show independent
+  provider-family coverage. The rest of this ADR (vendoring, discovery,
+  ZDR-first policy, the family-diverse catalog) remains in force unchanged.
+  See the Amendment below.
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema retain the fail-closed zero-cost virtual model id `orchestrator/free`; authoritative Strix security analysis uses the provider-diverse `orchestrator/auto` pool. Strix is intentionally correctness-first rather than zero-cost. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
@@ -148,32 +152,61 @@ all five, and auto-optimize routing by cost.
   every non-ZDR route and fails closed when no attested ZDR route exists in the
   selected workflow pool.
 
-## Amendment: Strix migrated to `orchestrator/free` (2026-08-30)
+## Addendum (2026-08-30): `free_family_diversity` evidence added (#1433)
 
-The Strix-specific split recorded in Decision §4 above — `strix.yml` provisioning
-the correctness-first `orchestrator/auto` pool while OpenCode/Noema stayed on
-`orchestrator/free` — is **superseded**, not deleted: the paragraph above is kept
-verbatim as the historical record of what was decided and why (the 2026-08-29
-DiskSage single-family-concentration finding). The current, binding decision is
-[ADR-0020: Retire Strix's separate `orchestrator/auto` pool](0020-strix-orchestrator-free-pool.md),
-which routes Strix through `orchestrator/free`, the same fail-closed zero-cost
-pool as OpenCode and Noema.
+The 2026-08-30 owner directive (`docs/product-goal-directive.md` §8, and its
+same-date instance-specific instruction) asked that Noema, OpenCode, *and*
+Strix all route through `contextual-orchestrator`'s `orchestrator/free` pool.
+Noema and OpenCode already did. Strix did not, and an initial attempt to flip
+that pin unconditionally (#1437, first draft) was rejected on exact-head
+review: the source itself acknowledged that the 2026-08-29 single-family
+outage-domain finding below was not eliminated, and an unconditional flip
+would have reintroduced the exact availability regression this ADR's original
+Strix split existed to prevent.
 
-ADR-0020 records the verification this amendment summarizes here: the
-provider-family cap in `scripts/ci/contextual_orchestrator_review_policy.py`
-(`build_zdr_prioritized_catalog`'s `per_family`/`family_cap` enforcement) was
-never conditioned on which pool it built a catalog for — it applies identically
-to `orchestrator/free` and `orchestrator/auto`, and `contextual_orchestrator_review_sidecar.sh`
-exports `ORCHESTRATOR_CATALOG_FAMILY_CAP` before pool selection, so no code
-change was needed to make the cap apply uniformly; it already did. Independently,
-`ContextualWisdomLab/contextual-orchestrator#919` (vendored at this repo's
-current pin `30c6d716…`, see the 2026-08-30 gap-baseline entries) generalized
-the Models.dev free-cost cross-reference from `opencode_zen`-only to also cover
-`nvidia_nim`/`nvidia_nim_sub`/`openai`, which widens how many provider families
-can actually appear in the *free* catalog's candidate set in the first place —
-directly bearing on the single-family concentration the 2026-08-29 DiskSage scan
-observed. See ADR-0020 for the residual risk this amendment does not claim to
-fully close, and for a separate, orthogonal reliability gap (request-time
-failover when a selected `orchestrator/free` route errors, as opposed to
-catalog-time family diversity) that a different, dedicated fix in
-`contextual-orchestrator` is addressing independently of this repository.
+`ContextualWisdomLab/.github#1433` added the missing evidence instead of
+flipping the pin on the strength of the instruction alone:
+`scripts/ci/contextual_orchestrator_review_policy.py` now reports
+`free_family_diversity`, the count of distinct outage-domain provider
+families (see `provider_family`) among *all* discovered free routes,
+independent of which pool is requested. This turns "is it safe to run Strix
+on a strict free pool right now" from a static assumption into evidence
+recomputed on every discovery run, consistent with this ecosystem's "no
+heuristics without evidence" convention (`docs/product-goal-directive.md`
+§6). #1433 deliberately left `strix.yml` untouched, tracking the wiring as a
+follow-up (`strix.yml` is a `pull_request_target` required workflow needing
+its own reviewed, same-head-checked change).
+
+## Amendment (2026-08-30): Strix wired to the diversity gate (ADR-0020, #1437)
+
+[ADR-0020: Evidence-gated `orchestrator/free` for Strix](0020-strix-orchestrator-free-pool.md)
+is the follow-up #1433 tracked and the corrected form of #1437's first draft.
+It wires `strix.yml`'s model-resolution step to read `free_family_diversity`
+from the sidecar's policy report (`CONTEXTUAL_ORCHESTRATOR_EVIDENCE`) and
+select `orchestrator/free` only when it is `>= 2` (the free catalog spans at
+least two independent outage domains, so one provider's outage cannot black
+out Strix review); otherwise it falls back to `orchestrator/auto`, the same
+pool Decision §4 above originally pinned. A negative fixture
+(`tests/test_strix_contextual_orchestrator_contract.py`) proves a diversity
+of 0 or 1 keeps the resolved model on `orchestrator/auto` rather than
+weakening it to `orchestrator/free` — the regression this whole mechanism
+exists to prevent.
+
+This is a refinement of Decision §4, not a supersession: `orchestrator/auto`
+is not retired, and neither is the correctness-first fallback OpenCode/Noema
+never needed but Strix still might. ADR-0020 records the residual risk this
+refinement does not claim to fully close (which providers currently publish a
+free tier is a live-market condition; a passing diversity count is necessary
+but not sufficient evidence of resilience) and a separate, orthogonal
+reliability gap — request-time failover when a selected `orchestrator/free`
+route errors, as opposed to catalog-time family diversity — that a dedicated
+fix in `contextual-orchestrator` is addressing independently of this
+repository; ADR-0020 states plainly whether that fix has landed as of this
+PR.
+
+These two additions are the conflict-resolution artifacts
+`docs/product-goal-directive.md` requires when the directive and an existing
+accepted decision disagree: neither silently kept the old pin nor silently
+adopted the new instruction, and
+`docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
+records the trail.

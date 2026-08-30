@@ -912,6 +912,10 @@ recurrence" section below out of the file entirely; both are restored here.)
 2. ContextualWisdomLab/.github#1345/#1347 — 각각 normalizer 선형 스캔과 web-E2E isolation/SSRF 수정의 terminal Checks·Strix·Noema 증거를 같은 HEAD에서 재확인한다.
 3. ContextualWisdomLab/.github#1326 — Appguardrail/macOS hourly caller를 current CodeRabbit finding 및 APA citation evidence와 함께 재검토한다.
 4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
+5. ContextualWisdomLab/.github#1433 — Strix를 `orchestrator/free`로 옮기라는 지시와 ADR-0003의 2026-08-29 단일 outage-domain 증거가 상충해, 즉시 pin을 바꾸는 대신 `free_family_diversity` 증거 필드를 추가했다(`docs/adr/0003-...md` addendum). 후속 PR이 이 증거를 읽어 `>=2` 독립 provider family일 때만 `strix.yml`을 `orchestrator/free`로 전환하도록 배선해야 한다.
+6. 같은 PR에서 org 전체 중앙 리뷰 파이프라인을 막고 있던 `gateway preflight returned HTTP 502`의 근본 원인 조사: 이미 안전하게 계산되던 bounded `error_code`/`http_status`가 evidence 아티팩트에만 쓰이고 job log에는 보이지 않던 gap을 발견해 `scripts/ci/contextual_orchestrator_review_sidecar.sh`에서 직접 로그하도록 수정했다. 근본적인 provider-side rejection 원인 자체는 다음 실행의 `error_code`로 확인해야 한다.
+7. ContextualWisdomLab/.github — "NIM 직접 통신은 제거 대상" 지시에 따라 org 전체 스캔: 호출자 없는 `scripts/ci/select_nvidia_nim_model.py`(직접 `integrate.api.nvidia.com` 호출)를 제거했다. `opencode.jsonc`의 `nvidia-nim`/`github-models` provider 카탈로그와 `opencode-review-dispatch.yml`의 `OPENCODE_MODEL_CANDIDATES` fallback pool은 여전히 활발히 테스트되는 별도 메커니즘이라 이번 pass에서 제거하지 않고 `docs/doctoring/direct-nvidia-nim-communication-removal.md`에 다음 increment로 남겼다.
+8. 4개 병렬 triage agent가 noema(7개 PR), contextual-orchestrator(6개 PR), `.github` 우선순위 critical/urgent-review 배치, `.github` 나머지 배치를 순회했다. 실제 고침: noema#500(draft 잠금 해제), `.github`#1238/#1271(scheduler 회귀 수정), contextual-orchestrator#906 관련 `.github`#1435(Pingora 정책이 1MB 초과 PDF에서 fail-closed되던 버그, `docs/papers/*.pdf` 리뷰를 막고 있었음), contextual-orchestrator#857의 두 번 실패한 self-modifying 워크플로 제거. 조직 전역에서 `opencode-review`가 아직 verdict 없는 head에 대해 의도적으로 fail-closed되는 대기 상태는 blocker로 취급하지 않았다.
 
 ## 6. Compliance and data boundary
 
