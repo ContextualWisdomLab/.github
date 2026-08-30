@@ -335,6 +335,19 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     # guarantees $sidecar_stderr holds everything the sidecar wrote before we
     # read it for the failure message below.
     wait_for_sidecar_sanitizers
+    # $preflight_report is written by the launcher's own ReviewPreflightError
+    # handler before it exits (see contextual_orchestrator_review_launcher.py
+    # main()), so it can hold real per-route evidence (agent_id/provider/
+    # model/status/error_type/http_status -- schema-bounded, never raw
+    # provider content or secrets) even though the generic exception message
+    # above never does. Previously this file was only ever surfaced by
+    # Strix's separate artifact-upload step, leaving every other workflow
+    # (noema-review, opencode-review) blind to *why* every candidate route
+    # was rejected. Printing it here puts that evidence in the one place
+    # every workflow's job log already is.
+    if [ -s "$preflight_report" ]; then
+      log "sidecar preflight route evidence: $(sed -n '1,80p' "$preflight_report" | tr '\n' ' ')"
+    fi
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
