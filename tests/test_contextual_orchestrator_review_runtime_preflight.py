@@ -525,7 +525,9 @@ def _run_gateway_retry_loop(
     return result, report
 
 
-@pytest.mark.parametrize("malformed_value", ["not-a-number", "0", "-1", "3.5"])
+@pytest.mark.parametrize(
+    "malformed_value", ["not-a-number", "0", "-1", "3.5", "00", "0000"]
+)
 def test_gateway_retry_loop_rejects_a_malformed_attempt_limit_before_any_curl_call(
     tmp_path: Path, malformed_value: str
 ) -> None:
@@ -538,6 +540,16 @@ def test_gateway_retry_loop_rejects_a_malformed_attempt_limit_before_any_curl_ca
     unset-or-empty as "use the default," so it never reaches the guard --
     the guard's own ``''`` pattern is defense in depth for a future change to
     that assignment, not a reachable case today.)
+
+    ``"00"``/``"0000"`` are a follow-up CodeRabbit finding on top of the
+    original fix: the digit-only guard's ``0`` branch only matched the exact
+    one-character string, so an all-digit-but-zero-valued override (leading
+    zeros) passed the guard and then made ``gateway_attempt -ge
+    $REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`` evaluate true on the very first
+    attempt (`test` parses a leading-zero numeral as decimal, so ``"00"`` is
+    ``0``) -- the opposite failure mode from the original bug (fails after
+    exactly one attempt instead of respecting the configured retry count),
+    but still config that must be rejected before any curl call.
 
     The plan is deliberately empty: if the fix regresses and the loop reaches
     curl at all, the fake curl exits 2 with a distinct "no plan queued"

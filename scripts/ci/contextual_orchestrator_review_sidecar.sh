@@ -511,9 +511,13 @@ REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-
 # expected", identical to a non-numeric one) -- so the bound below also caps
 # digit COUNT, not just digit-ness. Four digits (up to 9999) is already far
 # beyond any realistic attempt count and stays safely representable on every
-# platform this runs on.
+# platform this runs on. An all-digit value can still be numerically zero
+# with leading zeros ("00", "0000"): `[ -ge ]` parses those as decimal 0, so
+# the loop would fail after exactly one attempt instead of respecting the
+# configured retry count -- listed explicitly alongside the bare `0` case
+# rather than folded into the digit-count cap below.
 case "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" in
-  ''|*[!0-9]*|0)
+  ''|*[!0-9]*|0|00|000|0000)
     fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be a positive integer" ;;
   ?????*)
     fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be at most 9999" ;;
