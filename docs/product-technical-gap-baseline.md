@@ -1706,6 +1706,37 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   pass에 무리해서 끼워넣지 않고 명시적으로 다음 pass로 넘긴다. naruon G-06/G-15도 동일한
   이유로 이번 pass에서는 착수하지 못했다 — 다음 pass의 최우선 항목으로 남긴다.
 
+## 2026-08-30 시간별 재개: 세 PR 재확인 + G-06/G-15/#1347 병행 조사 착수
+
+세 PR(`naruon#1486`, `.github#1438`, `contextual-orchestrator#923`)의 required Checks를
+재확인했다. 공통 결론: 세 PR 모두 `opencode-review`가 실패 중이지만, 이는 코드 결함이 아니라
+현재 head에서 opencode-agent의 APPROVED/CHANGES_REQUESTED verdict가 아직 게시되지 않은,
+이미 알려진 정상 비동기 대기 상태다(`.github#1438`은 구 head `c11b68c2`에서 받은
+`COMMENTED`(coverage gate가 그 시점에 실패해 opencode-agent 스스로 승인을 보류한 상태)만
+있고, 새 head `73459977`에 대한 verdict는 아직 없다; 나머지 두 PR은 아직 어떤 verdict도 없다).
+`naruon#1486`의 `metadata-only gate evaluation` 실패도 동일하게 `opencode-review` 실패의
+하위 파생 결과일 뿐이다.
+
+`.github#1438`의 `noema-review`에서 이전에 문서화된 "healthz는 통과하지만 실제 completion
+요청이 120초간 0바이트로 행"하는 시그니처가 재현됐다(`request_failed
+status=413`/`provider_discovery_failed provider=bytez` 이후 healthz+preflight는 31초에
+확인됐으나, 이어진 `orchestrator/free` 전체 gateway preflight 요청이 `curl --max-time 120`
+한계에서 0바이트로 타임아웃). 이 PR의 diff와 무관한 공유 리뷰 인프라(무료 티어 NVIDIA NIM
+provider의 지연/부하 변동)로 판단해, 근거 없는 재작업 대신 governance 규칙에 따라 실패한
+job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재실행 결과는 다음 tick에서
+확인한다.
+
+병행해서 다음 3개 조사를 백그라운드 에이전트로 착수했다(결과는 다음 항목에서 반영):
+1. naruon G-06 다음 증분 — thread/sender ontology 및 human-correction 슬라이스 중 어느 쪽이
+   naruon의 기존 코드 관례(opaque `*_uid`, 구조화 Alembic, deny-first RBAC/ABAC) 위에서
+   가장 작고 실질적인 다음 조각인지 정찰.
+2. naruon G-15 다음 증분 — 현재 첨부파일 1MB 상한의 실제 위치, 기존 parser/registry 유무,
+   streaming upload 여부, quarantine/zip-bomb 방어 유무를 정찰해 가장 작은 실질적 슬라이스를
+   특정.
+3. `.github#1347`(SSRF/isolation) — PR 브랜치와 `main`이 독립적으로 각각 추가한
+   `scripts/ci/sandboxed_web_e2e.py`의 SSRF 방어 로직을 정확히 대조하고, ordinary merge
+   commit(no rebase)으로 결합할 정확한 hunk별 해소안을 정찰.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
