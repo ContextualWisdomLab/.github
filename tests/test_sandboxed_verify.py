@@ -74,6 +74,36 @@ def test_copy_workspace_excludes_default_noise_and_keeps_sources(tmp_path):
     assert not (copied / "__pycache__").exists()
 
 
+def test_copy_workspace_excludes_credential_bearing_paths(tmp_path):
+    """A repo checkout's credential files must never ride into the writable sandbox."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.production").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".npmrc").write_text("//registry.example.com/:_authToken=leaked\n", encoding="utf-8")
+    (repo / ".netrc").write_text("machine example.com login x password leaked\n", encoding="utf-8")
+    (repo / ".git-credentials").write_text("https://x:leaked@example.com\n", encoding="utf-8")
+    (repo / ".ssh").mkdir()
+    (repo / ".ssh" / "id_rsa").write_text("leaked-key\n", encoding="utf-8")
+    (repo / ".aws").mkdir()
+    (repo / ".aws" / "credentials").write_text("leaked\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    for excluded in (
+        ".env",
+        ".env.production",
+        ".npmrc",
+        ".netrc",
+        ".git-credentials",
+        ".ssh",
+        ".aws",
+    ):
+        assert not (copied / excluded).exists(), excluded
+
+
 def test_copy_workspace_rejects_missing_repo_root(tmp_path):
     """Workspace copy fails clearly when the source root is invalid."""
     with pytest.raises(ValueError, match="repo root is not a directory"):

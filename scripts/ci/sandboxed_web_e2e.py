@@ -128,46 +128,55 @@ def _probe_isolation_capability(backend: str) -> None:
     user, PID, and mount namespaces bubblewrap depends on. A restricted Linux
     host (for example one with unprivileged user namespaces disabled, or a
     seccomp policy that denies ``unshare``/``clone``) can have a working
-    ``bwrap`` binary that still fails on every real invocation. This runs the
-    same essential namespace and mount operations ``isolated_command`` relies
-    on (new PID namespace, tmpfs root, the standard read-only binds,
-    ``/proc``, ``/dev``, a tmpfs ``/tmp``) against a harmless no-op
-    executable (``true``, resolved on PATH so it lands inside one of the same
-    bind roots rather than assuming a fixed path), so that kind of failure is
-    classified as unavailable isolation (exit code 126) instead of surfacing
+    ``bwrap`` binary that still fails on every real invocation. This mirrors
+    every operation ``isolated_command`` actually performs -- new-session
+    creation, the new PID namespace, tmpfs root, the standard read-only
+    binds, ``/proc``, ``/dev``, a tmpfs ``/tmp``, and a writable bind+chdir
+    into the same mount point real commands run from -- against a real
+    (throwaway) temp directory, so a host that permits a reduced probe but
+    denies one of these still-untested operations is classified as
+    unavailable isolation (exit code 126) up front, instead of surfacing
     later as a confusing service-readiness or test failure.
     """
-    probe_executable = shutil.which("true") or "/bin/true"
+    probe_executable = shutil.which("sh") or "/bin/sh"
     bind_args: list[str] = []
     for root in _bind_roots():
         bind_args.extend(("--ro-bind", str(root), str(root)))
-    probe_command = [
-        backend,
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-pid",
-        "--tmpfs",
-        "/",
-        *bind_args,
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--",
-        probe_executable,
-    ]
-    try:
-        result = subprocess.run(
-            probe_command,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
+    with tempfile.TemporaryDirectory(prefix="sandboxed-web-e2e-probe-") as probe_workspace:
+        probe_command = [
+            backend,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-pid",
+            "--tmpfs",
+            "/",
+            *bind_args,
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            "--bind",
+            probe_workspace,
+            SANDBOX_MOUNT,
+            "--chdir",
+            SANDBOX_MOUNT,
+            "--",
+            probe_executable,
+            "-c",
+            f"test -w {SANDBOX_MOUNT} && test -w /tmp",
+        ]
+        try:
+            result = subprocess.run(
+                probe_command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit code {result.returncode}"
         raise RuntimeError(f"bubblewrap cannot create required namespaces: {detail}")

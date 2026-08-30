@@ -33,6 +33,24 @@ DEFAULT_IGNORE = (
     "htmlcov",
     "dist",
     "build",
+    # Credential-bearing dotfiles/dirs a repo checkout can carry (npm/pip
+    # registry tokens, git credential helpers, cloud/SSH/GPG config). The
+    # sandboxed command's own workspace mount is writable, so anything copied
+    # in here is both readable and tamperable by the command under test --
+    # these must never ride along with an ordinary repo copy.
+    ".env",
+    ".env.*",
+    ".envrc",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".pgpass",
+    ".git-credentials",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
 )
 SECRET_ENV_TOKENS = (
     "TOKEN",

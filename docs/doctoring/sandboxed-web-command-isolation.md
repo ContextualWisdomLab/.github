@@ -19,13 +19,17 @@ A `bwrap` binary discovered on `PATH` is not by itself proof that isolation
 works: a restricted host (unprivileged user namespaces disabled, or a
 seccomp-restricted CI runner) can have the binary present yet unable to create
 the requested namespaces. Before starting either service, `isolation_backend`
-runs a bounded, cheap capability preflight — the same minimal namespace and
-mount shape `isolated_command` uses (new PID namespace, tmpfs root, the
-standard read-only binds, `/proc`, `/dev`, a tmpfs `/tmp`) around a trivial
-no-op executable. A non-zero exit, or a failure to even launch the probe, is
-classified as isolation-unavailable and exits with code `126`, the same as a
-missing `bwrap` binary, instead of surfacing later as a confusing readiness or
-test failure.
+runs a bounded, cheap capability preflight that mirrors *every* operation
+`isolated_command` actually performs — new-session creation, the new PID
+namespace, tmpfs root, the standard read-only binds, `/proc`, `/dev`, a tmpfs
+`/tmp`, and a writable bind+chdir into the same mount point real commands run
+from, exercised against a real (throwaway) temp directory rather than a
+trivial no-op. A reduced probe that skips one of these can pass on a host that
+specifically denies that operation, then fail later once a real service
+starts; mirroring the full set closes that gap. A non-zero exit, or a failure
+to even launch the probe, is classified as isolation-unavailable and exits
+with code `126`, the same as a missing `bwrap` binary, instead of surfacing
+later as a confusing readiness or test failure.
 
 Use `--isolation disabled` only for trusted local debugging. The result marker
 records the requested mode and resolved backend so CI evidence cannot be
@@ -50,6 +54,19 @@ resolved and checked against the workspace root immediately after
 `shutil.copytree`, in `copy_workspace` itself so both callers get the same
 protection; the first one found to escape fails the whole copy closed rather
 than being silently dropped or repaired.
+
+The writable `/workspace` mount is a copy of the caller's repository checkout,
+not the checkout itself. `copy_workspace` (`scripts/ci/sandboxed_verify.py`)
+excludes VCS/cache/build noise by default, and now also excludes common
+credential-bearing dotfiles/dirs a checkout can carry (`.env*`, `.netrc`,
+`.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, `.ssh`, `.gnupg`, `.aws`,
+`.kube`, `.docker`) so a repository that happens to have one of these present
+at copy time never rides along into the sandboxed command's writable,
+readable mount. Logs and the scrubbed per-command home directories are
+intentionally part of that same writable mount — the tested command needs to
+write them — this exclusion list narrows what "writable and readable by the
+command under test" actually contains; it does not attempt to split the mount
+by service.
 
 Readiness polling remains loopback-only and does not follow redirects. Invalid
 readiness URLs are reported as a coded readiness failure (`125`) rather than an

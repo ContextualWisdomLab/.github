@@ -29,6 +29,17 @@ Semantic Versioning where the repository publishes a release.
   resolved target lands outside the copied tree, since `copytree(...,
   symlinks=True)` otherwise preserves an escaping symlink as a live link
   inside the bind-mounted `/workspace`.
+- (Devin review 반영, 후속 라운드) 같은 sandboxed web E2E isolation 헬퍼에 두 건을 추가로
+  hardening했습니다: (1) `_probe_isolation_capability`가 이제 `isolated_command`가 실제로
+  수행하는 모든 연산(`--new-session`, `/tmp` tmpfs, 실제 명령이 사용하는 것과 동일한 mount
+  point로의 쓰기 가능한 bind+chdir)을 진짜 임시 디렉터리로 그대로 재현합니다 — 이전의 축소된
+  probe는 이 중 하나를 거부하는 host에서는 통과했다가 실제 서비스 실행에서만 실패할 수
+  있었습니다. (2) `scripts/ci/sandboxed_verify.py`의 `copy_workspace` 기본 제외 목록에
+  자격증명 관련 dotfile/디렉터리(`.env*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`,
+  `.git-credentials`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`)를 추가했습니다 — 쓰기
+  가능한 `/workspace` mount는 테스트 대상 명령이 읽고 쓸 수 있으므로, repo checkout에 우연히
+  존재하는 자격증명 파일이 그대로 복사되어서는 안 됩니다(로그·per-command home은 명령이 실제로
+  써야 하므로 의도적으로 동일 mount 안에 유지).
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

@@ -1078,6 +1078,32 @@ def test_probe_isolation_capability_rejects_when_probe_cannot_run(monkeypatch):
         sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
 
+def test_probe_isolation_capability_exercises_the_same_operations_as_real_commands(monkeypatch):
+    """The probe must not pass on a host that would fail the real invocation.
+
+    A reduced probe (missing --new-session, /tmp, or the bind+chdir into the
+    same mount real commands use) can pass on a host that denies one of
+    those specific operations, then fail later once a real service starts.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/sh")
+    captured: dict[str, object] = {}
+
+    def _fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
+    sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+    command = captured["command"]
+    assert "--new-session" in command
+    assert command.count("--tmpfs") == 2
+    assert "/tmp" in command
+    assert "--bind" in command
+    assert sandboxed_web_e2e.SANDBOX_MOUNT in command
+    assert "--chdir" in command
+
+
 def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
     """A probe that hangs past its bounded timeout is classified as unavailable."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: None)
