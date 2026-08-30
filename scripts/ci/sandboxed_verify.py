@@ -169,54 +169,98 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
 
 
 def _validate_contained_symlink_cycle(candidate: Path, source_root: Path) -> None:
-    """Accept a repository-internal symlink chain, rejecting only an escape.
+    """Reject a symlink chain that escapes ``source_root`` or cannot be resolved.
 
-    ``validate_repository_symlinks`` calls this for every symlink it finds,
-    walking the chain by hand one ``os.readlink`` hop at a time instead of
-    asking ``Path.resolve()`` to follow it: ``resolve()`` only reports the
-    first hop's absolute-ness, silently following any absolute hop reached
-    partway through a chain, and its behavior on an actual cycle is not
-    reliable evidence either way -- it raises ``RuntimeError`` on some Python
-    versions but silently returns a partially-resolved path, with no error at
-    all, on others. This function instead tracks visited paths itself, so a
-    hop whose target is absolute, or whose lexically normalized target steps
-    outside ``source_root``, raises ``RepositoryPathBoundaryError`` no matter
-    how deep into the chain it occurs or which Python version is running. A
-    chain that revisits a path it already followed -- without ever leaving
-    ``source_root`` -- is treated as contained and returns normally. The hop
-    count is bounded so a chain that (due to purely lexical, not real-path,
-    normalization) never repeats still fails closed instead of hanging. The
-    walk allows one more iteration than the hop limit: each iteration checks
-    one position and then, if it is a symlink, advances to the next, so a
-    chain of exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks needs
-    a final iteration to confirm the landing position is not itself a
-    further symlink -- without it, such a chain would be rejected even
-    though the OS itself can resolve it.
+    Thin entry point over ``_resolve_repository_symlink_components``, which
+    does the actual component-by-component walk starting fresh (no symlink
+    yet in progress, the full hop budget available).
     """
-    visited: set[Path] = set()
-    current = Path(os.path.normpath(candidate))
-    for _ in range(MAXIMUM_SYMLINK_HOPS + 1):
-        if current in visited:
-            return
-        visited.add(current)
-        if not current.is_symlink():
-            return
-        target = Path(os.readlink(current))
+    _resolve_repository_symlink_components(
+        candidate.relative_to(source_root).parts,
+        source_root,
+        source_root,
+        set(),
+        [MAXIMUM_SYMLINK_HOPS],
+        candidate,
+    )
+
+
+def _resolve_repository_symlink_components(
+    parts: Sequence[str],
+    resolved: Path,
+    source_root: Path,
+    active: set[Path],
+    hops_remaining: list[int],
+    candidate: Path,
+) -> Path:
+    """Resolve ``parts`` one component at a time, raising on escape or cycle.
+
+    ``validate_repository_symlinks`` calls ``_validate_contained_symlink_cycle``
+    for every symlink it finds, which enters this function. It walks by hand
+    one path component at a time using ``os.readlink``, instead of asking
+    ``Path.resolve()`` to follow the chain or collapsing each hop's whole
+    target in a single ``os.path.normpath`` call: either of those would miss
+    a target that itself contains an intermediate component that is a
+    symlink -- for example ``some-alias/../secret`` where ``some-alias`` is
+    an entirely-legitimate-looking internal symlink on its own -- and
+    ``Path.resolve()``'s behavior on an actual cycle is not reliable evidence
+    either way, raising ``RuntimeError`` on some Python versions but silently
+    returning a partially-resolved path, with no error at all, on others.
+    Processing one component at a time and recursing into a symlink's own
+    target -- rather than collapsing the whole string lexically, which would
+    cancel ``some-alias`` against a following ``..`` textually without ever
+    re-examining whether ``some-alias`` needs its own resolution first --
+    closes that gap without ever calling ``Path.resolve()``.
+
+    Recursion is also what makes the cycle check precise: a symlink is added
+    to ``active`` only while its own target is being resolved and removed
+    again as soon as that resolution returns successfully, so the *same*
+    symlink referenced twice in one chain -- once fully resolved before the
+    second reference is ever reached, not a real loop -- is accepted, while a
+    symlink that (directly or through others) points back to itself while
+    still being resolved raises ``RepositoryPathBoundaryError``: there is no
+    well-defined resolved position to hand back to a caller that needs to
+    keep resolving components after such a symlink, so a genuine cycle can
+    never be treated as merely "contained" once resolution is allowed to
+    continue past it. A hop budget, shared across the whole recursive walk,
+    bounds the total number of symlinks followed so a chain that never
+    repeats still fails closed instead of walking forever; only actually
+    dereferencing a symlink spends one unit of that budget, so a chain of
+    exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
+    """
+    for component in parts:
+        if component == "..":
+            if resolved == source_root:
+                raise RepositoryPathBoundaryError(
+                    f"symlink escapes repository verification sandbox: {candidate}"
+                )
+            resolved = resolved.parent
+            continue
+        step = resolved / component
+        if not step.is_symlink():
+            resolved = step
+            continue
+        if step in active:
+            raise RepositoryPathBoundaryError(
+                f"symlink chain could not be resolved: {candidate}"
+            )
+        if hops_remaining[0] <= 0:
+            raise RepositoryPathBoundaryError(
+                f"symlink chain exceeds the supported hop limit: {candidate}"
+            )
+        active.add(step)
+        hops_remaining[0] -= 1
+        target = Path(os.readlink(step))
         if target.is_absolute():
             raise RepositoryPathBoundaryError(
                 f"symlink escapes repository verification sandbox via absolute target: "
-                f"{current} -> {target}"
+                f"{step} -> {target}"
             )
-        current = Path(os.path.normpath(current.parent / target))
-        try:
-            current.relative_to(source_root)
-        except ValueError as exc:
-            raise RepositoryPathBoundaryError(
-                f"symlink escapes repository verification sandbox: {candidate} -> {target}"
-            ) from exc
-    raise RepositoryPathBoundaryError(
-        f"symlink chain exceeds the supported hop limit: {candidate}"
-    )
+        resolved = _resolve_repository_symlink_components(
+            target.parts, resolved, source_root, active, hops_remaining, candidate
+        )
+        active.discard(step)
+    return resolved
 
 
 def validate_repository_symlinks(source: Path) -> None:
@@ -226,16 +270,16 @@ def validate_repository_symlinks(source: Path) -> None:
     ``source``. Absolute links are rejected even when they currently name a
     path beneath ``source`` because preserving them would point the sandboxed
     command back at the original checkout instead of the isolated copy. Every
-    symlink is validated with ``_validate_contained_symlink_cycle``'s lexical,
-    hop-by-hop walk rather than ``Path.resolve()``: resolving a multi-hop
-    chain silently follows any absolute hop partway through instead of just
-    the first one, and resolving a genuine cycle is not reliable evidence
-    either way -- it raises ``RuntimeError`` on some Python versions but
-    silently returns a partially-resolved path, with no error at all, on
+    symlink is validated with ``_validate_contained_symlink_cycle``'s
+    component-by-component walk rather than ``Path.resolve()``: resolving a
+    multi-hop chain silently follows any absolute hop partway through instead
+    of just the first one, and resolving a genuine cycle is not reliable
+    evidence either way -- it raises ``RuntimeError`` on some Python versions
+    but silently returns a partially-resolved path, with no error at all, on
     others. Neither behavior is something this boundary check can depend on;
-    the manual walk is deterministic across Python versions and checks every
-    hop, not just the first. A symlink cycle fully contained beneath
-    ``source`` is accepted rather than aborting verification.
+    the manual walk is deterministic across Python versions, checks every
+    hop rather than just the first, and rejects rather than tolerates a
+    symlink chain that cannot be resolved to a real, bounded target.
     """
     source_root = source.resolve(strict=True)
     for current_root, directory_names, file_names in os.walk(source_root, followlinks=False):

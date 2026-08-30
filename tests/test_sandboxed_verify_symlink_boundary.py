@@ -3,7 +3,6 @@
 import json
 
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -51,45 +50,69 @@ def test_copy_workspace_preserves_repository_internal_symlink(tmp_path: Path) ->
     assert (copied / "alias.txt").read_text(encoding="utf-8") == "review me"
 
 
-def test_copy_workspace_accepts_repository_internal_symlink_cycle(tmp_path: Path) -> None:
-    """A two-link symlink cycle fully inside the repository is contained, not fatal.
+def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(
+    tmp_path: Path,
+) -> None:
+    """A symlink resolved twice in one chain, not as part of a loop, is accepted.
 
-    ``Path.resolve(strict=False)`` raises an uncaught ``RuntimeError`` for a
-    symlink loop. Before the fix, that ``RuntimeError`` escaped
-    ``validate_repository_symlinks`` and aborted an otherwise-valid copy;
-    a cycle that never leaves the copied repository must instead be
-    accepted so verification proceeds normally.
+    ``link -> shared/../shared/file.txt`` references ``shared`` twice, but
+    the first reference is fully resolved (and its bookkeeping cleared)
+    before the second one is ever reached -- this is not a cycle, just an
+    ordinary path that happens to name the same symlink in two places, and
+    the OS itself resolves it without issue. A cycle check that treats
+    "already resolved once, earlier" the same as "currently being resolved"
+    would reject this valid path.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "cycle-a").symlink_to("cycle-b")
-    (repo / "cycle-b").symlink_to("cycle-a")
+    (repo / "real_dir").mkdir()
+    (repo / "real_dir" / "file.txt").write_text("payload", encoding="utf-8")
+    (repo / "shared").symlink_to("real_dir", target_is_directory=True)
+    (repo / "link").symlink_to("shared/../shared/file.txt")
 
     copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", ())
 
-    assert (copied / "cycle-a").is_symlink()
-    assert (copied / "cycle-b").is_symlink()
+    assert (copied / "link").is_symlink()
+    assert (copied / "link").read_text(encoding="utf-8") == "payload"
 
 
-def test_main_accepts_repository_internal_symlink_cycle_and_runs_command(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The CLI runs normally when the repository holds a self-contained cycle.
+def test_copy_workspace_rejects_repository_internal_symlink_cycle(tmp_path: Path) -> None:
+    """A two-link symlink cycle fails closed instead of hanging or being tolerated.
 
-    Before the fix, ``main`` would have surfaced the ``RuntimeError`` raised
-    by ``Path.resolve`` deep inside ``copy_workspace`` -- never reaching the
-    command execution path at all, let alone this repository's normal,
-    non-path-boundary result payload.
+    ``Path.resolve(strict=False)`` raises an uncaught ``RuntimeError`` for a
+    symlink loop on some Python versions but silently returns a
+    partially-resolved path on others -- neither is reliable evidence this
+    check can depend on. A genuine cycle has no well-defined resolved
+    position once resolution is allowed to continue past it into further
+    path components, so it is rejected the same way an escape is, rather
+    than being tolerated as merely "contained".
     """
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "cycle-a").symlink_to("cycle-b")
     (repo / "cycle-b").symlink_to("cycle-a")
 
-    exit_code = sandboxed_verify.main(
-        ["--repo-root", str(repo), "--", sys.executable, "-c", "print('verified')"]
-    )
+    with pytest.raises(ValueError, match="symlink chain could not be resolved"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", ())
+
+
+def test_main_rejects_repository_internal_symlink_cycle_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI reports a clean path-boundary rejection for a self-contained cycle.
+
+    Before the fix, ``main`` would have surfaced the ``RuntimeError`` raised
+    by ``Path.resolve`` deep inside ``copy_workspace`` as an uncaught
+    traceback, never reaching this repository's normal, coded rejection
+    payload at all.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cycle-a").symlink_to("cycle-b")
+    (repo / "cycle-b").symlink_to("cycle-a")
+
+    exit_code = sandboxed_verify.main(["--repo-root", str(repo), "--", "verify"])
     captured = capsys.readouterr()
     lines = [
         line
@@ -98,10 +121,10 @@ def test_main_accepts_repository_internal_symlink_cycle_and_runs_command(
     ]
     payload = json.loads(lines[0].removeprefix(sandboxed_verify.RESULT_MARKER))
 
-    assert exit_code == 0
-    assert payload["exit_code"] == 0
-    assert payload["path_boundary_rejected"] is False
-    assert "verified" in captured.out
+    assert exit_code == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert payload["exit_code"] == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert payload["path_boundary_rejected"] is True
+    assert payload["cwd"] == "(not-created)"
     assert "Traceback" not in captured.err
 
 
