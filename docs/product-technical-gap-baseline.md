@@ -1448,10 +1448,13 @@ reference `ContextualWisdomLab/.github#1455` anywhere in this ADR's own text, ev
 filed and fully reasoned during the implementation pass — added the cross-reference at the point of
 definition and in Consequences, explicitly *not* reopening the discovery-timing question itself (that
 stays tracked on #1455, unchanged). One was genuinely new and verified real, not a restatement:
-`REVIEW_PREFLIGHT_MAX_ESCALATIONS`'s shared budget is consumed in deterministic catalog order
-(alphabetical by `(provider, model)`, not random), so a candidate that sorts later can be denied its
-own escalation attempt purely because 4 earlier candidates already claimed the shared budget — verified
-directly against `_preflight_review_agents`'s actual loop structure. Considered a cheap reordering fix
+`REVIEW_PREFLIGHT_MAX_ESCALATIONS`'s shared budget is consumed in deterministic catalog order (not
+random, but not purely alphabetical either — verified directly against `build_zdr_prioritized_catalog`'s
+actual sort key: `(cost_evidence_rank, zdr_attested_rank, provider, model)`, so alphabetical
+`(provider, model)` is only the tie-breaker within each same-cost/same-ZDR-status group), so a candidate
+that sorts later can be denied its own escalation attempt purely because 4 earlier candidates already
+claimed the shared budget — verified directly against `_preflight_review_agents`'s actual loop
+structure. Considered a cheap reordering fix
 (round-robin, random shuffling) and rejected it on the merits, not on convergence-fatigue: any selection
 policy for a fixed-size shared budget smaller than the candidate pool still has to deny *someone* a
 slot, so reordering only changes which candidates are favored, not whether the trade-off exists — and

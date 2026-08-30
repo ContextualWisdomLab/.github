@@ -319,7 +319,13 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   principle already rejects (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). This ADR does not
   reopen that question; see #1455 for the full analysis and options considered.
   **Second known, accepted, tracked limitation on this same shared counter**: candidates are probed in
-  catalog order (deterministic, sorted alphabetically by `(provider, model)` — not random), and the
+  catalog order — deterministic, not random, but not purely alphabetical either: verified directly
+  against `build_zdr_prioritized_catalog`'s actual sort key
+  (`contextual_orchestrator_review_policy.py`), eligible rows sort by `(cost_evidence_rank,
+  zdr_attested_rank, provider, model)` — cost-evidence tier first (constant within `orchestrator/free`,
+  since every row is already free), ZDR-attested status second (ZDR-attested candidates sort before
+  non-attested ones, regardless of `require_zdr`), and `(provider, model)` alphabetically only as the
+  tie-breaker within each same-cost/same-ZDR-status group — and the
   4-escalation budget is consumed strictly first-come-first-served, so a candidate that sorts later in
   the catalog can be denied its own escalation attempt purely because 4 earlier candidates already
   claimed the shared budget, even if that later candidate would have succeeded at the escalated budget.

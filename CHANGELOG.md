@@ -95,7 +95,10 @@ Semantic Versioning where the repository publishes a release.
   the shared, catalog-order-consumed `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
   budget can deny a later-sorting, healthy candidate its own escalation
   attempt once 4 earlier candidates have claimed the budget -- catalog
-  order is deterministic (alphabetical by provider/model), not random.
+  order is deterministic, not random, but not purely alphabetical either:
+  `build_zdr_prioritized_catalog` sorts by `(cost_evidence_rank,
+  zdr_attested_rank, provider, model)`, so alphabetical `(provider, model)`
+  is only the tie-breaker within each same-cost/same-ZDR-status group.
   Considered reordering (round-robin, random shuffling) as a cheap fix and
   rejected it: no selection policy for a fixed-size shared budget removes
   the underlying trade-off, only changes which arbitrary policy governs
