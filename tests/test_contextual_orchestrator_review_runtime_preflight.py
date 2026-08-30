@@ -219,6 +219,35 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
+def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
+    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+
+    Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
+    evidence reproduction (Strix run 33306775025 on
+    ContextualWisdomLab/contextual-orchestrator#921, job 99244624298) showed
+    the routing probe marking a DeepSeek NIM route "ready" in 18s, then the
+    identical gateway request against that same healthy route being cut off
+    at exactly curl's configured bound -- "gateway preflight request could
+    not reach the local sidecar" was that timeout, not a real connectivity
+    failure. This asserts the bound is generous enough to tolerate a real
+    reasoning generation (well above the routing probe's own 10s
+    per-candidate budget) rather than the previous 30s, which rejected a
+    route the routing probe had just proven healthy.
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
+    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
+    gateway_preflight_timeout_seconds = int(match.group(1))
+
+    assert gateway_preflight_timeout_seconds >= 120, (
+        "gateway preflight curl --max-time "
+        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
+        "completion latency; 30s was observed cutting off a route the routing probe "
+        "had just proven ready"
+    )
+
+
 def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() -> None:
     """A genuinely broken model must still fail closed at the full 4096-token
     budget -- proving the sidecar-preflight-max-tokens fix widens the budget
