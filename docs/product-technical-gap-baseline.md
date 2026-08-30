@@ -2370,6 +2370,17 @@ ruff clean.
 `ContextualWisdomLab/naruon#1486`에 남은 유일한 required-check 실패는 여전히 opencode-review의
 비동기 verdict 대기뿐.
 
+**참고(main 자체의 별개 증거, 이 PR의 required check 아님)**: `.github#1438`에 붙은 "Default-branch
+repository_dispatch Strix evidence" 상태(main 자신, head `1ff82682` — 정확히 ADR-0005 sidecar fix를
+구현한 그 커밋 — 를 스캔)가 실패. job 로그 확인: sidecar 자체는 정상 기동해 "healthz and
+provider-route preflight confirmed after 36s"까지 성공했으나(Bytez 500은 기존에 알려진 non-fatal
+경고), 그 이후 워크플로 자신의 "gateway preflight" 단계가 3회 재시도(각 2분 간격, 총 6분) 모두
+"did not reach the sidecar cleanly (status=unreachable)"로 실패 — 이전에 문서화된 "healthz는 통과하되
+completion 요청이 0바이트로 hang"과는 다른 새 증상(요청이 hang하는 게 아니라 sidecar 자체가 preflight
+성공 이후 어느 시점에 완전히 응답 불가 상태가 된 것으로 보임, 프로세스 조기 종료 또는 포트 미수신
+가능성). main 자신에 대한 평가라 이 PR의 required check를 막지 않고(diff와 무관), 별도 PR로 원인
+조사가 필요한 새 데이터 포인트로만 기록한다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
