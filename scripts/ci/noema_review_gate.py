@@ -55,7 +55,8 @@ _SENSITIVE_DATA_SCRUB_RE = re.compile(
     r'\b(sk-[A-Za-z0-9_-]+)|'
     r'\b(xox[baprs]-[A-Za-z0-9-]+)|'
     r'\b(AKIA[0-9A-Z]{16})|'
-    r'((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?|'
+    r'((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)'
+    r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\r\n,;}\]]+)|'
     r'((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'
 )
 
