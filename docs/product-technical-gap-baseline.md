@@ -1551,6 +1551,22 @@ ADRs' convention) with an explicit note that acceptance is the design decision, 
 and the Consequences section's tense corrected to describe the shipped behavior. 1926 tests pass; 100%
 coverage and 100% docstring coverage on `scripts/ci/`.
 
+**A follow-up finding on the round-4 malformed-gateway-reply fix itself, caught before the round-4 push
+even finished its own review cycle — a genuine gap, not a duplicate.** `json.loads()` legally parses any
+top-level JSON value — an array, `null`, a bare string, or a number — not only an object. The very next
+line, `response.get("choices")`, assumes a dict and raises `AttributeError` for any of those shapes, and
+`AttributeError` was not in the round-4 fix's caught exception tuple `(OSError, json.JSONDecodeError,
+IndexError, TypeError)`. So a `200` response whose body is valid-but-wrong-shaped JSON (e.g. `[]` or
+`null` instead of `{"choices": [...]}`) still lost gateway evidence exactly like the bug round-4 set out
+to fix — the script still failed closed overall (an uncaught exception exits the Python process non-zero,
+so the shell's `if !` still caught it and called `fail`), but wrote nothing to the report first. Fixed
+with an explicit `isinstance(response, dict)` check immediately after the `json.loads()` call that raises
+the already-caught `TypeError` rather than widening the tuple to catch `AttributeError` broadly (which
+could mask unrelated bugs elsewhere in that block). Parametrized regression tests (`[]`, `null`, a bare
+string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 'gateway'`, the same
+signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
+100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

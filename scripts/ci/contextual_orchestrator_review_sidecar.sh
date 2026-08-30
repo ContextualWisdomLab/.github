@@ -617,6 +617,16 @@ report_path = Path(sys.argv[2])
 attempts = int(sys.argv[3]) if sys.argv[3].isdecimal() else 0
 try:
     response = json.loads(response_path.read_text(encoding="utf-8"))
+    if not isinstance(response, dict):
+        # Valid JSON, wrong top-level shape (e.g. `[]`, `null`, a bare
+        # string/number instead of an object) -- .get("choices") below
+        # assumes a dict and would otherwise raise AttributeError, which is
+        # not in the caught tuple below, losing evidence exactly like the
+        # unparseable-body case this except block exists to cover. Reuses
+        # the already-caught TypeError rather than widening the tuple to
+        # AttributeError broadly, which could mask unrelated bugs elsewhere
+        # in this block.
+        raise TypeError(f"gateway response was not a JSON object: {type(response).__name__}")
     choices = response.get("choices")
     first = choices[0] if isinstance(choices, list) and choices else None
     message = first.get("message") if isinstance(first, dict) else None

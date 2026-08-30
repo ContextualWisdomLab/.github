@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix one more Devin Review finding on PR #1452, a genuine gap in the round-4
+  malformed-gateway-reply fix (`scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`):
+  `json.loads()` legally parses a top-level JSON array, `null`, a bare
+  string, or a number, not just an object -- the immediately following
+  `response.get("choices")` assumes a dict and raises `AttributeError` for
+  any of those, which was not in the round-4 fix's caught exception tuple,
+  so a valid-JSON-but-wrong-shaped HTTP 200 body still lost evidence exactly
+  like the original bug (the script still failed closed overall, since an
+  uncaught exception exits non-zero, but wrote nothing to the gateway
+  evidence report). Fixed with an explicit `isinstance(response, dict)`
+  check that raises the already-caught `TypeError` rather than widening the
+  tuple to `AttributeError` broadly. Added parametrized regression tests
+  (`[]`, `null`, a bare string, and a bare number) confirmed to fail against
+  the pre-fix script before the fix, and pass after. 1930 tests pass; 100%
+  coverage and 100% docstring coverage on `scripts/ci/`.
 - Fix 3 more Devin Review findings from a fourth review pass on PR #1452
   (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`,

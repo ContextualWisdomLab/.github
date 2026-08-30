@@ -798,6 +798,35 @@ def test_gateway_retry_loop_records_evidence_when_the_response_file_is_missing(
     }
 
 
+@pytest.mark.parametrize("wrong_shaped_body", ["[]", "null", '"just a string"', "42"])
+def test_gateway_retry_loop_records_evidence_for_a_valid_json_wrong_top_level_type(
+    tmp_path: Path, wrong_shaped_body: str
+) -> None:
+    """Regression for a follow-up Devin Review finding on the malformed-
+    gateway-reply fix: ``json.loads`` legally parses a top-level JSON array,
+    ``null``, a bare string, or a number -- not just an object -- and
+    ``response.get("choices")`` assumes a dict, raising ``AttributeError``
+    for any of these, which was NOT in the caught exception tuple. That
+    uncaught exception still failed the script closed overall (a non-zero
+    Python exit), but skipped writing evidence entirely -- the same
+    evidence-loss bug as the unparseable-JSON/missing-file cases, just for
+    a body that IS valid JSON with the wrong top-level shape. Must now
+    record the same bounded ``gateway_invalid_response`` classification.
+    """
+    result, report = _run_gateway_retry_loop(
+        tmp_path, max_attempts=1, plan=[f"200\n{wrong_shaped_body}"]
+    )
+
+    assert result.returncode == 1
+    assert "gateway preflight returned unusable chat content" in result.stderr
+    assert report["gateway"] == {
+        "endpoint": "chat/completions",
+        "status": "rejected",
+        "error_type": "gateway_invalid_response",
+        "attempts": 1,
+    }
+
+
 def test_reasoning_without_content_escalates_then_still_fails_closed_if_unresolved() -> None:
     """ADR-0005 round 5 (Devin Review): escalation must key off the vendored
     ``ModelClient._response_content``'s own "reasoning, no content" signature,
