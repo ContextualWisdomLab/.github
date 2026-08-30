@@ -1292,7 +1292,7 @@ conflicting** PRs address pieces of this:
   currently blocked by the sidecar-preflight outage above, so neither could
   be re-reviewed to a genuine pass yet regardless of which approach wins.
 
-## 2026-08-30 sidecar preflight `max_tokens`: explicit owner critique, ADR-0005
+## 2026-08-30 sidecar preflight `max_tokens`: explicit owner critique, ADR-0005 (revised after Devin Review)
 
 Direct owner feedback after #1436's `max_tokens` 16→4096 raise moved the sidecar's gateway preflight
 failure from "empty content" to "120s timeout, zero bytes": *"max_tokens 이걸 고정하는 게 말이 안
@@ -1301,28 +1301,40 @@ real ceiling differs too). Both are correct and evidenced, not just asserted: se
 [`docs/adr/0005-sidecar-preflight-token-budget.md`](adr/0005-sidecar-preflight-token-budget.md) for the
 full research trail, checked directly against `contextual-orchestrator` source rather than assumed.
 
-Summary of what that ADR found and decided:
+**Six Devin Review findings on the ADR's PR (#1449) were each verified and led to real revisions**, not
+dismissed — including two genuine design flaws in the original proposal: (1) the original draft would
+have reused a single fixed tiny `max_tokens` for every per-candidate probe, which is the same
+reasoning-budget-starvation bug class the whole investigation started from, just moved one layer down;
+(2) the original draft dropped the sidecar's separate end-to-end virtual-pool smoke request in favor of
+per-candidate checks alone, which cannot detect a bug in the virtual-pool dispatch layer itself — already
+documented live on PR #1433 (candidate-level preflight passed, the virtual-pool request still 502'd).
+Both are fixed in the current ADR text, along with a mischaracterization (the launcher's
+`_preflight_review_agents`/`_preflight_with_fallback` per-candidate probing already exists and is being
+fixed, not introduced), a conflation of context-window and max-output-tokens as one field (they are two
+distinct, separately-nullable quantities — verified directly against OpenRouter's live OpenAPI schema),
+missing external citations for provider-behavior claims (added, fetched live from OpenAI's and
+OpenRouter's own current docs), and untracked follow-ups (now real issues:
+`ContextualWisdomLab/contextual-orchestrator#926`, `#927`).
+
+Summary of the current ADR:
 
 - **No caller-facing lever separates a reasoning budget from a content budget on this gateway.**
   `ReasoningEffortProfile` is real but additive (still always sets `max_tokens`), opt-in server-side
-  only, and — critically — the public `/v1/chat/completions` / `/v1/responses` endpoints this preflight
-  and Strix both use treat a caller-supplied `reasoning_effort`/`reasoning` field as a **documented
-  no-op**, confirmed directly from `server.py`'s own docstrings.
-- **A better-shaped liveness mechanism already exists upstream** (`ModelClient.probe()` /
-  `provider_readiness_report()`, per-candidate, isolated-failure, exposed as
-  `GET /api/v1/provider_readiness/latest`), but it is gated at **`admin` scope** while the sidecar's
-  bearer token is `inference`-scoped — adopting it as-is would be a real privilege widening, not
-  recommended.
-- **No per-model `max_tokens`/context-window ceiling is captured anywhere today.** Confirmed by direct
-  read: neither `DiscoveredModel` (`model_discovery.py`) nor `ModelAgent` (`orchestrator.py`) carries
-  any such field, even though several already-queried provider list endpoints publish one. Real,
-  closeable gap; not same-day sidecar work.
-- **Decision**: stop tuning one global constant. Replace the sidecar's single-shot preflight with a
-  bounded per-candidate probe over the catalog it already builds, requiring only one of several
-  candidates to succeed (N-of-M), so no single `max_tokens` value has to be simultaneously right for
-  every model in a heterogeneous pool. Two upstream `contextual-orchestrator` asks (an
-  inference-scoped readiness probe; a real per-model token-ceiling field in discovery) are tracked as
-  follow-ups, not closed by this ADR.
+  only, and the public `/v1/chat/completions`/`/v1/responses` endpoints this preflight and Strix both
+  use treat a caller-supplied `reasoning_effort`/`reasoning` field as a **documented no-op**.
+- **Decision**: keep both existing preflight layers (per-candidate launcher probing; the shell script's
+  separate virtual-pool smoke request) — fix their shared flaw (a fixed `max_tokens` per attempt)
+  with a diagnostic, escalate-only-on-positive-evidence retry (only when a response is empty **and**
+  `finish_reason == "length"` — the provider-documented signature of "budget too small," not "down")
+  and short per-attempt timeouts, rather than picking a new fixed number. This ADR deliberately does
+  not commit to specific budget/timeout constants — those should come from real telemetry the
+  redesigned preflight itself will emit, not from inspection.
+- **Live, current evidence this is an active defect, not theoretical**: `noema-review` failed on the
+  ADR's own PR (#1449, job `99253418179`) with exactly this bug while the ADR was being written —
+  Layer 1 passed in 30s, Layer 2 then hung the full 120s with zero bytes back.
+- Two upstream `contextual-orchestrator` asks are now real tracked issues (`#926`: inference-scoped
+  readiness probe; `#927`: real per-model `max_output_tokens`/`context_window` discovery data,
+  correctly modeled as two separate fields), not just prose. Neither blocks the sidecar-side fix.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

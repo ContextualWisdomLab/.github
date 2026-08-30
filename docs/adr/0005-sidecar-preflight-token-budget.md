@@ -1,61 +1,79 @@
-# ADR-0005: Replace the sidecar's single-shot, fixed-`max_tokens` gateway preflight with per-candidate readiness
+# ADR-0005: Replace the sidecar's fixed-`max_tokens` gateway checks with diagnostic, tolerant readiness
 
 - Status: proposed
 - Date: 2026-08-30
 - Scope: `ContextualWisdomLab/.github` central review pipelines' vendored `contextual-orchestrator`
-  sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), and a small upstream request to
-  `ContextualWisdomLab/contextual-orchestrator`.
-- Decision: Stop trying to pick a single, universally-correct `max_tokens` value for the sidecar's
-  post-`healthz` gateway preflight. Replace the one hardcoded-budget completion request against the
-  virtual `orchestrator/free` pool with a bounded, per-candidate probe over the catalog the sidecar
-  already builds, using an **N-of-M "is at least one route usable" threshold** instead of a single
-  request that must succeed. Track upstream extension of `contextual-orchestrator`'s existing
-  `ModelClient.probe()` / `provider_readiness_report()` machinery with an inference-scoped variant, and
-  track a separate, real per-model `max_tokens` ceiling in model discovery, as two follow-ups this ADR
-  does not itself close.
-- Ownership: `.github` owns the sidecar script and this ADR; `ContextualWisdomLab/contextual-orchestrator`
-  owns the gateway internals cited as evidence and the two follow-up asks.
+  sidecar — `scripts/ci/contextual_orchestrator_review_launcher.py`'s existing
+  `_preflight_review_agents`/`_preflight_with_fallback`, and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s separate gateway smoke request — plus two
+  tracked upstream asks on `ContextualWisdomLab/contextual-orchestrator`.
+- Decision: Keep both existing preflight layers (per-candidate launcher probing, and the shell
+  script's separate end-to-end request to the virtual `orchestrator/free` model) — neither is being
+  introduced, both already exist and each catches a failure class the other cannot. Fix what is
+  actually wrong with each: replace their single fixed `max_tokens` value with a diagnostic,
+  short-timeout, escalate-only-on-positive-evidence probe, so no single number has to be
+  simultaneously right for every model in a heterogeneous pool, and a reasoning-heavy healthy
+  candidate is no longer misclassified as down. Track two upstream `contextual-orchestrator` asks
+  (`ContextualWisdomLab/contextual-orchestrator#926`, `#927`) as real, tracked, non-blocking follow-ups.
+- Ownership: `.github` owns the sidecar/launcher script and this ADR; `ContextualWisdomLab/contextual-orchestrator`
+  owns the gateway internals cited as evidence and the two follow-up issues.
 - Figma File ID: N/A (no customer UI).
 
 ## Context
 
-`scripts/ci/contextual_orchestrator_review_sidecar.sh`'s gateway preflight sends one
-`POST /v1/chat/completions` request against the virtual `orchestrator/free` model —
-`{"model":"orchestrator/free","messages":[...,"Reply with just 'OK'."],"max_tokens":<N>,...}` — and
-fails the whole sidecar (blocking `noema-review`/`opencode-review`/`strix` org-wide) unless that one
-request returns non-empty `choices[0].message.content` within a fixed `curl --max-time`.
+Central review (`noema-review`/`opencode-review`/`strix`) depends on two separate, already-existing
+liveness checks in the vendored sidecar, run in sequence — this ADR fixes both, it introduces neither:
 
-`N` has already been tuned twice in this investigation: 16 → 4096 (#1436), moving the failure from
-"empty content at 16 tokens" (the provider's response consumed the whole budget on internal reasoning
-before emitting visible content — see `ModelClient._response_content`'s own anticipated error message,
-quoted below) to "120s timeout with zero bytes at 4096 tokens" on a separate run. Direct owner feedback
-in response to that outcome, quoted verbatim because it is the reason this ADR exists:
+1. **Per-candidate launcher probing.** `scripts/ci/contextual_orchestrator_review_launcher.py`'s
+   `_preflight_review_agents()` (line 200) sends one bounded `POST` to `client.proxy_send_once` for
+   *each* candidate agent in the admitted catalog, with a fixed `max_tokens=REVIEW_MAX_OUTPUT_TOKENS`
+   (currently `4096`, line 38) and a fixed `temperature=REVIEW_TEMPERATURE`. It keeps every candidate
+   whose response has non-empty text (`_chat_response_has_text`, line 175 — checks only
+   `choices[0].message.content`, never inspects `finish_reason`) and raises `ReviewPreflightError`
+   only if **zero** candidates pass — i.e. it is already an N-of-M ("at least one must work") design,
+   not a single-candidate gate. `_preflight_with_fallback()` (line 274) wraps this with one fallback
+   catalog tier. This runs inside the Python process at server startup, before the sidecar can even
+   report healthy.
+2. **The shell script's own virtual-pool smoke request.** Once the server is up,
+   `contextual_orchestrator_review_sidecar.sh` separately sends one `POST /v1/chat/completions` with
+   `"model":"orchestrator/free"` (the *virtual* pool id, not a specific candidate) and its own fixed
+   `max_tokens` — this is the request `N` below refers to.
+
+`N` has already been tuned twice: 16 → 4096 (#1436), moving the failure from "empty content at 16
+tokens" (the provider's response consumed the whole budget on internal reasoning before emitting
+visible content — see `ModelClient._response_content`'s own anticipated error message, quoted below)
+to "120s timeout with zero bytes at 4096 tokens" on a separate run. Direct owner feedback in response
+to that outcome, quoted verbatim because it is the reason this ADR exists:
 
 > "max_tokens 이걸 고정하는 게 말이 안 되는데" — hardcoding this max_tokens doesn't make sense.
 > "모델마다 max_tokens 허용치가 다 다른데" — each model has a genuinely different max_tokens allowance.
 
 `orchestrator/free` is a heterogeneous pool (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`,
 `openrouter`, ... — see `contextual_orchestrator_review_policy.py`'s `PROVIDER_FAMILIES`), and which
-candidate a given preflight run draws varies (family-cap admission is deterministic but
-alphabetical-by-provider-then-model, and the catalog itself changes over time). A fixed `max_tokens`
-is wrong on two independent, evidenced axes for a pool like this:
+candidate a given preflight run draws varies. A fixed `max_tokens` is wrong on two independent,
+evidenced axes for a pool like this:
 
-1. **Reasoning-token overhead differs per model.** A model that spends internal reasoning tokens before
-   emitting visible content can exhaust a small budget with zero visible output, or (with a much larger
-   budget) legitimately take far longer to finish than a fast, non-reasoning model would for the same
-   budget — this is very likely what turned #1436's 4096-token raise into a 120-second timeout instead
-   of a fix (see the 2026-08-30 gap-baseline entry's "third, distinct failure mode").
-2. **The provider's own hard ceiling on `max_tokens`/`max_completion_tokens` differs per model.** Some
-   providers reject a request outright (400) if `max_tokens` exceeds what that specific model supports;
-   others support far more than a generic constant would ever request. A single number can therefore be
-   simultaneously too small for one model's reasoning overhead and too large for another model's real
-   ceiling — there is structurally no number that is not wrong for some member of the pool.
+1. **Reasoning-token overhead differs per model.** A model that spends internal reasoning tokens
+   before emitting visible content can exhaust a small budget with zero visible output. OpenAI's own
+   documentation of `finish_reason == "length"` describes exactly this: *"it's likely that max_tokens
+   is too small and model runs out of tokens before it manages to [complete]"*
+   ([OpenAI API guide](https://developers.openai.com/api/docs/guides/completions)). This is very
+   likely what turned #1436's 4096-token raise into a 120-second timeout instead of a fix — a large
+   budget lets a heavy-reasoning model legitimately run far longer than a fast, non-reasoning model
+   would for the same request (see the 2026-08-30 gap-baseline entry's "third, distinct failure mode").
+2. **The provider's own hard ceiling on completion tokens differs per model**, and is a genuinely
+   separate quantity from a model's context window (see Research §3 below). Some providers reject a
+   request outright if `max_tokens` exceeds what that specific model supports; others support far more
+   than a generic constant would ever request. A single number can therefore be simultaneously too
+   small for one model's reasoning overhead and too large for another model's real ceiling — there is
+   structurally no number that is not wrong for some member of the pool.
 
 The standing session principle governing this decision, also quoted verbatim: "어떠한 휴리스틱과 Rule
 of thumbs도 금지" — no heuristics or rules of thumb; a parameter needs actual justification from real
 data, not a constant that happens to work today.
 
-## Research: three questions, checked directly against `contextual-orchestrator` source
+## Research: three questions, checked directly against `contextual-orchestrator` source and, where the
+## claim is about external provider behavior, against the providers' own current documentation
 
 ### 1. Does the gateway expose a way to separate a reasoning budget from a content budget?
 
@@ -66,167 +84,212 @@ directly in `contextual_orchestrator/orchestrator.py` and `server.py`, not assum
   capability-gated mechanism (`ModelAgent.reasoning_effort_supported: bool | None`, fail-closed unless
   proven `True`), but it is **additive, not substitutive**: `apply_request_profile()` always sets
   `payload["max_tokens"] = validated.max_output_tokens` regardless of whether `reasoning_effort` is
-  also set. There is no "unbounded reasoning + bounded content" mode — `reasoning_effort` is a coarse
-  enum (`none`/`low`/`medium`/`high`) that tells a supporting provider how to spend *within* the
-  existing token budget, not a second, independently-sized budget.
+  also set. There is no "unbounded reasoning + bounded content" mode. This matches how OpenAI itself
+  documents the analogous parameter: `max_completion_tokens` is *"an upper bound for the number of
+  tokens that can be generated for a completion, **including** visible output tokens and reasoning
+  tokens"* (same OpenAI guide) — reasoning and visible content already share one budget upstream, by
+  design, not only in this gateway.
 - This mechanism is **opt-in at `TaskOrchestrator` construction**, not caller-controlled:
   `_role_effort_profile(role)` returns `None` unless the server was constructed with an explicit
-  `role_effort_catalog` (`orchestrator.py:5530-5534`). It is also only reachable from role-based
-  workflow steps; the sidecar's plain "Reply with just 'OK'" prompt against the virtual pool is not a
-  role-scoped workflow call.
-- Critically, the **public `/v1/chat/completions` endpoint the sidecar and Strix's client both call
-  does not thread a caller-supplied `reasoning_effort`/`reasoning` field into orchestration at all.**
-  `server.py`'s own docstrings say so directly: `_validate_chat_reasoning_effort` — "This gateway never
-  threads the knob into `ModelClient` on the orchestration path. Known levels are accepted as
+  `role_effort_catalog` (`orchestrator.py:5530-5534`).
+- The **public `/v1/chat/completions` endpoint the sidecar and Strix's client both call does not
+  thread a caller-supplied `reasoning_effort`/`reasoning` field into orchestration at all.**
+  `server.py`'s own docstrings say so directly: `_validate_chat_reasoning_effort` — "This gateway
+  never threads the knob into `ModelClient` on the orchestration path. Known levels are accepted as
   default-effort no-ops"; `_validate_responses_reasoning` (the `/v1/responses` equivalent) — "This
-  gateway proxies Responses but does not interpret or enforce reasoning controls." Both accept the
-  field syntactically (so SDK defaults do not 400) and then discard it. Switching the preflight from
-  `/v1/chat/completions` to `/v1/responses` would not gain anything here — the field is a documented
-  no-op on both surfaces.
+  gateway proxies Responses but does not interpret or enforce reasoning controls." Switching the
+  preflight to `/v1/responses` would not gain anything here — the field is a documented no-op on both.
 
 **Conclusion**: there is no lever, on any caller-facing surface this preflight (or Strix) can reach,
-that separates "let the model think as long as it needs" from "cap what it can emit." This is the
-honest "no" the coordinator's brief anticipated as a possible outcome.
+that separates "let the model think as long as it needs" from "cap what it can emit."
 
 ### 2. Is a real-generation preflight even the right liveness mechanism — is there a cheaper or more direct signal?
 
-**A better mechanism than the sidecar's hand-rolled curl probe already exists upstream, but it is not
-"free" and it is not currently reachable at the sidecar's privilege level.** Checked directly:
+**A better-shaped mechanism than a single fixed-budget request exists in two places — one already in
+this sidecar, one further upstream — but neither is a free non-generation signal.** Checked directly:
 
-- `ModelClient.probe(agent, timeout=...)` (`orchestrator.py:1483`) is a purpose-built liveness probe,
-  documented as exactly the right idea: *"`/health` and `/v1/models` only prove process/model-registry
-  liveness; this verifies the configured local model and deliberately exercises the chat path with one
-  output token. It never retries, so a stuck local queue cannot be multiplied by the readiness check."*
-  It isolates failures per agent (catches every exception, returns `status: "not_ready"` with a
-  `failure_code` rather than raising) and runs against every agent type, not only local providers — the
-  chat-probe payload construction is unconditional on `_is_local_provider_url`.
-- `TaskOrchestrator.provider_readiness_report(refresh=True)` (`orchestrator.py:3441`) calls `probe()`
-  across **every candidate agent in the pool**, isolating each candidate's outcome, and returns an
-  aggregate plus a per-agent `items[]` list with `status`/`failure_code`/`latency_ms`. This is
-  structurally exactly what the sidecar's single-shot "one candidate must work" curl probe is trying to
-  approximate externally — except done per-candidate, with real diagnostics, instead of betting the
-  whole preflight on whichever one candidate the pool router happens to draw. It is exposed as
-  `GET /api/v1/provider_readiness/latest?refresh=true` (`server.py:5711-5715`).
-- **This is not a free lunch, and the honest caveats matter as much as the discovery:**
-  - `probe()` itself still hardcodes `max_tokens: 1` (`orchestrator.py:1536`) — even more aggressive
-    than either value the sidecar has tried. It has the *same* reasoning-overhead vulnerability
-    described above, per candidate. The win is not that this number is right for every model; the win
-    is that the surface is already structured so one candidate's wrong-budget failure is an isolated,
-    attributable `not_ready` entry (`failure_code: "provider_empty_probe_response"`), not an opaque
-    all-or-nothing outage.
-  - **Verified directly, and this is the one real blocker to adopting it as-is**: `/api/v1/*` GET
-    routes, `provider_readiness/latest` included, are authorized at **`admin` scope**
-    (`server.py`'s `_admin_purpose()` / the `self._authorize("admin", ...)` call guarding the
-    `/api/v1/*` dispatch block), while `/v1/chat/completions` — what the sidecar's bearer token is
-    scoped for today — is authorized at the separate, narrower **`inference` scope**
-    (`self._authorize("inference")` on the chat/completions and `/v1/models` handlers). Provisioning
-    the CI review sidecar with an admin-scoped token just to call a readiness endpoint would be a real
-    privilege widening (full operator/admin surface, not merely "can it serve a chat completion") that
-    this ADR explicitly does **not** recommend.
+- **Already in this repo**: `_preflight_review_agents()` (described in Context above) already probes
+  every candidate individually and already tolerates any number of individual failures — it fails the
+  whole preflight only when literally none pass. What it lacks is not the *shape* (that already
+  exists) but a way to tell "this candidate is down" apart from "this candidate is healthy but its
+  first probe's budget was wrong for it" — seе Decision §1 below.
+- **Further upstream, admin-scoped**: `ModelClient.probe()` (`orchestrator.py:1483`) and
+  `TaskOrchestrator.provider_readiness_report()` (`orchestrator.py:3441`, exposed as
+  `GET /api/v1/provider_readiness/latest?refresh=true`, `server.py:5711-5715`) are the gateway's own,
+  more mature version of the same idea — per-candidate, isolated failure, real `failure_code`
+  diagnostics. **Verified directly, and this is a real blocker to adopting it as-is**: `/api/v1/*` GET
+  routes are authorized at **`admin` scope** (`server.py`'s `_admin_purpose()` /
+  `self._authorize("admin", ...)`), while `/v1/chat/completions` — what the sidecar's bearer token is
+  scoped for today — is authorized at the separate, narrower **`inference` scope**. Provisioning the
+  CI review sidecar with an admin-scoped token just to call a readiness endpoint would be a real
+  privilege widening this ADR does not recommend. Tracked as
+  `ContextualWisdomLab/contextual-orchestrator#926`.
+- **Neither eliminates real generation.** `probe()` itself still hardcodes `max_tokens: 1`
+  (`orchestrator.py:1536`) — even more aggressive than either value this sidecar has tried, and
+  vulnerable to the exact same reasoning-overhead misclassification described above. Adopting
+  `provider_readiness_report`'s *shape* without also fixing this calibration problem would just move
+  the bug, not fix it — which is Devin Review's finding on an earlier draft of this ADR (see Decision
+  §1 for the actual fix).
 
-**Conclusion**: the right-shaped mechanism exists upstream, but adopting it exactly as-is would trade a
-token-budget problem for a privilege-scope problem. The actionable move today is to replicate its
-*shape* (per-candidate, isolated-failure, N-of-M) inside the sidecar itself, over the catalog it
-already builds, using the same `inference`-scoped bearer token it already holds — see Decision below —
-and separately ask upstream for an `inference`-scoped narrow readiness probe so the sidecar can retire
-its own hand-rolled version later.
+**Conclusion**: reuse the shape that already exists in this sidecar (per-candidate, N-of-M-tolerant);
+fix its calibration (Decision §1); track the upstream, better-tested version as a non-blocking
+follow-up (`#926`) because it is currently out of reach at this token's privilege level.
 
 ### 3. If a numeric budget is still needed, can it be derived per-model from real discovered data?
 
-**Not today — confirmed as a genuine, currently-open gap, not assumed.** Checked both schemas directly:
+**Not today — confirmed as a genuine, currently-open gap.** Checked both schemas directly:
 
-- `contextual_orchestrator/model_discovery.py`'s `DiscoveredModel` dataclass carries `provider_name`,
-  `model_id`, `credential_name`, `chat_base_url`, `auth_scheme`, `capabilities`, `input_modalities`,
-  `output_modalities`, pricing (`prompt_price_per_1k`, `completion_price_per_1k`, `unit_prices`),
-  `is_free`, and ZDR/privacy flags. **No field for context window, max output tokens, or max
-  completion tokens exists anywhere in this dataclass** (a repo-wide grep for
-  `context_length|context_window|max_output_tokens|max_completion_tokens|"limit"` inside this file
-  returns nothing).
-- `contextual_orchestrator/orchestrator.py`'s `ModelAgent` dataclass (the routing-time representation)
-  likewise carries no such field — `reasoning_effort_supported` and `stream_usage_supported` are the
-  only capability flags it has.
-- This is real, closeable data loss: several of the providers this discovery pipeline already queries
-  (e.g. OpenRouter's `/api/v1/models` response, `models.dev`'s `api.json`) commonly publish a per-model
-  context-window / max-output-tokens field in the exact list responses `model_discovery.py` already
-  fetches and parses — it is being read and then dropped, not unavailable.
+- `contextual_orchestrator/model_discovery.py`'s `DiscoveredModel` dataclass and
+  `contextual_orchestrator/orchestrator.py`'s `ModelAgent` dataclass carry no field for a model's
+  output-token ceiling or context window — confirmed via full-dataclass read and grep.
+- This is real, closeable data loss, and it is **two distinct pieces of data, not one** — verified
+  directly against a live provider schema rather than assumed uniform. OpenRouter's current OpenAPI
+  spec (`https://openrouter.ai/openapi.yaml`) defines the `Model` object's `context_length` field
+  (required) as *"Maximum context length in tokens"*, and separately, `TopProviderInfo.max_completion_tokens`
+  (nullable — genuinely absent for some models) as *"Maximum completion tokens from the top provider.
+  Input and output tokens share the context window, so the effective maximum output for a request is
+  further limited by the context remaining after input tokens."* Only the second field can directly
+  clamp a `max_tokens` request parameter; the first constrains prompt+output together and is not a
+  substitute for it — conflating them would let a large-context, small-output model's window size
+  wrongly justify a `max_tokens` far beyond what that model can actually complete in.
 
 **Conclusion**: deriving a real per-model ceiling is the *correct* long-term answer to the owner's
-second axis, but it requires a schema extension to `DiscoveredModel`/`ModelAgent` plus per-provider
-field-mapping research (a Ponytail-gate task in its own right — provider list-response shapes need
-verifying individually, not assumed uniform) and a place in `ModelClient` to clamp a requested
-`max_tokens` to `min(requested, discovered_ceiling)`, fail-closed the same way
-`reasoning_effort_supported=None` already fails closed when support is unproven. This is real,
-substantial `contextual-orchestrator` work, not a same-day sidecar patch — tracked as a follow-up below,
-not undertaken in this ADR.
+second axis, but requires a schema extension distinguishing `max_output_tokens` from `context_window`
+as two separately-provenanced, independently-nullable fields, plus per-provider field-mapping research
+(schemas are not uniform across the five configured providers). Tracked as
+`ContextualWisdomLab/contextual-orchestrator#927`, not undertaken in this ADR.
 
 ## Decision
 
-1. **Replace the sidecar's single-shot preflight with a bounded per-candidate probe and an N-of-M
-   threshold**, over the same catalog the sidecar's launcher already builds (the same candidate list
-   `contextual_orchestrator_review_policy.py`'s family-cap selection admits). For each admitted
-   candidate (bounded by the existing `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`), send one bounded
-   `POST /v1/chat/completions` request pinned to that specific model id (not the virtual
-   `orchestrator/free` pool, so the sidecar controls exactly which candidate each probe exercises),
-   with a small, deliberately conservative `max_tokens` (matching upstream `probe()`'s own precedent —
-   this ADR does not invent a new number, it reuses the one the gateway's own author already chose for
-   the same purpose). Treat the preflight as passed once **any** candidate returns real content, not
-   only the first or only the one the pool router happens to draw. This does not require picking a
-   number that is right for every model — it requires tolerating that some candidates will fail their
-   probe for reasons unrelated to the gateway being down (token-budget mismatch among them), the same
-   way `provider_readiness_report`'s own aggregate already tolerates partial `not_ready` results.
-2. **File an upstream ask on `ContextualWisdomLab/contextual-orchestrator`** for an `inference`-scoped
-   variant of `provider_readiness_report`/`probe()` (or a scope widening of the existing endpoint that
-   the gateway's own security model is comfortable with) so the sidecar can eventually retire its
-   hand-rolled per-candidate loop in favor of the gateway's own, better-tested mechanism. Not blocking
-   for item 1.
-3. **File an upstream ask on `ContextualWisdomLab/contextual-orchestrator`** to extend
-   `DiscoveredModel`/`ModelAgent` with a real, provider-sourced max-output-tokens/context-window field,
-   fail-closed when a provider does not publish one, so `max_tokens` selection (here and everywhere
-   else in the codebase that currently uses a single constant) can eventually be derived from real
-   per-model data rather than any constant. Not blocking for item 1; this is the correct long-term
-   closure of the owner's second axis.
-4. **Explicitly reject** further tuning of one global `max_tokens` constant as a terminal fix. Every
-   value tried so far (16, 4096) has failed for a different, evidenced reason tied to pool
-   heterogeneity, confirming the owner's original objection rather than one bad guess needing one
-   better guess.
+1. **Fix both existing preflight layers' probe calibration with diagnostic, escalate-on-evidence
+   retries — do not introduce a new mechanism, and do not remove either existing layer.**
+   - **Layer 1 (`_preflight_review_agents`, per candidate)**: for each candidate, send a first bounded
+     probe at a modest token budget. If the response is empty/whitespace **and** its
+     `choices[0].finish_reason == "length"` — the exact, provider-documented signature of "the
+     budget was too small," not "the candidate is unreachable" — retry that *same* candidate once at
+     a materially larger budget before recording it as rejected. Every other failure class (timeout,
+     connection error, non-2xx status, or empty content with any other `finish_reason`) is **not**
+     retried — those are not budget problems, and retrying would not fix them. This directly answers
+     Devin Review's finding: a fixed tiny budget (whether `1`, matching upstream `probe()`'s own
+     precedent, or any other single constant) would still misclassify a healthy reasoning-heavy
+     candidate as down; escalating only on the specific evidence that the budget — not the candidate
+     — was the problem does not have this failure mode, because a genuinely-down candidate never
+     reaches the retry path.
+   - **Layer 2 (the shell script's virtual-pool smoke request)**: apply the same diagnostic escalation
+     to the real end-to-end `POST /v1/chat/completions` request against `"model":"orchestrator/free"`.
+     This layer is **kept, not replaced by Layer 1** — Layer 1's per-candidate checks call
+     `client.proxy_send_once` against explicit candidate agents directly and structurally cannot
+     detect a bug in the virtual-pool's own dispatch/selection code, which is a different code path.
+     This is not hypothetical: the 2026-08-30 gap-baseline entry for PR #1433 records exactly this
+     split failure live — the launcher's own per-candidate preflight passed and the server reported
+     healthy, while the shell script's separate virtual-pool request still came back `HTTP 502`. Any
+     redesign that dropped Layer 2 in favor of Layer 1 alone would silently reintroduce that exact,
+     already-documented gap. Bound Layer 2 to at most 2 total attempts (matching Layer 1's own retry
+     bound) so a genuinely broken virtual-pool layer still fails fast.
+   - **Keep each attempt's own wall-clock timeout short**, independent of the token-budget question.
+     A candidate or route that is simply slow or hung should fail *that attempt* quickly and be
+     recorded as not ready — tolerable under Layer 1's existing N-of-M design and Layer 2's bounded
+     retry — rather than the preflight trying to avoid ever hitting a timeout by picking a "safer"
+     token budget. This decouples the two previously-conflated failure modes (wrong budget vs. slow
+     response) that made #1436's single-number tuning symptom-chase between them.
+   - **This ADR deliberately does not fix specific numeric values** for the modest/escalated budgets
+     or the per-attempt timeout. Committing to new constants here would repeat the same mistake at one
+     remove — picking numbers by inspection rather than evidence. Both existing preflight layers
+     already emit a structured per-route report (`_preflight_review_agents`'s `routes[]`, and the
+     shell script's `preflight_report`/`gateway` JSON) — the follow-up implementation PR should add
+     `finish_reason` and attempt-count to that evidence and let the actual values be set from real
+     telemetry once deployed, not guessed in this document.
+2. **Track `ContextualWisdomLab/contextual-orchestrator#926`** (an `inference`-scoped variant of
+   `provider_readiness_report`/`probe()`) so the sidecar can eventually retire its hand-rolled Layer 1
+   loop in favor of the gateway's own, better-tested mechanism. Not blocking for item 1.
+3. **Track `ContextualWisdomLab/contextual-orchestrator#927`** (real, separately-provenanced
+   `max_output_tokens`/`context_window` fields in `DiscoveredModel`/`ModelAgent`, fail-closed when
+   unknown) so `max_tokens` selection can eventually be derived from real per-model data. Not blocking
+   for item 1; this is the correct long-term closure of the owner's second axis.
+4. **Explicitly reject** further tuning of one global `max_tokens` constant as a terminal fix for
+   either layer. Every value tried so far (16, 4096) has failed for a different, evidenced reason tied
+   to pool heterogeneity, confirming the owner's original objection rather than one bad guess needing
+   one better guess.
 
 ## Consequences
 
-- The preflight becomes structurally tolerant of individual candidates being wrong for a fixed token
-  budget, which is the actual shape of the problem — instead of continuing to search for a number that
-  fits every model in a heterogeneous pool, no single number is asked to.
-- The preflight's total worst-case latency grows with the number of candidates probed (bounded by the
-  existing `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES` / `REVIEW_PREFLIGHT_TIMEOUT_SECONDS` ceiling already
-  governing family-cap candidate counts) rather than being one fixed-cost request; this trades latency
-  for the isolation that made the family-cap fix's own tolerant-of-partial-failure design work.
-  Each candidate probe should stay short (small, conservative `max_tokens`, short per-candidate
-  timeout) precisely because it no longer needs to prove one specific candidate works — only that one
-  of several does.
-- Item 1 is implementable now, inside `.github`, without upstream changes. Items 2 and 3 are real
-  `contextual-orchestrator` feature work and are explicitly not closed by this ADR — they are the
-  more complete answers the coordinator's brief asked to be surfaced honestly rather than invented.
-- No production routing default changes; this is scoped to the sidecar's own liveness check.
+- Both preflight layers become structurally tolerant of an individual attempt being wrong for a fixed
+  token budget or briefly slow, which is the actual shape of the problem — instead of continuing to
+  search for a number that fits every model in a heterogeneous pool, no single number is asked to, and
+  a genuinely down candidate or route is still detected and reported, just no longer conflated with a
+  merely-miscalibrated one.
+- Total worst-case preflight latency grows modestly (up to one extra retry per candidate in Layer 1,
+  up to one extra retry in Layer 2), bounded by the existing `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES` /
+  `REVIEW_PREFLIGHT_TIMEOUT_SECONDS` ceiling and the new short per-attempt timeouts — this trades a
+  small amount of latency for the diagnostic precision that avoids the false-outage misclassification
+  Devin Review flagged.
+- Keeping Layer 2 (not just Layer 1) means the preflight still proves the actual consumer-facing
+  `orchestrator/free` route works, not only that individual candidates can respond in isolation —
+  closing the PR #1433 gap class rather than reopening it.
+- Items 2 and 3 are real `contextual-orchestrator` feature work, now tracked as real issues
+  (`#926`, `#927`), and are explicitly not closed by this ADR.
+- No production routing default changes; this is scoped to the sidecar's own liveness checks.
+- **This is currently active, not theoretical**: the live reproduction in the Evidence trail below is
+  from `noema-review` failing on this ADR's own PR while this ADR was being written, presently
+  blocking that required check org-wide on every repo that routes through this sidecar. The
+  implementation follow-up (a separate PR applying Decision §1) should be prioritized accordingly once
+  this ADR is settled, not treated as ordinary backlog.
 
 ## Evidence trail
 
-- `ModelClient._response_content` (`orchestrator.py:1648-1660`) — the exact "reasoning without content"
-  failure this whole investigation traces to, already anticipated in the codebase's own error message:
+- `scripts/ci/contextual_orchestrator_review_launcher.py`: `_preflight_review_agents` (L200-271),
+  `_preflight_with_fallback` (L274-291), `_chat_response_has_text` (L175-189),
+  `REVIEW_MAX_OUTPUT_TOKENS = 4096` (L38) — the existing Layer 1 mechanism this ADR fixes, not
+  introduces.
+- `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the existing Layer 2 virtual-pool smoke
+  request this ADR keeps.
+- 2026-08-30 gap-baseline entry (PR #1433 evidence): *"the shell script's separate, subsequent real
+  `/v1/chat/completions` gateway smoke request against the now-serving `orchestrator/free` virtual
+  model came back HTTP 502. This is a different code path than the launcher's own preflight
+  (`ModelClient.proxy_send_once` against explicit candidate agents)"* — the direct, already-documented
+  precedent for why Layer 2 cannot be dropped in favor of Layer 1 alone.
+- `ModelClient._response_content` (`orchestrator.py:1648-1660`) — the "reasoning without content"
+  failure this investigation traces to, already anticipated in the codebase's own error message:
   *"provider {agent.id} returned reasoning without content; for mlx-lm set
-  chat_template_args={"enable_thinking": false} or increase max_output_tokens"* — note even this
-  upstream guidance is "increase the budget," the same reactive strategy #1436 tried and this ADR
-  moves away from.
+  chat_template_args={"enable_thinking": false} or increase max_output_tokens."*
 - `ModelClient.apply_effort_profile` / `reasoning_effort_profile.apply_request_profile` — confirms
   `max_tokens` is always set regardless of `reasoning_effort`.
 - `server.py:3731-3758` (`_validate_chat_reasoning_effort`), `server.py:4775-4809`
-  (`_validate_responses_reasoning`) — confirms both `reasoning_effort` and `reasoning` are validated,
-  documented no-ops on the caller-facing surfaces this preflight and Strix use.
+  (`_validate_responses_reasoning`) — confirms both fields are validated, documented no-ops on the
+  caller-facing surfaces this preflight and Strix use.
 - `ModelClient.probe` (`orchestrator.py:1483-1561`), `TaskOrchestrator.provider_readiness_report`
-  (`orchestrator.py:3441-3486`), `server.py:5711-5715` (`GET /api/v1/provider_readiness/latest`) —
-  the existing per-candidate readiness mechanism, and its admin-scope gate
-  (`server.py`'s `_admin_purpose` / `_authorize("admin", ...)` vs. the `inference`-scoped
-  `/v1/chat/completions` and `/v1/models` handlers).
+  (`orchestrator.py:3441-3486`), `server.py:5711-5715` — the upstream mechanism, and its admin-scope
+  gate vs. the `inference`-scoped `/v1/chat/completions`/`/v1/models` handlers.
+- **External, directly-fetched citations** (not from memory — verified live against the providers'
+  own current documentation before citing, per this org's traceability convention):
+  - OpenAI, [*Completions API guide*](https://developers.openai.com/api/docs/guides/completions):
+    `finish_reason == "length"` — *"it's likely that max_tokens is too small and model runs out of
+    tokens before it manages to [complete]"*; `max_completion_tokens` — *"an upper bound for the
+    number of tokens that can be generated for a completion, including visible output tokens and
+    reasoning tokens."*
+  - OpenRouter, OpenAPI spec (`https://openrouter.ai/openapi.yaml`), `Model.context_length` —
+    *"Maximum context length in tokens"* (required); `TopProviderInfo.max_completion_tokens` —
+    *"Maximum completion tokens from the top provider. Input and output tokens share the context
+    window, so the effective maximum output for a request is further limited by the context
+    remaining after input tokens"* (nullable).
 - `contextual_orchestrator/model_discovery.py`'s `DiscoveredModel` dataclass and
   `contextual_orchestrator/orchestrator.py`'s `ModelAgent` dataclass — confirmed absence of any
   context-window/max-output-tokens field via direct grep and full-dataclass read.
+- `ContextualWisdomLab/contextual-orchestrator#926`, `#927` — the two tracked upstream follow-ups.
 - 2026-08-30 gap-baseline entries ("sidecar-preflight outage: family_cap/max_tokens fixes confirmed
   working end to end...") for the live #1436→120s-timeout evidence this ADR responds to.
+- **Live reproduction on this ADR's own PR**, verified directly against the job log rather than taken
+  on report: `noema-review` on `ContextualWisdomLab/.github#1449` (job `99253418179`,
+  `https://github.com/ContextualWisdomLab/.github/actions/runs/33310078256/job/99253418179`) —
+  ```
+  2026-08-30T11:58:29Z healthz and provider-route preflight confirmed after 30s (pid 3973)
+  2026-08-30T12:00:29Z curl: (28) Operation timed out after 120002 milliseconds with 0 bytes received
+  2026-08-30T12:00:29Z error: gateway preflight request could not reach the local sidecar
+  ```
+  Layer 1 (per-candidate) passed in 30s; Layer 2 (the virtual-pool smoke request) then hung for
+  exactly the full 120s timeout with **zero bytes received** — not a slow response, not an error
+  status, literally nothing back. This is a live, current instance of exactly the failure mode
+  Decision §1's "keep each attempt's own wall-clock timeout short" design targets: under this ADR's
+  design that hang would be capped at a short per-attempt timeout and recorded as one not-ready
+  result, not a 120-second block on the whole required check. Confirms this ADR is fixing an active,
+  currently-blocking defect, not a theoretical one.
