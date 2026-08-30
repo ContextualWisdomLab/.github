@@ -278,6 +278,88 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
+def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
+    """A genuinely oversized documentation PDF still cannot be verified by content.
+
+    GitHub's Contents API refuses to return content for a file over
+    MAX_FILE_BYTES at all, so this is the one case that still falls back to
+    the path+suffix convention -- the real research-paper-citation use case
+    this whole exemption exists for.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [
+                {"filename": "docs/papers/big-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/big-paper.pdf" in url
+        return {"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=11,
+        head_sha="c" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
+    """A patchless '.pdf' file that fetches as real content is still scanned.
+
+    Regression coverage for Devin Review's second finding: a missing diff
+    patch is not proof of binary content by itself (GitHub also omits one
+    for a textual diff over its own rendering limit, well under this
+    module's MAX_FILE_BYTES fetch ceiling), so a file this small must be
+    verified by its real magic bytes, not trusted on patch-absence alone.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/12/files" in url:
+            return [
+                {"filename": "docs/papers/not-really-a-pdf.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/not-really-a-pdf.pdf" in url
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=12,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> None:
+    """A genuine, fetchable PDF (verified by its magic bytes) is exempt too."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/13/files" in url:
+            return [
+                {"filename": "docs/papers/small-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/small-paper.pdf" in url
+        return encoded_file("%PDF-1.7\nupstream nginx { server 127.0.0.1:9; }\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=13,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
     """Closed-event cleanup remains a no-op for the required-workflow context."""
 
@@ -364,6 +446,7 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     [
         ([], "not an object"),
         ({"type": "symlink", "encoding": "base64", "size": 0, "content": ""}, "not a regular"),
+        ({"type": "file", "encoding": "base64", "size": -1, "content": ""}, "malformed size"),
         ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "size contract"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),

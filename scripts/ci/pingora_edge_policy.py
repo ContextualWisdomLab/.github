@@ -130,6 +130,19 @@ class PolicyError(RuntimeError):
     """Raised when policy evidence cannot be collected or validated safely."""
 
 
+class ContentSizeExceededError(PolicyError):
+    """Raised when a well-formed Contents API response exceeds MAX_FILE_BYTES.
+
+    Distinct from every other ``PolicyError`` cause (a malformed response, a
+    non-file/non-base64 entry, corrupt base64, a declared size that does not
+    match the decoded bytes) so a caller can choose to trust a narrow,
+    path-scoped convention -- a genuinely oversized documentation PDF, the
+    one case this module cannot verify by content at all -- instead of
+    failing the whole check closed. Every other content-evidence failure
+    still fails closed exactly as before.
+    """
+
+
 OpenJson = Callable[[str, str], object]
 
 
@@ -180,14 +193,16 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
 
 
 def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
-    """Return whether *changed* is a genuinely binary documentation PDF.
+    """Return whether *changed* is a plausibly binary documentation PDF.
 
-    GitHub's changed-files API never returns a diff ``patch`` for a true
-    binary file, so ``patch_available`` is the signal that distinguishes an
-    opaque PDF (cannot embed an interpretable, active Nginx runtime artifact)
-    from a textual file that merely has a ``.pdf`` suffix and *can* be
-    diffed -- and therefore could smuggle inspectable content the way any
-    other text file could. Only the former is exempt.
+    This is only the cheap, patch-presence pre-filter: GitHub's changed-files
+    API never returns a diff ``patch`` for a true binary file, so a missing
+    ``patch`` is *necessary* but not *sufficient* evidence -- GitHub also
+    omits one for a textual diff that merely exceeds its own rendering
+    limit. A caller with network access (``evaluate_pull_request``) must
+    still confirm this with ``_pdf_evidence_confirms_binary`` before
+    trusting it; a caller without one (this module's own unit tests calling
+    this function directly) is only checking the necessary condition.
     """
 
     if changed.patch_available:
@@ -316,8 +331,14 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
-    """Load one final head file as bounded UTF-8 text from the Contents API."""
+def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
+    """Load one final head file's raw decoded bytes from the Contents API.
+
+    Raises ``ContentSizeExceededError`` specifically when the declared size
+    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
+    caller may treat differently from every other, genuinely malformed
+    response shape, which always raises the base ``PolicyError`` instead.
+    """
 
     encoded_path = quote(path, safe="/")
     url = f"{api_url}/repos/{repository}/contents/{encoded_path}?ref={head_sha}"
@@ -328,22 +349,72 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
     encoded = payload.get("content")
     declared_size = payload.get("size")
-    if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0 or declared_size > MAX_FILE_BYTES:
-        raise PolicyError(f"GitHub content evidence for {path} exceeds or violates the size contract")
+    if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0:
+        raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
+    if declared_size > MAX_FILE_BYTES:
+        raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
         raise PolicyError(f"GitHub content evidence for {path} is invalid base64") from exc
     if len(raw) != declared_size:
         raise PolicyError(f"GitHub content evidence for {path} has a size mismatch")
+    return raw
+
+
+def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+    """Load one final head file as bounded UTF-8 text from the Contents API."""
+
+    raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
 
 
+_PDF_MAGIC_PREFIX = b"%PDF-"
+
+
+def _pdf_evidence_confirms_binary(
+    changed: ChangedFile,
+    *,
+    api_url: str,
+    repository: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+) -> bool:
+    """Return whether a claimed binary documentation PDF is genuinely binary.
+
+    A missing diff ``patch`` alone is not proof of binary content: GitHub
+    also omits a patch for a textual diff that exceeds its own rendering
+    limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
+    ceiling. Whenever the file's raw bytes can be fetched at all, this
+    verifies the real ``%PDF-`` magic prefix instead of trusting
+    patch-presence alone. Only a file whose content evidently exceeds the
+    Contents API's size ceiling -- the exact case ``_is_binary_documentation_pdf``
+    exists for, a cited, large research paper -- falls back to trusting the
+    path+suffix convention; every other content-evidence failure (a
+    malformed API response, corrupt base64, a declared size that does not
+    match the decoded bytes) propagates and fails the whole check closed,
+    same as for any other file that needs scanning.
+    """
+
+    try:
+        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
+    except ContentSizeExceededError:
+        return True
+    return raw.startswith(_PDF_MAGIC_PREFIX)
+
+
 def _needs_content_scan(changed: ChangedFile) -> bool:
-    """Return whether a changed final file can carry an active edge runtime."""
+    """Return whether a changed final file can carry an active edge runtime.
+
+    A claimed binary documentation PDF (``_is_binary_documentation_pdf``)
+    exempts here on the cheap, offline pre-filter alone; ``evaluate_pull_request``
+    never actually relies on that -- it runs ``_pdf_evidence_confirms_binary``
+    for that case before this function is even consulted.
+    """
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
@@ -386,7 +457,24 @@ def evaluate_pull_request(
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
-        if not _needs_content_scan(changed):
+        # A claimed binary documentation PDF gets its own network-verified
+        # check ahead of _needs_content_scan's patch-presence-only signal:
+        # a missing patch does not by itself prove binary content (GitHub
+        # also omits one for an oversized textual diff), so this confirms
+        # the real %PDF- magic prefix whenever the bytes can be fetched at
+        # all, falling back to the path+suffix convention only when the
+        # content genuinely exceeds the Contents API's size ceiling.
+        if _is_binary_documentation_pdf(changed):
+            if _pdf_evidence_confirms_binary(
+                changed,
+                api_url=api_url.rstrip("/"),
+                repository=repository,
+                head_sha=head_sha,
+                token=token,
+                opener=opener,
+            ):
+                continue
+        elif not _needs_content_scan(changed):
             continue
         content = _load_file_content(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
         violations.extend(scan_content(changed.path, content))
