@@ -16,10 +16,10 @@
 # pull_request workflows upload to refs/pull/N/merge, so no single ref ever holds
 # all tools. Bundling at the workflow/check level is ref-independent.
 #
-# NOTE on dependency-review: dependency graph can be unavailable on some repos.
-# Treat that as "not enforceable here" instead of making the required workflow
-# unsatisfiable; keep medium-or-higher dependency findings hard-failing where the
-# API is supported.
+# NOTE on dependency-review: unavailable evidence is not a clean result. Only
+# an exact base/head comparison returning HTTP 200 may reach the pinned hard
+# gate. Every other probe outcome fails closed without printing the response
+# body. See docs/doctoring/dependency-review-fail-closed.md.
 #
 # NOTE on trivy-fs: it scans the whole repo, so a pre-existing FIXABLE
 # MEDIUM/HIGH/CRITICAL finding blocks every PR in that repo until it is fixed.
@@ -75,6 +75,18 @@ jobs:
           path: source
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify OSV base checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::OSV base checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
@@ -114,6 +126,18 @@ jobs:
           path: source
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify OSV head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::OSV head checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
@@ -227,7 +251,7 @@ jobs:
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: results.sarif
           # results.sarif is produced after checkout of the pull request head.
@@ -259,10 +283,24 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Checkout
+      - name: Checkout exact dependency-review head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Dependency Review head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Dependency Review checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=dependency-review revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Check dependency review support
         id: dependency_review_support
         env:
@@ -270,40 +308,51 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
-          response_file="$(mktemp)"
+          set +e
           status="$(
-            curl -fsS -o "$response_file" -w '%{http_code}' \
+            curl -sS --connect-timeout 10 --max-time 30 \
+              -o /dev/null \
+              -w '%{http_code}' \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
-              || true
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}"
           )"
+          curl_status=$?
+          set -e
 
-          if [ "$status" = "200" ]; then
-            echo "supported=true" >>"$GITHUB_OUTPUT"
-            exit 0
+          case "$status" in
+            [0-9][0-9][0-9]) http_status="$status" ;;
+            "") http_status="unavailable" ;;
+            *) http_status="malformed" ;;
+          esac
+
+          case "${REPOSITORY_VISIBILITY:-}" in
+            public | private | internal) repository_visibility="$REPOSITORY_VISIBILITY" ;;
+            *) repository_visibility="unknown" ;;
+          esac
+
+          echo "DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} curl_exit=${curl_status}"
+
+          if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then
+            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
+            exit 1
           fi
 
-          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
-            echo "::warning::Dependency review is unavailable for ${REPOSITORY}; skipping dependency-review hard gate."
-            echo "supported=false" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "::error::Dependency review support check failed with HTTP ${status}."
-          cat "$response_file"
-          exit 1
+          echo "supported=true" >>"$GITHUB_OUTPUT"
       - name: Dependency review
         if: steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}
           fail-on-severity: moderate
-          comment-summary-in-pr: on-failure
+          comment-summary-in-pr: never
 
   trivy-fs:
     if: github.event.action != 'closed'
@@ -313,10 +362,24 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact Trivy head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Trivy head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Trivy checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=trivy-fs revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
@@ -385,10 +448,12 @@ jobs:
         if: always() && hashFiles('trivy-results.sarif') != ''
         # The parser above fails on every fixable Medium+ finding independently.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Trivy SARIF upload failure
         if: steps.upload_trivy_sarif.outcome == 'failure'
@@ -405,10 +470,24 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Checkout
+      - name: Checkout exact Scorecard head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Verify Scorecard head checkout
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Scorecard checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "SECURITY_CHECKOUT scanner=scorecard revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Run Scorecard
         uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
@@ -459,10 +538,12 @@ jobs:
         id: upload_scorecard_sarif
         # Scorecard is soft repository-posture evidence; upload quota is external.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: results.sarif
           category: scorecard
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report Scorecard SARIF upload failure
         if: steps.upload_scorecard_sarif.outcome == 'failure'
