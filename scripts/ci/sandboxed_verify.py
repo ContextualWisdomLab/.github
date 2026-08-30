@@ -185,11 +185,17 @@ def _validate_contained_symlink_cycle(candidate: Path, source_root: Path) -> Non
     chain that revisits a path it already followed -- without ever leaving
     ``source_root`` -- is treated as contained and returns normally. The hop
     count is bounded so a chain that (due to purely lexical, not real-path,
-    normalization) never repeats still fails closed instead of hanging.
+    normalization) never repeats still fails closed instead of hanging. The
+    walk allows one more iteration than the hop limit: each iteration checks
+    one position and then, if it is a symlink, advances to the next, so a
+    chain of exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks needs
+    a final iteration to confirm the landing position is not itself a
+    further symlink -- without it, such a chain would be rejected even
+    though the OS itself can resolve it.
     """
     visited: set[Path] = set()
     current = Path(os.path.normpath(candidate))
-    for _ in range(MAXIMUM_SYMLINK_HOPS):
+    for _ in range(MAXIMUM_SYMLINK_HOPS + 1):
         if current in visited:
             return
         visited.add(current)

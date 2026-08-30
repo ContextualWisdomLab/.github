@@ -162,6 +162,33 @@ def test_validate_contained_symlink_cycle_fails_closed_past_hop_limit(
             )
 
 
+def test_validate_contained_symlink_cycle_accepts_a_chain_of_exactly_the_hop_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chain of exactly MAXIMUM_SYMLINK_HOPS real symlinks is still accepted.
+
+    Each iteration checks one position and only advances past it if it is
+    itself a further symlink, so resolving a chain of N real symlinks needs
+    N+1 checks: one per hop, plus one to confirm the final landing position
+    is a real, non-symlink target. A chain of exactly the hop limit is
+    something the OS itself can resolve and must not be rejected.
+    """
+    monkeypatch.setattr(sandboxed_verify, "MAXIMUM_SYMLINK_HOPS", 3)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_root = Path(tmp_dir)
+        (source_root / "hop-0").symlink_to("hop-1")
+        (source_root / "hop-1").symlink_to("hop-2")
+        (source_root / "hop-2").symlink_to("real.txt")
+        (source_root / "real.txt").write_text("payload", encoding="utf-8")
+
+        assert (
+            sandboxed_verify._validate_contained_symlink_cycle(
+                source_root / "hop-0", source_root
+            )
+            is None
+        )
+
+
 def test_copy_workspace_does_not_validate_ignored_symlinks(tmp_path: Path) -> None:
     """A link excluded from the copy is outside the command's path boundary."""
     repo = tmp_path / "repo"
