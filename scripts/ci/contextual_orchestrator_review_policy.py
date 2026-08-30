@@ -203,7 +203,18 @@ def build_zdr_prioritized_catalog(
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, provider-family-diverse catalog."""
+    """Select a free-first, ZDR-aware, provider-family-diverse catalog.
+
+    The returned report's ``free_family_diversity`` counts the distinct
+    outage-domain families (see ``provider_family``) among *all* discovered
+    free routes, independent of ``pool`` or the per-family selection cap.
+    A caller deciding whether a CI consumer may run on a strict, fail-closed
+    ``orchestrator/free`` pool without an ``orchestrator/auto`` paid-route
+    safety net should require at least two independent families here — one
+    family alone (e.g. every free route sharing a single upstream provider,
+    as recorded for Strix in ADR-0003) means that provider's outage takes
+    the whole free catalog down with it.
+    """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
 
@@ -292,6 +303,10 @@ def build_zdr_prioritized_catalog(
             }
         )
 
+    free_family_diversity = len(
+        {provider_family(str(row["provider"])) for row in all_free_rows}
+    )
+
     selected_evidence = [_cost_evidence(row) for row in picked]
     return {
         "agents": catalog_rows,
@@ -301,6 +316,7 @@ def build_zdr_prioritized_catalog(
             "total_free_routes": len(all_free_rows),
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
+            "free_family_diversity": free_family_diversity,
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": selected_evidence.count(COST_FREE),

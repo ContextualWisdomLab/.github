@@ -142,3 +142,48 @@ all five, and auto-optimize routing by cost.
   set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
   every non-ZDR route and fails closed when no attested ZDR route exists in the
   selected workflow pool.
+
+## Addendum (2026-08-30): evidence-gated path toward `orchestrator/free` for Strix
+
+The 2026-08-30 owner directive (`docs/product-goal-directive.md` §8, and its
+same-date instance-specific instruction) asks that Noema, OpenCode, *and*
+Strix all route through `contextual-orchestrator`'s `orchestrator/free` pool.
+Noema and OpenCode already do. Strix does not, and this addendum does not flip
+that pin today — it explains why, and what would have to be true first.
+
+The 2026-08-29 finding recorded above (four discovered free routes all
+sharing the OpenRouter outage domain) is not a one-time anecdote: it is the
+general failure mode a strict, fail-closed `orchestrator/free` pool is exposed
+to whenever the *discovered* free catalog happens to concentrate on one
+upstream provider. `orchestrator/auto` tolerates that because it retains a
+price-attested fallback tier; a literal `orchestrator/free` pin for Strix
+would not, so a single provider's outage would take Strix's required security
+review dark for every PR until the free catalog recovers. That is a worse
+outcome for the product's security posture than the rare priced fallback
+call `orchestrator/auto` already prefers to avoid (it sorts free routes first
+and only reaches for priced routes when free selection is insufficient).
+
+Rather than leave this as a standing "no," `scripts/ci/contextual_orchestrator_review_policy.py`
+now reports `free_family_diversity`: the count of distinct outage-domain
+provider families (see `provider_family`) among *all* discovered free routes,
+independent of which pool is requested. This turns "is it safe to run Strix
+on a strict free pool today" from a static assumption into evidence recomputed
+on every discovery run, consistent with this ecosystem's "no heuristics
+without evidence" convention (`docs/product-goal-directive.md` §6).
+
+**Decision:** Strix stays pinned to `orchestrator/auto` in `strix.yml` until a
+follow-up change wires the workflow to read `free_family_diversity` from the
+sidecar's policy report and select `orchestrator/free` only when it is `>= 2`
+(i.e., the free catalog spans at least two independent outage domains and a
+single provider's outage cannot black out Strix review), falling back to
+`orchestrator/auto` otherwise. That wiring is tracked as a follow-up rather
+than landed in this addendum because `strix.yml` is a `pull_request_target`
+required workflow (see `docs/pr-review-and-merge-procedure.md`'s trust-boundary
+note) and changes to it need their own reviewed, same-head-checked PR rather
+than a same-PR bundling with the policy-evidence change.
+
+This addendum is the conflict-resolution artifact `docs/product-goal-directive.md`
+requires when the directive and an existing accepted decision disagree: it
+does not silently keep the old pin or silently adopt the new instruction, and
+`docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
+records the trail.
