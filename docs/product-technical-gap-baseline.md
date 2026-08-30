@@ -1133,20 +1133,33 @@ then a 502 on the actual gateway request).
   has not been extended to PR #1434 specifically, so this pass did not
   self-authorize one) or a `repository_dispatch` targeting a *different*
   repository that does not itself edit these trusted files.
-- **Secondary, separate finding on the same run**: the follow-up
-  `publish-manual-pr-evidence-status` job also failed —
+- **Secondary, separate finding on the same run — now fixed.** The
+  follow-up `publish-manual-pr-evidence-status` job also failed —
   `target-app-token` got `HTTP 403: Resource not accessible by integration`
   publishing the (correctly non-success, per the self-test failure above)
   Strix status back to `.github`'s own PR #1434. The publisher's own logic
   only tolerates a publish failure silently when `STRIX_RESULT=success`; a
-  non-success result that also cannot be published hard-fails by design, so
-  this is arguably correct fail-closed behavior surfacing a real,
-  previously-unobserved token-scoping gap, not a logic bug. Plausibly an
-  edge case specific to `.github` being the `target_repository` of its own
-  `repository_dispatch` Strix run (this central repo normally dispatches
-  Strix *to* sibling repos, not to itself) rather than a gap sibling repos
-  would hit; not investigated further or fixed this pass given it is
-  downstream of, and only surfaced by, the self-test failure above.
+  non-success result that also cannot be published hard-fails by design,
+  which is correct fail-closed behavior, not a logic bug — but the actual
+  token-scoping gap it surfaced was real: `target-app-token` (an OpenCode
+  app-token exchange) is scoped for *sibling* repositories, not for
+  `.github` as the target of its own `repository_dispatch` (this central
+  repo normally dispatches Strix *to* siblings, not to itself), so it can
+  never succeed for this specific self-referential case. The job's own
+  `permissions: statuses: write` block already grants `github.token`
+  exactly the scope this case needs, and the sibling status-publish block
+  earlier in the same file (the `strix` job's own inline publish step, ~40
+  lines above) already had a `github-token` fallback conditioned on
+  `target_repository == '' || target_repository == github.repository` —
+  this second, near-identical block had simply drifted without it. Fixed
+  by adding the same conditional `GITHUB_STATUS_TOKEN` env var and a
+  matching `post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"` call
+  to this job's fallback chain, mirroring the existing pattern exactly;
+  empty (never attempted) for a genuine cross-repo target, so no behavior
+  change for the normal sibling-repo case. Full local suite unaffected
+  (1882 passed, 100% interrogate); not verified on a live hosted run since
+  reproducing it requires a `repository_dispatch` Strix run targeting
+  `.github` itself, the same rare trigger path that surfaced the bug.
 
 ## 2026-08-30 ZDR/NIM-routing architecture review (owner-directed)
 

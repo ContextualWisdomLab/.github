@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `strix.yml`'s `publish-manual-pr-evidence-status` job failing to
+  publish a manual Strix status back to `.github` when it is the
+  `repository_dispatch` target of its own Strix run: `target-app-token` is
+  scoped for sibling repositories and always 403s for this self-referential
+  case, and the job was missing the `github.token` fallback (conditioned on
+  `target_repository == github.repository`, matching the job's own
+  already-declared `statuses: write` permission) that a near-identical
+  block elsewhere in the same file already had. No behavior change for
+  genuine cross-repo targets.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

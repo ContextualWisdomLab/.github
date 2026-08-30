@@ -1087,6 +1087,15 @@ jobs:
       - name: Publish same-head manual Strix status
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          # Same conditional as the strix job's own GITHUB_STATUS_TOKEN above:
+          # github.token only has statuses:write on THIS repository, so it is
+          # only worth offering as a publish credential when the dispatch
+          # target is this repository itself (the self-referential case
+          # target-app-token cannot cover -- the OpenCode app is scoped to
+          # sibling repos, not to ContextualWisdomLab/.github as its own
+          # target). Empty for a cross-repo target, matching post_strix_status's
+          # existing empty-token skip.
+          GITHUB_STATUS_TOKEN: ${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}
           GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
@@ -1196,6 +1205,9 @@ jobs:
           }
 
           if post_strix_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_strix_status "github-token" "$GITHUB_STATUS_TOKEN"; then
             exit 0
           fi
           if post_strix_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
