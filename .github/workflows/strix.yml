@@ -574,6 +574,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
+          CONTEXTUAL_ORCHESTRATOR_POOL: free
         run: |
           set -euo pipefail
           bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -739,7 +740,7 @@ jobs:
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
           STRIX_TARGET_PATH: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && '__PR_SCOPE__' || './' }}
           STRIX_SOURCE_DIRS: ". backend frontend"
-          # The gateway free pool is capability-diverse. Strix function tools
+          # The gateway auto pool is provider-diverse. Strix function tools
           # must not send a provider-specific reasoning setting to every route.
           STRIX_REASONING_EFFORT: none
           STRIX_LLM_MAX_RETRIES: 1

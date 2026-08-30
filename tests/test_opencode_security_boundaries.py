@@ -47,12 +47,14 @@ def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
     source = (
         "build failed for package requests==2.31.0\n"
+        "token expired at: 2026-01-01\n"
         "Authorization: Bearer abc.def.ghi\n"
         "SERVICE_TOKEN=opaque_service_value_123456789\n"
     )
     cleaned = redactor.redact_text(source)
 
     assert "build failed for package requests==2.31.0" in cleaned
+    assert "token expired at: 2026-01-01" in cleaned
     assert "abc.def.ghi" not in cleaned
     assert "opaque_service_value_123456789" not in cleaned
     assert cleaned.count(redactor.REDACTED) >= 2
@@ -77,6 +79,7 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
         "token=": "token=",
         "token=,": "token=,",
         "9safe=value": "9safe=value",
+        "9password=value": f"9password={redactor.REDACTED}",
         '"token: value': f'"token: {redactor.REDACTED}',
         "token:   ": "token:   ",
     }
@@ -84,9 +87,31 @@ def test_sensitive_log_redaction_assignment_parser_edges_remain_auditable() -> N
     for source, expected in cases.items():
         assert redactor.redact_text(source) == expected
 
+    assert redactor._consume_sensitive_assignment("=password=value", 0) is None
+    assert redactor._consume_sensitive_assignment("visible=value", 0) is None
     assert redactor.redact_text('token="safe\\"inside" trailing') == (
         f"token={redactor.REDACTED} trailing"
     )
+
+
+def test_sensitive_log_redaction_evaluates_each_invalid_key_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated sensitive substrings in one invalid key do not cause rescans."""
+    calls = 0
+    consume = redactor._consume_sensitive_assignment
+
+    def counted(text: str, start: int) -> tuple[str, int] | None:
+        """Count candidate parses while delegating to the real parser."""
+        nonlocal calls
+        calls += 1
+        return consume(text, start)
+
+    monkeypatch.setattr(redactor, "_consume_sensitive_assignment", counted)
+    source = "token" * 2_000 + " without an assignment"
+
+    assert redactor.redact_text(source) == source
+    assert calls == 1
 
 
 def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
@@ -207,6 +232,105 @@ def test_safe_pytest_executor_adds_src_layout_to_pythonpath(
     monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
     assert safe_pytest.execute_command(tmp_path, ["pytest", "tests"]) == 0
     assert observed["env"]["PYTHONPATH"] == os.pathsep.join(("src", "."))
+
+
+def test_safe_pytest_executor_adds_trusted_monorepo_package_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A service can import non-symlinked package sources from its repository."""
+    observed: dict[str, object] = {}
+    project_dir = tmp_path / "services" / "people-api"
+    (project_dir / "src").mkdir(parents=True)
+    (tmp_path / ".git").write_text("gitdir: fixture", encoding="utf-8")
+    package_root = tmp_path / "packages"
+    hris_source = package_root / "hris-kernel" / "src"
+    keyverse_source = package_root / "keyverse-adapter" / "src"
+    hris_source.mkdir(parents=True)
+    keyverse_source.mkdir(parents=True)
+    (package_root / "not-a-package").write_text("fixture", encoding="utf-8")
+    (package_root / "empty-package").mkdir()
+    (package_root / "linked-package").symlink_to(package_root / "hris-kernel")
+    (package_root / "linked-source").mkdir()
+    (package_root / "linked-source" / "src").symlink_to(hris_source)
+
+    def fake_run(argv, *, cwd, env, shell, check):
+        observed.update(env=env)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(safe_pytest.subprocess, "run", fake_run)
+    assert safe_pytest.execute_command(project_dir, ["pytest", "tests"]) == 0
+    assert observed["env"]["PYTHONPATH"] == os.pathsep.join(
+        ("src", ".", str(hris_source), str(keyverse_source))
+    )
+
+
+def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
+    tmp_path: Path,
+) -> None:
+    """Symlinked ``packages`` roots are ignored during monorepo discovery."""
+    project_dir = tmp_path / "linked-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    package_source = tmp_path / "real-packages" / "example" / "src"
+    package_source.mkdir(parents=True)
+    (tmp_path / "linked-repository" / "packages").symlink_to(tmp_path / "real-packages")
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
+def test_safe_pytest_package_source_discovery_stops_at_checkout_root(
+    tmp_path: Path,
+) -> None:
+    """An empty checkout package root cannot expose sources from its parent workspace."""
+    project_dir = tmp_path / "nested-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    (tmp_path / "nested-repository" / "packages").mkdir()
+    (tmp_path / "nested-repository" / ".git").mkdir()
+    outer_source = tmp_path / "packages" / "outside-checkout" / "src"
+    outer_source.mkdir(parents=True)
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
+def test_safe_pytest_package_source_discovery_handles_checkout_without_packages(
+    tmp_path: Path,
+) -> None:
+    """A checked-out repository without packages keeps the local path only."""
+    project_dir = tmp_path / "repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    (tmp_path / "repository" / ".git").mkdir()
+
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
+
+
+def test_safe_pytest_repository_root_rejects_symlinked_git_marker(tmp_path: Path) -> None:
+    """A symlinked checkout marker cannot redirect source discovery to another root."""
+    project_dir = tmp_path / "linked-repository" / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    external_git = tmp_path / "external-git"
+    external_git.mkdir()
+    (tmp_path / "linked-repository" / ".git").symlink_to(external_git, target_is_directory=True)
+
+    assert safe_pytest._repository_root(project_dir) is None
+
+
+def test_safe_pytest_package_source_discovery_rejects_resolved_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A resolved package source outside the package root is fail-closed."""
+    project_dir = tmp_path / "services" / "people-api"
+    project_dir.mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    package_source = tmp_path / "packages" / "shared-kernel" / "src"
+    package_source.mkdir(parents=True)
+    original_is_relative_to = Path.is_relative_to
+
+    def pretend_escape(path: Path, other: Path) -> bool:
+        if path == package_source:
+            return False
+        return original_is_relative_to(path, other)
+
+    monkeypatch.setattr(Path, "is_relative_to", pretend_escape)
+    assert safe_pytest._repository_package_python_paths(project_dir) == []
 
 
 def test_configured_pytest_discovery_drops_injected_workflow_command(tmp_path: Path) -> None:

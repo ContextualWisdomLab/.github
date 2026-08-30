@@ -131,6 +131,9 @@ GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
+    "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
+)
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
@@ -1277,6 +1280,21 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def can_retry_check_gated_opencode_review(pr: dict[str, Any]) -> bool:
+    """Return whether recovered checks justify replacing a gate-only request."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        body = str(review.get("body") or "")
+        return (
+            (review.get("state") or "").upper() == "CHANGES_REQUESTED"
+            and CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER in body
+            and "Failed checks:" in body
+            and not failed_status_checks(pr)
+        )
+    return False
+
+
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
     """Return dismissible automated change requests tied to previous heads."""
     review_ids: list[int] = []
@@ -2390,6 +2408,11 @@ def inspect_pr(
         # Merge automation stays default-branch-only; rulesets do not gate
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+        check_gated_retry = can_retry_check_gated_opencode_review(pr)
+        if check_gated_retry and pr.get("autoMergeRequest"):
+            opencode_state = "complete"
+        elif check_gated_retry and trigger_reviews and opencode_state != "running":
+            opencode_state = "absent"
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
             wait_reason = repository_dispatch_wait_reason(repo, workflow)
             if wait_reason:
@@ -2525,16 +2548,22 @@ def inspect_pr(
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
-        if pr.get("autoMergeRequest"):
-            return finish(
-                disable_auto_merge_decision(
-                    repo,
-                    pr,
-                    dry_run=dry_run,
-                    reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+        if not (
+            can_retry_check_gated_opencode_review(pr)
+            and trigger_reviews
+            and review_dispatch_allowed
+            and not pr.get("autoMergeRequest")
+        ):
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                    )
                 )
-            )
-        return decide("block", "current-head OpenCode review requested changes")
+            return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
     if current_head_approved:

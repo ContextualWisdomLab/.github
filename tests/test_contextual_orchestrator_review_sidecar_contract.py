@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "b21645116b352967e50fc497b87eb745b9cc8c61"
+ORCH_PIN_SHA = "30c6d71680e659f25a0a433d4726ad0d437f9757"
 
 
 def _read(path: Path) -> str:
@@ -259,7 +259,7 @@ def test_sidecar_masks_gateway_token_before_startup_can_emit_logs() -> None:
     mask_index = text.index(mask)
     for later_operation in (
         "git clone",
-        "python3 -m pip install",
+        '"$sidecar_python" -m pip install',
         '"$ORCHESTRATOR_WORK/launch_sidecar.py"',
         "healthz",
     ):
@@ -276,12 +276,14 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
     assert "get_credential(REVIEW_AUTH_CREDENTIAL_NAME)" in text
 
 
-def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
-    """Discovery, free filtering, and serving come from the vendored library."""
+def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
+    """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
-    assert "free_discovered_models(discovered)" in text
+    assert "routable_discovered = _routable_discovered_models(discovered)" in text
+    assert "free_discovered_models(routable_discovered)" in text
+    assert 'getattr(model, "evidence_only", False)' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
@@ -294,9 +296,29 @@ def test_launcher_uses_orchestrator_discovery_and_free_pool() -> None:
     assert has_text_output(SimpleNamespace(output_modalities=("text", "image")))
     assert not has_text_output(SimpleNamespace(output_modalities=("video",)))
     assert not has_text_output(SimpleNamespace())
+    report_rows = launcher["_report_rows"]
+    free = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="free/model",
+        agent_id="openrouter_free_model",
+        output_modalities=("text",),
+    )
+    priced = SimpleNamespace(
+        provider_name="openai",
+        model_id="priced-model",
+        agent_id="openai_priced_model",
+        output_modalities=("text",),
+        prompt_price_per_1k=0.002,
+        completion_price_per_1k=0.008,
+        currency_code="USD",
+    )
+    rows = report_rows([free, priced], frozenset({("openrouter", "free/model")}))
+    assert [row["is_free"] for row in rows] == [True, False]
+    assert rows[1]["prompt_price_per_1k"] == 0.002
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
-    assert "orchestrator/free would fail closed" in text
+    assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
+    assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text
 
@@ -326,6 +348,7 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
     """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -376,6 +399,75 @@ def test_sidecar_trap_keeps_the_gateway_alive_after_provisioning() -> None:
     assert "cleanup_sidecar_on_error" in text
     assert "trap cleanup_sidecar_on_error EXIT" in text
     assert 'trap \'log "stopping sidecar (pid $sidecar_pid)"; kill "$sidecar_pid"' not in text
+
+
+def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() -> None:
+    """A bare `2> >(sanitizer)` races the failure-path read and can hide the diagnostic; the drain must close that race."""
+    text = _read(SIDECAR)
+    assert "exec {orchestrator_stdout_fd}> >(" in text
+    assert "stdout_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stderr_fd}> >(" in text
+    assert "stderr_sanitizer_pid=$!" in text
+    assert "exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-" in text
+    assert "wait_for_sidecar_sanitizers" in text
+    # The old bare, unwaited process-substitution redirection must be gone.
+    assert '> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \\' not in text
+    assert '2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &' not in text
+    # The drain must happen strictly before the failure-path read, only in the
+    # branch where the sidecar has already exited (not the healthz-timeout
+    # branch, where it may still be running and draining would hang).
+    exited_branch = text.index("sidecar exited before healthz")
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < exited_branch
+
+
+def test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected() -> None:
+    """A total preflight rejection must print real route evidence, not just a generic message.
+
+    The launcher writes agent_id/provider/model/status/error_type/http_status
+    (schema-bounded, never raw provider content or secrets -- the same shape
+    Strix's own artifact already publishes) to ``--preflight-out`` before it
+    raises. Before this evidence line existed, every workflow except Strix's
+    separate artifact-upload step was blind to *why* every candidate route
+    was rejected -- the generic exception message never carries per-route
+    detail, only a fixed "no provider route passed..." string.
+    """
+    text = _read(SIDECAR)
+    assert 'if [ -s "$preflight_report" ]; then' in text
+    assert (
+        'log "sidecar preflight route evidence: $(sed -n \'1,80p\' "$preflight_report" | tr \'\\n\' \' \')"'
+        in text
+    )
+    # Must be printed before the fail() call in the same branch, using the
+    # already-drained (sanitizer-waited) state -- not a bare, possibly racy
+    # read of a still-draining stream.
+    exited_branch = text.index("sidecar exited before healthz")
+    evidence_line = text.rindex("sidecar preflight route evidence", 0, exited_branch)
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < evidence_line < exited_branch
+
+
+def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
+    """A partial provider failure must reach the visible log even when the sidecar still starts."""
+    text = _read(SIDECAR)
+    assert 'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"' in text
+    # Must wait for the launcher's own completion sentinel to pass through the
+    # async sanitizer -- a plain `[ -s "$sidecar_stderr" ]` check would race a
+    # slow sanitizer and silently show nothing even when warnings exist.
+    assert 'grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    assert 'grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    # `grep -v` exits 1 when every line was filtered out (the common, healthy
+    # case with zero warnings); under `set -o pipefail` that would abort the
+    # whole script unless explicitly tolerated.
+    assert "sed -n '1,20p' || true)\"" in text
+    assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
+    # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
+    # after a successful healthz, so its sanitizer never sees EOF and doing
+    # so would hang the workflow forever.
+    healthz_confirmed = text.index("healthz and provider-route preflight confirmed")
+    warnings_line = text.index("sidecar startup warnings (non-fatal)")
+    assert healthz_confirmed < warnings_line
+    assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
 
 
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
