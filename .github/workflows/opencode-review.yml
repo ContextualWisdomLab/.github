@@ -197,6 +197,7 @@ jobs:
           fi
 
       - name: Enforce Cloudflare Pingora edge policy
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}

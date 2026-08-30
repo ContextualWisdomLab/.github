@@ -5,26 +5,6 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Bump the vendored `contextual-orchestrator` review-sidecar pin from
-  `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
-  `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
-  Models.dev free-cost join beyond `opencode_zen` to `nvidia_nim`/
-  `nvidia_nim_sub`/`openai`, and fixes the actual root cause — `_fetch_json`
-  sent no `User-Agent`, so Cloudflare-fronted `models.dev` rejected every
-  discovery request with HTTP 403, silently breaking the Models.dev join for
-  every provider (including the pre-existing `opencode_zen` path). See the
-  2026-08-30 gap-baseline entry for the merge/bypass rationale.
-- Keep the required OpenCode bootstrap's Pingora policy step unconditional
-  within its pull-request-only workflow, so the static bootstrap contract does
-  not depend on event payload fields. (Ported from #1414, not yet merged, to
-  unblock this PR's own `exact-head-path-policy` check.)
-- Bump the vendored `contextual-orchestrator` review-sidecar pin from
-  `b2164511` (103 commits stale) to current `main` `5f2753a`, so the
-  gateway's model-discovery/ZDR/pool-selection fixes landed since the old pin
-  reach `opencode-review`/`noema-review`. The stale pin's discovery logic was
-  failing the sidecar's own preflight with a gateway 502 before any review
-  could post, which is why `opencode-review` and `noema-review` were failing
-  closed on most `contextual-orchestrator` PRs and several `.github` PRs.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the
   fail-closed wheel-only path when Python coverage is relevant.

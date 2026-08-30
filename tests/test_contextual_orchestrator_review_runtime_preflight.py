@@ -52,84 +52,6 @@ def _openai_text(content: str) -> dict[str, object]:
     return {"choices": [{"message": {"content": content}}]}
 
 
-def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
-    """Evidence-only rows (e.g. OpenRouter) must never enter live selection."""
-    namespace = _load_launcher()
-    routable = namespace.get("_routable_discovered_models")
-    assert callable(routable), "launcher must expose an evidence-only discovery filter"
-
-    evidence_only_model = SimpleNamespace(
-        id="openrouter_evidence_only",
-        provider_name="openrouter",
-        model_id="some/model",
-        evidence_only=True,
-    )
-    live_model = SimpleNamespace(
-        id="nvidia_ready",
-        provider_name="nvidia_nim",
-        model_id="ready/free",
-        evidence_only=False,
-    )
-    no_flag_model = SimpleNamespace(
-        id="bytez_untagged", provider_name="bytez", model_id="untagged/free"
-    )
-
-    assert routable([evidence_only_model, live_model, no_flag_model]) == [
-        live_model,
-        no_flag_model,
-    ]
-    assert routable(None) == []
-    assert routable([]) == []
-
-
-def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A discarded discovery error must become a visible, sanitizer-safe diagnostic."""
-    namespace = _load_launcher()
-    log_discovery_errors = namespace.get("_log_discovery_errors")
-    assert callable(log_discovery_errors), "launcher must expose a discovery-error logger"
-
-    errors = [
-        SimpleNamespace(provider_name="bytez", error_code="http_status_401"),
-        SimpleNamespace(provider_name="openai", error_code="timeout"),
-    ]
-
-    log_discovery_errors(errors)
-
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.splitlines() == [
-        "provider_discovery_failed provider=bytez code=http_status_401",
-        "provider_discovery_failed provider=openai code=timeout",
-        "discovery_diagnostics_complete",
-    ]
-
-
-def test_log_discovery_errors_emits_only_the_sentinel_on_a_clean_discovery(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """No providers failed -> just the completion sentinel, no warning lines."""
-    namespace = _load_launcher()
-    log_discovery_errors = namespace.get("_log_discovery_errors")
-    assert callable(log_discovery_errors)
-
-    log_discovery_errors([])
-
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "discovery_diagnostics_complete\n"
-
-
-def test_log_discovery_errors_sentinel_matches_the_sidecar_scripts_constant() -> None:
-    """The sidecar shell script's poll target must equal this exact literal."""
-    namespace = _load_launcher()
-    sentinel = namespace.get("_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL")
-    assert sentinel == "discovery_diagnostics_complete"
-    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
-    assert f'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="{sentinel}"' in sidecar_text
-
-
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
     """Reject provider errors/malformed replies before the sidecar becomes ready."""
     namespace = _load_launcher()
@@ -367,7 +289,6 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
         "request_failed status=500 code=internal_error upstream sk-secret"
     ) == "request_failed status=500 code=internal_error"
     assert sanitize_line("client_disconnected") == "client_disconnected"
-    assert sanitize_line("discovery_diagnostics_complete") == "discovery_diagnostics_complete"
     assert sanitize_line(
         "review sidecar preflight failed: upstream sk-secret"
     ) == "review sidecar preflight failed"
@@ -375,18 +296,8 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
         "review sidecar discovery failed: https://provider.invalid/?key=sk-secret"
     ) == "review sidecar discovery failed"
     assert sanitize_line(
-        "review sidecar discovered no eligible models; orchestrator/free would fail closed"
-    ) == "review sidecar discovered no eligible models"
-    assert sanitize_line(
-        "review sidecar requires an explicit --auth-token or the KV credential "
-        "'CONTEXTUAL_ORCHESTRATOR_TOKEN'"
-    ) == "review sidecar auth token unavailable"
-    assert sanitize_line(
-        "review sidecar requires at least one provider credential in the KV"
-    ) == "review sidecar requires at least one provider credential in the KV"
-    assert sanitize_line(
-        "provider_discovery_failed provider=bytez code=http_status_401"
-    ) == "provider_discovery_failed provider=bytez code=http_status_401"
+        "review sidecar discovered no zero-cost models; orchestrator/free would fail closed"
+    ) == "review sidecar discovered no zero-cost models"
     assert sanitize_line("provider response sk-secret") is None
 
 

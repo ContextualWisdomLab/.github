@@ -22,14 +22,8 @@ from agent_mention_router import (
 )
 from redact_sensitive_log import redact_text
 
-ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
-# The repository-name segment intentionally allows a leading dot (the org's
-# own central repository is literally named ".github") and interior/trailing
-# dots (e.g. "foo.bar"); those are not path-traversal-significant once they
-# are embedded in a longer segment. What must be rejected is a segment that
-# is *entirely* dots ("." or ".."), since those are the only values that
-# GitHub API/URL path resolution treats as traversal components.
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!\.+$)[A-Za-z0-9_.-]+$")
+ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
 # The sweep-organization-agent-mentions job has a 900s (15-minute) GitHub

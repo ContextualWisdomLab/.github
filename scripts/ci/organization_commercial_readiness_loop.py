@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 
 DEFAULT_ORGANIZATION = "ContextualWisdomLab"
-ORGANIZATION_RE = re.compile(r"^(?!.*(?:\.\.|\.$|^\.))[A-Za-z0-9_.-]+$")
+ORGANIZATION_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ENTRYPOINT_MARKER = "# cwl-org-commercial-entrypoint: v1"
 CENTRAL_REPOSITORY = f"{DEFAULT_ORGANIZATION}/.github"
 CENTRAL_REPAIR_EVENT = "pr-review-fix-scheduler"

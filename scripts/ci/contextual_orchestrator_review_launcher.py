@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -64,52 +63,6 @@ def _has_text_output(model: object) -> bool:
     if isinstance(modalities, str):
         modalities = (modalities,)
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
-
-
-_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL = "discovery_diagnostics_complete"
-
-
-def _log_discovery_errors(errors: list[object]) -> None:
-    """Print one bounded, secret-free diagnostic per provider discovery failure.
-
-    ``discover_all_models()`` isolates one provider's failure from the
-    others by design, but a caller that discards the returned errors cannot
-    tell "this provider has zero free models" from "this provider's
-    discovery silently failed" -- exactly the ambiguity that made a real
-    incident impossible to diagnose from CI logs alone. Each error's
-    ``error_code`` is a bounded classification (``http_status_NNN`` /
-    ``timeout`` / ``transport_error`` / ``invalid_response``) that never
-    carries raw provider response text, so this is safe to print to stderr.
-
-    Always emits a trailing sentinel line, even with zero errors: the sidecar
-    shell script's async stream sanitizer processes stderr lines strictly in
-    order, so once the sanitizer has passed the sentinel through, every
-    discovery-error line printed here is guaranteed to have already reached
-    the sanitized file too -- letting the shell script wait for a
-    deterministic marker instead of racing a fixed-size or fixed-timeout
-    guess at whether the sanitizer has caught up yet.
-    """
-    for error in errors:
-        print(
-            f"provider_discovery_failed provider={getattr(error, 'provider_name', 'unknown')} "
-            f"code={getattr(error, 'error_code', 'unknown')}",
-            file=sys.stderr,
-            flush=True,
-        )
-    print(_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL, file=sys.stderr, flush=True)
-
-
-def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
-    """Drop evidence-only discovery rows before any live-serving selection.
-
-    Evidence-only rows (e.g. the OpenRouter catalog) exist solely to supply
-    ZDR evidence for other providers' models; contextual_orchestrator's own
-    ``agent_from_discovered()`` refuses to turn one into a serving agent.
-    Filtering here keeps that same invariant in this sidecar's selection path,
-    which builds its catalog independently rather than calling
-    ``agent_from_discovered()`` directly.
-    """
-    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
 
 
 def _route_identity(model: object) -> tuple[str, str]:
@@ -429,15 +382,13 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("review sidecar requires at least one provider credential in the KV")
 
     try:
-        discovered, discovery_errors = discover_all_models()
+        discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    _log_discovery_errors(discovery_errors)
-    routable_discovered = _routable_discovered_models(discovered)
-    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
+    free_models = list(free_discovered_models(discovered)) if discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
-    for model in routable_discovered:
+    for model in discovered or []:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
             continue

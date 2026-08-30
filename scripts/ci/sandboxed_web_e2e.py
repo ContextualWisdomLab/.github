@@ -113,6 +113,7 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -198,6 +199,7 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        shell=False,
     )
 
 
