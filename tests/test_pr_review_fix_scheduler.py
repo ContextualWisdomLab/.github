@@ -770,7 +770,7 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
 
 def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, capsys):
     """The queue pre-filter fetches comments for approved conflicting PRs too."""
-    pr = _approved_dirty_pr()
+    pr = _approved_dirty_pr(baseRefName="feature-base")
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
     monkeypatch.setattr(
@@ -779,7 +779,7 @@ def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, caps
         lambda repo, pr, workflow, workflow_repository, dry_run, resolve_conflict=False: None,
     )
     monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
-    assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
+    assert fix.main(["--repo", "owner/repo", "--base-branch", "*", "--dry-run"]) == 0
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["autofix_dispatches"] == 1
 
@@ -789,6 +789,12 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
     assert fix.inspect_pr("owner/repo", make_pr(isDraft=True), args) == ("skip", ("draft PR",))
     assert fix.inspect_pr("owner/repo", make_pr(baseRefName="develop"), args)[1][0].startswith("base branch")
+    wildcard_args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "*"])
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))
+    assert fix.inspect_pr("owner/repo", make_pr(baseRefName="develop"), wildcard_args) == (
+        "skip",
+        ("no current-head autofixable review, failed-check RCA, or approved merge conflict",),
+    )
     assert fix.inspect_pr("owner/repo", make_pr(headRepository={"nameWithOwner": "fork/repo"}), args)[1] == (
         "external PR head is not writable by repository workflow credentials",
     )

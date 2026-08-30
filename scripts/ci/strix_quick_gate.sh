@@ -154,7 +154,7 @@ preserve_attempt_log() {
 sanitize_known_strix_report_warnings() {
 	local report_root
 	for report_root in "$@"; do
-		if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		if [ -z "$report_root" ] || { [ ! -d "$report_root" ] && [ ! -f "$report_root" ]; } || [ -L "$report_root" ]; then
 			continue
 		fi
 		python3 - "$report_root" <<'PY'
@@ -172,9 +172,16 @@ known_internal_warning = re.compile(
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
 )
+known_scanner_warning = re.compile(
+    r"^(?:│  MODEL QUALITY WARNING\s+│|"
+    r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
+)
 
 
 def iter_report_logs(root: Path):
+    if root.is_file() and root.suffix == ".log":
+        yield root
+        return
     for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current_root)
         dir_names[:] = [
@@ -194,7 +201,12 @@ for log_path in iter_report_logs(root):
         lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
         continue
-    filtered = [line for line in lines if not known_internal_warning.match(line)]
+    filtered = [
+        line
+        for line in lines
+        if not known_internal_warning.match(line)
+        and not known_scanner_warning.match(line)
+    ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
@@ -308,6 +320,31 @@ is_vertex_model() {
 	esac
 }
 
+is_contextual_orchestrator_model() {
+	case "$1" in
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_contextual_orchestrator_api_base() {
+	# The sidecar deliberately binds this fixed process-local origin; accepting
+	# an environment override here would make the gateway trust boundary ambiguous.
+	local contextual_orchestrator_loopback_origin="http://127.0.0.1:18080"
+	case "$1" in
+	"$contextual_orchestrator_loopback_origin" | "$contextual_orchestrator_loopback_origin"/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 is_gemini_model() {
 	case "$1" in
 	gemini/*)
@@ -379,6 +416,52 @@ if [ -n "$STRIX_GITHUB_MODELS_KEY_FILE" ]; then
 		exit 2
 	fi
 fi
+
+# Optional cross-provider fallback credentials for direct-OpenAI fallback
+# models (openai-direct/... or openai_direct/...). When the primary model runs
+# against NVIDIA NIM, OpenRouter, or GitHub Models, its LLM_API_KEY cannot
+# authenticate a direct-OpenAI fallback; this file carries the OpenAI key.
+# Optional: without it, explicit direct-OpenAI models keep using LLM_API_KEY,
+# which is correct whenever the primary already runs against direct OpenAI.
+STRIX_OPENAI_FALLBACK_KEY_FILE="${STRIX_OPENAI_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && { [ ! -f "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] || [ -L "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; }; then
+	echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must reference a regular file containing the API key." >&2
+	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY_FILE="${STRIX_OPENROUTER_FALLBACK_KEY_FILE:-}"
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ] && ! STRIX_OPENROUTER_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENROUTER_FALLBACK_KEY_FILE" "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENROUTER_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENROUTER_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENROUTER_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENROUTER_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENROUTER_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ] && ! STRIX_OPENAI_FALLBACK_KEY_FILE="$(resolve_trusted_input_file "STRIX_OPENAI_FALLBACK_KEY_FILE" "$STRIX_OPENAI_FALLBACK_KEY_FILE")"; then
+	exit 2
+fi
+STRIX_OPENAI_FALLBACK_KEY=""
+if [ -n "$STRIX_OPENAI_FALLBACK_KEY_FILE" ]; then
+	STRIX_OPENAI_FALLBACK_KEY="$(trim_whitespace "$(cat -- "$STRIX_OPENAI_FALLBACK_KEY_FILE")")"
+	if [ -z "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+		echo "ERROR: STRIX_OPENAI_FALLBACK_KEY_FILE must contain a non-empty API key." >&2
+		exit 2
+	fi
+fi
+
+is_explicit_openai_model() {
+	case "$1" in
+	openai_direct/* | openai-direct/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
 
 require_non_negative_integer() {
 	local value="$1"
@@ -773,6 +856,17 @@ is_github_models_api_base() {
 	local api_base="$1"
 	case "$api_base" in
 	https://models.github.ai | https://models.github.ai/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+is_known_foreign_provider_api_base() {
+	case "$1" in
+	https://models.github.ai/* | https://integrate.api.nvidia.com/* | https://openrouter.ai/*)
 		return 0
 		;;
 	*)
@@ -2380,10 +2474,23 @@ resolved_llm_api_base_for_model() {
 	if is_vertex_model "$model"; then
 		return 0
 	fi
-
-	local api_base_file="$LLM_API_BASE_FILE"
+	local api_base_file="${LLM_API_BASE_FILE:-}"
 	local api_base_file_name="LLM_API_BASE_FILE"
-	if is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
+	if [[ "$model" == openrouter/* ]] && [ -n "${STRIX_OPENROUTER_FALLBACK_API_BASE_FILE:-}" ]; then
+		api_base_file="$STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENROUTER_FALLBACK_API_BASE_FILE"
+	elif is_explicit_openai_model "$model" && [ -n "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ]; then
+		# Cross-provider fallback: openai-direct/* candidates must reach the
+		# direct OpenAI API even when the primary provider selected a
+		# different LLM_API_BASE_FILE endpoint (e.g. NVIDIA NIM). Without
+		# this the fallback hits the primary gateway and 404s.
+		api_base_file="$STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		api_base_file_name="STRIX_OPENAI_FALLBACK_API_BASE_FILE"
+		# The workflow always provisions this file for cross-provider fallbacks.
+		# In standalone runs, an explicitly supplied LLM_API_BASE_FILE remains
+		# a caller-owned custom OpenAI-compatible endpoint rather than being
+		# silently discarded.
+	elif is_github_models_model "$model" && [ -n "${STRIX_GITHUB_MODELS_API_BASE_FILE:-}" ]; then
 		# Cross-provider fallback: when the active primary provider uses a
 		# different API base (for example OpenRouter), github_models/* fallback
 		# attempts must still route through the GitHub Models inference endpoint.
@@ -2392,6 +2499,10 @@ resolved_llm_api_base_for_model() {
 	fi
 
 	if [ -z "$api_base_file" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require LLM_API_BASE_FILE to select the pinned loopback gateway." >&2
+			return 2
+		fi
 		if is_github_models_model "$model"; then
 			echo "ERROR: GitHub Models Strix scans require LLM_API_BASE_FILE to select the GitHub Models inference endpoint." >&2
 			return 2
@@ -2409,15 +2520,34 @@ resolved_llm_api_base_for_model() {
 	llm_api_base_value="${llm_api_base_value%%:generateContent*}"
 	llm_api_base_value="$(trim_whitespace "$llm_api_base_value")"
 	if [ -z "$llm_api_base_value" ]; then
+		if is_contextual_orchestrator_model "$model"; then
+			echo "ERROR: contextual-orchestrator Strix scans require a non-empty pinned loopback API base." >&2
+			return 2
+		fi
 		return 0
+	fi
+	if is_contextual_orchestrator_model "$model" &&
+		! is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		echo "ERROR: contextual-orchestrator Strix scans require the pinned loopback API base." >&2
+		return 2
 	fi
 	if [[ "$llm_api_base_value" =~ [[:space:][:cntrl:]] ]]; then
 		echo "ERROR: LLM_API_BASE must not contain whitespace or control characters." >&2
 		return 2
 	fi
-	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]]; then
+	if [[ ! "$llm_api_base_value" =~ ^https://[^[:space:]]+$ ]] &&
+		! { is_contextual_orchestrator_model "$model" && is_contextual_orchestrator_api_base "$llm_api_base_value"; }; then
 		echo "ERROR: LLM_API_BASE must be an https URL when configured." >&2
 		return 2
+	fi
+	# Never let a known provider-specific base leak into an explicit
+	# direct-OpenAI fallback when no separate OpenAI override was provisioned.
+	# Other caller-supplied OpenAI-compatible endpoints remain valid standalone
+	# configuration and are intentionally preserved.
+	if is_explicit_openai_model "$model" \
+		&& [ -z "${STRIX_OPENAI_FALLBACK_API_BASE_FILE:-}" ] \
+		&& is_known_foreign_provider_api_base "$llm_api_base_value"; then
+		return 0
 	fi
 	if is_github_models_api_base "$llm_api_base_value" && ! is_github_models_api_compatible_model "$model"; then
 		echo "ERROR: LLM_API_BASE may route through GitHub Models only when STRIX_LLM uses a GitHub Models-compatible model." >&2
@@ -2429,6 +2559,18 @@ resolved_llm_api_base_for_model() {
 child_model_for_api_base() {
 	local model="$1"
 	local llm_api_base_value="$2"
+
+	# LiteLLM requires an explicit provider prefix even when the gateway is an
+	# OpenAI-compatible local endpoint. Strip only the connector-facing alias so
+	# the selected orchestrator/free virtual pool reaches contextual-orchestrator
+	# unchanged.
+	if is_contextual_orchestrator_model "$model" &&
+		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		local contextual_orchestrator_model
+		contextual_orchestrator_model="${model#contextual-orchestrator/}"
+		printf 'openai/%s\n' "$contextual_orchestrator_model"
+		return 0
+	fi
 
 	if [ -n "$llm_api_base_value" ] && is_github_models_api_base "$llm_api_base_value"; then
 		case "$model" in
@@ -2452,6 +2594,13 @@ child_model_for_api_base() {
 		printf 'openai/%s\n' "${model#openai_direct/}"
 		return 0
 		;;
+	# The workflow contract spells the direct-OpenAI fallback with a hyphen
+	# (openai-direct/...). litellm cannot infer a provider from that prefix,
+	# so both spellings must resolve to the litellm openai/<model> form.
+	openai-direct/*)
+		printf 'openai/%s\n' "${model#openai-direct/}"
+		return 0
+		;;
 	esac
 
 	printf '%s\n' "$model"
@@ -2468,6 +2617,7 @@ run_strix_once() {
 	local rc
 	local llm_api_base_value
 	local child_model
+	local child_reasoning_effort="${STRIX_REASONING_EFFORT:-}"
 	local resolved_target_path
 	local timeout_seconds="$STRIX_PROCESS_TIMEOUT_SECONDS"
 	local total_budget_limited_timeout=0
@@ -2491,6 +2641,13 @@ run_strix_once() {
 		return 2
 	fi
 	child_model="$(child_model_for_api_base "$model" "$llm_api_base_value")"
+	# Strix uses function tools. Direct OpenAI chat-completions rejects those
+	# tools when reasoning_effort is non-none, so scope the supported value to
+	# this provider attempt without weakening reasoning on other providers.
+	if is_explicit_openai_model "$model" &&
+		{ [ -z "$llm_api_base_value" ] || [ "${llm_api_base_value%/}" = "https://api.openai.com/v1" ]; }; then
+		child_reasoning_effort="none"
+	fi
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
@@ -2504,10 +2661,20 @@ run_strix_once() {
 			# with the GitHub Models token, not the direct-OpenAI key.
 			child_llm_api_key="$STRIX_GITHUB_MODELS_KEY"
 		fi
+		if is_explicit_openai_model "$model" && [ -n "$STRIX_OPENAI_FALLBACK_KEY" ]; then
+			# Cross-provider fallback: explicit direct-OpenAI models
+			# authenticate with the OpenAI key, not the primary provider's
+			# key (NVIDIA NIM, OpenRouter, or GitHub Models).
+			child_llm_api_key="$STRIX_OPENAI_FALLBACK_KEY"
+		fi
+		if [[ "$model" == openrouter/* ]] && [ -n "$STRIX_OPENROUTER_FALLBACK_KEY" ]; then
+			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
+		fi
 	fi
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
+	STRIX_CHILD_REASONING_EFFORT="$child_reasoning_effort" \
 	STRIX_CHILD_LLM_API_KEY="$child_llm_api_key" \
 	STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 	STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
@@ -2593,6 +2760,8 @@ for key in (
     value = os.environ.get(key)
     if value:
         child_env[key] = value
+if os.environ.get("STRIX_CHILD_REASONING_EFFORT"):
+    child_env["STRIX_REASONING_EFFORT"] = os.environ["STRIX_CHILD_REASONING_EFFORT"]
 llm_api_base = os.environ.get("STRIX_CHILD_LLM_API_BASE", "")
 if llm_api_base:
     child_env["LLM_API_BASE"] = llm_api_base
@@ -2744,7 +2913,7 @@ PY
 	fi
 	preserve_attempt_log "$model" "$rc"
 
-	sanitize_known_strix_report_warnings "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
@@ -2799,8 +2968,20 @@ is_llm_api_connection_error() {
 
 is_llm_service_unavailable_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.ServiceUnavailableError' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
-		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|Service Unavailable)' "$STRIX_LOG"; then
+		grep -Eiq '(GeminiException|Nvidia_nimException|nvidia[_ -]?nim|VertexAI|Vertex_ai|vertex\.ai|openai|anthropic|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG" &&
+		grep -Eiq '("status"[[:space:]]*:[[:space:]]*"UNAVAILABLE"|(^|[^0-9])503([^0-9]|$)|high demand|temporarily overloaded|Service Unavailable)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	# OpenRouter's dynamic free route can wrap one upstream 502 over several
+	# terminal lines. Join only the bounded LiteLLM error block so unrelated
+	# target-app output elsewhere in the log cannot assemble a retry signature.
+	if awk '
+		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
+		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG" |
+		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
 		return 0
 	fi
 
@@ -4123,7 +4304,10 @@ run_current_target_scan() {
 
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
+		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
+			return 1
+		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
 			strict_primary_provider_fallback=1
 		else
 			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
@@ -4160,6 +4344,10 @@ run_current_target_scan() {
 
 	if ! is_model_retryable_error "$PRIMARY_MODEL"; then
 		echo "Strix quick scan failed with a non-recoverable error." >&2
+		return 1
+	fi
+	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
 		return 1
 	fi
 
