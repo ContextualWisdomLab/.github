@@ -342,6 +342,17 @@ if [ ! -s "$preflight_report" ]; then
 fi
 publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+if [ -s "$sidecar_stderr" ]; then
+  # A successful startup never re-reads $sidecar_stderr otherwise: only the
+  # failure branches above embed it in their ::error:: message. A partial,
+  # non-fatal provider discovery failure (e.g. one bad credential) would
+  # otherwise be silently invisible to every workflow except Strix's
+  # artifact upload -- print it into the always-visible job log too. The
+  # sidecar keeps serving after this point, so its sanitizer subprocess is
+  # still draining; this is a best-effort snapshot of whatever it has
+  # flushed so far, not a guaranteed-complete read.
+  log "sidecar startup warnings (non-fatal): $(sed -n '1,20p' "$sidecar_stderr")"
+fi
 
 # Exercise the exact OpenAI-compatible endpoint and model name Strix uses. A
 # process can be healthy while the coordinator/model-group path still raises an

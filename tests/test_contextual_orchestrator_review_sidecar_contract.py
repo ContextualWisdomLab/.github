@@ -421,6 +421,19 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     assert drain_call < exited_branch
 
 
+def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
+    """A partial provider failure must reach the visible log even when the sidecar still starts."""
+    text = _read(SIDECAR)
+    assert 'log "sidecar startup warnings (non-fatal): $(sed -n' in text
+    # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
+    # after a successful healthz, so its sanitizer never sees EOF and doing
+    # so would hang the workflow forever.
+    healthz_confirmed = text.index("healthz and provider-route preflight confirmed")
+    warnings_line = text.index("sidecar startup warnings (non-fatal)")
+    assert healthz_confirmed < warnings_line
+    assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
+
+
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     """Required Noema review uses the gateway; the public NIM hardcode is gone."""
     workflow = _read(NOEMA_WORKFLOW)
