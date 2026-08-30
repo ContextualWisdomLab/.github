@@ -220,10 +220,11 @@ def test_copy_workspace_rejects_escape_via_intermediate_directory_alias(tmp_path
 def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
     """A symlink cycle that never terminates fails closed instead of hanging.
 
-    The chain walk tracks every path it has already followed; revisiting one
-    without ever leaving the sandbox root means the chain cannot be resolved
-    to a real, bounded target, so it becomes the same ``ValueError`` every
-    other unresolvable case in this function raises.
+    The walk tracks every symlink it is currently in the middle of
+    following; revisiting one of those without ever leaving the sandbox root
+    means the chain cannot be resolved to a real, bounded target, so it
+    becomes the same ``ValueError`` every other unresolvable case in this
+    function raises.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -232,6 +233,30 @@ def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
 
     with pytest.raises(ValueError, match="workspace symlink could not be resolved"):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(tmp_path):
+    """A symlink resolved twice in one chain, not as part of a loop, is accepted.
+
+    ``link -> shared/../shared/file.txt`` references ``shared`` twice, but
+    the first reference is fully resolved (and its bookkeeping cleared)
+    before the second one is ever reached -- this is not a cycle, just an
+    ordinary path that happens to name the same symlink in two places, and
+    the OS itself resolves it without issue. A cycle check that treats
+    "already resolved once, earlier" the same as "currently being resolved"
+    would reject this valid path.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real_dir").mkdir()
+    (repo / "real_dir" / "file.txt").write_text("payload", encoding="utf-8")
+    (repo / "shared").symlink_to("real_dir", target_is_directory=True)
+    (repo / "link").symlink_to("shared/../shared/file.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "link").is_symlink()
+    assert (copied / "link").read_text(encoding="utf-8") == "payload"
 
 
 def test_copy_workspace_keeps_internal_symlinks_intact(tmp_path):

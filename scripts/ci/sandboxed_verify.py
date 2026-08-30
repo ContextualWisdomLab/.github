@@ -191,48 +191,56 @@ def _reject_escaping_symlinks(destination: Path) -> None:
     root = destination.resolve(strict=True)
     for path in destination.rglob("*"):
         if path.is_symlink():
-            _reject_escaping_symlink_chain(path, root)
+            _resolve_symlink_components(
+                path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path
+            )
 
 
-def _reject_escaping_symlink_chain(candidate: Path, root: Path) -> None:
-    """Walk one symlink's target chain lexically, raising on escape or cycle.
+def _resolve_symlink_components(
+    parts: Sequence[str],
+    resolved: Path,
+    root: Path,
+    active: set[Path],
+    hops_remaining: list[int],
+    candidate: Path,
+) -> Path:
+    """Resolve ``parts`` one component at a time, raising on escape or cycle.
 
-    Uses ``os.readlink`` plus ``os.path.normpath`` at every hop instead of
-    ``Path.resolve()``, which requires the fully-resolved path to exist
-    (``strict=True``) or is unreliable for detecting a cycle across Python
-    versions (``strict=False``, the default) -- either way conflating a
-    symlink escape with a symlink that merely points at a target this
-    function never had to check for existence. A dangling target -- for
-    example one whose file was excluded from the copy by ``DEFAULT_IGNORE``
-    -- is therefore accepted as long as it still lexically resolves inside
-    ``root``: verification must still run despite the broken link. Only an
-    absolute target, a target segment that normalizes outside ``root``, or a
-    chain that revisits a symlink it has already followed (an unresolvable
-    cycle) raises. The walk processes the candidate's path one component at a
-    time rather than resolving each symlink's whole target in a single
-    ``os.path.normpath`` call, because a target can itself contain an
-    intermediate component that is a symlink -- for example
+    Uses ``os.readlink`` at every hop instead of ``Path.resolve()``, which
+    requires the fully-resolved path to exist (``strict=True``) or is
+    unreliable for detecting a cycle across Python versions (``strict=False``,
+    the default) -- either way conflating a symlink escape with a symlink
+    that merely points at a target this function never had to check for
+    existence. A dangling target -- for example one whose file was excluded
+    from the copy by ``DEFAULT_IGNORE`` -- is therefore accepted as long as
+    it still resolves inside ``root``: verification must still run despite
+    the broken link. Only an absolute target, a component that steps outside
+    ``root``, or a chain that revisits a symlink it is *currently in the
+    middle of following* (an unresolvable cycle) raises.
+
+    Each path component is checked individually, and a component found to be
+    a symlink is resolved via a recursive call, rather than resolving a whole
+    target string in one ``os.path.normpath`` call -- a target can itself
+    contain an intermediate component that is a symlink, for example
     ``some-alias/../secret`` where ``some-alias`` is itself a relative,
     entirely-legitimate-looking internal symlink. Collapsing that whole
     string lexically in one step would cancel ``some-alias`` against the
     following ``..`` textually, silently ignoring that following
     ``some-alias`` for real can land somewhere shallower or deeper than one
-    directory level -- exactly the gap a real ``os.path.normpath`` call
-    cannot see, since it never re-examines whether an intermediate segment is
-    itself a symlink needing its own resolution first. Processing one
-    component at a time and re-checking ``is_symlink()`` after every step
-    closes that gap without ever calling ``Path.resolve()``. A hop budget
-    bounds the total number of symlinks followed so a chain that never
-    repeats still fails closed instead of walking forever; only actually
-    dereferencing a symlink spends one unit of that budget, so a chain of
-    exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
+    directory level. Recursion is what makes the cycle check precise: a
+    symlink is added to ``active`` only while its own target is being
+    resolved and removed again as soon as that resolution returns
+    successfully, so the *same* symlink referenced twice in one chain --
+    once fully resolved before the second reference is ever reached, not a
+    real loop -- is accepted, while a symlink that (directly or through
+    others) points back to itself while still being resolved is rejected. A
+    hop budget, shared across the whole recursive walk, bounds the total
+    number of symlinks followed so a chain that never repeats still fails
+    closed instead of walking forever; only actually dereferencing a symlink
+    spends one unit of that budget, so a chain of exactly
+    ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
     """
-    seen: set[Path] = set()
-    resolved = root
-    stack = list(candidate.relative_to(root).parts)
-    hops_remaining = MAXIMUM_SYMLINK_HOPS
-    while stack:
-        component = stack.pop(0)
+    for component in parts:
         if component == "..":
             if resolved == root:
                 raise ValueError(f"workspace symlink escapes the sandbox root: {candidate}")
@@ -242,18 +250,22 @@ def _reject_escaping_symlink_chain(candidate: Path, root: Path) -> None:
         if not step.is_symlink():
             resolved = step
             continue
-        if step in seen:
+        if step in active:
             raise ValueError(f"workspace symlink could not be resolved: {candidate}")
-        if hops_remaining <= 0:
+        if hops_remaining[0] <= 0:
             raise ValueError(f"workspace symlink could not be resolved: {candidate}")
-        seen.add(step)
-        hops_remaining -= 1
+        active.add(step)
+        hops_remaining[0] -= 1
         target = Path(os.readlink(step))
         if target.is_absolute():
             raise ValueError(
                 f"workspace symlink escapes the sandbox root: {step} -> {target}"
             )
-        stack = list(target.parts) + stack
+        resolved = _resolve_symlink_components(
+            target.parts, resolved, root, active, hops_remaining, candidate
+        )
+        active.discard(step)
+    return resolved
 
 
 def _ignore_with_env_template_allowlist(patterns: Sequence[str]) -> Callable[[str, list[str]], set[str]]:
