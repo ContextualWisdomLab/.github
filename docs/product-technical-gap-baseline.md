@@ -1380,16 +1380,94 @@ Summary of the current ADR:
 - Two upstream `contextual-orchestrator` asks are now real tracked issues (`#926`: inference-scoped
   readiness probe; `#927`: real per-model `max_output_tokens`/`context_window` discovery data,
   correctly modeled as two separate fields), not just prose. Neither blocks the sidecar-side fix.
-- **A 5th Devin Review pass found one more real, distinct gap** (detection accuracy, not
-  retry-diversity): Trigger B's predicate (`finish_reason == "length"`) missed the vendored
-  `ModelClient._response_content`'s own broader signature for this exact failure — a populated
-  `message.reasoning` field with empty `content`, which a reasoning model can hit under a *different*
-  `finish_reason` (provider `finish_reason` semantics for this case are not verified as uniform across
-  the pool). Verified directly against current `contextual_orchestrator/orchestrator.py` before fixing.
-  This was the exact original PR #1436 failure mode — a fixed predicate this narrow would have missed
-  the very case the whole investigation started from. Fixed: Trigger B now escalates on
-  `finish_reason == "length"` **or** a populated `reasoning` field with no content, matching the
-  vendored detection logic exactly rather than inferring it from one field alone.
+
+**A fifth Devin Review pass found Trigger B's own definition was too narrow, missing the exact failure
+mode this whole ADR responds to.** Verified directly against `contextual_orchestrator/orchestrator.py`:
+`ModelClient._response_content` treats *either* `choices[0].finish_reason == "length"` *or* a populated
+`message.reasoning` field with no string `content` as the same "budget too small" signature — already
+anticipated in the codebase's own error message (*"provider {agent.id} returned reasoning without
+content ... increase max_output_tokens"*), and directly citing the reasoning-without-content half is
+what a purely `finish_reason`-based predicate cannot express. This matters because provider
+`finish_reason` semantics for this specific case are not verified as uniform across a pool this
+heterogeneous (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`, `openrouter`, ...) — a reasoning model
+can exhaust its budget mid-reasoning under a different or absent `finish_reason`, so a `finish_reason ==
+"length"`-only Trigger B would silently misclassify a genuinely healthy reasoning-capable candidate as
+down, exactly the false-negative class this ADR's two-trigger split exists to prevent, just resurfacing
+one level deeper. **Fixed by widening Trigger B's definition** to the two-part OR-condition throughout
+Decision §1 and §3 (the escalation predicate, the worst-case arithmetic prose, and the "every other
+outcome" fallback case) and the implementation-telemetry requirement (both `finish_reason` and the
+reasoning-without-content signal must be emitted, not only the former) — Layer 2's "no retry on Trigger
+B" now explicitly covers both signatures, not only the `finish_reason` one, since the same "already
+recorded as successful by the gateway's routing" reasoning applies equally to either.
+
+**A sixth Devin Review pass (two findings) narrowed the same Trigger B question two more notches —
+verified directly, and judged by this org's convergence rule to be the point of diminishing returns for
+textual precision.** First, verified against the vendored source line by line: `_response_content`
+checks `isinstance(content, str)` *before* ever inspecting `reasoning`, so a genuinely empty string
+`""` (as opposed to missing/`null`) is treated as a valid, non-erroring return and never reaches the
+reasoning-without-content branch at all — meaning the ADR's citation of `_response_content` as Trigger
+B's motivating signature was, read hyper-literally, imprecise about exactly when that function's own
+exception fires. Checked whether this was a real implementation bug, not just an ADR-wording issue: it
+is not — `ContextualWisdomLab/.github#1452`'s already-shipped `_response_has_reasoning_without_content`
+predicate independently treats `content == ""` the same as missing content (reusing
+`_chat_response_has_text`'s own "empty or missing" definition), which is deliberately *broader* than
+`_response_content`'s exact technical condition and correctly escalates this case already. Fixed as a
+documentation-precision matter only: the ADR's Trigger B definition now states explicitly that "no
+usable content" means missing, `null`, non-string, *or* a genuinely empty string, and a new precision
+note clarifies the citation is the motivating signature this preflight generalizes from, not a claim
+that the implementation must reproduce `_response_content`'s exact, narrower branching.
+
+Second, and requiring an actual scope decision rather than a wording fix: a reasoning-without-content
+failure can itself surface at Layer 2 as a generic `HTTP 502` rather than the `200`-with-empty-content
+case Trigger B was designed around — verified directly against `contextual_orchestrator/server.py`:
+its request handler's `except ProviderResponseError:` clause is one blanket handler that does not even
+bind the caught exception, collapsing both of `_response_content`'s distinct failure messages
+(reasoning-without-content vs. no-content-at-all) into an identical `502 invalid_structured_output`
+body with no machine-readable distinguishing field. Layer 2's sidecar script therefore cannot tell this
+case apart from any other non-2xx and, by elimination, classifies it as Trigger A — retried up to 3
+times against a candidate the gateway's own routing is likely to repeat, rather than failing fast the
+way a correctly-classified Trigger B would. Verified this genuinely requires a `contextual-orchestrator`
+code change to fix properly (no in-repo workaround exists that avoids fragile, contractually-unstable
+message-text matching, which this org's own no-heuristics convention already rejects elsewhere in this
+same ADR) — out of scope for this sidecar-only ADR and its stacked implementation PR. Documented as a
+known, accepted, tracked Layer 2 limitation in both Decision §1 (at the point of definition) and
+Consequences (matching the existing `escalated_probe_rejected`/route-diversity limitations' own
+pattern), filed as `ContextualWisdomLab/contextual-orchestrator#932` following the `#926`/`#927`
+tracking precedent, and added to Decision §4's upstream-tracking list. Does not change Layer 2's stated
+360s worst case (this failure still draws from the same shared Trigger-A attempt budget, not an
+additional one) — only means this specific failure typically consumes the whole retry budget rather
+than failing fast.
+
+**A seventh Devin Review pass (four findings) was judged against this org's convergence rule at 26+
+review threads across seven rounds on a docs-only PR — the point past which the marginal value of
+another textual-precision pass drops below the cost of continuing to block the org's central review
+pipeline.** One was trivial and fixed outright: the Evidence trail's upstream-issue citation still
+named only `#926`/`#927`, missing `#932` from the round just landed — added. One was a
+cross-reference gap, not a new question: Layer 1's `160s` worst-case claim (Decision §3) still didn't
+reference `ContextualWisdomLab/.github#1455` anywhere in this ADR's own text, even though #1455 was
+filed and fully reasoned during the implementation pass — added the cross-reference at the point of
+definition and in Consequences, explicitly *not* reopening the discovery-timing question itself (that
+stays tracked on #1455, unchanged). One was genuinely new and verified real, not a restatement:
+`REVIEW_PREFLIGHT_MAX_ESCALATIONS`'s shared budget is consumed in deterministic catalog order (not
+random, but not purely alphabetical either — verified directly against `build_zdr_prioritized_catalog`'s
+actual sort key: `(cost_evidence_rank, zdr_attested_rank, provider, model)`, so alphabetical
+`(provider, model)` is only the tie-breaker within each same-cost/same-ZDR-status group), so a candidate
+that sorts later can be denied its own escalation attempt purely because 4 earlier candidates already
+claimed the shared budget — verified directly against `_preflight_review_agents`'s actual loop
+structure. Considered a cheap reordering fix
+(round-robin, random shuffling) and rejected it on the merits, not on convergence-fatigue: any selection
+policy for a fixed-size shared budget smaller than the candidate pool still has to deny *someone* a
+slot, so reordering only changes which candidates are favored, not whether the trade-off exists — and
+picking a specific reordering policy without real telemetry on which candidates actually need
+escalation more often would itself be exactly the unjustified heuristic this ADR already rejects
+elsewhere (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). Documented as a known, accepted, tracked
+limitation (`ContextualWisdomLab/.github#1458`, matching the `#1454`/`#1455`/`#932` pattern) rather than
+redesigned. The fourth finding needed no action: it observed that the ADR, CHANGELOG, and this baseline
+all narrate the same review rounds — this is this repo's own documented, intentional convention, not
+accidental redundancy (`docs/adr/0002-product-technical-gap-baseline.md`: this document is "an
+operational snapshot" and "live PR metadata inventory," a distinct role from the ADR's settled design
+record and the CHANGELOG's terse pointer entries, not a duplicate of either).
+
 - **Implemented** (`scripts/ci/contextual_orchestrator_review_launcher.py`,
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`): Layer 1's `_preflight_review_agents` now
   probes each candidate at a new `REVIEW_PREFLIGHT_BASE_TOKENS = 16`, escalating that same candidate
@@ -1550,6 +1628,14 @@ lands") even though this very PR now implements it — updated to `accepted` (ma
 ADRs' convention) with an explicit note that acceptance is the design decision, not a merge authorization,
 and the Consequences section's tense corrected to describe the shipped behavior. 1926 tests pass; 100%
 coverage and 100% docstring coverage on `scripts/ci/`.
+
+**Reconciliation note (post-merge):** this `Status: accepted` edit was made on PR #1452's own,
+by-then-diverged copy of `docs/adr/0005-sidecar-preflight-token-budget.md`, not on the ADR-only PR #1449
+branch, which continued independently through its own rounds 5-9 and kept `Status: proposed` throughout.
+When #1449 merged into `main` (squash `6ffd8f8a`), #1452 was rebased onto that ADR text via a regular
+merge commit, so the ADR file now reads `Status: proposed` again — the round-4 edit described above is
+superseded, not currently reflected in the file. Acceptance remains a process decision distinct from
+merge authorization either way; nothing about the shipped implementation depends on this field's value.
 
 **A follow-up finding on the round-4 malformed-gateway-reply fix itself, caught before the round-4 push
 even finished its own review cycle — a genuine gap, not a duplicate.** `json.loads()` legally parses any
