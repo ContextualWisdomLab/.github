@@ -956,7 +956,7 @@ extract_strix_failed_check_block "$EVIDENCE_FILE" "$strix_evidence_file"
 
 emit_known_missing_string_finding \
 	"$EVIDENCE_FILE" \
-	"steps.target_visibility.outputs.is_private == 'false' && 'nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b' || 'gpt-5.6-luna'" \
+	"steps.target_visibility.outputs.is_private == 'false' && steps.resolve_nvidia_models.outputs.primary || 'gpt-5.4'" \
 	"Strix public scans must default to NVIDIA NIM while private scans retain the contracted provider" \
 	".github/workflows/strix.yml" \
 	"scripts/ci/test_strix_quick_gate.sh"

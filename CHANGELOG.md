@@ -5,13 +5,124 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
+  `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the
+  Models.dev free-cost join beyond `opencode_zen` to `nvidia_nim`/
+  `nvidia_nim_sub`/`openai`, and fixes the actual root cause — `_fetch_json`
+  sent no `User-Agent`, so Cloudflare-fronted `models.dev` rejected every
+  discovery request with HTTP 403, silently breaking the Models.dev join for
+  every provider (including the pre-existing `opencode_zen` path). See the
+  2026-08-30 gap-baseline entry for the merge/bypass rationale.
+- Keep the required OpenCode bootstrap's Pingora policy step unconditional
+  within its pull-request-only workflow, so the static bootstrap contract does
+  not depend on event payload fields. (Ported from #1414, not yet merged, to
+  unblock this PR's own `exact-head-path-policy` check.)
+- Bump the vendored `contextual-orchestrator` review-sidecar pin from
+  `b2164511` (103 commits stale) to current `main` `5f2753a`, so the
+  gateway's model-discovery/ZDR/pool-selection fixes landed since the old pin
+  reach `opencode-review`/`noema-review`. The stale pin's discovery logic was
+  failing the sidecar's own preflight with a gateway 502 before any review
+  could post, which is why `opencode-review` and `noema-review` were failing
+  closed on most `contextual-orchestrator` PRs and several `.github` PRs.
+- Skip trusted base Python lock materialization for exact-head reviews with no
+  Python source or dependency-manifest changes, while preserving the
+  fail-closed wheel-only path when Python coverage is relevant.
+- Route required Strix scans through the contextual-orchestrator
+  `orchestrator/auto` pool so the five configured provider credentials form
+  real cross-provider failover. Priced routes require finite, nonnegative
+  published prompt/completion prices and an explicit currency; unknown pricing
+  fails closed. Private-target ZDR enforcement and the no-external-fallback
+  contract remain unchanged.
+- Allow the protected Strix required-workflow smoke to recognize only the
+  existing `orchestrator/free` route or the provider-diverse
+  `orchestrator/auto` route. This provides a fail-closed two-phase migration
+  path without admitting direct-provider model identifiers.
+- Give stacked pull requests a separately bounded organization-sweep
+  OpenCode dispatch budget, so default-branch review traffic cannot leave a
+  stacked PR at `OpenCode review absent` without changing the protected merge
+  or exact-head evidence rules.
+- Add a bounded hourly LineageWeave stacked-PR review-repair caller while
+  preserving the existing review-agent, model-routing, and protected-merge
+  boundaries. Product-gap development remains a separately gated coordinator
+  capability and is not claimed by this caller. The shared repair scheduler
+  now treats an explicit `*` base scope as all branch bases so stacked pull
+  requests are inspected instead of silently filtered out.
+- Ensure the central Security Scan and SAST Semgrep pull-request workflows
+  trigger for stacked PRs targeting feature branches, preserving the same
+  diff-scoped dependency and repository-wide filesystem security coverage.
+- Harden the contextual-orchestrator Strix sidecar by rejecting line-breaking
+  bearer tokens and masking the token before clone, install, launch, or health
+  diagnostics can emit it. The raw bearer no longer enters `GITHUB_ENV` (where
+  a later step header could render it before masking); only a mode-0600 token
+  file path crosses steps, and each model consumer validates and masks the file
+  inside its own step. The bounded required-workflow smoke now parses every
+  governed shell input independently, including the sidecar and token loader.
+  Strix also qualifies only the loopback child model as
+  `openai/orchestrator/free`, which satisfies LiteLLM's explicit-provider
+  contract while preserving `orchestrator/free` at the gateway boundary; a
+  missing, empty, or non-pinned contextual-orchestrator API base fails closed.
+- Restore OpenCode coverage honesty and mermaid surfaces stacked on main after #1360 squash `17052a7c`: `publish_fallback_diff_review` posts a COMMENT product-file review then `request_changes_for_coverage_evidence_failure` sets the status comment to `COVERAGE_BLOCKED` so a coverage miss never looks finished as `Gate result: COMMENT`; mermaid labels crates/packages instead of generic `Changed file (N files)` and does not invent class edges; findings say `Review process` instead of `.github/workflows/opencode-review.yml:1` unless that file is in the diff. Does not change `noema-review.yml` (PM owns `feat/noema-orchestrator-free-zdr`) and is not NIM-2h or GitHub Models.
+- Required OpenCode dispatch and Strix now use the vendored
+  `contextual-orchestrator/orchestrator/free` gateway for model execution and
+  failed-check diagnosis. The generated OpenCode config contains only the
+  gateway provider, Strix rejects non-gateway model overrides and external
+  fallbacks, and private-target visibility enables the sidecar's attested ZDR
+  requirement. The sidecar installs its vendored dependencies with the
+  hash-pinned lock, and gateway provider exhaustion remains fail-closed.
+- Required Noema review now routes through the same vendored
+  `contextual-orchestrator` sidecar as the autofix writer: `noema-review.yml`
+  provisions the gateway with the five provider secrets, points the LLM step
+  at the loopback `orchestrator/free` pool (ZDR-first auto-discovery), and
+  deletes the public-repo NVIDIA NIM hardcode. `call_llm` keeps SSRF closed
+  for arbitrary private and `localhost` targets and allows only the
+  orchestrator sidecar loopback (`127.0.0.1` / `::1`) only when it matches the
+  exact configured sidecar base URL. Reviewer identity
+  is unchanged (`NOEMA_REVIEW_TOKEN` / GitHub App / OIDC; never
+  `github.token`). The hourly-review-repair roster is untouched.
+- Central review now routes through the vendored `contextual-orchestrator`
+  gateway sidecar: the write-capable PR autofix and the shared `opencode.jsonc`
+  default use the fail-closed zero-cost pool `orchestrator/free`, with
+  ZDR-compliant (zero-data-retention) routes prioritized inside it. The five
+  provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) are
+  registered into the gateway's process-local KV as bootstrap transport, model
+  selection is delegated to the orchestrator's auto model discovery, and the
+  previous direct NVIDIA NIM pin is gone from the autofix writer. Adds
+  `scripts/ci/zdr_policy.py`,
+  `scripts/ci/contextual_orchestrator_review_policy.py`,
+  `scripts/ci/contextual_orchestrator_review_launcher.py`, and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` with contract-test and
+  ZDR/audit evidence (`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`,
+  `docs/doctoring/contextual-orchestrator-vendored-sidecar.md`). Mutation
+  authority is unchanged: app-token-only, never `github.token`.
+- Dependency updates now keep coverage evidence when the lock file passes
+  validation. If validation reports a problem, refresh the lock file and run
+  the review again before merging.
+- Route Strix cross-provider fallbacks to explicit direct-OpenAI models
+  (`openai-direct/...`) through the OpenAI inference endpoint instead of
+  inheriting a provider-specific primary base: the workflow now provisions
+  `STRIX_OPENAI_FALLBACK_API_BASE_FILE` (`https://api.openai.com/v1`), while
+  standalone caller-supplied `LLM_API_BASE_FILE` values remain honored for
+  OpenAI-compatible endpoints. Known GitHub Models, NVIDIA NIM, and OpenRouter
+  bases are never inherited, and LiteLLM uses native OpenAI defaults only when
+  no base is supplied. A non-https override fails configuration. This removes the NVIDIA-NIM-edge
+  `404 page not found` that made the contracted final fallback unreachable
+  after NIM exhaustion.
+- Align stale `gpt-5.6-luna` test expectations with the valid `gpt-5.4`
+  contract left behind by the earlier model rename.
 - Honor each trusted base project's exact, integrity-bearing pnpm
   `packageManager` specification in OpenCode coverage images through the pinned
   Node distribution's Corepack runtime, instead of admitting the specification
   during materialization and then rejecting every version except pnpm 11.5.3;
   route generic coverage and docstring package scripts through the same
   Corepack boundary instead of invoking a removed bare `pnpm` binary.
+- Review scans now run in a controlled order so each pull request receives a
+  complete result instead of a rate-limit interruption. Open the pull request
+  after the active scan finishes to review the latest result.
+- Closed pull-request cleanup now preserves the review record and reports any
+  authorization or malformed-data issue for follow-up. Reopen the pull request
+  or update its credentials when the cleanup message asks you to act.
 - Keep `--trust-lockfile` only for pnpm 11.3 and newer
   (`trustLockfile` landed in pnpm 11.3). pnpm 9, 10, and 11.0–11.2 reject
   that flag and previously failed LineageWeave JavaScript coverage before
@@ -71,6 +182,20 @@ Semantic Versioning where the repository publishes a release.
 ### Fixed
 
 - Made pull-request scheduler mutation and dispatch failures fail the targeted workflow and organization sweep after the complete structured decision summary is emitted, while ordinary policy waits remain successful.
+- Web verification now checks services through local readiness addresses only.
+  Start the backend and frontend on this computer and use their local health
+  URLs when running the check.
+- Review results now separate cosmetic notices from blocking failures. Open the
+  failure details and correct the requested issue before running the check
+  again.
+- Resolve Strix visibility from the trusted GitHub event for ordinary push,
+  schedule, and pull-request runs, reserving API retries for cross-repository
+  dispatches whose workflow token may not see the target repository.
+- Reconciled the Strix required-workflow smoke contract and the privileged
+  OpenCode model pool with the current `gpt-5.4` direct-OpenAI fallback after
+  `gpt-5.6-luna` was retired. This prevents every consumer repository's
+  required Strix check from failing on a stale central assertion or selecting a
+  nonexistent direct model.
 
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
@@ -127,6 +252,7 @@ Semantic Versioning where the repository publishes a release.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).
 - Excluded relative `-r` and `--requirement` referrers from generated flat base-lock publication while retaining bounded include syntax diagnostics and discovering independently complete direct `.txt` children of `requirements` directories.
+- Bound the central Semgrep job to one `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`, so a buyer reconstructing the scan can prove the logged scanner is the scanner that ran.
 - Published substantive OpenCode LLM probes when they already carried an independent proof and exact source-line digest but omitted a duplicated `path:line` citation, so NVIDIA NIM / OpenCode review evidence is no longer discarded as `NO_CONCLUSION`.
 - Refused a conflict-scope repository root whose immediate parent is a symbolic link, so a swapped parent cannot redirect the canonical worktree after the last-component check (CWE-367).
 - Materialized base Python locks only when every package line is an exact SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone `--require-hashes` directive, a dotted include such as `./lock.txt`, or `-r other-hashes.txt` no longer enters the trusted build context.
@@ -143,6 +269,7 @@ Semantic Versioning where the repository publishes a release.
 
 ### Security
 
+- Fail closed when GitHub dependency-review evidence is unavailable (non-200, transport failure, or truncated compare) instead of treating HTTP 403/404 as a clean skip; the probe checks out the exact head SHA and never prints the API body.
 - Keep the Quarantine Sandbox Runtime caller read-only and model-secret-free, grant only job-scoped OIDC to the reusable scheduler, and preserve the product boundary in which the sandbox returns artifact-analysis evidence while hosts retain WAF/IDS, admission, final verdict, incident, and retention authority.
 - Reject `.github/` and `scripts/ci/` from review-thread-derived autofix path authority so an untrusted inline reviewer cannot authorize the write-capable repair agent to modify workflows, CODEOWNERS, actions, scheduler code, or CI helpers that govern its own control plane.
 - Require the model-write snapshot and exact-path allowlist to remain outside the pull-request worktree, checking both absolute and resolved locations so repository-local controls and outside-looking symlinks resolving into the repository fail closed before they can authorize or verify model changes.

@@ -131,6 +131,9 @@ GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
+    "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
+)
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
@@ -1277,6 +1280,21 @@ def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "CHANGES_REQUESTED")
 
 
+def can_retry_check_gated_opencode_review(pr: dict[str, Any]) -> bool:
+    """Return whether recovered checks justify replacing a gate-only request."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        body = str(review.get("body") or "")
+        return (
+            (review.get("state") or "").upper() == "CHANGES_REQUESTED"
+            and CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER in body
+            and "Failed checks:" in body
+            and not failed_status_checks(pr)
+        )
+    return False
+
+
 def stale_opencode_change_request_ids(pr: dict[str, Any]) -> list[int]:
     """Return dismissible automated change requests tied to previous heads."""
     review_ids: list[int] = []
@@ -1828,7 +1846,11 @@ def post_update_branch_followup(
         wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
         if wait_reason:
             return f"{head_note}; {wait_reason}"
-        dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        dispatch_result = dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return f"{head_note}; same-head Strix evidence is already running"
+        if dispatch_result == "repository_busy":
+            return f"{head_note}; target repository already has active Strix evidence, so dispatch waits"
         return (
             f"{head_note}; same-head Strix evidence dispatched because workflow-token branch updates "
             "must not rely on a PR synchronize event to rerun evidence"
@@ -1933,6 +1955,8 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                     "--method",
                     "GET",
                     f"repos/{repo}/actions/runs",
+                    "--paginate",
+                    "--slurp",
                     "-f",
                     f"status={status}",
                     "-F",
@@ -1940,7 +1964,9 @@ def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_pro
                 ]
             )
         )
-        runs.extend(payload.get("workflow_runs") or [])
+        pages = payload if isinstance(payload, list) else [payload]
+        for page in pages:
+            runs.extend(page.get("workflow_runs") or [])
     return runs
 
 
@@ -2234,9 +2260,27 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             )
         )
         return "already_running"
-    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
+    stale_ids = {run_id for _, run_id in stale_run_refs}
+    busy_refs = [
+        (dispatch_repo, str(run_data["id"]))
+        for run_data in active_workflow_runs(dispatch_repo)
+        if run_data.get("id")
+        and str(run_data["id"]) not in stale_ids
+        and run_data.get("name") == workflow
+        and run_data.get("event") == "repository_dispatch"
+        and str(run_data.get("display_title") or "").startswith(
+            f"Strix Security Scan {target_repo}#"
+        )
+    ]
+    if busy_refs:
+        print(
+            "Strix evidence dispatch skipped: target repository already has active run(s) "
+            + ", ".join(f"{run_repo}@{run_id}" for run_repo, run_id in busy_refs)
+        )
+        return "repository_busy"
+    base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     run_github_dispatch(
         [
             "gh",
@@ -2364,6 +2408,11 @@ def inspect_pr(
         # Merge automation stays default-branch-only; rulesets do not gate
         # feature-branch merges.
         opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+        check_gated_retry = can_retry_check_gated_opencode_review(pr)
+        if check_gated_retry and pr.get("autoMergeRequest"):
+            opencode_state = "complete"
+        elif check_gated_retry and trigger_reviews and opencode_state != "running":
+            opencode_state = "absent"
         if opencode_state in {"absent", "stale"} and trigger_reviews and review_dispatch_allowed:
             wait_reason = repository_dispatch_wait_reason(repo, workflow)
             if wait_reason:
@@ -2379,6 +2428,13 @@ def inspect_pr(
                 number,
                 "review_dispatch",
                 f"stacked PR onto {base_ref}; OpenCode review dispatched",
+            )
+        if opencode_state in {"absent", "stale"} and trigger_reviews and not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                f"stacked PR onto {base_ref}; OpenCode review {opencode_state}; "
+                "review dispatch limit reached",
             )
         return Decision(
             number,
@@ -2492,16 +2548,22 @@ def inspect_pr(
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
-        if pr.get("autoMergeRequest"):
-            return finish(
-                disable_auto_merge_decision(
-                    repo,
-                    pr,
-                    dry_run=dry_run,
-                    reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+        if not (
+            can_retry_check_gated_opencode_review(pr)
+            and trigger_reviews
+            and review_dispatch_allowed
+            and not pr.get("autoMergeRequest")
+        ):
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                    )
                 )
-            )
-        return decide("block", "current-head OpenCode review requested changes")
+            return decide("block", "current-head OpenCode review requested changes")
 
     current_head_approved = has_current_head_approval(pr)
     if current_head_approved:
@@ -2809,7 +2871,14 @@ def inspect_pr(
             wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
-            dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return decide("wait", "same-head Strix evidence is still running")
+            if dispatch_result == "repository_busy":
+                return decide(
+                    "wait",
+                    "current head has no completed Strix evidence; target repository already has active Strix evidence",
+                )
             return decide(
                 "security_dispatch",
                 "current head has no completed Strix evidence; same-head Strix dispatched",
@@ -3887,6 +3956,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument(
+        "--stacked-review-dispatch-limit",
+        type=int,
+        default=None,
+        help="Optional separate OpenCode review dispatch limit for stacked PRs; -1 means unlimited",
+    )
+    parser.add_argument(
         "--branch-update-limit",
         type=int,
         default=int(os.environ.get("BRANCH_UPDATE_LIMIT", "1")),
@@ -3926,16 +4001,30 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
+    if args.stacked_review_dispatch_limit is not None and args.stacked_review_dispatch_limit < -1:
+        raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if not args.pr_number:
+        # Stacked PRs have no injected required workflow and depend exclusively
+        # on this bounded sweep; default-base PRs also receive event-driven runs.
+        prs.sort(key=lambda pr: pr.get("baseRefName") == args.base_branch)
     decisions = []
     review_dispatches_used = 0
+    stacked_review_dispatches_used = 0
     branch_updates_used = 0
     for pr in prs:
-        review_dispatch_allowed = (
-            args.review_dispatch_limit < 0 or review_dispatches_used < args.review_dispatch_limit
-        )
+        stacked_pr = pr.get("baseRefName") != args.base_branch
+        if stacked_pr and args.stacked_review_dispatch_limit is not None:
+            review_dispatch_allowed = (
+                args.stacked_review_dispatch_limit < 0
+                or stacked_review_dispatches_used < args.stacked_review_dispatch_limit
+            )
+        else:
+            review_dispatch_allowed = (
+                args.review_dispatch_limit < 0 or review_dispatches_used < args.review_dispatch_limit
+            )
         branch_update_allowed = args.branch_update_limit < 0 or branch_updates_used < args.branch_update_limit
         try:
             decision = inspect_pr(
@@ -3962,7 +4051,10 @@ def main(argv: list[str]) -> int:
             )
         decisions.append(decision)
         if decision.action in {"review_dispatch", "security_dispatch"}:
-            review_dispatches_used += 1
+            if stacked_pr and args.stacked_review_dispatch_limit is not None:
+                stacked_review_dispatches_used += 1
+            else:
+                review_dispatches_used += 1
         if decision.action in {"update_branch", "restamp_head"}:
             branch_updates_used += 1
     print_summary(
