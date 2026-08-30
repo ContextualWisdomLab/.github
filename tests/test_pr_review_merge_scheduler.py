@@ -3658,6 +3658,23 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert not sched.can_update_pr_head("owner/repo", external_behind)
     assert sched.can_update_pr_head("owner/repo", external_mutable)
     assert "same-repository head update permission" in sched.non_mutable_head_reason("owner/repo", behind)
+    # Regression: GitHub repository identity is case-insensitive. A PR whose
+    # GitHub-reported canonical headRepository differs from the configured
+    # target repo only by case must still be classified same-repository, so
+    # it keeps branch-update and merge eligibility instead of being
+    # misrouted onto the external/fork head path.
+    same_repo_different_case = make_pr(
+        mergeStateStatus="BEHIND",
+        headRepository={"nameWithOwner": "Owner/Repo"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    assert sched.same_repository_head("owner/repo", same_repo_different_case)
+    assert sched.can_update_pr_head("owner/repo", same_repo_different_case)
+    assert sched.compare_ref_for_pr_head("owner/repo", same_repo_different_case) == "feature"
+    same_case_decision = inspect(same_repo_different_case)
+    assert same_case_decision.action == "update_branch"
+    assert called == [("owner/repo", 1, True)]
+    called.clear()
     behind_failed = make_pr(
         mergeStateStatus="BEHIND",
         reviews={"nodes": [opencode_review("APPROVED", "head")]},

@@ -59,17 +59,27 @@ def windows_runner?(job)
   end
 end
 
+def containerized_job?(job)
+  !job["container"].nil?
+end
+
 def effective_shell(workflow, job, step)
   step["shell"] ||
     job.dig("defaults", "run", "shell") ||
     workflow.dig("defaults", "run", "shell") ||
-    (windows_runner?(job) ? "pwsh" : "bash")
+    (windows_runner?(job) ? "pwsh" : (containerized_job?(job) ? "sh" : "bash"))
 end
 
 def shellcheck_dialect(shell)
-  return shell if ["bash", "sh"].include?(shell)
-  return "bash" if shell.start_with?("bash ")
-  return "sh" if shell.start_with?("sh ")
+  # A custom shell template names its executable as the first
+  # whitespace-delimited token (optionally followed by flags and a `{0}`
+  # script-path placeholder), and GitHub Actions accepts it as an absolute
+  # path (e.g. "/bin/bash --noprofile --norc -eo pipefail {0}" or
+  # "/usr/bin/sh {0}"), not just a bare "bash"/"sh" name. Resolve to the
+  # executable's basename so both forms classify identically.
+  executable = shell.to_s.split(" ", 2).first.to_s
+  name = File.basename(executable)
+  return name if ["bash", "sh"].include?(name)
 
   nil
 end

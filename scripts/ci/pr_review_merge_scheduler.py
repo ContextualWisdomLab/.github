@@ -964,7 +964,11 @@ def compare_ref_for_pr_head(repo: str, pr: dict[str, Any]) -> str:
     """Return the compare-API head ref for a PR branch."""
     head_ref = pr.get("headRefName") or "HEAD"
     head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
-    if not head_repo or head_repo == repo:
+    # GitHub repository identity is case-insensitive: casefold both sides so
+    # a same-repository head whose GitHub-reported canonical name differs
+    # only in case from the configured target is still treated as
+    # same-repository, matching same_repository_head below.
+    if not head_repo or head_repo.casefold() == repo.casefold():
         return head_ref
     head_owner, _ = split_repo(head_repo)
     return f"{head_owner}:{head_ref}"
@@ -1905,7 +1909,13 @@ def post_update_branch_followup(
 def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
     """Return whether the PR head branch belongs to the repository being scanned."""
     head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
-    return head_repo == repo
+    # GitHub repository identity is case-insensitive; casefold both sides so
+    # a same-repository PR whose GitHub-reported canonical name differs only
+    # in case from the configured target repo is not misclassified as
+    # cross-repository, matching the existing case-insensitive comparisons
+    # already used elsewhere in this file (e.g. the stale-run-cancellation
+    # gate and the central-repository dispatch-target check).
+    return bool(head_repo) and head_repo.casefold() == repo.casefold()
 
 
 def can_update_pr_head(repo: str, pr: dict[str, Any]) -> bool:

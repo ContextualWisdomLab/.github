@@ -158,6 +158,94 @@ def test_linter_uses_actionlint_schema_and_bounded_shfmt_parser(tmp_path: Path) 
     assert shfmt_records[1]["script"] == "set -e\necho ok\n"
 
 
+def test_linter_treats_unshelled_container_job_step_as_posix_sh(tmp_path: Path) -> None:
+    """A container job with no explicit shell defaults to sh, not bash.
+
+    GitHub Actions runs container-job steps under ``sh`` when no ``shell:``
+    is configured anywhere in the resolution chain (step, job defaults,
+    workflow defaults) — unlike non-container Linux/macOS jobs, which
+    default to ``bash``. A linter that assumes bash here would validate
+    Bash-only syntax that the runner will actually execute as (potentially
+    broken) POSIX sh.
+    """
+
+    environment, capture_dir = _tool_environment(tmp_path)
+    workflow = tmp_path / "container-default-shell.yml"
+    workflow.write_text(
+        """name: container-default-shell
+on: push
+jobs:
+  containerized:
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - name: No explicit shell
+        run: echo ok
+  bare:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: No explicit shell, no container
+        run: echo ok
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_linter(workflow, environment)
+
+    shfmt_records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(capture_dir.glob("shfmt-*.json"))
+    ]
+    assert result.returncode == 0, result.stderr
+    assert len(shfmt_records) == 2
+    # Container job step: no explicit shell anywhere -> sh (posix).
+    assert shfmt_records[0]["args"] == ["-ln", "posix", "-tojson"]
+    # Non-container job step: no explicit shell anywhere -> bash, unchanged.
+    assert shfmt_records[1]["args"] == ["-ln", "bash", "-tojson"]
+
+
+def test_linter_classifies_absolute_path_shell_templates(tmp_path: Path) -> None:
+    """Custom shell templates naming an absolute Bash/sh path are recognized.
+
+    GitHub Actions accepts any executable, including an absolute path, as a
+    custom ``shell:`` template (optionally followed by flags and a ``{0}``
+    script-path placeholder). A dialect matcher that only recognizes the
+    bare names "bash"/"sh" silently skips shell-syntax validation for such
+    steps instead of classifying them by dialect.
+    """
+
+    environment, capture_dir = _tool_environment(tmp_path)
+    workflow = tmp_path / "absolute-path-shell.yml"
+    workflow.write_text(
+        """name: absolute-path-shell
+on: push
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Absolute bash with flags
+        shell: '/bin/bash --noprofile --norc -eo pipefail {0}'
+        run: echo bash-ok
+      - name: Absolute sh with placeholder
+        shell: '/usr/bin/sh {0}'
+        run: echo sh-ok
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_linter(workflow, environment)
+
+    shfmt_records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(capture_dir.glob("shfmt-*.json"))
+    ]
+    assert result.returncode == 0, result.stderr
+    assert len(shfmt_records) == 2
+    assert shfmt_records[0]["args"] == ["-ln", "bash", "-tojson"]
+    assert shfmt_records[1]["args"] == ["-ln", "posix", "-tojson"]
+
+
 def test_linter_preserves_lines_inside_multiline_expressions(tmp_path: Path) -> None:
     """Expression sanitizing keeps shfmt source and diagnostic lines aligned."""
 
