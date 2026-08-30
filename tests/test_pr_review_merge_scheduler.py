@@ -2633,6 +2633,36 @@ def test_outdated_unapproved_branch_disarms_stale_auto_merge_instead_of_updating
     assert "remains queued" not in decision.reason
 
 
+def test_clean_unapproved_armed_pr_disarms_auto_merge_before_review_dispatch():
+    """An unapproved CLEAN PR with stale auto-merge armed must disarm, not dispatch-and-leave-armed.
+
+    ``behind_by`` is falsy here (the branch is not behind base), so neither
+    behind-by disarm path applies. With no current-head approval and no
+    completed Strix evidence, the ordinary review-dispatch cascade would
+    normally return a plain ``security_dispatch``/``wait`` decision -- and
+    every branch in that cascade previously returned without ever checking
+    ``autoMergeRequest``. That left a stale auto-merge request (e.g. armed by
+    an approval a later push has since invalidated, or armed by a human
+    before any review ran) queued through the PR's ordinary, everyday
+    review-in-progress state. If GitHub's own required checks are not
+    themselves gated on this scheduler's OpenCode approval, GitHub's native
+    auto-merge could complete the merge without this scheduler ever getting a
+    chance to require a fresh independent approval -- the exact bypass this
+    scheduler exists to prevent.
+    """
+    clean_unapproved_armed = make_pr(
+        mergeStateStatus="CLEAN",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": []},
+    )
+
+    decision = inspect(clean_unapproved_armed)
+
+    assert decision.action == "disable_auto_merge"
+    assert "current head has no OpenCode approval" in decision.reason
+    assert "wait for fresh same-head approval" in decision.reason
+
+
 def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
     head = "a" * 40
     fallback_review = {
@@ -4841,8 +4871,14 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
             autoMergeRequest={"enabledAt": "now"},
         )
     )
+    # An unapproved PR disarms as soon as "no current-head approval" is
+    # established, regardless of mergeability -- the hoisted guard in
+    # inspect_pr() fires before the merge_state == "UNKNOWN" branch's own
+    # (approved-only, see test_approved_unknown_mergeability_disarms_auto_merge)
+    # check is ever reached, so the reason names the real blocker (missing
+    # approval) rather than the unresolved mergeability calculation.
     assert unknown_auto_merge.action == "disable_auto_merge"
-    assert "mergeability is still being calculated" in unknown_auto_merge.reason
+    assert "current head has no OpenCode approval" in unknown_auto_merge.reason
     rest_clean = inspect(
         make_pr(
             mergeStateStatus="BEHIND",
@@ -5418,6 +5454,33 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert "no live current-head approval" in behind_without_opencode_decision.reason
     assert called == []
     assert disabled == [("owner/repo", 1, True)]
+
+
+def test_approved_unknown_mergeability_disarms_auto_merge_pending_evaluation():
+    """An approved PR whose mergeability is still UNKNOWN keeps its own disarm reason.
+
+    Unlike the unapproved case (see the ``unknown_auto_merge`` assertion in
+    ``test_inspect_pr_blocks_and_waits_for_policy_states``), the hoisted
+    "no current-head approval" guard in ``inspect_pr`` does not apply here --
+    ``current_head_approved`` is True, so this PR still reaches the
+    ``merge_state == "UNKNOWN"`` branch's own, more specific check: with
+    ``merge_mode="auto"`` and mergeability not yet CLEAN, the scheduler cannot
+    yet attempt the merge, so an auto-merge request armed on this still-being-
+    evaluated head is disarmed pending a resolved mergeability calculation,
+    not for any approval defect.
+    """
+    approved_unknown_armed = make_pr(
+        mergeStateStatus="CLEAN",
+        restMergeableState="UNKNOWN",
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
+        autoMergeRequest={"enabledAt": "now"},
+    )
+
+    decision = inspect(approved_unknown_armed, merge_mode="auto")
+
+    assert decision.action == "disable_auto_merge"
+    assert "mergeability is still being calculated" in decision.reason
 
 
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):

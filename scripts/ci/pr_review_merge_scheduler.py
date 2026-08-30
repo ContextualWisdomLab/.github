@@ -3267,6 +3267,35 @@ def inspect_pr(
             )
         )
 
+    if not current_head_approved and auto_merge_enabled:
+        # Neither behind-by disarm path applies (the branch is not behind
+        # base) and the last-push-approval restamp does not apply either (it
+        # requires current_head_approved). Yet auto-merge is still armed with
+        # no live current-head approval -- whether from a previously valid
+        # approval a new push has since invalidated, or from auto-merge armed
+        # before any review ever ran, this scheduler draws no distinction
+        # between the two (see the behind-by disarm path and the prior
+        # unconditional catch-all below, neither of which drew one either).
+        # Disarm immediately here, before any of the wait/dispatch branches
+        # below (OpenCode running, deterministic-fallback wait, stale-review
+        # retry, or the ordinary Strix/OpenCode dispatch cascade -- the
+        # everyday state for a PR between or during reviews) can return
+        # without having done so. Relying on a catch-all reached only once
+        # dispatch has nothing left to do would let GitHub's own native
+        # auto-merge complete the merge first if this scheduler is the only
+        # thing enforcing the OpenCode-approval requirement.
+        return finish(
+            disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason=(
+                    "current head has no OpenCode approval; wait for fresh same-head "
+                    "approval before re-enabling auto-merge"
+                ),
+            )
+        )
+
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
         return decide("wait", "OpenCode review is already in progress")
@@ -3420,16 +3449,11 @@ def inspect_pr(
             "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
-    if pr.get("autoMergeRequest"):
-        return finish(
-            disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason="current head has no OpenCode approval; wait for fresh same-head approval before re-enabling auto-merge",
-            )
-        )
-
+    # No autoMergeRequest re-check is needed here: the hoisted
+    # `not current_head_approved and auto_merge_enabled` guard above already
+    # disarmed and returned before any of the wait/dispatch branches between
+    # it and here could be reached, so auto-merge cannot still be armed by
+    # this point.
     return decide("block", "current head has no OpenCode approval")
 
 
