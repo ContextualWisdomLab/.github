@@ -396,40 +396,64 @@ flowchart LR
   or typed provider result. A green event handler that skips the LLM call is not
   acceptance evidence.
 
-## 2026-08-30 sidecar pin staleness recurrence
+## 2026-08-30 hourly loop recheck: bootstrap/sidecar-pin cycle still open, one independent fix landed
 
-- Same class of defect as the 2026-08-29 entry above recurred within one day:
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s
-  `ORCHESTRATOR_PIN_SHA` default (`b21645116b352967e50fc497b87eb745b9cc8c61`)
-  was already 103 commits behind `contextual-orchestrator` `main`. Observed
-  directly in hosted `noema-review` job logs (`.github` PR #1421,
-  `ContextualWisdomLab/contextual-orchestrator` PR #857 and others): the
-  vendored sidecar's own preflight against the stale pin fails closed with
-  `gateway preflight returned HTTP 502` (and, on a differently-shaped request,
-  `request_failed status=413 code=request_too_large`) before the model pool
-  can run, so `opencode-agent`/Noema never post a verdict and the required
-  `opencode-review`/`noema-review` checks fail on unrelated PRs across both
-  repos. Confirmed via `contextual-orchestrator` main history that
-  `5f2753ace756ddd81049a5221d55e8977572a416` is the current `main` HEAD and
-  passes its own Tests/Security/Fuzz gates.
-- This PR bumps the pin to `5f2753ace756ddd81049a5221d55e8977572a416` in the
-  three places the contract tests pin it: the sidecar script default,
-  `tests/test_contextual_orchestrator_review_sidecar_contract.py`'s
-  `ORCH_PIN_SHA`, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
-  "today" reference. `requirements.lock` needs no separate sync — the sidecar
-  installs it fresh from the freshly-checked-out pinned commit, not from a
-  copy embedded in this repo.
-- Acceptance remains open the same way the 2026-08-29 entry describes: this
-  fixes the reproduced local preflight failure and all static contract tests
-  pass, but only a fresh post-merge hosted `noema-review`/`opencode-review`
-  run against the new pin is proof the live gateway path actually completes
-  and posts a verdict. Given this is the second staleness incident in as many
-  days, the underlying gap is process, not just this one value: nothing
-  currently keeps this pin near `contextual-orchestrator` `main` on an
-  ongoing basis. A scheduled or CI-triggered pin-freshness check (e.g., fail
-  a nightly job once the pin falls more than N commits or M days behind a
-  green `contextual-orchestrator` main) would close that gap; not implemented
-  in this PR, left for a follow-up.
+- Reconfirmed at the start of this hourly pass: protected `main` is
+  `6c8ee24046d743b3981c566c6e29f99f09137f6a` (this has moved on from the
+  2026-08-26 107-open-PR snapshot's `826b92394c63deb6981c3a8d16a724d71f85a0d7`
+  through ordinary merges since; it is not the same commit). #1413 (Strix
+  `orchestrator/auto` route), #1422 (stale contextual-orchestrator sidecar
+  pin refresh), and #1414 (bootstrap `if:` guard removal) have not merged
+  into this current `main`; no human admin bootstrap merge landed this
+  cycle.
+- Sampled the newest open PRs (#1394, #1398, #1411, #1416, #1417, #1418,
+  #1419, #1420) against current-head job logs. All of #1411, #1416, #1418,
+  #1419, and #1420's `strix`/`noema-review`/`opencode-review` failures
+  reproduce one of the three already-diagnosed systemic causes rather than a
+  new defect: the Strix `orchestrator/auto` LiteLLM/HTTPS-base rejection
+  (#1413's fix), the redundant bootstrap `if:` guard tripping
+  `exact-head-path-policy` (#1414's fix — seen verbatim on #1411 and #1420:
+  `FAIL: opencode required workflow bootstrap must not depend on
+  required-workflow event payload fields`), and the stale
+  `contextual-orchestrator` sidecar pin `b21645116b352967e50fc497b87eb745b9cc8c61`
+  failing gateway preflight with `request_failed status=413
+  code=request_too_large` / `sidecar exited before healthz` (#1422's fix —
+  seen verbatim on #1418). These are three independent fixes, not
+  interchangeable: the Strix `orchestrator/auto` failure clears only once
+  #1413 merges; the sidecar-pin failure clears only once #1422 merges; the
+  bootstrap `if:` guard failure clears once any of #1413, #1414, or #1422
+  merges (all three carry that fix). A PR failing on more than one signature
+  needs each corresponding fix on `main`, not just one merge. None of these
+  failures were reclassified or worked around.
+- One independent, non-systemic defect was found and fixed this pass: #1417
+  ("Bolt: label_section 탐색 로직 최적화") added a `ThreadPoolExecutor`-based
+  `probe_agent` nested closure to
+  `scripts/ci/contextual_orchestrator_review_launcher.py` without a
+  docstring, dropping the pinned `interrogate --fail-under 100` gate to
+  98.8% (`_preflight_review_agents.probe_agent (L174) MISSED`) and failing
+  #1417's `Hourly cadence, immutable source, NIM credential, and conflict
+  scope` check independently of the three systemic blockers above. Fixed by
+  adding a one-line docstring and pushed to #1417's existing head branch
+  `bolt-opt-label-section-2431233332957705980` (commit `190e505`). Verified
+  locally: `interrogate` now reports 100.0% over the five pinned files, the
+  full suite (`1873 passed, 1 skipped, 17 subtests`) and the focused
+  `opencode_review_normalize_output`/`contextual_orchestrator_review_*`
+  suites are unaffected, and `compileall`/`git diff --check` pass.
+- #1394 (Sentinel SSRF fix touching `sandboxed_web_e2e.py`) and #1418
+  (Sentinel SSRF/path-traversal regex fix touching
+  `agent_mention_sweep.py`/`organization_commercial_readiness_loop.py`) were
+  checked against each other and confirmed **not** duplicates — disjoint
+  files, disjoint vulnerabilities. #1394 also carries a stale `base` (its
+  branch predates several recent `main` merges) and needs an ordinary
+  merge-base-into-head before its checks are meaningful; not attempted this
+  pass given the time budget.
+- No open PR had a qualifying independent `APPROVED` review this pass
+  (`is:pr is:open review:approved` returned zero results repo-wide), so
+  priority 4 (merge) had no eligible candidate.
+- Next hourly pass: re-check whether #1413/#1414/#1422 merged; if still
+  open, keep sampling the backlog for independent (non-systemic) defects the
+  way this pass found #1417's, and consider merging `main` into #1394's head
+  to get it off its stale base.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
