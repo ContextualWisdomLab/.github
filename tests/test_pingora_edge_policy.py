@@ -61,6 +61,7 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
     assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
     assert policy.scan_content("deploy/fixtures/runtime.yaml", sample)
@@ -70,6 +71,22 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content(
         "deploy/ingress.yaml", "image: nginx/nginx-ingress:1.11\n"
     )
+
+
+def test_this_test_files_own_content_is_exempt() -> None:
+    """This file's own fixture strings (denied Nginx forms) must never self-trip.
+
+    Regression coverage for a real required-workflow-bootstrap failure: a
+    diff to this file that happens to add a line matching a CONTENT_RULES
+    pattern (e.g. a new test fixture containing "/etc/nginx/") triggers
+    _needs_content_scan's "nginx" in the patch heuristic, which then scans
+    this file's *entire* current content -- full of intentional denied
+    forms by design -- unless this exact path is self-exempted the same way
+    scripts/ci/pingora_edge_policy.py already is.
+    """
+
+    own_content = Path(__file__).read_text(encoding="utf-8")
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", own_content) == ()
 
 
 def test_nested_documentation_path_allows_prose_samples() -> None:
