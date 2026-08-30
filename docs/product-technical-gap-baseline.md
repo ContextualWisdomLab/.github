@@ -2381,6 +2381,22 @@ completion 요청이 0바이트로 hang"과는 다른 새 증상(요청이 hang�
 가능성). main 자신에 대한 평가라 이 PR의 required check를 막지 않고(diff와 무관), 별도 PR로 원인
 조사가 필요한 새 데이터 포인트로만 기록한다.
 
+**naruon G-15 두 번째 슬라이스 배포**: 4개 PR이 전부 async 대기 상태로 머물러 있는 동안, PR 소진
+여부와 무관하게 다음 제품 Gap 증분을 진행한다는 원칙에 따라 `reparse_pending`을 실제로 소비하는
+`AttachmentReparseWorker`를 구현·배포했다(`naruon#1486`의 같은 브랜치에 push, 커밋 `ba9a01be`) —
+ADR-0005가 명시적으로 미뤄뒀던 바로 그 후속 워커. `NewsdomRecognitionWorker`와 동일한
+jittered-loop + PostgreSQL advisory-lock lease + starvation-free cursor 구조를 그대로 따라
+`main.py` lifespan에 배선했고, 매 스윕마다 보존된 원본 바이트 + 원래 선언된 `content_type`으로
+`parse_email_attachment`를 재호출해 재평가한다(sniff된 타입을 신뢰하는 별도 로직 없이 동일
+분류 파이프라인에 같은 질문을 다시 던지는 방식 — 향후 그 파이프라인에 생기는 어떤 수정도
+자동으로 이 워커에 반영됨). 보존 payload가 base64로 유효하지 않은 경우만 새 terminal 상태
+`reparse_payload_invalid`로 분류. PDF 전용이 아닌 범용 base64 디코더
+`decode_quarantined_attachment_payload`도 `attachment_parser.py`에 추가했고, ADR-0005의
+"reparse_pending has no consumer worker yet" 서술과 그 README 색인 행을 갱신했다. 검증: 신규
+테스트 19개(worker 15 + parser 디코더 4), 전체 백엔드 스위트 1864 passed/33 skipped(기존 1845),
+ruff clean. 남은 G-15 후보: HWP/HWPX 지원, 단일 첨부파일 upload-accept 상한. G-06(thread/sender
+ontology 다리)이 다음 pass의 우선순위 후보로 남는다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
