@@ -1103,6 +1103,50 @@ then a 502 on the actual gateway request).
   fail (or go dark) until that outage's stale-model/provider-diversity gaps
   are fixed, which is the accepted, expected, and now-explicitly-owner-chosen
   state, not a new defect.
+- **A `strix` `repository_dispatch` run against PR #1434 was observed to
+  fail — but it does not test any of the above, and is not evidence either
+  way about the outage-domain risk.** Run
+  `ContextualWisdomLab/.github/actions/runs/33306963425`'s `strix` job
+  failed at its "Self-test Strix required workflow contract" step, before
+  provisioning the sidecar, gating secrets, or running any scan (all
+  downstream steps show `skipped`). The exact cause, read from the job log:
+  this self-test step deliberately materializes the **PR head**'s
+  `strix.yml` (`"Materialized PR-head Strix workflow for self-test."`) and
+  checks it with the **trusted-base** (i.e. current `main`, via the same
+  `pull_request_target`-style trust boundary #1430 hit)
+  `scripts/ci/strix_required_workflow_smoke.sh`. `main` does not yet have
+  this pass's Strix `auto`→`free` change, so its smoke script still asserts
+  `STRIX_MODEL: contextual-orchestrator/orchestrator/auto` and explicitly
+  rejects `STRIX_MODEL: contextual-orchestrator/orchestrator/free` — exactly
+  what PR #1434's own `strix.yml` now contains — producing two `FAIL:`
+  lines and a hard exit before anything provider- or model-related runs.
+  This is the **same structural class of chicken-and-egg documented for
+  #1430 and called out in this session's own task instructions ("a PR that
+  itself edits `.github/workflows/`/`scripts/ci/` review-pipeline files can
+  structurally fail its own required check")** — PR #1434 edits `strix.yml`
+  and `strix_required_workflow_smoke.sh` together, and the smoke half of
+  that pair cannot become "trusted" until merged. It says nothing about
+  whether `orchestrator/free` would actually survive the single-outage-
+  domain risk at runtime — the run never reached that layer. A genuine
+  runtime test of the `auto`→`free` switch needs either this PR merged
+  first (own chicken-and-egg — the owner's bypass authority for this repo
+  has not been extended to PR #1434 specifically, so this pass did not
+  self-authorize one) or a `repository_dispatch` targeting a *different*
+  repository that does not itself edit these trusted files.
+- **Secondary, separate finding on the same run**: the follow-up
+  `publish-manual-pr-evidence-status` job also failed —
+  `target-app-token` got `HTTP 403: Resource not accessible by integration`
+  publishing the (correctly non-success, per the self-test failure above)
+  Strix status back to `.github`'s own PR #1434. The publisher's own logic
+  only tolerates a publish failure silently when `STRIX_RESULT=success`; a
+  non-success result that also cannot be published hard-fails by design, so
+  this is arguably correct fail-closed behavior surfacing a real,
+  previously-unobserved token-scoping gap, not a logic bug. Plausibly an
+  edge case specific to `.github` being the `target_repository` of its own
+  `repository_dispatch` Strix run (this central repo normally dispatches
+  Strix *to* sibling repos, not to itself) rather than a gap sibling repos
+  would hit; not investigated further or fixed this pass given it is
+  downstream of, and only surfaced by, the self-test failure above.
 
 ## 2026-08-30 ZDR/NIM-routing architecture review (owner-directed)
 
