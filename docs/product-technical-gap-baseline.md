@@ -396,6 +396,175 @@ flowchart LR
   or typed provider result. A green event handler that skips the LLM call is not
   acceptance evidence.
 
+## 2026-08-30 hourly loop recheck: bootstrap/sidecar-pin cycle still open, one independent fix landed
+
+**Superseded by the entries below.** This section was drafted before #1413
+(Strix `orchestrator/auto` route) and #1422 (stale sidecar-pin refresh)
+merged into `main`; its premise that they "have not merged" no longer holds.
+Kept here, unedited, only as a record of the queue's state at that earlier
+point in the loop — see "2026-08-30 post-#1413/#1422 backlog refresh cycle"
+below for the accurate current-cycle account. (This same annotation was lost
+from an earlier resolution of this PR's own merge conflict against `main`,
+which also silently dropped the "2026-08-30 sidecar pin staleness
+recurrence" section below out of the file entirely; both are restored here.)
+
+- Reconfirmed at the start of this hourly pass: protected `main` is
+  `6c8ee24046d743b3981c566c6e29f99f09137f6a` (this has moved on from the
+  2026-08-26 107-open-PR snapshot's `826b92394c63deb6981c3a8d16a724d71f85a0d7`
+  through ordinary merges since; it is not the same commit). #1413 (Strix
+  `orchestrator/auto` route), #1422 (stale contextual-orchestrator sidecar
+  pin refresh), and #1414 (bootstrap `if:` guard removal) have not merged
+  into this current `main`; no human admin bootstrap merge landed this
+  cycle.
+- Sampled the newest open PRs (#1394, #1398, #1411, #1416, #1417, #1418,
+  #1419, #1420) against current-head job logs. All of #1411, #1416, #1418,
+  #1419, and #1420's `strix`/`noema-review`/`opencode-review` failures
+  reproduce one of the three already-diagnosed systemic causes rather than a
+  new defect: the Strix `orchestrator/auto` LiteLLM/HTTPS-base rejection
+  (#1413's fix), the redundant bootstrap `if:` guard tripping
+  `exact-head-path-policy` (#1414's fix — seen verbatim on #1411 and #1420:
+  `FAIL: opencode required workflow bootstrap must not depend on
+  required-workflow event payload fields`), and the stale
+  `contextual-orchestrator` sidecar pin `b21645116b352967e50fc497b87eb745b9cc8c61`
+  failing gateway preflight with `request_failed status=413
+  code=request_too_large` / `sidecar exited before healthz` (#1422's fix —
+  seen verbatim on #1418). These are three independent fixes, not
+  interchangeable: the Strix `orchestrator/auto` failure clears only once
+  #1413 merges; the sidecar-pin failure clears only once #1422 merges; the
+  bootstrap `if:` guard failure clears once any of #1413, #1414, or #1422
+  merges (all three carry that fix). A PR failing on more than one signature
+  needs each corresponding fix on `main`, not just one merge. None of these
+  failures were reclassified or worked around.
+- One independent, non-systemic defect was found and fixed this pass: #1417
+  ("Bolt: label_section 탐색 로직 최적화") added a `ThreadPoolExecutor`-based
+  `probe_agent` nested closure to
+  `scripts/ci/contextual_orchestrator_review_launcher.py` without a
+  docstring, dropping the pinned `interrogate --fail-under 100` gate to
+  98.8% (`_preflight_review_agents.probe_agent (L174) MISSED`) and failing
+  #1417's `Hourly cadence, immutable source, NIM credential, and conflict
+  scope` check independently of the three systemic blockers above. Fixed by
+  adding a one-line docstring and pushed to #1417's existing head branch
+  `bolt-opt-label-section-2431233332957705980` (commit `190e505`). Verified
+  locally: `interrogate` now reports 100.0% over the five pinned files, the
+  full suite (`1873 passed, 1 skipped, 17 subtests`) and the focused
+  `opencode_review_normalize_output`/`contextual_orchestrator_review_*`
+  suites are unaffected, and `compileall`/`git diff --check` pass.
+- #1394 (Sentinel SSRF fix touching `sandboxed_web_e2e.py`) and #1418
+  (Sentinel SSRF/path-traversal regex fix touching
+  `agent_mention_sweep.py`/`organization_commercial_readiness_loop.py`) were
+  checked against each other and confirmed **not** duplicates — disjoint
+  files, disjoint vulnerabilities. #1394 also carries a stale `base` (its
+  branch predates several recent `main` merges) and needs an ordinary
+  merge-base-into-head before its checks are meaningful; not attempted this
+  pass given the time budget.
+- No open PR had a qualifying independent `APPROVED` review this pass
+  (`is:pr is:open review:approved` returned zero results repo-wide), so
+  priority 4 (merge) had no eligible candidate.
+- Next hourly pass: re-check whether #1413/#1414/#1422 merged; if still
+  open, keep sampling the backlog for independent (non-systemic) defects the
+  way this pass found #1417's, and consider merging `main` into #1394's head
+  to get it off its stale base.
+
+## 2026-08-30 orchestrator/free pool exhausted by upstream ZDR hardening
+
+- **Root cause (verified by live, end-to-end local reproduction, not log
+  inference).** After #1422 bumped `ORCHESTRATOR_PIN_SHA` to
+  `5f2753ace756ddd81049a5221d55e8977572a416`, the first hosted `noema-review`
+  run on the new pin (`.github` PR #1423, head
+  `954d57b46fd8896ba0fb572a4fc662aa6a684c0a`) failed with `sidecar exited
+  before healthz (status 1); stderr: omitted_unstructured_lines=1` — a new
+  failure signature, distinct from the stale-pin HTTP 502/413 class the
+  2026-08-30 entry above describes. Between the old pin
+  (`b21645116b352967e50fc497b87eb745b9cc8c61`) and the new one, upstream
+  `contextual-orchestrator` commit `952996ec` ("fix(discovery): keep
+  OpenRouter catalog evidence-only") deliberately set
+  `ProviderModelSource(provider_name="openrouter", ...).evidence_only=True`
+  (previously `False`) — an intentional, ZDR-privacy-motivated hardening
+  (OpenRouter routes to many third-party backends with varying retention
+  policies, so it may no longer be used as a *serving* agent, only as a
+  source of per-model ZDR evidence for other providers' matching canonical
+  ids). This is a correct fix on the orchestrator side and must not be
+  reverted or weakened.
+- The org's sidecar (`scripts/ci/contextual_orchestrator_review_launcher.py`)
+  builds the `orchestrator/free` pool only from `is_free=True` routes among
+  the five credentialed providers (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`).
+  `openrouter` was, and had always been, the *only* one of those five whose
+  discovery response carries genuine per-model pricing (`contextual_orchestrator/model_discovery.py`'s `_parse_openai_compatible` reads `row["pricing"]`, present only in OpenRouter's `/v1/models`
+  response shape). NVIDIA NIM, OpenAI, and Bytez publish no pricing via their
+  list-models endpoints at all — confirmed by an unauthenticated live probe
+  of `https://integrate.api.nvidia.com/v1/models` in this session, which
+  returns only `{id, object, created, owned_by}` per model, and by
+  `contextual_orchestrator`'s own `_parse_bytez` docstring ("Bytez prices by
+  GPU-second ... leaving per-1k pricing unset is more honest than a
+  misleading estimate"). `.github`'s own
+  `tests/test_contextual_orchestrator_review_live_discovery_contract.py`
+  already encoded this as `cost_evidence == "unknown"` for openai/nvidia_nim/
+  nvidia_nim_sub/bytez in its live-shape fixture — this was a known,
+  pre-existing structural dependency on OpenRouter for the free pool, not a
+  new assumption. With `openrouter` now `evidence_only`, the launcher's
+  `_routable_discovered_models()` filter drops all 540 OpenRouter rows before
+  the free-pool selection ever runs, so `selected_models` is empty and
+  `main()` raises `SystemExit("review sidecar discovered no eligible models;
+  orchestrator/free would fail closed")` — exit 1, before `serve()`, hence
+  before `/healthz`.
+- **Live reproduction** (this session, real network calls, fake-but-present
+  values for the five secrets, pinned commit `5f2753ac…` installed from its
+  own `requirements.lock`): `discover_all_models()` returned 682 models —
+  `openrouter`: 540 total, 60 genuinely free, but 540/540 `evidence_only`;
+  `nvidia_nim` and `nvidia_nim_sub`: 71 each, 0 free; `openai`/`bytez`:
+  `http_status_401` (fake key, but note neither provider's list endpoint
+  carries pricing regardless of auth outcome). Routable (non-evidence-only)
+  free models: **0**. Running
+  `scripts/ci/contextual_orchestrator_review_launcher.py` directly end-to-end
+  reproduced the exact hosted signature: raw stderr
+  `review sidecar discovered no eligible models; orchestrator/free would
+  fail closed`, exit 1. This is deterministic and structural, not a
+  transient provider/network fluke — every future `noema-review` run with
+  this exact five-secret credential set will fail identically until the free
+  pool gets a real, non-OpenRouter zero-cost source, so this blocks PR review
+  org-wide, not just PR #1423.
+- **Independent bug found and fixed in this pass (safe, no policy
+  tradeoff):** `scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py`'s
+  `_PREFIX_SUMMARIES` allowlist still matched the launcher's *old* wording
+  ("no zero-cost models"), not the current "no eligible models" text, and had
+  no entry at all for the launcher's missing-auth-token or
+  missing-provider-credential `SystemExit` messages. All three fell through
+  to `omitted_unstructured_lines=N`, which is exactly why PR #1423's hosted
+  log showed only `omitted_unstructured_lines=1` instead of the actionable
+  cause above — the redaction was hiding a real, non-secret diagnostic, not
+  protecting a secret. Fixed the three prefixes/summaries and the matching
+  pinned assertions in
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`; full
+  `.github` suite (1875 passed, 1 skipped, 25 subtests), `coverage report`
+  (the changed file itself is 100%; the pre-existing repo-wide 99% is the
+  already-tracked `scripts/ci/pingora_edge_policy.py:274` gap owned by
+  #1398, not introduced here), and `interrogate` (100.0%) all pass on this
+  change alone.
+- **What is intentionally NOT fixed by this pass, and needs a product/human
+  decision, not a unilateral code change:** restoring a non-empty
+  `orchestrator/free` pool. Two candidate paths, neither exercised or
+  authorized here: (a) accept real provider spend by pointing
+  `CONTEXTUAL_ORCHESTRATOR_POOL` at `auto` (already fully implemented in the
+  launcher as a priced fallback) — this trades away the "fail-closed
+  zero-cost" guarantee `docs/CWL-MASTER-CONTEXT.md`/`CLAUDE.md` describe for
+  every PR review org-wide, a budget-owner call; or (b) wire in a genuine
+  zero-cost provider — `contextual_orchestrator`'s `opencode_zen` source
+  already cross-references real Models.dev pricing (not a self-reported
+  flag) to compute `is_free` honestly, and its credential
+  (`OPENCODE_ZEN_API_KEY`) already exists as an org secret (used today only
+  by `opencode-review.yml`'s separate OpenCode Zen GitHub Models config, not
+  passed to this sidecar) — but wiring it in also needs a new
+  `scripts/ci/zdr_policy.py` `PROVIDER_ZDR_SCOPE["opencode_zen"]` attestation
+  entry (that table currently `KeyError`s on an unknown provider name by
+  design, so skipping this would crash every ZDR-required — i.e.
+  private/internal-repo — review instead of just noema-review's current
+  public-repo failure) and live verification, with a real key, that
+  opencode.ai/zen's discovered free models are actually
+  general-chat/tool-call-capable and pass the sidecar's runtime preflight —
+  none of which this pass could validate without provisioning real
+  credentials. Neither option is a small, obviously-safe patch, so it is
+  left open here rather than forced.
 ## 2026-08-30 sidecar pin staleness recurrence
 
 - Same class of defect as the 2026-08-29 entry above recurred within one day:
@@ -403,7 +572,7 @@ flowchart LR
   `ORCHESTRATOR_PIN_SHA` default (`b21645116b352967e50fc497b87eb745b9cc8c61`)
   was already 103 commits behind `contextual-orchestrator` `main`. Observed
   directly in hosted `noema-review` job logs (`.github` PR #1421,
-  `ContextualWisdomLab/contextual-orchestrator` PR #857 and others): the
+  `ContextualWisdomLab/contextual-orchestrator#857` and others): the
   vendored sidecar's own preflight against the stale pin fails closed with
   `gateway preflight returned HTTP 502` (and, on a differently-shaped request,
   `request_failed status=413 code=request_too_large`) before the model pool
@@ -430,6 +599,698 @@ flowchart LR
   a nightly job once the pin falls more than N commits or M days behind a
   green `contextual-orchestrator` main) would close that gap; not implemented
   in this PR, left for a follow-up.
+
+## 2026-08-30 post-#1413/#1422 backlog refresh cycle
+
+- Confirmed at the start of this pass: protected `main` is
+  `c48859ac3919f1e7d2f24e744e5c551b94e66ac2`, which includes both #1413
+  (Strix `orchestrator/auto` route recognition) and #1422 (sidecar pin bump
+  to `5f2753ace756ddd81049a5221d55e8977572a416`) merged. Both root-cause
+  fixes are live on `main` as of this pass, alongside the pre-existing
+  bootstrap `if:` guard fix.
+- Since `strix`/`opencode-review`/`noema-review` are `pull_request_target`
+  required checks, an already-open PR does not get a fresh run merely
+  because `main` moved; each needs a new push event on its own branch. This
+  pass merged current `main` into as many otherwise-viable open PR branches
+  as could be validated in the time available, always as an ordinary
+  non-force-push merge commit (never a rebase), and only after a local
+  test-merge confirmed either a clean merge or a genuinely trivial conflict.
+- **15 PRs refreshed against the new `main`** (all pushed as plain merge
+  commits):
+  - Clean merges, no conflicts (6 via `update_pull_request_branch`, GitHub's
+    native "merge base into head" API): #1416, #1417, #1418, #1419, plus
+    #1276 and #1275 (dependency/security-action version bumps).
+  - Trivial conflicts resolved by hand, all confined to the additive
+    `## [Unreleased]` list in `CHANGELOG.md` (both sides had independently
+    appended unrelated bullets to the same list; resolution kept both):
+    #1411, #1398, #1397, #1348, #790, #821, #1391.
+    - #1348 additionally collided on Gap ID: its own draft `G-15` entry
+      (queue-hygiene live-ref race, `ContextualWisdomLab/LineageWeave#667`) numerically collided
+      with `main`'s already-merged, unrelated `G-15` (attachment-processing
+      boundary). Renumbered the branch's entry to **G-16**; confirmed no
+      test or cross-reference in that PR's diff pins the literal string
+      `G-15`, so the rename is safe.
+    - #1391 additionally conflicted in
+      `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s
+      `REVIEW_DISPATCH_BLOB_SHA` pinned-blob-hash constant, because #1391's
+      own change (a Cargo-prefetch step) edits
+      `.github/workflows/opencode-review-dispatch.yml` inside the same
+      region `main` had independently changed, so neither side's pre-merge
+      constant was correct post-merge. Resolved by computing
+      `git hash-object` on the actually-merged file
+      (`50752bfef4c8db87bf971c5e9c2a98da72fc281c`) rather than guessing;
+      verified with `pytest tests/test_pr_review_autofix_nvidia_nim_contract.py`
+      (23 passed).
+  - Already on current `main`, no merge needed, just stuck: #1233 and #1176
+    both showed `base.sha` already equal to current `main` yet
+    `mergeable_state: blocked` (no conflict, just no fresh check run).
+    Pushed an empty retrigger commit to each to generate the required new
+    event.
+- **8 PRs left untouched this pass due to real (non-trivial) conflicts**,
+  each confirmed by an actual local `git merge --no-commit --no-ff origin/main`
+  rather than by SHA-staleness alone: #1394 and #1347 (both edit
+  `scripts/ci/sandboxed_web_e2e.py`, which `main` has independently changed
+  for its own SSRF hardening — same file, overlapping logic, not attempted);
+  #1415 (edits `scripts/ci/contextual_orchestrator_review_launcher.py`,
+  colliding with #1422's own sidecar changes); #1382 (nine conflicting files
+  spanning `strix.yml`, the ZDR policy module, and the sidecar script —
+  large surface, not attempted); #1009 (eleven conflicting files across
+  agent-mention routing, the merge scheduler, and Strix); #834 (conflicts in
+  `scripts/ci/contextual_orchestrator_review_policy.py`); #789 (six
+  conflicting files including `AGENTS.md` and the sidecar token loader);
+  #1114 (`strix.yml` — `main` has already independently grown equivalent
+  retry-with-backoff visibility-lookup logic to what #1114 itself proposed,
+  so this PR may now be moot rather than merely stale; flagging for owner
+  review rather than guessing). None of these were pushed; none were force
+  anything.
+- **Independent, non-systemic defect found on #1420** (whose branch was
+  already exactly on current `main` — no refresh needed): its fresh
+  `noema-review` run *did* vendor the corrected sidecar pin
+  (`5f2753ace756…`, confirmed in job logs) but then failed with
+  `request_failed status=413 code=request_too_large` during model
+  discovery, fell back to the OpenRouter ZDR feed, and the sidecar process
+  exited before its own healthz check with a non-zero status. Its
+  `opencode-review` gate failed separately and for an unrelated reason: at
+  the moment it ran, no `opencode-agent` review existed yet at the exact
+  current head (the verdict-lookup gate and the actual model dispatch that
+  posts the verdict appear to run on different, only loosely synchronized
+  schedules). Neither failure traces to the three already-diagnosed root
+  causes (Strix model recognition, the bootstrap guard, or the stale pin
+  value) — this is new evidence of a still-open sidecar/gateway runtime
+  defect and a possible review-dispatch timing gap, not yet root-caused or
+  fixed. Left for a follow-up pass; not in scope to fix blind this cycle.
+- **This PR's own earlier section above was corrected in place rather than
+  left to stand**, per the "search existing PRs for the same root cause
+  first" instruction: its content predated #1413/#1422 landing and was
+  simply wrong about the current backlog state, so amending this PR (which
+  already exists, unmerged, solely to record an hourly-loop dated entry) was
+  preferred over opening a duplicate doc-update PR for the same purpose. An
+  earlier attempt at this same correction, pushed concurrently by another
+  process to this same branch, resolved its `main`-merge conflict by
+  dropping the "2026-08-30 sidecar pin staleness recurrence" section above
+  out of the file entirely; that section is restored verbatim above as part
+  of this correction.
+- **No PR was merged this pass.** Every refreshed PR's required
+  `opencode-review`/`noema-review` verdict depends on an asynchronous model
+  dispatch (observed taking on the order of minutes just for sidecar
+  bootstrap and model discovery before any verdict posts) that had not
+  completed for any of the 15 refreshed PRs by the time this pass ended;
+  none had a qualifying current-head `APPROVED` review yet. This is expected
+  for one pass in an hourly loop, not a defect: the next pass should re-read
+  each of the 15 PRs' current-head checks and reviews, and merge whichever
+  come back green and approved with `--match-head-commit` per §5.
+
+## 2026-08-30 discovery-error visibility gap in the review sidecar launcher
+
+- While investigating the "2026-08-30 orchestrator/free pool exhausted by
+  upstream ZDR hardening" entry above, the repo owner asked why a local
+  reproduction of that incident showed only 3 of the 5 configured providers
+  (`openrouter`, `nvidia_nim`, `nvidia_nim_sub`) and never `bytez`/`openai`,
+  despite all 5 credentials being registered.
+- Traced to a real, separate bug in this repo (not `contextual-orchestrator`):
+  `scripts/ci/contextual_orchestrator_review_launcher.py`'s `main()` called
+  `discovered, _ = discover_all_models()`, discarding the second tuple
+  element entirely. `discover_all_models()` itself correctly isolates and
+  returns each provider's failure as a `ProviderDiscoveryError` (bounded,
+  secret-free: a `provider_name` plus a stable `error_code` classification
+  such as `http_status_401`/`timeout`/`transport_error`/`invalid_response`,
+  confirmed by reading `_provider_discovery_error_code` and
+  `ProviderDiscoveryError.__init__` directly) — the launcher simply never
+  looked at them. An operator reading CI logs could not tell "this provider
+  legitimately has zero free models" from "this provider's credential or
+  discovery request is silently broken", which is exactly the ambiguity that
+  made the earlier ad hoc reproduction inconclusive about bytez/openai.
+- Fixed by adding `_log_discovery_errors()` to the launcher, called
+  immediately after `discover_all_models()`, printing one
+  `provider_discovery_failed provider=<name> code=<code>` line per error to
+  stderr (non-fatal, matching `discover_all_models()`'s own "one provider's
+  failure never blocks the others" contract). Extended
+  `scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py` with a
+  matching bounded regex (mirroring the existing `request_failed` pattern)
+  so this new diagnostic is allowlisted through to CI evidence instead of
+  falling into `omitted_unstructured_lines=N` — the same class of redaction
+  gap the "2026-08-30 sidecar-diagnostics gap baseline" fix (#1425) closed
+  for the fail-closed exit message.
+- This does not by itself restore `orchestrator/free`; it only makes any
+  future bytez/openai discovery failure (credential expiry, API changes,
+  etc.) visible instead of silently indistinguishable from "no free models
+  today". Root cause and fix for the free-pool exhaustion itself remain
+  tracked in the entry above.
+- Validation: `PYTHONPATH=. python3 -m coverage run -m pytest tests -q` —
+  1878 passed, 1 skipped, 25 subtests; `interrogate` 100.0%; `git diff
+  --check` clean. `scripts/ci/contextual_orchestrator_review_launcher.py`
+  remains outside the coverage gate per this repo's pre-existing, documented
+  `pyproject.toml` `[tool.coverage.run]` omission (it imports the vendored
+  orchestrator library, installed only inside the sidecar's own runtime);
+  the new `_log_discovery_errors` helper is still covered by two new
+  regression tests exercising it directly via `runpy.run_path`, consistent
+  with this file's existing test pattern for the same module's other
+  runtime-only helpers.
+
+## 2026-08-30 orchestrator/free root-cause fix landed; sidecar pin bumped
+
+- Root cause of the "orchestrator/free pool exhausted by upstream ZDR
+  hardening" entry above is now fixed upstream:
+  `ContextualWisdomLab/contextual-orchestrator#919` generalized the
+  ADR-0032 Models.dev cost cross-reference from `opencode_zen`-only to also
+  cover `nvidia_nim`/`nvidia_nim_sub`/`openai`, and — the actual blocker
+  found during that PR's own review — fixed `_fetch_json` sending no
+  `User-Agent` header, which caused `models.dev` (Cloudflare-fronted) to
+  reject every discovery request with HTTP 403 error 1010. That 403 had been
+  silently breaking the Models.dev join for **all** providers, including the
+  pre-existing `opencode_zen` path, since before this incident was first
+  observed; without it, no provider could ever populate `orchestrator/free`
+  regardless of the OpenRouter `evidence_only` hardening this baseline
+  previously identified as the proximate cause.
+- Merged into `contextual-orchestrator` `main` as squash commit
+  `30c6d71680e659f25a0a433d4726ad0d437f9757`, with owner-authorized admin
+  bypass past `opencode-review`/`noema-review`/`strix` — those three required
+  checks run this org's central review pipeline against `.github`'s
+  *current* `main` pin, which (before this PR bump) still pointed at the
+  broken pre-fix commit, so they failed on the exact chicken-and-egg this fix
+  resolves: the PR that restores `orchestrator/free` cannot itself pass a
+  required review that depends on `orchestrator/free`. All 5 review threads
+  (Devin, CodeRabbit) were independently resolved before merge; local suite
+  was 2676 passed.
+- This PR bumps `ORCHESTRATOR_PIN_SHA` from
+  `5f2753ace756ddd81049a5221d55e8977572a416` (the #1422 pin) to
+  `30c6d71680e659f25a0a433d4726ad0d437f9757` in the same three places #1422
+  established as the contract: the sidecar script default
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
+  test's `ORCH_PIN_SHA`
+  (`tests/test_contextual_orchestrator_review_sidecar_contract.py`), and
+  `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
+  reference. `requirements.lock` needs no separate sync for the same reason
+  #1422 recorded — the sidecar installs it fresh from the freshly
+  checked-out pinned commit.
+- Acceptance is open the same way #1422's entry describes: this closes the
+  reproduced root cause (live-verified against the real `models.dev/api.json`
+  endpoint both before the fix, HTTP 403, and after, HTTP 200) and all
+  static contract tests pass, but only a fresh post-merge hosted
+  `noema-review`/`opencode-review` run against this new pin is proof the live
+  gateway path actually discovers a free model and posts a verdict.
+  Following up on that hosted-run confirmation is the concrete next check for
+  this entry, not a new code change.
+
+## 2026-08-30 hosted-run confirmation of #1430 fails at a new stage: live preflight, not discovery
+
+- This is exactly the follow-up hosted-run confirmation the entry above asked
+  for, and it does **not** come back clean. Three independent fresh
+  `noema-review` runs were forced against current `main`
+  (`755fe8e1`/`30c6d716`, i.e. with #1430's fix already in effect, since
+  `pull_request_target` always executes the *base* branch's copy of
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` regardless of the
+  PR's own content): #1432 twice (`61de349f`, jobs `33303869223` then
+  `33304289755` after a second forced re-run) and #1418 once (`7b4161fd`,
+  job containing check id `99238526905`). All three reproduce the identical
+  new failure, verbatim: `vendoring contextual-orchestrator @
+  30c6d71680e659f25a0a433d4726ad0d437f9757` → discovery completes with
+  **zero** `provider_discovery_failed` lines (the sentinel
+  `discovery_diagnostics_complete` is reached cleanly, so `orchestrator/free`
+  is genuinely populated this time, unlike the pre-#1430 empty-pool
+  signature) → `review sidecar preflight failed` (the launcher's
+  `_preflight_review_agents` in `scripts/ci/contextual_orchestrator_review_launcher.py`
+  raises `ReviewPreflightError("no provider route passed the Strix
+  plain-chat preflight", report)`) → `sidecar exited before healthz (status
+  1)`. Every run also logs `omitted_unstructured_lines=4`: the redacting
+  stream sanitizer (`scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py`)
+  is, by design, dropping the four lines that would explain *which* routes
+  were rejected and why (provider response bodies/exception text are
+  intentionally never allowlisted into CI logs) — so the exact per-route
+  `error_type`/`http_status` only exists in the `preflight_report` JSON
+  (`$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json`), which only
+  `strix.yml` uploads as an artifact; `noema-review.yml` and
+  `opencode-review-dispatch.yml` run the identical sidecar script but do not
+  upload it, so this pass could not retrieve the artifact (a same-cycle
+  `strix` run on unrelated PR #1176 was still queued behind the
+  per-repository concurrency group after 15+ minutes and was not waited
+  out).
+- This is a **different** defect from the one #1430 fixed, not a recurrence
+  of it: the pool is not empty and discovery is not failing. Something
+  downstream — plausibly (not yet confirmed) shared-provider-key rate/burst
+  pressure from the large number of PRs' `noema-review`/`opencode-review`/
+  `strix` jobs re-triggered by #1430 landing, or a genuine defect newly
+  exposed by #919's provider-family generalization (`nvidia_nim`/
+  `nvidia_nim_sub`/`openai` routes that previously never reached live
+  discovery) — is rejecting every one of the (up to 12) selected zero-cost
+  candidates at `ModelClient.proxy_send_once`. Two observations argue
+  against pure rate-limiting: the failure is 3-for-3 reproducible with no
+  intervening success, and the two #1432 runs were ~9 minutes apart (well
+  outside a typical burst window) yet failed identically. This needs a
+  `preflight_report` artifact (or direct provider-side log access this
+  session does not have) to root-cause conclusively — not assumed to be one
+  cause or the other here.
+- **Scope of impact**: essentially every non-draft open PR's
+  `noema-review`/`opencode-review`/`strix` required checks are currently
+  blocked on this, independent of anything in the PR's own diff or how
+  stale its branch is — confirmed by sampling ~45 open PRs' latest check
+  runs and finding the `noema-review`/`opencode-review`/`strix` failures
+  either stale (pre-dating one of today's earlier fixes: #1413, #1414,
+  #1422, or #1430) or, on the three forced fresh re-runs above, this new
+  signature. No PR sampled this pass showed a `noema-review` failure
+  distinct from this signature or from the three already-diagnosed
+  pre-#1430 systemic causes recorded in the 2026-08-30 hourly-recheck entry
+  above.
+- **Not bypassed.** The owner's standing bypass authorization for this repo
+  covers two verified structural signatures only: a PR whose own diff edits
+  `.github/workflows/`/`scripts/ci/` review-pipeline files (the
+  `pull_request_target` trust-boundary case #1430 itself hit) or the
+  pre-#1430 empty-pool chicken-and-egg. Neither applies here: discovery is
+  not empty, and none of the PRs sampled this pass (including #1176, which
+  edits `.github/workflows/audit-central-ruleset.yml` and
+  `scripts/ci/audit_central_required_workflows.py` — real workflow/CI files,
+  but not the review-pipeline ones, and not the cause of its own
+  `noema-review` failure) edit the review-pipeline files themselves. Per the
+  owner's explicit conservative instruction, an unclear or newly-surfaced
+  failure reason is not bypass-eligible, so nothing was bypass-merged this
+  pass.
+- Given the above, this pass deliberately did **not** mass-retry
+  `update_pull_request_branch`/re-runs across the ~45 affected open PRs:
+  three independent forced reproductions already established the failure is
+  systemic and deterministic, not per-PR or transient, so repeating the same
+  forced re-run dozens more times would only burn shared runner/provider
+  quota for the same evidence already in hand.
+- Next concrete step (not attempted this pass, given the time budget): get
+  one `strix` run's `contextual-orchestrator-preflight.json` artifact on a
+  current-`main`-based head (wait out or avoid the concurrency queue) to
+  read the real per-route `error_type`/`http_status`, then decide whether
+  the fix belongs in `contextual_orchestrator_review_launcher.py` (e.g.
+  lower `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`/serialize discovery to avoid a
+  self-inflicted burst) or in `contextual-orchestrator` itself (e.g. a
+  credential-resolution or request-shape regression for the newly-widened
+  `nvidia_nim`/`nvidia_nim_sub`/`openai` routes from #919).
+
+## 2026-08-30 sidecar-preflight outage: consolidated evidence and why it is not one deterministic bug
+
+**Supersedes the framing (not the evidence) of the entry above** — same incident,
+now with the actual per-route rejection data and a third independent run
+sequence, from three converging sources this pass: this session's own three
+forced reproductions on `.github` (#1432 x2, #1418 x1, all `SystemExit`
+before `healthz`), the `contextual-orchestrator-preflight.json`/
+`contextual-orchestrator-discovery.json` artifact recovered from PR #1176's
+`strix` run (queued behind #1418's, completed ~09:45), and a fourth
+independently-reported run on PR #1433's `noema-review` (`healthz` reached,
+then a 502 on the actual gateway request).
+
+- **PR #1176's `strix` artifact is the first look at the real per-route
+  reasons**, previously invisible because the sanitizer intentionally
+  redacts them from job logs. That run used `orchestrator/auto` (pre-dating
+  this pass's now-reverted Strix free/auto edit — see below), so it exercised
+  both stages `_preflight_with_fallback` runs:
+  - **Primary (free) stage, 4/4 candidates rejected, zero ready**: two
+    `nvidia_nim` `deepseek-ai/deepseek-v4-*` candidates timed out
+    (`TimeoutError`); two `nvidia_nim` `google/gemma-3-*b-it` candidates got
+    `HTTPError` **404** — i.e. NVIDIA has retired those hosted model ids
+    (the exact failure class `scripts/ci/select_nvidia_nim_model.py`'s own
+    docstring already describes for a *different*, currently-unwired
+    caller: "NVIDIA retires hosted models on published end-of-life dates,
+    and the endpoint then answers every request with HTTP 410/404"). The
+    discovery report shows 46 free-priced rows existed, all `nvidia_nim`/
+    `nvidia_nim_sub` duplicates of the same ~23 model ids — so this was not
+    a bad selection out of a large pool; it is the **entire** free-tier
+    catalog for this run, and 2 of ~23 distinct ids are already dead.
+  - **Fallback (priced/auto) stage, 2/8 ready**: `nvidia_nim` and
+    `nvidia_nim_sub` `nvidia/nemotron-3-super-120b-a12b` both succeeded;
+    `nemotron-3-ultra-550b-a55b` timed out on both keys; all four `openai`
+    candidates (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`, `gpt-4.1`) were
+    rejected with **HTTPError 429** (rate-limited) on every single attempt.
+    The run only survived because `auto`'s fallback tier existed at all.
+- **PR #1433's `noema-review` (pool is always `free` there, no fallback tier)
+  reached `healthz` successfully after 23s** — its own internal
+  `_preflight_review_agents` found a viable route this time — but the
+  shell script's separate, subsequent real `/v1/chat/completions` gateway
+  smoke request against the now-serving `orchestrator/free` virtual model
+  came back **HTTP 502**. This is a different code path than the launcher's
+  own preflight (`ModelClient.proxy_send_once` against explicit candidate
+  agents) — it is the running server's own virtual-model routing under a
+  real request — so a route that passed the launcher's own preflight
+  moments earlier still failed when the server tried to actually serve it.
+  A `provider_discovery_failed provider=bytez code=http_status_500` warning
+  in the same run is flagged non-fatal by the sidecar itself; not confirmed
+  either way as related.
+- **Reading all four data points together**, this is not one deterministic
+  code defect to patch: it is a **mix of (a) a stale/retired-model gap in
+  the free-tier catalog** (the 404s — a real, fixable bug: nothing in
+  `contextual_orchestrator_review_launcher.py`'s selection path
+  cross-checks a discovered "free" model id against the provider's live
+  `/v1/models` catalog before adding it as a preflight candidate, unlike
+  `select_nvidia_nim_model.py`'s already-solved pattern for its own,
+  currently-unwired caller) **and (b) load-sensitive provider instability**
+  (timeouts, the 429s across every OpenAI candidate in one run, the 502 on
+  an already-healthy server in another) most consistent with the shared
+  five org provider keys being hit by concurrent review-check volume across
+  many simultaneously re-triggered PRs org-wide, though this pass could not
+  instrument request volume to confirm that mechanism directly. Two runs on
+  the same PR #1432 nine minutes apart failing identically (both times
+  `omitted_unstructured_lines=4`, same overall shape) argues the *retired-
+  model* component is deterministic and load-independent; PR #1176/#1433's
+  more varied outcomes (partial success, a different failure stage
+  entirely) argue the *timeout/429/502* component is not.
+- **Root-caused precisely (code-verified, not just log-pattern-matched) and
+  a first mitigation implemented, though not confirmed on a live hosted
+  run** — this session lacks the five provider credentials the sidecar
+  registers into its KV, so nothing here could be locally reproduced end to
+  end; the fix below was reasoned from reading
+  `scripts/ci/contextual_orchestrator_review_policy.py`'s actual selection
+  code against the PR #1176 artifact's exact discovery/preflight data, not
+  from guessing at the log-pattern level:
+  - `contextual_orchestrator_review_policy.py`'s
+    `build_zdr_prioritized_catalog` groups `nvidia_nim`/`nvidia_nim_sub`
+    into one outage-domain "family" (`PROVIDER_FAMILIES`) and caps how many
+    candidates from one family it will ever select
+    (`family_cap`, default 4) — a guard originally meant to stop one
+    provider family from crowding out others. But eligible rows are sorted
+    purely alphabetically by `(cost_rank, zdr_rank, provider, model)`, with
+    **no reliability signal at all**, and per the PR #1176 discovery report,
+    100% of `orchestrator/free`'s 46 rows (23 distinct model ids, mirrored
+    across the two NVIDIA keys) currently belong to this one family. The
+    combination is deterministic, not merely load-sensitive: every run
+    admits the exact same alphabetically-first 4 candidates —
+    `deepseek-ai/deepseek-v4-flash-0731`, `deepseek-ai/deepseek-v4-pro-0813`,
+    `google/gemma-3-12b-it`, `google/gemma-3-4b-it` — and the PR #1176
+    artifact shows two of those four (the `gemma-3` pair) are NVIDIA-retired
+    model ids returning HTTP 404, forever, on every future run, regardless
+    of load or timing, while the other ~19 free `nvidia_nim`/`nvidia_nim_sub`
+    model ids in the same discovery report (`nemotron`, `llama`, `mistral`,
+    `minimax`, `moonshot`, `openai/gpt-oss-*`, `poolside`) never get a
+    chance to preflight at all. This fully explains the earlier finding that
+    two runs on PR #1432 nine minutes apart failed identically
+    (`omitted_unstructured_lines=4` both times, same shape): it was never
+    going to vary run to run.
+  - **Implemented**: raised `contextual_orchestrator_review_sidecar.sh`'s
+    `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8 (see the dated
+    comment left at that line for the full reasoning and numbers). This is a
+    deliberately moderate, bounded change, not a full fix: it roughly
+    doubles how many of the ~23 distinct free `nvidia_nim`/`nvidia_nim_sub`
+    model ids get a chance per run, which — assuming the retired/slow
+    candidates observed in the one artifact available are a minority of that
+    set, not the majority — meaningfully improves the odds of finding a
+    working route without needing new retry/exclude logic in
+    `contextual_orchestrator_review_launcher.py` or touching
+    `contextual_orchestrator_review_policy.py`'s tested, shared
+    `family_cap` contract (its own default and tests are untouched; only
+    this one deployment-level env-var default changed). It does **not**
+    remove the two permanently-dead `gemma-3` candidates from the pool —
+    they will still be tried and still fail, just alongside more real
+    chances rather than crowding out all of them. The trade-off made
+    explicitly, not silently. The picking loop also stops at the overall
+    `CATALOG_LIMIT` (12) regardless of `family_cap`, so the absolute
+    worst case across any number of distinct families was already
+    `REVIEW_PREFLIGHT_TIMEOUT_SECONDS=10` × 12 = 120s before this change
+    (reached once `family_cap` × distinct families ≥ 12, i.e. ≥3 families
+    at the old cap of 4) and stays 120s after it — this raise does not move
+    that pre-existing ceiling. What changes is *when* that ceiling is
+    reached and the typical case today: with the single family
+    (`nvidia_nim`) currently filling 100% of `orchestrator/free`,
+    worst-case preflight time rises from ~40s (4 candidates) to ~80s (8
+    candidates); with exactly two distinct families it would now also
+    reach the 120s ceiling (previously ~80s at `family_cap=4`). Both
+    figures stay within the sidecar's existing 180s readiness-wait
+    ceiling in the common case but not verified against real provider
+    latency, since this session cannot exercise that path live.
+  - **Not implemented, and the more complete fix if 8 turns out
+    insufficient or the added latency itself becomes the new bottleneck**:
+    cross-check discovered "free" model ids against the provider's live
+    `/v1/models` catalog before admitting them to the candidate pool at all,
+    dropping retired ids at discovery time rather than paying their
+    preflight cost every single run. `scripts/ci/select_nvidia_nim_model.py`
+    already implements exactly this pattern (see its docstring) — for a
+    different, currently-unwired caller (this same pass's ZDR/NIM-routing
+    entry above). Wiring that same live-catalog-freshness check into
+    `contextual_orchestrator_review_launcher.py`'s own selection path was
+    not attempted this pass: it requires new network-call error handling in
+    a security-relevant path this session cannot exercise against real
+    NVIDIA endpoints, which is a materially different risk profile than the
+    bounded, config-only change above.
+  - The separate timeout/429/502 half of the four-source evidence above
+    (real transient provider-side load, not a catalog-freshness issue) is
+    unaffected by this change and remains unconfirmed either way; a
+    properly-diverse candidate set (which this change moves toward) is the
+    best available mitigation for it without direct provider-side
+    observability this session does not have.
+  - **Next concrete step for whoever has runner access next**: watch the
+    next real hosted `noema-review`/`opencode-review`/`strix` run's
+    artifact/logs against this change. If it still fails with "no provider
+    route passed" and `omitted_unstructured_lines` stays non-zero, pull the
+    `contextual-orchestrator-preflight.json` artifact (`strix` only uploads
+    it; a targeted `strix` run may be needed) and check whether the newly
+    admitted 4 candidates (ranks 5-8 alphabetically) are also all rejected,
+    which would mean the dead/slow fraction of this provider's free catalog
+    is larger than assumed and the live-catalog cross-check above is the
+    real fix, not a further family_cap increase.
+  - **A second, independent, complementary fix landed on `main` mid-pass**:
+    PR #1436 ("give the gateway preflight probe a real reasoning budget"),
+    authored elsewhere in parallel, fixes `contextual_orchestrator_review_
+    sidecar.sh`'s own post-`healthz` gateway smoke request — it previously
+    used a `max_tokens` value desynchronized from
+    `REVIEW_MAX_OUTPUT_TOKENS`, so a reasoning-capable free-tier route (e.g.
+    a DeepSeek NIM model) that the launcher's own internal preflight had
+    already proved "ready" could still spend its whole budget on internal
+    reasoning before any visible answer, making the shell script's separate
+    end-to-end smoke request see empty assistant content and fail closed
+    with `502 invalid_structured_output`. This is the precise mechanism
+    behind the PR #1433 "healthz reached, then 502" signature this entry's
+    earlier revision (see the superseded framing note above) described
+    without yet knowing the cause — it is a genuinely different bug from
+    this entry's own family-cap/stale-model finding (that one is about
+    *which* candidates ever reach a preflight attempt; #1436's is about the
+    *separate*, later smoke-test step that re-checks whichever candidate
+    the server ends up actually routing to), not a duplicate or a
+    correction of it. Both fixes are now in this branch's ancestry
+    (merged `main` into `fix/zdr-nim-nvidia-citation-20260830` mid-pass);
+    a hosted run against the combined state is the next real test of
+    whether the outage is now closed or whether further work (the
+    live-catalog cross-check above, or something neither fix covers) is
+    still needed.
+- **Strix `orchestrator/auto` → `orchestrator/free`: implemented, per the
+  owner's explicit, informed decision.** This pass first drafted the switch,
+  then reverted it unpushed on discovering `docs/adr/0003-contextual-
+  orchestrator-vendored-free-zdr.md`'s original, evidence-based rationale for
+  `orchestrator/auto` ("the 2026-08-29 exact-head DiskSage scan proved that
+  four discovered free routes all shared the OpenRouter outage domain...
+  Strix has no external fallback") and today's own PR #1176 artifact showing
+  that exact single-family-collapse pattern reproducing live (free-only
+  primary stage: 4/4 candidates rejected — 2 timeouts, 2 HTTP 404s on retired
+  NVIDIA models; only `auto`'s paid fallback kept that run alive). That
+  conflict — a fresh verbal directive versus a documented prior decision with
+  a specific, currently-reproducing technical rationale — was surfaced to the
+  owner rather than resolved unilaterally. The owner's response, having seen
+  both: "아니 일단 내가 지시한대로 해봐" ("no, do what I originally instructed
+  first") — an explicit, informed override, accepting that Strix can now go
+  fully dark rather than degraded-but-running during the exact incident class
+  ADR-0003 originally used `orchestrator/auto` to survive, until the
+  free-catalog's stale-model and provider-diversity gaps (documented in the
+  entries above and below) are separately closed.
+  **Implemented this pass**: `strix.yml`'s `STRIX_MODEL`/
+  `CONTEXTUAL_ORCHESTRATOR_POOL` and both model-selection-step allowlists now
+  default to and accept only `orchestrator/free`;
+  `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model` no
+  longer accepts `orchestrator/auto`; `scripts/ci/
+  strix_required_workflow_smoke.sh`, `AGENTS.md`, and the diagnostic-string
+  lookups in `opencode-review-dispatch.yml`'s failed-check diagnosis were
+  updated to match; `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+  carries a dated amendment recording this as a superseding decision (not a
+  silent contradiction) with the owner's accepted risk spelled out
+  explicitly. All 6 previously-`auto`-pinning test files plus one
+  reviewed-workflow blob-SHA pin (`opencode-review-dispatch.yml` changed
+  content, so its independently-reviewed-blob contract in
+  `tests/test_pr_review_autofix_nvidia_nim_contract.py` was re-pinned to the
+  new blob SHA) were updated; full local suite: 1880 passed, 1 skipped, 100%
+  interrogate, `pingora_edge_policy.py`'s single pre-existing coverage miss
+  unrelated to this change. **Not yet confirmed on a real hosted run**: this
+  makes Strix subject to the same currently-open sidecar-preflight outage
+  documented above — a real `strix` run against this change will very likely
+  fail (or go dark) until that outage's stale-model/provider-diversity gaps
+  are fixed, which is the accepted, expected, and now-explicitly-owner-chosen
+  state, not a new defect.
+- **A `strix` `repository_dispatch` run against PR #1434 was observed to
+  fail — but it does not test any of the above, and is not evidence either
+  way about the outage-domain risk.** Run
+  `ContextualWisdomLab/.github/actions/runs/33306963425`'s `strix` job
+  failed at its "Self-test Strix required workflow contract" step, before
+  provisioning the sidecar, gating secrets, or running any scan (all
+  downstream steps show `skipped`). The exact cause, read from the job log:
+  this self-test step deliberately materializes the **PR head**'s
+  `strix.yml` (`"Materialized PR-head Strix workflow for self-test."`) and
+  checks it with the **trusted-base** (i.e. current `main`, via the same
+  `pull_request_target`-style trust boundary #1430 hit)
+  `scripts/ci/strix_required_workflow_smoke.sh`. `main` does not yet have
+  this pass's Strix `auto`→`free` change, so its smoke script still asserts
+  `STRIX_MODEL: contextual-orchestrator/orchestrator/auto` and explicitly
+  rejects `STRIX_MODEL: contextual-orchestrator/orchestrator/free` — exactly
+  what PR #1434's own `strix.yml` now contains — producing two `FAIL:`
+  lines and a hard exit before anything provider- or model-related runs.
+  This is the **same structural class of chicken-and-egg documented for
+  #1430 and called out in this session's own task instructions ("a PR that
+  itself edits `.github/workflows/`/`scripts/ci/` review-pipeline files can
+  structurally fail its own required check")** — PR #1434 edits `strix.yml`
+  and `strix_required_workflow_smoke.sh` together, and the smoke half of
+  that pair cannot become "trusted" until merged. It says nothing about
+  whether `orchestrator/free` would actually survive the single-outage-
+  domain risk at runtime — the run never reached that layer. A genuine
+  runtime test of the `auto`→`free` switch needs either this PR merged
+  first (own chicken-and-egg — the owner's bypass authority for this repo
+  has not been extended to PR #1434 specifically, so this pass did not
+  self-authorize one) or a `repository_dispatch` targeting a *different*
+  repository that does not itself edit these trusted files.
+- **Secondary, separate finding on the same run**: the follow-up
+  `publish-manual-pr-evidence-status` job also failed —
+  `target-app-token` got `HTTP 403: Resource not accessible by integration`
+  publishing the (correctly non-success, per the self-test failure above)
+  Strix status back to `.github`'s own PR #1434. The publisher's own logic
+  only tolerates a publish failure silently when `STRIX_RESULT=success`; a
+  non-success result that also cannot be published hard-fails by design, so
+  this is arguably correct fail-closed behavior surfacing a real,
+  previously-unobserved token-scoping gap, not a logic bug. Plausibly an
+  edge case specific to `.github` being the `target_repository` of its own
+  `repository_dispatch` Strix run (this central repo normally dispatches
+  Strix *to* sibling repos, not to itself) rather than a gap sibling repos
+  would hit; not investigated further or fixed this pass given it is
+  downstream of, and only surfaced by, the self-test failure above.
+
+## 2026-08-30 ZDR/NIM-routing architecture review (owner-directed)
+
+Investigated the owner's stated goal that Noema/OpenCode/Strix review route
+through `contextual-orchestrator`'s `orchestrator/free` specifically, and that
+direct-NVIDIA-NIM communication is a removal target.
+
+- **Repo visibility, checked directly rather than assumed**: `.github`,
+  `noema`, `contextual-orchestrator`, `naruon`, `fast-mlsirm`, `TEPP`,
+  `scopeweave`, `pg-llm-batch`, and `keyverse` are all confirmed **public**
+  (this session's git proxy serves them as anonymous public reads with no
+  attachment needed). `gyeot` required a genuine authenticated attachment
+  (the proxy's "added"/`push`-capable response, not the "already public"
+  response the others got) — strong evidence it is **private**, making it
+  (or any other private sibling repo not checked here) the concrete case
+  where `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR` actually evaluates `true` and
+  the free+ZDR intersection below matters. For `.github`/`noema`/
+  `contextual-orchestrator` themselves, confirmed directly in job env
+  (`CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: false` in every log pulled this
+  pass) that ZDR is not gating their own reviews — the sidecar-preflight
+  outage above is a separate, ZDR-independent problem for those three.
+- **`scripts/ci/zdr_policy.py`'s conservative `nvidia_nim`/`nvidia_nim_sub`
+  = not-ZDR classification is correct, and now has a direct primary-source
+  citation rather than an indirect one.** Fetched NVIDIA's own current
+  *NVIDIA API Trial Terms of Service* (the terms actually governing this
+  org's free/trial `integrate.api.nvidia.com` key; PDF, v. September 19,
+  2025, confirmed still the live document as of 2026-08-30) directly from
+  `assets.ngc.nvidia.com` rather than relying on third-party summaries.
+  Section 3.3(iv) states NVIDIA collects "User Content and Generated
+  Content to improve NVIDIA products and services, including AI models" —
+  i.e., prompts/completions from this API **are** used for training; this
+  is not merely "unattested," it is affirmative evidence against ZDR.
+  Updated both `PROVIDER_ZDR_SCOPE` entries' `source`/`note`/`as_of` fields
+  to cite this document and quote the operative clause (code change only,
+  `zero_data_retention` stays `False` as it already was); `scripts/ci/`
+  interrogate coverage stays 100% and `tests/test_zdr_policy.py`/
+  `tests/test_contextual_orchestrator_review_policy.py` (67 tests) still
+  pass unchanged, since neither pins the old source URL. **Did not
+  reclassify `opencode_zen`** (present in
+  `contextual_orchestrator/model_discovery.py`'s five... six provider
+  sources but absent from `PROVIDER_ZDR_SCOPE`'s five entries — a real,
+  pre-existing gap: `provider_zdr_scope()` would `KeyError` on it if it
+  were ever ZDR-checked) because this org's CI sidecar never registers an
+  `opencode_zen` credential (only the five `BYTEZ_/NVIDIA_NIM_/
+  NVIDIA_NIM_SUB_/OPENROUTER_/OPENAI_API_KEY` secrets exist), so the
+  dormant `KeyError` risk is not live here; flagged rather than silently
+  left, since it would surface the moment any caller registers that
+  credential and requires ZDR.
+- **The "free + ZDR is structurally near-empty for private targets" premise
+  is confirmed, and is not fixable by reclassifying NVIDIA** — the Section
+  3.3(iv) evidence above forecloses that specific path. The only
+  theoretical non-empty free+ZDR route left is an OpenRouter model that is
+  simultaneously free-priced and present in the live
+  `/api/v1/endpoints/zdr` feed; not verified live this pass (would need a
+  fresh discovery run against real credentials, which circles back to the
+  same access gap as the sidecar-outage investigation above). This remains
+  a real, unresolved architecture question for private-repo reviews
+  specifically (public repos are unaffected, per the visibility check
+  above) and is a policy/product decision, not a code bug this pass can
+  close.
+- **Direct-NIM-communication audit — narrower than the initial description,
+  most of it already resolved or dormant, nothing changed this pass:**
+  - `scripts/ci/select_nvidia_nim_model.py` (the "ask NVIDIA's live
+    `/v1/models` catalog which model is actually still served" resolver,
+    written specifically to survive NVIDIA's own model end-of-life
+    rotations) has **zero callers** anywhere in `.github/workflows/` or
+    `scripts/`; only its own test (`tests/test_select_nvidia_nim_model.py`)
+    exercises it. It is not wired into `pr_review_fix_scheduler.py` or any
+    hourly-repair workflow despite its docstring's framing ("the scheduled
+    autofix worker"). Dead code today, not a live direct-NIM path — and,
+    notably, it already implements the exact live-catalog cross-check that
+    would fix this entry's 404-retired-model finding above, just for a
+    different, currently-unwired caller.
+  - `scripts/ci/run_opencode_review_model_pool.sh`'s `is_nvidia_nim_candidate`/
+    `NVIDIA_API_KEY` handling is real, wired code, but its candidate list
+    comes entirely from `OPENCODE_MODEL_CANDIDATES`, which
+    `.github/workflows/opencode-review-dispatch.yml` (contract-pinned by
+    `tests/test_opencode_agent_contract.py`) currently sets to the single
+    value `"contextual-orchestrator/orchestrator/free"` — already
+    gateway-only, no direct-NIM entries active. `docs/nvidia-nim-opencode-hotfix.md`
+    documents that a six-model NIM-prefix hotfix existed for exactly this
+    script during a past GitHub-Models outage and was already rolled back
+    per its own "Rollback" section; that doc is now stale (describes a
+    reverted state as current) and its own instructions say to delete it
+    once catalog reliability is restored — worth a follow-up doc cleanup,
+    not attempted this pass. The dormant `nvidia-nim` provider block still
+    present in root `opencode.jsonc` (lines ~289-294) is inert for the CI
+    dispatch path (which generates its own `enabled_providers:
+    ["contextual-orchestrator"]` config) but was left as-is since it may
+    still serve local/interactive OpenCode use outside CI, which is outside
+    the owner's stated CI-routing goal.
+  - `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
+    was narrowed to `orchestrator/free` only, per the owner's explicit
+    override decision recorded above — see the "Strix `orchestrator/auto` →
+    `orchestrator/free`" entry above for the full sequencing conflict, how
+    it was surfaced, and the owner's decision.
+- **Net effect on the owner's goal**: the OpenCode review-dispatch path was
+  already fully gateway-only (`orchestrator/free`, no direct-NIM) before
+  this pass. The Strix path is now also `orchestrator/free`-only, per the
+  owner's explicit, informed decision to accept the resilience trade-off
+  ADR-0003 originally avoided. The private-repo free+ZDR gap is real,
+  unresolved, and not a code bug. No dead NIM-direct code was removed this
+  pass because none of the
+  three flagged call sites turned out to be a live, unconditional
+  direct-NIM path that could be safely deleted without either doing nothing
+  (already dead) or removing the one resilience mechanism keeping a
+  required check alive during a live outage.
+
+## 2026-08-30 pingora_edge_policy.py binary-evidence gap: two competing open fixes
+
+A live failure on `ContextualWisdomLab/contextual-orchestrator#906`'s `required-workflow-bootstrap`
+job (`GitHub content evidence for docs/papers/helm-holistic-evaluation-2211.09110.pdf
+is not a regular base64 file`) traces to `scripts/ci/pingora_edge_policy.py`'s
+`_load_file_content`: GitHub's Contents API stops returning inline
+`encoding: "base64"` once a file crosses roughly 1 MB (returning
+`encoding: "none"` + a `download_url` instead), and this policy scanner's
+`_needs_content_scan` has no exemption for genuinely binary evidence files in
+general — any added/modified file without a `patch` (i.e. any binary file,
+regardless of size) reaches `_load_file_content`, which always fails once it
+tries `raw.decode("utf-8")`. Two **already-open, independent, partially
+conflicting** PRs address pieces of this:
+
+- **#1420** adds real, structural validation (`_is_recognized_documentation_image`:
+  PNG magic header, chunk order, CRC, zlib-stream, dimension, and scanline
+  checks) so an image *suffix* alone cannot exempt a file — consistent with
+  this policy's own stated principle. Covers `.png` only; does not touch
+  `.pdf`, so it would not by itself fix `ContextualWisdomLab/contextual-orchestrator#906`.
+- **#1427** adds a flat `NON_RUNTIME_BINARY_SUFFIXES` allowlist (`.avif`,
+  `.gif`, `.ico`, `.jpeg`, `.jpg`, `.pdf`, `.png`, `.webp`) that skips
+  content-scanning by **extension alone**, no byte-level verification. This
+  does fix `ContextualWisdomLab/contextual-orchestrator#906`, but for every
+  suffix in that list (not just `.pdf`) it
+  reintroduces the exact "extension alone is not an exception" gap #1420
+  exists to close for PNG — a shell/config file renamed to `evidence.pdf`
+  (or `.png`, `.jpg`, ...) would now bypass the Nginx-runtime-artifact scan
+  entirely.
+- Left substantive comments on both PRs (this pass) recommending #1420's
+  structural-validation pattern be extended to `.pdf` (a bounded magic-
+  header/`%%EOF`-trailer check, short of full parsing) rather than merging
+  #1427's blanket suffix-trust list, and that the two PRs coordinate so the
+  org does not land two divergent implementations of the same policy
+  surface. Not resolved in code this pass — both PRs are themselves
+  currently blocked by the sidecar-preflight outage above, so neither could
+  be re-reviewed to a genuine pass yet regardless of which approach wins.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
