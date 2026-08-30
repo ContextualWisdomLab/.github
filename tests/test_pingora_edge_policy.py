@@ -212,6 +212,58 @@ def test_documentation_png_rejects_disguised_text_and_invalid_structure() -> Non
     assert not policy._is_recognized_documentation_image(
         "docs/acceptance.png", insert_png_chunk(rgba, b"abca")
     )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(rgba, b"tRNS", b"\x00")
+    )
+    grayscale = build_png(color_type=0, bit_depth=8)
+    assert policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(grayscale, b"tRNS", b"\x00\x00")
+    )
+
+
+@pytest.mark.parametrize("filter_type", [0, 1, 2, 3, 4])
+def test_documentation_png_reconstructs_each_legal_filter(filter_type: int) -> None:
+    """Every standard PNG scanline filter is decoded before acceptance."""
+
+    raw = build_png(color_type=6, bit_depth=8, width=1, height=1)
+    raw = replace_png_chunk(raw, b"IDAT", policy.zlib.compress(bytes((filter_type, 0, 0, 0, 0))))
+    assert policy._is_recognized_documentation_image("docs/acceptance.png", raw)
+
+
+def test_documentation_png_rejects_unknown_filter() -> None:
+    """A structurally sized stream still fails on an unknown filter byte."""
+
+    raw = build_png(color_type=6, bit_depth=8, width=1, height=1)
+    raw = replace_png_chunk(raw, b"IDAT", policy.zlib.compress(b"\x05\x00\x00\x00\x00"))
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", raw)
+
+
+@pytest.mark.parametrize("filter_type", [0, 1])
+@pytest.mark.parametrize("interlace", [0, 1])
+def test_documentation_png_rejects_missing_palette_entries(
+    filter_type: int, interlace: int
+) -> None:
+    """Indexed pixels cannot reference an entry absent from PLTE."""
+
+    raw = build_png(
+        color_type=3,
+        bit_depth=8,
+        width=1,
+        height=1,
+        palette=b"\x00\x00\x00",
+    )
+    raw = replace_png_chunk(raw, b"IDAT", policy.zlib.compress(bytes((filter_type, 1))))
+    if interlace:
+        raw = replace_png_ihdr(raw, interlace=1)
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", raw)
+
+
+def test_documentation_image_path_requires_a_documentation_directory() -> None:
+    """Root-level image names do not cross the documented directory boundary."""
+
+    assert policy._is_documentation_image_path("docs/screenshots/acceptance.png")
+    assert not policy._is_documentation_image_path("README.png")
+    assert not policy._is_documentation_image_path("CHANGELOG.png")
 
 
 def test_documentation_png_rejects_each_malformed_envelope_boundary() -> None:

@@ -235,7 +235,58 @@ def _is_documentation_image_path(path: str) -> bool:
     """Return whether *path* claims to be raster evidence below documentation."""
 
     pure = PurePosixPath(path)
-    return _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_ASSET_SUFFIXES
+    return (
+        len(pure.parts) > 1
+        and any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts[:-1])
+        and pure.suffix.lower() in DOCUMENT_ASSET_SUFFIXES
+    )
+
+
+def _paeth_predictor(left: int, above: int, upper_left: int) -> int:
+    """Return the PNG Paeth predictor for three reconstructed bytes."""
+
+    estimate = left + above - upper_left
+    distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+    return (left, above, upper_left)[distances.index(min(distances))]
+
+
+def _png_rows_are_valid(
+    pixels: bytes,
+    pass_layouts: list[tuple[int, int, int, int]],
+    *,
+    bytes_per_pixel: int,
+    bit_depth: int,
+    palette_entries: int | None,
+) -> bool:
+    """Validate filters and indexed samples for every decoded PNG pass."""
+
+    for start, stride, rows, pass_width in pass_layouts:
+        previous = bytes(stride - 1)
+        for row in range(rows):
+            row_start = start + row * stride
+            filter_type = pixels[row_start]
+            if filter_type > 4:
+                return False
+            encoded = pixels[row_start + 1 : row_start + stride]
+            reconstructed = bytearray(len(encoded))
+            for index, value in enumerate(encoded):
+                left = reconstructed[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                above = previous[index]
+                upper_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                predictor = (0, left, above, (left + above) // 2, _paeth_predictor(left, above, upper_left))[filter_type]
+                reconstructed[index] = (value + predictor) & 0xFF
+            previous = bytes(reconstructed)
+            if palette_entries is None:
+                continue
+            samples_seen = 0
+            for byte in reconstructed:
+                for shift in range(8 - bit_depth, -1, -bit_depth):
+                    if samples_seen == pass_width:
+                        break
+                    if ((byte >> shift) & ((1 << bit_depth) - 1)) >= palette_entries:
+                        return False
+                    samples_seen += 1
+    return True
 
 
 def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
@@ -248,6 +299,8 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
     width = height = bit_depth = color_type = interlace = None
     idat_parts: list[bytes] = []
     saw_plte = False
+    palette_entries = None
+    saw_trns = False
     saw_idat = False
     finished_idat = False
     while offset + 12 <= len(raw):
@@ -312,6 +365,16 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             ):
                 return False
             saw_plte = True
+            palette_entries = length // 3
+        elif chunk_type == b"tRNS":
+            valid_length = {
+                0: length == 2,
+                2: length == 6,
+                3: saw_plte and 0 < length <= (palette_entries or 0),
+            }.get(color_type, False)
+            if width is None or saw_trns or saw_idat or not valid_length:
+                return False
+            saw_trns = True
         elif chunk_type == b"IDAT":
             if width is None or finished_idat or (color_type == 3 and not saw_plte):
                 return False
@@ -343,7 +406,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                     (0, 1, 1, 2),
                 ]
             )
-            pass_layouts: list[tuple[int, int, int]] = []
+            pass_layouts: list[tuple[int, int, int, int]] = []
             expected_size = 0
             for x_start, y_start, x_step, y_step in passes:
                 pass_width = 0 if width <= x_start else (width - x_start + x_step - 1) // x_step
@@ -355,7 +418,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 pass_size = pass_height * stride
                 if pass_size > MAX_IMAGE_DECODED_BYTES - expected_size:
                     return False
-                pass_layouts.append((expected_size, stride, pass_height))
+                pass_layouts.append((expected_size, stride, pass_height, pass_width))
                 expected_size += pass_size
             try:
                 decoder = zlib.decompressobj()
@@ -368,10 +431,12 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
                 and not decoder.unused_data
                 and not decoder.unconsumed_tail
                 and len(pixels) == expected_size
-                and all(
-                    pixels[start + row * stride] <= 4
-                    for start, stride, rows in pass_layouts
-                    for row in range(rows)
+                and _png_rows_are_valid(
+                    pixels,
+                    pass_layouts,
+                    bytes_per_pixel=max(1, (channels * bit_depth + 7) // 8),
+                    bit_depth=bit_depth,
+                    palette_entries=palette_entries if color_type == 3 else None,
                 )
             )
         offset = end
