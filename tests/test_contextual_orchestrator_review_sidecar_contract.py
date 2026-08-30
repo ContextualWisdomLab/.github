@@ -348,7 +348,7 @@ def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
     """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -419,6 +419,32 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     exited_branch = text.index("sidecar exited before healthz")
     drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
     assert drain_call < exited_branch
+
+
+def test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected() -> None:
+    """A total preflight rejection must print real route evidence, not just a generic message.
+
+    The launcher writes agent_id/provider/model/status/error_type/http_status
+    (schema-bounded, never raw provider content or secrets -- the same shape
+    Strix's own artifact already publishes) to ``--preflight-out`` before it
+    raises. Before this evidence line existed, every workflow except Strix's
+    separate artifact-upload step was blind to *why* every candidate route
+    was rejected -- the generic exception message never carries per-route
+    detail, only a fixed "no provider route passed..." string.
+    """
+    text = _read(SIDECAR)
+    assert 'if [ -s "$preflight_report" ]; then' in text
+    assert (
+        'log "sidecar preflight route evidence: $(sed -n \'1,80p\' "$preflight_report" | tr \'\\n\' \' \')"'
+        in text
+    )
+    # Must be printed before the fail() call in the same branch, using the
+    # already-drained (sanitizer-waited) state -- not a bare, possibly racy
+    # read of a still-draining stream.
+    exited_branch = text.index("sidecar exited before healthz")
+    evidence_line = text.rindex("sidecar preflight route evidence", 0, exited_branch)
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < evidence_line < exited_branch
 
 
 def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
@@ -497,7 +523,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(
