@@ -120,6 +120,11 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         "opencode-free/qwen3.6-plus-free ' || '' }}"
     )
     candidates_text = candidates_match.group(1)
+    if candidates_text == "contextual-orchestrator/orchestrator/free":
+        assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
+        assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+        assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
+        return
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
         "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -186,7 +191,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["opencode-free", "qwen3.6-plus-free"],
         ["opencode", "gpt-5.6-terra"],
         ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.6-luna"],
+        ["openai", "gpt-5.4"],
         ["openrouter", "deepseek/deepseek-v3.2"],
         ["openrouter", "qwen/qwen3-coder"],
         ["github-models", "openai/gpt-4.1"],
@@ -197,7 +202,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         ["github-models", "deepseek/deepseek-r1"],
     ]
     assert zen_models == ["gpt-5.6-terra"]
-    assert direct_openai_models == ["gpt-5.6-luna"]
+    assert direct_openai_models == ["gpt-5.4"]
     assert openrouter_models == [
         "deepseek/deepseek-v3.2",
         "qwen/qwen3-coder",
@@ -402,6 +407,24 @@ def test_opencode_trusted_source_ref_is_not_controlled_by_workflow_inputs():
     )
 
 
+def test_required_workflow_validates_archive_members_before_extraction():
+    """Trusted source materialization rejects traversal and executable archive entries."""
+    workflow = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+    start = workflow.index("      - name: Materialize trusted central policy source\n")
+    end = workflow.index("\n      - name:", start + 1)
+    step = workflow[start:end]
+
+    assert "tar -xzf \"$trusted_archive\"" not in step
+    assert "tarfile.open(archive_path, \"r:gz\")" in step
+    assert "PurePosixPath(name).parts" in step
+    assert "member.isdir()" in step
+    assert "member.isfile()" in step
+    assert "unsupported archive member type" in step
+    assert '".."' in step
+    assert '"\\\\"' in step
+    assert 'destination.open("xb")' in step
+
+
 def test_opencode_bounded_evidence_context_is_resolved_from_event_payload():
     """Avoid putting untrusted PR metadata directly into shell environment keys."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -565,6 +588,25 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "ENV COREPACK_HOME=/opt/corepack" in measure_step
     assert "corepack --version >/dev/null" in measure_step
     assert "https://registry.npmjs.org/pnpm/-/pnpm-11.5.3.tgz" not in measure_step
+    assert 'git -C "$COVERAGE_SOURCE_WORKDIR" diff \\' in measure_step
+    assert "--name-only --diff-filter=ACMRTUXBD -z \"$PR_BASE_SHA\" HEAD" in measure_step
+    assert "while IFS= read -r -d '' changed_path" in measure_step
+    assert "python_coverage_required=0" in measure_step
+    assert (
+        "No Python source or dependency-manifest changes on the exact current head"
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/manifest.json\""
+        in measure_step
+    )
+    assert (
+        "printf '[]\\n' >\"$coverage_build_dir/base-python-requirements/vcs-manifest.json\""
+        in measure_step
+    )
+    assert "*.py|pyproject.toml|uv.lock|poetry.lock" in measure_step
+    assert "requirements.lock|requirements*.txt|requirements*.in" in measure_step
+    assert "*/requirements/*" in measure_step
     assert "materialize_base_javascript_packages.py" in measure_step
     assert '--head-sha "$PR_HEAD_SHA"' in measure_step
     assert "COPY base-javascript-packages /tmp/base-javascript-packages" in measure_step
@@ -573,9 +615,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in measure_step
     )
     assert "/opt/javascript-package-locks/manifest.json" in measure_step
-    assert "npm ci" in measure_step
+    assert "corepack npm ci" in measure_step
+    assert "has_exact_npm_package_manager() {" in measure_step
+    assert ".devEngines" in measure_step
+    assert "if has_exact_npm_package_manager; then" in measure_step
+    assert "then \\\n                          corepack npm ci" in measure_step
+    assert "else \\\n                          npm ci" in measure_step
     assert "--cache /opt/npm-cache" in measure_step
-    assert "npm cache verify --cache /opt/npm-cache" in measure_step
+    assert "corepack npm cache verify --cache /opt/npm-cache" in measure_step
     assert "pnpm@*)" in measure_step
     assert "corepack pnpm fetch" in measure_step
     assert "--store-dir /opt/pnpm-store" in measure_step
@@ -636,6 +683,30 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     )
     assert 'hash-object --no-filters -- "$relative_lock"' not in measure_step
     assert "refusing --trust-lockfile for PR-controlled dependency resolution" in measure_step
+    # A PR-mutated pnpm lock is trusted only when the trusted materializer
+    # recorded the exact head blob from the validated HEAD revision; the
+    # sandbox must consult that manifest record instead of refusing every
+    # dependency-changing pull request.
+    pnpm_trust_block = measure_step.split(
+        "trusted_pnpm_lock_matches_base() {", 1
+    )[1].split("prepare_writable_pnpm_store()", 1)[0]
+    assert (
+        "differs from the validated base and was not materialized from "
+        "the validated HEAD"
+    ) in pnpm_trust_block
+    assert (
+        "does not match the validated HEAD; refusing --trust-lockfile "
+        "because the coverage source artifact was tampered with"
+    ) in pnpm_trust_block
+    assert "trusted_manifest_records_lock_revision" in pnpm_trust_block
+    assert '--arg manager "pnpm"' in measure_step
+    assert '.package_manager | startswith($manager + "@")' in measure_step
+    assert "/opt/javascript-package-locks/manifest.json" in measure_step
+    assert ".revision_sha == $revision and .lock_blob == $blob" in measure_step
+    # Manifest records normalize Git object identities to lowercase; pnpm trust
+    # must match the npm path even when an input SHA uses uppercase hex.
+    assert '--arg revision "${PR_HEAD_SHA,,}"' in measure_step
+    assert '--arg blob "${head_blob,,}"' in measure_step
     assert "prepare_writable_pnpm_store()" in measure_step
     assert (
         'destination="$(mktemp -d /tmp/opencode-pnpm-store.XXXXXX)"'
@@ -794,7 +865,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         in normalized_compile_script
     )
     assert (
-        "1bb93c2aa61d2a5b38f1526546d95cf4132cb681e541a337bf8dfd092be816e5"
+        "ff97a14362eef486483ed44042ca2027ea257df6ff768e62358ee0c9776925ac"
         in trusted_requirements
     )
 
@@ -803,6 +874,207 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     target_condition = target_job.split("    runs-on:", 1)[0]
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
+
+
+def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Path):
+    """Run the workflow classifier against supported and unrelated path shapes."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    cases = [
+        ("module.py", "1", False),
+        ("pyproject.toml", "1", False),
+        ("services/analysis/pyproject.toml", "1", False),
+        ("uv.lock", "1", False),
+        ("services/analysis/uv.lock", "1", False),
+        ("requirements.lock", "1", False),
+        ("services/requirements-dev.txt", "1", False),
+        ("requirements/ci.txt", "1", False),
+        ("services/requirements/ci.txt", "1", False),
+        ("requirements/docs/notes.txt", "1", False),
+        ("services/requirements/docs/notes.txt", "1", False),
+        ("services/requirements/requirements-extra.txt", "1", False),
+        ("deleted.py", "1", True),
+        ("README.md", "0", False),
+        ("package-lock.json", "0", False),
+    ]
+
+    for index, (relative_path, expected, deleted) in enumerate(cases):
+        repository = tmp_path / f"repo-{index}"
+        repository.mkdir()
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.name", "test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        (repository / "README.md").write_text("base\n", encoding="utf-8")
+        changed_file = repository / relative_path
+        if deleted:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+        )
+        base_sha = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if deleted:
+            changed_file.unlink()
+        else:
+            changed_file.parent.mkdir(parents=True, exist_ok=True)
+            changed_file.write_text("changed\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "COVERAGE_SOURCE_WORKDIR": str(repository),
+                "PR_BASE_SHA": base_sha,
+                "RUNNER_TEMP": str(tmp_path),
+            }
+        )
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", classifier],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected, relative_path
+
+
+def test_opencode_python_lock_classifier_keeps_nested_include_targets(tmp_path: Path):
+    """A nested requirements include keeps trusted base materialization enabled."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("            python_change_files=")
+    end = workflow.index(
+        '            if [ "$python_coverage_required" -eq 1 ]; then', start
+    )
+    classifier = textwrap.dedent(workflow[start:end]) + (
+        '\nprintf \'%s\\n\' "$python_coverage_required"\n'
+    )
+    repository = tmp_path / "repo-with-nested-include"
+    repository.mkdir()
+    subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "test"], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "config",
+            "user.email",
+            "test@example.com",
+        ],
+        check=True,
+    )
+    nested = repository / "requirements/docs/notes.txt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("base dependency\n", encoding="utf-8")
+    (repository / "requirements.txt").write_text(
+        "-r requirements/docs/notes.txt\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "base"], check=True
+    )
+    base_sha = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    nested.write_text("changed dependency\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "--all"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "head"], check=True
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", classifier],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "COVERAGE_SOURCE_WORKDIR": str(repository),
+            "PR_BASE_SHA": base_sha,
+            "RUNNER_TEMP": str(tmp_path),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
+
+
+def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
+    """The trusted image resolver selects only deterministic npm versions."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    resolver_line = next(
+        line.strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith("jq -e '(.packageManager // null)")
+    )
+    expression = resolver_line.split("jq -e '", 1)[1].rsplit(
+        "' package.json", 1
+    )[0]
+    cases = [
+        ({"packageManager": "npm@10.9.9"}, True),
+        (
+            {
+                "packageManager": "npm@10",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {
+                "packageManager": "yarn@1.22.22",
+                "devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}},
+            },
+            False,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10.9.9"}}},
+            True,
+        ),
+        (
+            {"devEngines": {"packageManager": {"name": "npm", "version": "10"}}},
+            False,
+        ),
+        ({}, False),
+    ]
+    for manifest, expected in cases:
+        result = subprocess.run(
+            ["jq", "-e", expression],
+            input=json.dumps(manifest) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is expected, manifest
 
 
 def test_opencode_repository_dispatch_authorization_is_fail_closed():
@@ -959,6 +1231,7 @@ def test_opencode_coverage_prefers_preinstalled_declared_pnpm_before_npm():
     assert "or fall back to npm" in measure_step
     assert "ensure_corepack_runner pnpm" in select_function
     assert "ensure_corepack_runner yarn" in select_function
+    assert "ensure_corepack_runner npm" in select_function
     assert select_function.index("[ -f pnpm-lock.yaml ]") < select_function.rindex(
         "elif command -v npm"
     )
@@ -988,7 +1261,7 @@ def test_opencode_coverage_uses_corepack_for_all_pnpm_package_scripts():
         'pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;'
         in measure_step
     )
-    assert 'npm) run_and_capture "$label" npm run "$script" ;;' in measure_step
+    assert 'npm) run_and_capture "$label" corepack npm run "$script" ;;' in measure_step
     assert 'yarn) run_and_capture "$label" yarn run "$script" ;;' in measure_step
     assert '"$package_runner" run' not in measure_step
 
@@ -1011,11 +1284,11 @@ def test_opencode_coverage_does_not_duplicate_existing_javascript_coverage():
     )
     assert "javascript_coverage_provider_declared" not in measure_step
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;'
         in measure_step
     )
     assert (
-        'npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;'
+        'npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;'
         in measure_step
     )
     assert (
@@ -1319,6 +1592,35 @@ def test_autofix_worker_resolves_merge_conflicts_fail_closed():
     )
     assert 'git push origin "HEAD:${PR_HEAD_REF}"' not in worker
 
+    for protected_path in (
+        "backend/core/local_http.py",
+        "backend/core/url_validation.py",
+        "backend/tests/test_local_http.py",
+        "backend/tests/test_url_validation.py",
+        "docs/doctoring/local-http-origin-port-validation.md",
+    ):
+        assert protected_path in worker
+    assert "Autofix cannot delete or rename protected security-contract path" in worker
+    assert (
+        "Conflict resolution cannot delete or rename protected security-contract path"
+        in worker
+    )
+    assert "- name: Reject protected security-contract deletions and renames" in worker
+    protected_step = worker.split(
+        "- name: Reject protected security-contract deletions and renames", 1
+    )[1].split("- name: Validate changed files", 1)[0]
+    assert "if: env.RESOLVE_CONFLICT" not in protected_step
+    assert "git diff HEAD --name-status -- \"$protected_path\"" in protected_step
+    assert "git diff --name-status -- \"$protected_path\"" not in protected_step
+    conflict_step = worker.split(
+        "- name: Merge base branch and resolve conflicts with OpenCode", 1
+    )[1]
+    conflict_guard = conflict_step.split(
+        "# Fail closed: never push unresolved conflict markers.", 1
+    )[0]
+    assert "Conflict resolution cannot delete or rename protected security-contract path" in conflict_guard
+    assert 'git diff HEAD --name-status -- "$protected_path"' in conflict_guard
+
     # The fix scheduler dispatches the mode only for approved conflicting PRs.
     scheduler = Path("scripts/ci/pr_review_fix_scheduler.py").read_text(
         encoding="utf-8"
@@ -1463,7 +1765,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'gsub("`"; "\'")' not in workflow
     assert 'gsub("`"; "&apos;")' in workflow
     assert '"code-reviewer"' in workflow
-    assert workflow.count('"reasoningEffort": "high"') >= 10
+    assert workflow.count('"reasoningEffort": "high"') >= 2
     assert '"task": "allow"' not in workflow
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
@@ -1667,7 +1969,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "implementation_completeness_scan.py" in workflow
     assert '"## Review outcome"' in workflow
     assert '"## Check outcome"' not in workflow
-    assert "publish REQUEST_CHANGES when coverage-evidence blocker states" in workflow
+    assert 'update_review_overview "COVERAGE_BLOCKED"' in workflow
+    assert "record coverage-evidence blocker states" in workflow
     assert re.search(
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
@@ -1715,41 +2018,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair"
         in workflow
     )
-    assert (
-        "needs.validate-pr-metadata.outputs.is_private == 'false' && "
-        "'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
-        "nvidia-nim/meta/llama-3.3-70b-instruct "
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
-        "opencode-free/nemotron-3-ultra-free "
-        "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
-        "opencode-free/ling-3.0-flash-free "
-        "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/hy3-free "
-        "opencode-free/minimax-m3-free "
-        "opencode-free/glm-5-free "
-        "opencode-free/kimi-k2.5-free "
-        "opencode-free/qwen3.6-plus-free ' || ''"
-    ) in workflow
-    assert (
-        "opencode/gpt-5.6-terra "
-        "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
-        "openrouter/deepseek/deepseek-v3.2 "
-        "openrouter/qwen/qwen3-coder "
-        "github-models/openai/gpt-4.1 "
-        "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
-        "github-models/openai/o3 "
-        "github-models/deepseek/deepseek-r1-0528 "
-        "github-models/deepseek/deepseek-r1"
-    ) in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
@@ -1772,10 +2041,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
-    assert 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS: "900"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
-    assert 'OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS: "45"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
@@ -1803,7 +2069,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         'gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate'
         not in publish_step
     )
-    assert "MODEL: github-models/deepseek/deepseek-v3-0324" in publish_step
+    assert "MODEL: contextual-orchestrator/orchestrator/free" in publish_step
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in publish_step
     assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" in publish_step
     assert (
@@ -1885,18 +2151,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert (
         'OPENCODE_MODEL_CANDIDATES: "github-models/openai/gpt-5-nano"' not in workflow
     )
-    assert (
-        "github-models/deepseek/deepseek-v3-0324 "
-        "openai/gpt-5.6-luna "
-        "openrouter/deepseek/deepseek-v3.2 "
-        "openrouter/qwen/qwen3-coder "
-        "github-models/openai/gpt-4.1 "
-        "github-models/openai/gpt-5 "
-        "github-models/openai/gpt-5-chat "
-        "github-models/openai/o3 "
-        "github-models/deepseek/deepseek-r1-0528 "
-        "github-models/deepseek/deepseek-r1"
-    ) in workflow
+    assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert "${{ runner.temp }}/opencode-review-model-pool.md" in workflow
     assert re.search(
         r'check-runs" \\\n\s+-f per_page=100 \\\n\s+--paginate \\\n\s+--slurp \|\n\s+jq -r "\$jq_filter"',
@@ -1928,7 +2183,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "falling back to current-head REST check-runs" in workflow
 
     strix_workflow = Path(".github/workflows/strix.yml").read_text(encoding="utf-8")
-    assert "STRIX_REASONING_EFFORT: high" in strix_workflow
+    assert "STRIX_REASONING_EFFORT: none" in strix_workflow
 
     prompt_template = Path("scripts/ci/opencode_review_prompt_template.md").read_text(
         encoding="utf-8"
@@ -2406,6 +2661,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
     assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
+    assert (
+        'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
+    ) in metadata_step
+    assert "private|internal) live_is_private=true" in metadata_step
+    assert "public) live_is_private=false" in metadata_step
+    assert ".base.repo.private | tostring" not in metadata_step
     trust_step = target_job.split(
         "      - name: Validate pull request head repository trust", 1
     )[1].split("\n      - name:", 1)[0]
@@ -2424,8 +2685,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         "${{ needs.validate-pr-metadata.outputs.is_private }}"
     ) in trust_step
     assert (
-        'live_is_private="$(jq -r \'.base.repo.private | tostring\''
+        'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in trust_step
+    assert "private|internal) live_is_private=true" in trust_step
+    assert "public) live_is_private=false" in trust_step
+    assert "live_is_private=\"\"" in trust_step
+    assert ".base.repo.private | tostring" not in trust_step
     assert '! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]]' in trust_step
     assert '! [[ "$live_is_private" =~ ^(true|false)$ ]]' in trust_step
     assert '[ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]' in trust_step
@@ -2642,9 +2907,9 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
     """A throttled gate READ is a GitHub side effect, not source evidence.
 
     The APPROVE write path already keeps the required check green when GitHub
-    rejects the pull review as a pure side effect; the gate's own reads (live
-    head, sentinel comment, peer check lookups) that share the same contended
-    installation token must degrade the same way on a detected throttle instead
+    rejects the pull review as a pure side effect; the gate's remaining reads
+    (live head and peer check lookups) that share the same contended installation
+    token must degrade the same way on a detected throttle instead
     of hard-failing the required check under ``set -euo pipefail``.
     """
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
@@ -2660,8 +2925,10 @@ def test_opencode_gate_reads_tolerate_shared_token_throttle():
         "side effect, not source evidence, while branch protection remains "
         "authoritative" in workflow
     )
-    assert 'if ! comment_json="$(' in workflow
-    assert "falling back to the selected OpenCode model output" in workflow
+    # The status-only overview is not queried for a control sentinel; the
+    # selected exact-run model output is the sole formal-verdict source.
+    assert "sentinel_comment_error_file" not in workflow
+    assert 'load_selected_review_output "$selected_review_output_file" "$tmp_body"' in workflow
 
     # The checks-lookup helper records a detected throttle and callers degrade
     # on it, mirroring the existing app-token bypass.
@@ -2774,7 +3041,10 @@ def test_opencode_model_pool_failure_uses_only_existing_real_model_approval():
         r'opencode_review_outcome="\$\{OPENCODE_MODEL_POOL_OUTCOME:-unknown\}"[\s\S]{0,900}'
         r'if \[ "\$opencode_review_outcome" != "success" \]; then\s+'
         r"if publish_blockers_after_model_unavailable; then[\s\S]{0,180}"
-        r"exit 0\s+fi\s+stop_without_review_after_model_unavailable\s+fi",
+        r"exit 0\s+fi\s+"
+        r'(?:if \[ "\$\{COVERAGE_EVIDENCE_RESULT:-skipped\}" != "success" \]; then[\s\S]{0,280}'
+        r"publish_fallback_diff_review[\s\S]{0,160}fi\s+)?"
+        r"stop_without_review_after_model_unavailable\s+fi",
         workflow,
     )
     assert 'stop_approval_without_review "MODEL_OUTPUT_UNAVAILABLE" "$body"' in workflow
