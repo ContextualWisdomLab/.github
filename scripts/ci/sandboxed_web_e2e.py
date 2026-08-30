@@ -333,13 +333,21 @@ def stop_service(service: Service) -> None:
     ``kill_process_group`` call. Without it, a same-group descendant that
     outlives an already-exited leader would keep the inherited log pipe open
     and never let the capture reach EOF.
+
+    ``poll()`` returning ``None`` only means the leader was alive at that
+    instant; it can still exit in the narrow window before ``os.killpg``
+    runs, which raises ``ProcessLookupError`` because the process group is
+    already gone. The leader is a genuine zombie at that point -- exited,
+    but not yet reaped by this parent -- so the exception handler still
+    reaps it with ``wait()`` instead of leaving it unreaped until this
+    wrapper process itself exits.
     """
     if service.process.poll() is None:
         try:
             os.killpg(service.process.pid, signal.SIGTERM)
             service.process.wait(timeout=10)
         except ProcessLookupError:
-            pass
+            service.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             bounded_subprocess.kill_process_group(service.process)
             service.process.wait(timeout=10)

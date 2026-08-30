@@ -163,6 +163,43 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     assert len(killed) == 3
 
 
+def test_stop_service_reaps_leader_that_exits_between_poll_and_killpg(monkeypatch, tmp_path):
+    """A leader that exits in the poll()-to-killpg() race is still reaped.
+
+    ``poll()`` returning ``None`` only proves the leader was alive at that
+    instant; if it exits before ``os.killpg`` runs, the whole process group
+    is already gone and ``killpg`` raises ``ProcessLookupError``. The leader
+    is then a genuine zombie -- exited, but never ``wait()``-ed on by this
+    parent -- so the exception handler must still reap it instead of
+    silently leaving it unreaped until the wrapper process itself exits.
+    """
+
+    class RaceProcess:
+        pid = 24680
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            self.wait_calls += 1
+            return 0
+
+    race_service = sandboxed_web_e2e.Service("race", "sleep", RaceProcess(), tmp_path / "race.log")
+    monkeypatch.setattr(
+        sandboxed_web_e2e.os,
+        "killpg",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError),
+        raising=False,
+    )
+
+    sandboxed_web_e2e.stop_service(race_service)
+
+    assert race_service.process.wait_calls >= 1
+
+
 def test_stop_service_reaps_descendant_after_leader_already_exited(tmp_path: Path) -> None:
     """A same-group descendant that inherits the log pipe cannot outlive a
     leader that has already exited and been reaped by the time cleanup runs.
