@@ -480,6 +480,118 @@ def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     assert result == ()
 
 
+def test_evaluate_pull_request_enforces_byte_budget_across_pdf_verification_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many patchless documentation PDFs must share the aggregate byte budget.
+
+    Regression coverage for Devin Review's finding that
+    ``_pdf_evidence_confirms_binary`` made its own separate Contents API
+    read outside both aggregate counters, so many one-megabyte
+    documentation PDFs collected in one pull request could exhaust the
+    required check's resources despite the budget mechanism existing
+    specifically to prevent that.
+    """
+    pdf_body = "%PDF-1.7\nresearch paper body\n"
+    monkeypatch.setattr(policy, "MAX_TOTAL_CONTENT_BYTES", len(pdf_body.encode()))
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/20/files" in url:
+            return [
+                {"filename": f"docs/papers/paper-{index}.pdf", "status": "added"}
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file(pdf_body)
+
+    with pytest.raises(policy.PolicyError, match="content byte budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=20,
+            head_sha="00" + "1" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    # The first PDF's decoded bytes exactly consume the shared byte budget,
+    # so the second PDF-verification request is never made.
+    assert len(content_calls) == 1
+
+
+def test_evaluate_pull_request_enforces_request_budget_across_pdf_verification_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many patchless documentation PDFs must share the aggregate request budget.
+
+    Regression coverage for Devin Review's finding that PDF-verification
+    reads bypassed ``MAX_CONTENT_REQUESTS``: without shared accounting, a
+    pull request containing many documentation PDFs could issue an
+    unbounded number of Contents API requests.
+    """
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 2)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/21/files" in url:
+            return [
+                {"filename": f"docs/papers/paper-{index}.pdf", "status": "added"}
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("%PDF-1.7\nresearch paper body\n")
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=21,
+            head_sha="00" + "2" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
+def test_evaluate_pull_request_charges_oversized_pdf_exemption_against_request_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The oversized-PDF exemption still consumes one request from the budget.
+
+    The exemption path (``encoding: "none"``, no fetchable content) reads
+    zero bytes, so it must not be free of charge on the request budget --
+    only the byte budget is naturally unaffected since nothing was decoded.
+    """
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 1)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/22/files" in url:
+            return [
+                {"filename": "docs/papers/big-paper.pdf", "status": "added"},
+                {"filename": "docs/papers/second-paper.pdf", "status": "added"},
+            ]
+        content_calls.append(url)
+        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=22,
+            head_sha="00" + "3" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 1
+
+
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
     """Closed-event cleanup remains a no-op for the required-workflow context."""
 

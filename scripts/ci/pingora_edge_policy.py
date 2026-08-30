@@ -446,7 +446,8 @@ def _pdf_evidence_confirms_binary(
     head_sha: str,
     token: str,
     opener: OpenJson,
-) -> bool:
+    max_bytes: int,
+) -> tuple[bool, int]:
     """Return whether a claimed binary documentation PDF is genuinely binary.
 
     A missing diff ``patch`` alone is not proof of binary content: GitHub
@@ -461,13 +462,21 @@ def _pdf_evidence_confirms_binary(
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
     same as for any other file that needs scanning.
+
+    ``max_bytes`` bounds this read against the caller's remaining aggregate
+    content-byte budget, exactly like ``_load_file_content``'s own
+    ``max_bytes``, so a PDF-verification read cannot itself exhaust
+    resources the shared budget exists to cap. The returned byte count is
+    the number of raw bytes actually decoded (zero when the size-exceeded
+    exemption fires without ever reading content), so the caller can charge
+    it against the same aggregate counter the ordinary scan path uses.
     """
 
     try:
-        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
+        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener, max_bytes=max_bytes)
     except ContentSizeExceededError:
-        return True
-    return raw.startswith(_PDF_MAGIC_PREFIX)
+        return True, 0
+    return raw.startswith(_PDF_MAGIC_PREFIX), len(raw)
 
 
 def _needs_content_scan(changed: ChangedFile) -> bool:
@@ -493,6 +502,25 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     if PurePosixPath(lower_path).suffix in {".conf", ".service", ".yaml", ".yml", ".sh"}:
         return True
     return "nginx" in changed.patch.lower()
+
+
+def _reserve_content_budget(content_requests: int, total_content_bytes: int) -> int:
+    """Raise a typed ``PolicyError`` if either aggregate evidence budget is spent.
+
+    Returns the bytes remaining under ``MAX_TOTAL_CONTENT_BYTES`` so the
+    caller can bound its next Contents API read. Both PDF binary-content
+    verification and ordinary text scanning call this before making a
+    request, so neither path can exhaust the required check's GitHub API
+    quota or wall-clock budget on its own -- a partially scanned pull
+    request fails closed rather than reporting a false pass.
+    """
+
+    if content_requests >= MAX_CONTENT_REQUESTS:
+        raise PolicyError("GitHub policy evidence exceeded the content request budget")
+    remaining_bytes = MAX_TOTAL_CONTENT_BYTES - total_content_bytes
+    if remaining_bytes <= 0:
+        raise PolicyError("GitHub policy evidence exceeded the content byte budget")
+    return remaining_bytes
 
 
 def evaluate_pull_request(
@@ -532,22 +560,23 @@ def evaluate_pull_request(
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
         if changed.status != "removed" and _is_binary_documentation_pdf(changed):
-            if _pdf_evidence_confirms_binary(
+            remaining_pdf_bytes = _reserve_content_budget(content_requests, total_content_bytes)
+            confirmed_binary, pdf_bytes_read = _pdf_evidence_confirms_binary(
                 changed,
                 api_url=api_url.rstrip("/"),
                 repository=repository,
                 head_sha=head_sha,
                 token=token,
                 opener=opener,
-            ):
+                max_bytes=remaining_pdf_bytes,
+            )
+            content_requests += 1
+            total_content_bytes += pdf_bytes_read
+            if confirmed_binary:
                 continue
         elif not _needs_content_scan(changed):
             continue
-        if content_requests >= MAX_CONTENT_REQUESTS:
-            raise PolicyError("GitHub policy evidence exceeded the content request budget")
-        remaining_bytes = MAX_TOTAL_CONTENT_BYTES - total_content_bytes
-        if remaining_bytes <= 0:
-            raise PolicyError("GitHub policy evidence exceeded the content byte budget")
+        remaining_bytes = _reserve_content_budget(content_requests, total_content_bytes)
         content = _load_file_content(
             api_url.rstrip("/"),
             repository,
