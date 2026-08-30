@@ -29,6 +29,16 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
+# Opaque binary document formats that cannot embed an interpretable, active
+# Nginx runtime artifact (unlike a text config, script, or container image
+# reference). Without this, any such file placed under a documentation
+# directory still falls through to `_needs_content_scan` -> `True` (binary
+# files never carry a GitHub diff `patch`), and then `_load_file_content`
+# fails closed with a `PolicyError` for any instance over the Contents API's
+# 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
+# (this org's own "attach the relevant paper PDF" convention) for a reason
+# that has nothing to do with the Nginx runtime policy this module enforces.
+BINARY_DOCUMENT_SUFFIXES = frozenset({".pdf"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -145,7 +155,8 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
     if lower_name in LICENSE_NAMES or (
-        is_known_documentation_path and pure.suffix.lower() in DOCUMENT_SUFFIXES
+        is_known_documentation_path
+        and pure.suffix.lower() in DOCUMENT_SUFFIXES | BINARY_DOCUMENT_SUFFIXES
     ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":

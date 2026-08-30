@@ -78,6 +78,31 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
+def test_needs_content_scan_exempts_documentation_pdfs() -> None:
+    """A cited research-paper PDF under docs/ never reaches content scanning.
+
+    Binary files never carry a GitHub diff `patch`, so without this exemption
+    `_needs_content_scan` falls through to its `not patch_available` branch and
+    always returns True for a PDF -- and any such file over the Contents API's
+    1 MiB base64 ceiling then fails closed in `_load_file_content` for a
+    reason unrelated to the Nginx runtime policy this module enforces (see
+    this org's "attach the relevant paper PDF under docs/papers/" convention).
+    """
+
+    changed = policy.ChangedFile
+    assert not policy._needs_content_scan(
+        changed("docs/papers/helm-holistic-evaluation-2211.09110.pdf", "added", "", patch_available=False)
+    )
+    assert not policy._needs_content_scan(
+        changed("docs/papers/README.md", "modified", "", patch_available=False)
+    )
+    # A PDF outside a recognized documentation directory is not exempted --
+    # only prose/paper locations are trusted to be inert.
+    assert policy._needs_content_scan(
+        changed("scripts/ci/payload.pdf", "added", "", patch_available=False)
+    )
+
+
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
 def test_scan_content_does_not_treat_test_name_substrings_as_fixtures(
     directory: str,
