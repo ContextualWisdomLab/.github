@@ -1528,6 +1528,14 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   blast radius가 크다 — 이번 pass에서는 구현하지 않고, 매 PR마다 수동으로 트리거하는 현재 관행을
   유지하며 후속 pass의 별도 증분으로 남긴다. 대안으로 CodeRabbit 자체의 organization 설정에서 이
   10-star 게이트를 우회하는 옵션이 있는지 확인하는 것도 병행 검토 대상이다.
+- **추가 발견 (트리거 직후)**: 두 트리거 코멘트 모두 CodeRabbit이 커맨드 자체는 수락했으나
+  ("I will review pull request..."), 곧이어 별도의 "Review limit reached — next included review
+  available in ~7–31 minutes" 코멘트로 rate-limit에 걸렸다. 즉 이 조직에는 두 개의 독립적인
+  CodeRabbit 제약이 겹쳐 있다: (1) 10-star 미만 repo는 애초에 자동 리뷰가 트리거되지 않는 gate,
+  (2) OSS 무료 티어의 리뷰 횟수 자체가 org 전체(또는 계정 전체)에서 공유되는 rate limit. 10-star
+  게이트를 자동화로 우회해도 (2)가 여전히 남아 즉시 리뷰가 실행되지 않을 수 있으므로, 위 "근본
+  해결책 후보"는 재시도/backoff까지 함께 고려해야 완전하다. 이번 pass에서는 재트리거하지 않고
+  rate-limit 창(가장 늦은 것 기준 naruon#1486 쪽 31분)이 지나기를 기다린다.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
