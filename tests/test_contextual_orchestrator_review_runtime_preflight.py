@@ -130,6 +130,117 @@ def test_log_discovery_errors_sentinel_matches_the_sidecar_scripts_constant() ->
     assert f'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="{sentinel}"' in sidecar_text
 
 
+def test_log_preflight_rejections_prints_one_bounded_line_per_rejected_route(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A rejected-route report must become a visible, sanitizer-safe diagnostic.
+
+    This is the same visibility gap ``_log_discovery_errors`` closed for
+    discovery, applied to preflight: the per-route ``error_type``/
+    ``http_status`` already recorded in the JSON evidence artifact must also
+    reach the CI job's visible console log, so a future incident can be
+    diagnosed as transient or not without downloading the artifact.
+    """
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace.get("_log_preflight_rejections")
+    assert callable(log_preflight_rejections), "launcher must expose a preflight-rejection logger"
+
+    report = {
+        "routes": [
+            {
+                "agent_id": "nvidia_nim/meta-llama-3.1",
+                "provider": "nvidia_nim",
+                "error_type": "HTTPError",
+                "http_status": 500,
+                "status": "rejected",
+            },
+            {
+                "agent_id": "bytez/llama-guard",
+                "provider": "bytez",
+                "error_type": "InvalidChatResponse",
+                "status": "rejected",
+            },
+            {
+                "agent_id": "openai/gpt-5",
+                "provider": "openai",
+                "status": "ready",
+            },
+        ]
+    }
+
+    log_preflight_rejections(report)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        (
+            "preflight_rejected agent=nvidia_nim/meta-llama-3.1 provider=nvidia_nim "
+            "error_type=HTTPError http_status=500"
+        ),
+        (
+            "preflight_rejected agent=bytez/llama-guard provider=bytez "
+            "error_type=InvalidChatResponse http_status=none"
+        ),
+    ]
+
+
+def test_log_preflight_rejections_walks_the_nested_primary_attempt_report(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A ``pool=="auto"`` fallback-then-fail report also surfaces primary rejections."""
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace["_log_preflight_rejections"]
+
+    report = {
+        "routes": [
+            {
+                "agent_id": "openrouter/priced",
+                "provider": "openrouter",
+                "error_type": "TimeoutError",
+                "status": "rejected",
+            },
+        ],
+        "primary_attempt": {
+            "routes": [
+                {
+                    "agent_id": "openrouter/free",
+                    "provider": "openrouter",
+                    "error_type": "TimeoutError",
+                    "status": "rejected",
+                },
+            ],
+        },
+    }
+
+    log_preflight_rejections(report)
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        (
+            "preflight_rejected agent=openrouter/free provider=openrouter "
+            "error_type=TimeoutError http_status=none"
+        ),
+        (
+            "preflight_rejected agent=openrouter/priced provider=openrouter "
+            "error_type=TimeoutError http_status=none"
+        ),
+    ]
+
+
+def test_log_preflight_rejections_prints_nothing_when_every_route_is_ready(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No rejections -> no diagnostic lines at all (nothing to explain)."""
+    namespace = _load_launcher()
+    log_preflight_rejections = namespace["_log_preflight_rejections"]
+
+    log_preflight_rejections({"routes": [{"agent_id": "openai/gpt-5", "status": "ready"}]})
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
     """Reject provider errors/malformed replies before the sidecar becomes ready."""
     namespace = _load_launcher()
@@ -387,6 +498,14 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line(
         "provider_discovery_failed provider=bytez code=http_status_401"
     ) == "provider_discovery_failed provider=bytez code=http_status_401"
+    assert sanitize_line(
+        "preflight_rejected agent=nvidia_nim/meta-llama-3.1 provider=nvidia_nim "
+        "error_type=HTTPError http_status=500 upstream sk-secret"
+    ) == "preflight_rejected agent=nvidia_nim/meta-llama-3.1 provider=nvidia_nim error_type=HTTPError http_status=500"
+    assert sanitize_line(
+        "preflight_rejected agent=bytez/llama-guard provider=bytez "
+        "error_type=InvalidChatResponse http_status=none"
+    ) == "preflight_rejected agent=bytez/llama-guard provider=bytez error_type=InvalidChatResponse http_status=none"
     assert sanitize_line("provider response sk-secret") is None
 
 

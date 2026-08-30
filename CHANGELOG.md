@@ -5,6 +5,19 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Surface the review sidecar's preflight-rejection detail (`error_type`,
+  `http_status` per rejected route) to the CI job's visible console log
+  (`_log_preflight_rejections` in `contextual_orchestrator_review_launcher.py`,
+  new sanitizer allowlist entry), mirroring the existing discovery-error
+  visibility fix. Previously this detail only reached a JSON artifact,
+  making it impossible to tell from CI logs alone whether a fail-closed
+  incident was transient or not. Bumped the sidecar's failure-path stderr
+  tail from a fixed 20 lines to a named `SIDECAR_STDERR_TAIL_LINES=60` so
+  the new diagnostics aren't truncated. Companion to
+  `ContextualWisdomLab/contextual-orchestrator#923`, which fixes the
+  matching discovery-side single-shot-fetch gap; this repo's own
+  completion-warm-up-probe path is deliberately left single-shot (see that
+  PR's description for why).
 - Refresh `docs/product-technical-gap-baseline.md`'s §5.1 next-increment list,
   which had gone stale: #1297 was already merged, and #1345/#1326 were closed
   unmerged, yet all three were still listed as pending candidates. Replaced

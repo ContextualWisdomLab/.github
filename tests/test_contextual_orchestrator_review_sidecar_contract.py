@@ -433,7 +433,7 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     # `grep -v` exits 1 when every line was filtered out (the common, healthy
     # case with zero warnings); under `set -o pipefail` that would abort the
     # whole script unless explicitly tolerated.
-    assert "sed -n '1,20p' || true)\"" in text
+    assert 'sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" || true)"' in text
     assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
     # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
     # after a successful healthz, so its sanitizer never sees EOF and doing
@@ -442,6 +442,20 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     warnings_line = text.index("sidecar startup warnings (non-fatal)")
     assert healthz_confirmed < warnings_line
     assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
+
+
+def test_sidecar_stderr_tail_covers_discovery_and_preflight_diagnostics() -> None:
+    """The failure-path log tail must be wide enough for the new diagnostics.
+
+    Discovery errors (one per credentialed provider) plus preflight-rejection
+    diagnostics (up to ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` routes) plus a
+    couple of summary lines can together exceed the old fixed 20-line cap,
+    silently truncating exactly the evidence a fail-closed incident needs.
+    """
+    text = _read(SIDECAR)
+    assert "SIDECAR_STDERR_TAIL_LINES=60" in text
+    assert text.count('sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p"') == 3
+    assert "sed -n '1,20p'" not in text
 
 
 def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:

@@ -99,6 +99,49 @@ def _log_discovery_errors(errors: list[object]) -> None:
     print(_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL, file=sys.stderr, flush=True)
 
 
+def _rejected_preflight_routes(report: dict[str, object]) -> list[dict[str, object]]:
+    """Collect rejected route rows from a preflight report, primary attempt included.
+
+    A ``pool=="auto"`` fallback report nests the primary attempt's own report
+    under ``primary_attempt`` (see :func:`_preflight_with_fallback`); this
+    walks into it so a fallback-then-fail run still surfaces the primary
+    attempt's rejections, not just the fallback's.
+    """
+    routes: list[dict[str, object]] = []
+    primary_attempt = report.get("primary_attempt")
+    if isinstance(primary_attempt, dict):
+        routes.extend(_rejected_preflight_routes(primary_attempt))
+    for route in report.get("routes") or []:
+        if isinstance(route, dict) and route.get("status") == "rejected":
+            routes.append(route)
+    return routes
+
+
+def _log_preflight_rejections(report: dict[str, object]) -> None:
+    """Print one bounded, secret-free diagnostic per rejected preflight route.
+
+    ``_preflight_review_agents`` already records a stable ``error_type`` and
+    optional ``http_status`` per rejected route in its JSON evidence artifact
+    (``args.preflight_out``), but that artifact is not part of the CI job's
+    visible console log -- exactly the gap that made a real fail-closed
+    incident impossible to diagnose as transient (5xx/timeout) versus not
+    (bad credential, empty completion) from CI logs alone. Safe to print
+    because ``error_type``/``http_status`` are the same bounded
+    classifications ``_log_discovery_errors`` already trusts, never raw
+    provider response text, exception messages, prompts, or credentials.
+    """
+    for route in _rejected_preflight_routes(report):
+        http_status = route.get("http_status")
+        print(
+            f"preflight_rejected agent={route.get('agent_id', 'unknown')} "
+            f"provider={route.get('provider', 'unknown')} "
+            f"error_type={route.get('error_type', 'unknown')} "
+            f"http_status={http_status if isinstance(http_status, int) else 'none'}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
     """Drop evidence-only discovery rows before any live-serving selection.
 
@@ -544,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
+        _log_preflight_rejections(exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
     if fallback_used and fallback_result is not None:
         Path(args.catalog_out).write_text(

@@ -35,6 +35,12 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # finishes, letting the shell script wait for a deterministic marker instead
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
+# Bounded tail shown in job-log failure messages: discovery errors (up to one
+# per credentialed provider) plus preflight-rejection diagnostics (up to
+# REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES routes) plus a couple of summary lines can
+# together exceed the old 20-line cap, silently truncating exactly the
+# evidence a fail-closed incident needs.
+SIDECAR_STDERR_TAIL_LINES=60
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-4}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
@@ -335,11 +341,11 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     # guarantees $sidecar_stderr holds everything the sidecar wrote before we
     # read it for the failure message below.
     wait_for_sidecar_sanitizers
-    fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
+    fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" "$sidecar_stderr")"
   fi
   i=$((i + 1))
   if [ "$i" -ge 180 ]; then
-    fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
+    fail "sidecar did not become healthy; stderr: $(sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" "$sidecar_stderr")"
   fi
   sleep 1
 done
@@ -370,7 +376,7 @@ until grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/de
   fi
   sleep 0.2
 done
-sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' || true)"
+sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" || true)"
 if [ -n "$sidecar_startup_warnings" ]; then
   log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"
 fi

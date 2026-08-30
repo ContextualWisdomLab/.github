@@ -15,6 +15,12 @@ _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
 )
+_PREFLIGHT_REJECTED = re.compile(
+    r"preflight_rejected agent=(?P<agent>[A-Za-z0-9_./:-]{1,128}) "
+    r"provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"error_type=(?P<error_type>[A-Za-z0-9_]{1,64}) "
+    r"http_status=(?P<http_status>[0-9]{1,3}|none)"
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
@@ -52,6 +58,14 @@ def sanitize_line(line: str) -> str | None:
         return (
             f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
             f"code={provider_discovery_failed.group('code')}"
+        )
+    preflight_rejected = _PREFLIGHT_REJECTED.search(stripped)
+    if preflight_rejected is not None:
+        return (
+            f"preflight_rejected agent={preflight_rejected.group('agent')} "
+            f"provider={preflight_rejected.group('provider')} "
+            f"error_type={preflight_rejected.group('error_type')} "
+            f"http_status={preflight_rejected.group('http_status')}"
         )
     if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
