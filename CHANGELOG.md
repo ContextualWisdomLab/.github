@@ -81,7 +81,32 @@ Semantic Versioning where the repository publishes a release.
   message-text matching), so documented as a known, accepted, tracked
   Layer 2 limitation (`ContextualWisdomLab/contextual-orchestrator#932`,
   following the `#926`/`#927` pattern) rather than worked around. No code
-  change in this PR; the sidecar migration is tracked separately.
+  change in this PR; the sidecar migration is tracked separately. A seventh
+  Devin Review pass found four more items, judged against this org's
+  convergence rule after 26+ review threads across seven rounds on this
+  docs-only PR. Trivial: the Evidence trail's upstream-issue citation still
+  named only `#926`/`#927`, missing `#932` -- added. Cross-reference gap,
+  not a new architectural question: Layer 1's `160s` worst case (Decision
+  §3) still didn't reference `ContextualWisdomLab/.github#1455` (the
+  discovery-timing gap filed and fully reasoned during the implementation
+  pass) anywhere in this ADR's own text -- added the cross-reference at the
+  point of definition and in Consequences, without reopening the
+  underlying question #1455 already tracks. Genuinely new, verified real:
+  the shared, catalog-order-consumed `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget can deny a later-sorting, healthy candidate its own escalation
+  attempt once 4 earlier candidates have claimed the budget -- catalog
+  order is deterministic (alphabetical by provider/model), not random.
+  Considered reordering (round-robin, random shuffling) as a cheap fix and
+  rejected it: no selection policy for a fixed-size shared budget removes
+  the underlying trade-off, only changes which arbitrary policy governs
+  it, and picking one without real evidence would itself be the kind of
+  unjustified heuristic this ADR already rejects elsewhere. Documented as
+  a known, accepted, tracked limitation (`ContextualWisdomLab/.github#1458`,
+  matching the `#1454`/`#1455`/`#932` pattern) rather than redesigned.
+  Informational, no change: the gap-baseline's repeated review-round
+  narrative is this repo's own documented, intentional convention
+  (ADR-0002: the baseline is "an operational snapshot," not a duplicate of
+  the ADR's design record), not accidental redundancy.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

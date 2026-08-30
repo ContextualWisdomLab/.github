@@ -1438,6 +1438,33 @@ tracking precedent, and added to Decision §4's upstream-tracking list. Does not
 additional one) — only means this specific failure typically consumes the whole retry budget rather
 than failing fast.
 
+**A seventh Devin Review pass (four findings) was judged against this org's convergence rule at 26+
+review threads across seven rounds on a docs-only PR — the point past which the marginal value of
+another textual-precision pass drops below the cost of continuing to block the org's central review
+pipeline.** One was trivial and fixed outright: the Evidence trail's upstream-issue citation still
+named only `#926`/`#927`, missing `#932` from the round just landed — added. One was a
+cross-reference gap, not a new question: Layer 1's `160s` worst-case claim (Decision §3) still didn't
+reference `ContextualWisdomLab/.github#1455` anywhere in this ADR's own text, even though #1455 was
+filed and fully reasoned during the implementation pass — added the cross-reference at the point of
+definition and in Consequences, explicitly *not* reopening the discovery-timing question itself (that
+stays tracked on #1455, unchanged). One was genuinely new and verified real, not a restatement:
+`REVIEW_PREFLIGHT_MAX_ESCALATIONS`'s shared budget is consumed in deterministic catalog order
+(alphabetical by `(provider, model)`, not random), so a candidate that sorts later can be denied its
+own escalation attempt purely because 4 earlier candidates already claimed the shared budget — verified
+directly against `_preflight_review_agents`'s actual loop structure. Considered a cheap reordering fix
+(round-robin, random shuffling) and rejected it on the merits, not on convergence-fatigue: any selection
+policy for a fixed-size shared budget smaller than the candidate pool still has to deny *someone* a
+slot, so reordering only changes which candidates are favored, not whether the trade-off exists — and
+picking a specific reordering policy without real telemetry on which candidates actually need
+escalation more often would itself be exactly the unjustified heuristic this ADR already rejects
+elsewhere (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). Documented as a known, accepted, tracked
+limitation (`ContextualWisdomLab/.github#1458`, matching the `#1454`/`#1455`/`#932` pattern) rather than
+redesigned. The fourth finding needed no action: it observed that the ADR, CHANGELOG, and this baseline
+all narrate the same review rounds — this is this repo's own documented, intentional convention, not
+accidental redundancy (`docs/adr/0002-product-technical-gap-baseline.md`: this document is "an
+operational snapshot" and "live PR metadata inventory," a distinct role from the ADR's settled design
+record and the CHANGELOG's terse pointer entries, not a duplicate of either).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

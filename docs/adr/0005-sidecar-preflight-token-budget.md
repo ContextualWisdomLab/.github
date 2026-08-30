@@ -302,8 +302,35 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4`, across the whole Layer 1 run (not per-candidate) — once 4
   candidates have consumed an escalation attempt, any further candidate that would otherwise qualify
   for Trigger B is instead recorded not-ready immediately with an explicit
-  `escalation_budget_exhausted` reason. **Worst case**: 12 × 10s (base attempts) + 4 × 10s (escalation
-  attempts) = **160s**, under the existing 180s ceiling with real margin, computed rather than assumed.
+  `escalation_budget_exhausted` reason. **Worst case (probing only)**: 12 × 10s (base attempts) + 4 ×
+  10s (escalation attempts) = **160s**, under the existing 180s ceiling with real margin, computed
+  rather than assumed. **This 160s covers only probing** — it does not include the launcher's own
+  pre-probe startup work (KV credential registration, `discover_all_models()`'s sequential provider
+  discovery, ZDR-prioritized catalog construction), which runs first, inside the *same* 180s watchdog.
+  Verified directly against the vendored `contextual_orchestrator.model_discovery` source during the
+  implementation pass: discovery alone can take up to ~105s worst case (up to ~7 sequential HTTP calls
+  at up to 15s each), for a combined real worst case of up to ~265s, not 160s. **Known, accepted,
+  tracked limitation, not redesigned here**: `ContextualWisdomLab/.github#1455` (filed and reasoned in
+  full during the implementation PR, `ContextualWisdomLab/.github#1452`) — accepted as non-blocking
+  because the failure mode requires two unlikely conditions to coincide in one run (discovery near its
+  own worst case *and* probing separately needing close to its full escalation budget), and no real
+  discovery-timing telemetry exists yet to justify a specific fix (a shared deadline, scaled-down
+  probing, or a justified watchdog extension) without guessing, which this ADR's own convergence
+  principle already rejects (Context, "어떠한 휴리스틱과 Rule of thumbs도 금지"). This ADR does not
+  reopen that question; see #1455 for the full analysis and options considered.
+  **Second known, accepted, tracked limitation on this same shared counter**: candidates are probed in
+  catalog order (deterministic, sorted alphabetically by `(provider, model)` — not random), and the
+  4-escalation budget is consumed strictly first-come-first-served, so a candidate that sorts later in
+  the catalog can be denied its own escalation attempt purely because 4 earlier candidates already
+  claimed the shared budget, even if that later candidate would have succeeded at the escalated budget.
+  Considered and rejected as not cheaply fixable: the budget must stay shared and bounded (unbounded
+  per-candidate escalation is exactly what round-3's already-fixed finding ruled out), and no selection
+  policy for *which* candidates get the fixed slots — catalog order, round-robin, random shuffling,
+  family-priority — removes the underlying trade-off, only changes which arbitrary policy governs it;
+  picking one without real evidence on which candidates actually need escalation more often would
+  itself be exactly the unjustified heuristic this ADR's convergence principle already rejects.
+  Tracked as `ContextualWisdomLab/.github#1458`; revisit if real hosted-run telemetry (already required
+  below) shows a specific, evidenced bias worth correcting.
 - **Layer 2** (bounded only by the job's own 120-minute ceiling, per the org's stated "accuracy over
   speed" policy already reasoned in this file — *not* by the 180s Layer 1 budget, which has already
   completed by the time Layer 2 runs): keep the existing per-attempt timeout (**120s, unchanged** — not
@@ -393,6 +420,17 @@ outcome already observed in production.**
   contractually-unstable message-text matching. Does not change Layer 2's stated worst case (this
   failure still draws from the same shared Trigger-A attempt budget). Tracked as
   `ContextualWisdomLab/contextual-orchestrator#932`.
+- Layer 1's `160s` worst case (Decision §3) covers probing only, not the launcher's own pre-probe
+  startup work (KV registration, model discovery, catalog construction), which runs first inside the
+  same 180s watchdog — verified at up to ~105s worst case for discovery alone, for a combined real
+  worst case of up to ~265s. Accepted the same way as the limitations above: the failure mode needs two
+  unlikely conditions to coincide, and no real discovery-timing telemetry exists yet to justify a
+  specific fix without guessing. Tracked as `ContextualWisdomLab/.github#1455`.
+- The shared, catalog-order-consumed `REVIEW_PREFLIGHT_MAX_ESCALATIONS` budget can deny a
+  later-sorting, genuinely healthy candidate its own escalation attempt once 4 earlier candidates have
+  already claimed the budget — accepted the same way: the budget must stay shared and bounded (an
+  unbounded per-candidate escalation was already ruled out, Decision §3), and no selection policy for
+  the fixed slots is justified by real evidence today. Tracked as `ContextualWisdomLab/.github#1458`.
 - Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues, and
   would remain explicitly not closed by this ADR even once the sidecar-side implementation lands.
 - No production routing default changes are proposed; this is scoped to the sidecar's own liveness
@@ -448,7 +486,8 @@ line numbers cannot rot as these files are edited later.
     remaining after input tokens"* (nullable); the deprecated `max_tokens` field description —
     *"Note: some providers enforce a minimum of 16"* — the direct evidence for this ADR's `16`-token
     Layer 1 base probe value.
-- `ContextualWisdomLab/contextual-orchestrator#926`, `#927` — the two tracked upstream follow-ups.
+- `ContextualWisdomLab/contextual-orchestrator#926`, `#927`, `#932` — the three tracked upstream
+  follow-ups.
 - **Live reproduction on this ADR's own PR**, verified directly against the job log rather than taken
   on report: `noema-review` on `ContextualWisdomLab/.github#1449` (job `99253418179`,
   `https://github.com/ContextualWisdomLab/.github/actions/runs/33310078256/job/99253418179`) —
