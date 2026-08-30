@@ -1690,7 +1690,21 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   설명했을 수 있다. naruon과 contextual-orchestrator는 자기 브랜치가 아니라 `.github`의 `main`에서
   중앙 워크플로우를 매 dispatch 시점에 새로 가져오므로(trusted source ref), 이 두 PR은 **자기
   브랜치를 건드리지 않고도** 다음 dispatch부터 이 fix의 혜택을 받을 수 있다.
-- 병합 후 전체 스위트 재검증 결과는 아래에 기록한다(진행 중).
+- 병합 커밋(`c55620fc`) 검증: 전체 스위트 1898 passed/1 skipped/21 subtests, coverage TOTAL
+  9966/9966 statements·3926/3926 branches **100%**, interrogate **100%**. 푸시 완료 —
+  `.github#1438`의 `mergeable_state`가 `dirty`(conflict)에서 `blocked`(required Checks/리뷰
+  대기, 정상)로 돌아왔다.
+- **관찰**: 이 병합 직후 `contextual-orchestrator#923`의 `noema-review`가 `success`로 전환되었고
+  (이전에 봤던 "healthz 통과 후 completion이 120초간 행" 시그니처가 이번에는 재현되지 않음),
+  `strix`도 (이전처럼 즉시 provider-unavailable로 실패하는 대신) 실제로 스캔을 진행 중이다 —
+  `702392a2`(Strix SDK streaming 비활성화 workaround)가 실제로 유효하게 작동하고 있다는
+  직접 증거다. `opencode-review`는 여전히 실패 상태이지만 이는 Strix가 아직 완료 전이라
+  scheduler가 dispatch를 순서화하며 기다리는, 이미 알려진 정상 대기 상태다.
+- `.github#1347`(SSRF/isolation)은 이번 pass에서도 손대지 않았다 — 별도 브랜치
+  (`fix/sandboxed-web-e2e-isolation-clean`, `main` 대비 8월 26일 이후로 stale, `mergeable_state:
+  dirty`)이며 실제 로직 대조가 필요한 전용 pass 대상이므로, 이미 상당한 시간을 투입한 이번
+  pass에 무리해서 끼워넣지 않고 명시적으로 다음 pass로 넘긴다. naruon G-06/G-15도 동일한
+  이유로 이번 pass에서는 착수하지 못했다 — 다음 pass의 최우선 항목으로 남긴다.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
