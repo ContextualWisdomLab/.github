@@ -1148,9 +1148,20 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
+_STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
+
+
 def strix_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, or complete for current-head Strix evidence."""
+    """Return missing, running, failed, or complete for current-head Strix evidence.
+
+    "complete" requires authoritative success (CheckRun conclusion or classic
+    commit-status state of SUCCESS). Any other terminal outcome -- failure,
+    error, cancelled, timed out, skipped, neutral, action_required, stale,
+    startup_failure -- is reported as "failed" rather than "complete" so
+    callers fail closed instead of unlocking on non-passing evidence.
+    """
     found = False
+    saw_failure = False
     for node in context_nodes(pr):
         if not is_strix_context(node):
             continue
@@ -1158,9 +1169,17 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
-        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
-            return "running"
-    return "complete" if found else "missing"
+        if node.get("__typename") == "CheckRun":
+            if status != "COMPLETED":
+                return "running"
+            conclusion = (node.get("conclusion") or "").upper()
+            if conclusion not in _STRIX_SUCCESS_CONCLUSIONS:
+                saw_failure = True
+        elif status not in _STRIX_SUCCESS_CONCLUSIONS:
+            saw_failure = True
+    if not found:
+        return "missing"
+    return "failed" if saw_failure else "complete"
 
 
 def unresolved_thread_count(pr: dict[str, Any]) -> int:
@@ -1842,7 +1861,7 @@ def post_update_branch_followup(
         return f"{head_note}; review dispatch limit reached, so no same-head evidence workflow was dispatched"
 
     strix_state = strix_evidence_state(updated_pr)
-    if strix_state == "missing":
+    if strix_state in {"missing", "failed"}:
         wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
         if wait_reason:
             return f"{head_note}; {wait_reason}"
@@ -2490,7 +2509,7 @@ def dispatch_draft_review_only(
             "draft PR review-only dispatch; current-head OpenCode verdict already exists",
         )
     strix_state = strix_evidence_state(pr)
-    if strix_state == "missing":
+    if strix_state in {"missing", "failed"}:
         if not review_dispatch_allowed:
             return Decision(
                 number,
@@ -3051,7 +3070,7 @@ def inspect_pr(
 
     if trigger_reviews:
         strix_state = strix_evidence_state(pr)
-        if strix_state == "missing":
+        if strix_state in {"missing", "failed"}:
             if not review_dispatch_allowed:
                 return decide(
                     "wait",

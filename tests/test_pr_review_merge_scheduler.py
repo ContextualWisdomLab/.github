@@ -1036,10 +1036,27 @@ def test_context_review_and_check_helpers(monkeypatch):
     )
     assert sched.strix_evidence_state(unknown_running) == "running"
     assert sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})) == "complete"
-    assert (
-        sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}))
-        == "complete"
-    )
+    for terminal_conclusion in (
+        "FAILURE",
+        "ERROR",
+        "CANCELLED",
+        "TIMED_OUT",
+        "SKIPPED",
+        "NEUTRAL",
+        "ACTION_REQUIRED",
+        "STALE",
+        "STARTUP_FAILURE",
+    ):
+        non_passing = make_pr(
+            statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion=terminal_conclusion)]}}
+        )
+        assert sched.strix_evidence_state(non_passing) == "failed", terminal_conclusion
+    classic_failure = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "FAILURE"}]}})
+    assert sched.strix_evidence_state(classic_failure) == "failed"
+    classic_error = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "ERROR"}]}})
+    assert sched.strix_evidence_state(classic_error) == "failed"
+    classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
+    assert sched.strix_evidence_state(classic_success) == "complete"
 
     threaded = make_pr(
         reviewThreads={
@@ -3001,6 +3018,18 @@ def test_inspect_pr_reports_stale_approval_cleanup_in_final_decision():
     )
 
 
+def test_inspect_pr_treats_failed_strix_like_missing_and_never_dispatches_opencode():
+    """A terminal but non-passing Strix conclusion must fail closed: a fresh
+    Strix attempt is dispatched, exactly as for missing evidence, and
+    OpenCode is never reached on that non-authoritative evidence."""
+    failed_strix = make_pr(
+        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
+    )
+    decision = inspect(failed_strix)
+    assert decision.action == "security_dispatch"
+    assert decision.reason == "current head has no completed Strix evidence; same-head Strix dispatched"
+
+
 def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
     def fail(_args, stdin=None):
         raise RuntimeError("Resource not accessible by integration")
@@ -3914,6 +3943,21 @@ def test_draft_pr_review_only_dispatch_strix_missing_then_opencode_chain():
     )
 
 
+def test_draft_pr_review_only_dispatch_treats_failed_strix_like_missing():
+    """A terminal but non-passing Strix conclusion on a draft review-only
+    request must fail closed the same as missing evidence: a fresh Strix
+    attempt is dispatched and OpenCode is never reached."""
+    failed_strix_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
+    )
+    decision = inspect(failed_strix_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "same-head Strix dispatched"
+    )
+
+
 def test_draft_pr_review_only_dispatch_strix_running_waits():
     running_strix_draft = make_pr(
         isDraft=True,
@@ -4421,6 +4465,46 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
         )
     )
+
+
+def test_post_update_branch_followup_treats_failed_strix_like_missing(monkeypatch):
+    """A terminal but non-passing Strix conclusion after a branch update must
+    fail closed the same as missing evidence: a fresh Strix attempt is
+    dispatched, and OpenCode is never reached on that non-authoritative
+    evidence."""
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(
+        headRefOid="new-head",
+        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}},
+    )
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    strix_dispatched = []
+    opencode_dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: strix_dispatched.append(pr["headRefOid"]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: opencode_dispatched.append(pr["headRefOid"]),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "same-head Strix evidence dispatched" in note
+    assert strix_dispatched == ["new-head"]
+    assert opencode_dispatched == []
 
 
 def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(monkeypatch):

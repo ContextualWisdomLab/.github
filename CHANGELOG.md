@@ -61,6 +61,26 @@ Semantic Versioning where the repository publishes a release.
     gated, exact-head-named artifact marker (above) is now the sole automatic
     gate; `--allow-draft-review-dispatch` remains only as a manual,
     direct-CLI operator override.
+  - `strix_evidence_state()` classified *any* terminal Strix check-run or
+    commit-status as `"complete"` because it only ever inspected `status`
+    (CheckRun) / whether a value was present (classic status) to tell
+    running from terminal, never the actual `conclusion` (CheckRun) or
+    terminal `state` value (classic status). A terminal `FAILURE`, `ERROR`,
+    `CANCELLED`, `TIMED_OUT`, `SKIPPED`, `NEUTRAL`, `ACTION_REQUIRED`,
+    `STALE`, or `STARTUP_FAILURE` outcome therefore satisfied the same gate
+    as an authoritative `SUCCESS`, letting non-passing Strix evidence unlock
+    OpenCode dispatch on both the draft review-only path and the ordinary
+    scheduler path. The function now returns a new `"failed"` state whenever
+    Strix evidence is terminal but not an authoritative success, and every
+    call site (`post_update_branch_followup`, `dispatch_draft_review_only`,
+    and the main non-draft `inspect_pr` Strix-then-OpenCode chain) treats
+    `"failed"` exactly like `"missing"`: it dispatches a fresh Strix attempt
+    and never falls through to OpenCode on that non-authoritative evidence.
+    Fails closed by design: any single non-success terminal context marks
+    the whole gate `"failed"` even alongside a successful one. Added
+    exhaustive regression fixtures for every non-passing terminal
+    conclusion/state plus authoritative success, for both CheckRun and
+    classic commit-status shapes.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
