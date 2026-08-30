@@ -822,6 +822,9 @@ def _select_python_locks(
         base_blob_sha = base_blob.decode("ascii", errors="strict").strip().lower()
         if base_blob_sha == head_blob:
             continue
+        if not _requirement_lines(content):
+            selected.pop(source_path, None)
+            continue
         if _is_flat_materializable_lock(content):
             selected[source_path] = content
             continue
