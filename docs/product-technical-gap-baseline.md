@@ -2327,9 +2327,14 @@ CodeRabbit이 rate limit 이후 `dcc9fcd0`에 새 pass를 돌리면 review decis
 opencode-agent on the current head"로 exit 1 — 그 head에 대한 authenticated dispatch verdict이 아직
 게시되지 않은 것뿐, merge conflict나 코드 결함이 아님). `.github#1438`에는 Devin이 새로 3건(테스트가
 텍스트만 검사한다는 지적 — 이 계약 테스트 파일 전체가 원래 텍스트 기반 검증이라 이 PR이 새로 도입한
-격차가 아님, 순수 정보성 확인 2건)을 남겨 전부 검증 후 코멘트+resolve했다. `.github#1347`에는 또 새
-Devin 라운드가 도착해 실제 코드 대조 검증을 전담 백그라운드 에이전트에 위임했다(진행 중, 다음 항목에서
-결과를 기록한다).
+격차가 아님, 순수 정보성 확인 2건)을 남겨 전부 검증 후 코멘트+resolve했다. CodeRabbit도 diff 밖(outside
+diff range) finding 1건을 남겼다: `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` 검증의 zero 거부가 정확히
+한 글자인 `"0"`만 매치해 `"00"`/`"0000"`처럼 전부 숫자이면서 0인 값이 통과했고, `[ -ge ]`는 이를 10진수
+0으로 파싱해 재시도 1회 만에 실패(설정한 재시도 횟수를 무시하는, 원래 malformed-value 버그와는 반대
+방향의 결함)하는 실재 버그였다 — case 패턴에 `00`/`0000`을 추가하고 기존 parametrized 회귀 테스트에도
+포함시켜 커밋 `17974388`으로 고쳤다(전체 스위트 1933 passed/1 skipped/21 subtests, coverage 100%,
+interrogate 100%). `.github#1347`에는 또 새 Devin 라운드가 도착해 실제 코드 대조 검증을 전담 백그라운드
+에이전트에 위임했다(진행 중, 다음 항목에서 결과를 기록한다).
 
 ## 6. Compliance and data boundary
 
