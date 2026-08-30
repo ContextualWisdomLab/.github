@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import io
 import json
+import re
 import runpy
 from pathlib import Path
 import sys
@@ -82,6 +83,54 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     assert routable([]) == []
 
 
+def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A discarded discovery error must become a visible, sanitizer-safe diagnostic."""
+    namespace = _load_launcher()
+    log_discovery_errors = namespace.get("_log_discovery_errors")
+    assert callable(log_discovery_errors), "launcher must expose a discovery-error logger"
+
+    errors = [
+        SimpleNamespace(provider_name="bytez", error_code="http_status_401"),
+        SimpleNamespace(provider_name="openai", error_code="timeout"),
+    ]
+
+    log_discovery_errors(errors)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        "provider_discovery_failed provider=bytez code=http_status_401",
+        "provider_discovery_failed provider=openai code=timeout",
+        "discovery_diagnostics_complete",
+    ]
+
+
+def test_log_discovery_errors_emits_only_the_sentinel_on_a_clean_discovery(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No providers failed -> just the completion sentinel, no warning lines."""
+    namespace = _load_launcher()
+    log_discovery_errors = namespace.get("_log_discovery_errors")
+    assert callable(log_discovery_errors)
+
+    log_discovery_errors([])
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "discovery_diagnostics_complete\n"
+
+
+def test_log_discovery_errors_sentinel_matches_the_sidecar_scripts_constant() -> None:
+    """The sidecar shell script's poll target must equal this exact literal."""
+    namespace = _load_launcher()
+    sentinel = namespace.get("_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL")
+    assert sentinel == "discovery_diagnostics_complete"
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+    assert f'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="{sentinel}"' in sidecar_text
+
+
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
     """Reject provider errors/malformed replies before the sidecar becomes ready."""
     namespace = _load_launcher()
@@ -132,6 +181,106 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
             {"role": "user", "content": "Reply with just 'OK'."},
         ]
         assert "tools" not in payload
+
+
+def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -> None:
+    """The bash script's end-to-end gateway check must not retest a route the
+    Python routing probe already proved ready with a stricter token budget.
+
+    Regression for the 2026-08-30 sidecar-preflight-max-tokens incident: the
+    routing probe (`_preflight_review_agents`, tested above) already uses
+    `REVIEW_MAX_OUTPUT_TOKENS` and correctly marked a reasoning-capable
+    nvidia_nim route "ready". The separate end-to-end gateway check in
+    ``contextual_orchestrator_review_sidecar.sh`` used to hardcode
+    ``"max_tokens":16`` for that same virtual-model request -- far too small
+    for a reasoning model to emit any answer content after its internal
+    reasoning tokens, so the gateway rejected a route its own routing probe
+    had just proven healthy. This asserts the two budgets stay numerically
+    identical so that mismatch cannot silently return; it fails on the
+    pre-fix literal (16) and passes once the gateway request is synchronized
+    with the routing probe's budget.
+    """
+    namespace = _load_launcher()
+    review_max_output_tokens = namespace["REVIEW_MAX_OUTPUT_TOKENS"]
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(
+        r'gateway_virtual_model.*?"max_tokens":(\d+)', sidecar, re.DOTALL
+    )
+    assert match, "sidecar must send one JSON gateway preflight request with an explicit max_tokens"
+    gateway_preflight_max_tokens = int(match.group(1))
+
+    assert gateway_preflight_max_tokens == review_max_output_tokens, (
+        "gateway preflight max_tokens "
+        f"({gateway_preflight_max_tokens}) must equal the routing probe's "
+        f"REVIEW_MAX_OUTPUT_TOKENS ({review_max_output_tokens}); a smaller "
+        "budget here can reject a route the routing probe already proved "
+        "ready"
+    )
+
+
+def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
+    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+
+    Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
+    evidence reproduction (Strix run 33306775025 on
+    ContextualWisdomLab/contextual-orchestrator#921, job 99244624298) showed
+    the routing probe marking a DeepSeek NIM route "ready" in 18s, then the
+    identical gateway request against that same healthy route being cut off
+    at exactly curl's configured bound -- "gateway preflight request could
+    not reach the local sidecar" was that timeout, not a real connectivity
+    failure. This asserts the bound is generous enough to tolerate a real
+    reasoning generation (well above the routing probe's own 10s
+    per-candidate budget) rather than the previous 30s, which rejected a
+    route the routing probe had just proven healthy.
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
+    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
+    gateway_preflight_timeout_seconds = int(match.group(1))
+
+    assert gateway_preflight_timeout_seconds >= 120, (
+        "gateway preflight curl --max-time "
+        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
+        "completion latency; 30s was observed cutting off a route the routing probe "
+        "had just proven ready"
+    )
+
+
+def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() -> None:
+    """A genuinely broken model must still fail closed at the full 4096-token
+    budget -- proving the sidecar-preflight-max-tokens fix widens the budget
+    without weakening the routing probe's fail-closed content check.
+
+    Negative control for the same incident: raising the budget must never be
+    mistaken for making every response acceptable. A route whose reply is
+    reasoning-only (present ``reasoning``, empty ``content``) -- the exact
+    shape ``contextual_orchestrator.orchestrator._response_content`` raises
+    ``ProviderResponseError`` for -- is simulated at the routing-probe layer
+    and must still be classified "rejected", never reclassified as a
+    healthy "ready" route just because the token budget grew.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    reasoning_only = SimpleNamespace(
+        id="nvidia_nim_reasoning_only", provider_name="nvidia_nim", model="reasoning/free"
+    )
+    client = _ProbeClient(
+        {
+            reasoning_only.id: {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "internal reasoning tokens only"}}
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed"):
+        preflight([reasoning_only], client=client)
+
+    assert client.calls[0][2]["max_tokens"] == namespace["REVIEW_MAX_OUTPUT_TOKENS"]
 
 
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
@@ -319,6 +468,7 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
         "request_failed status=500 code=internal_error upstream sk-secret"
     ) == "request_failed status=500 code=internal_error"
     assert sanitize_line("client_disconnected") == "client_disconnected"
+    assert sanitize_line("discovery_diagnostics_complete") == "discovery_diagnostics_complete"
     assert sanitize_line(
         "review sidecar preflight failed: upstream sk-secret"
     ) == "review sidecar preflight failed"
@@ -335,6 +485,9 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line(
         "review sidecar requires at least one provider credential in the KV"
     ) == "review sidecar requires at least one provider credential in the KV"
+    assert sanitize_line(
+        "provider_discovery_failed provider=bytez code=http_status_401"
+    ) == "provider_discovery_failed provider=bytez code=http_status_401"
     assert sanitize_line("provider response sk-secret") is None
 
 

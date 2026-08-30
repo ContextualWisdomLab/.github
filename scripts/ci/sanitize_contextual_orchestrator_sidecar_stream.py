@@ -11,6 +11,10 @@ _REQUEST_FAILED = re.compile(
     r"request_failed status=(?P<status>[1-5][0-9]{2}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
 )
+_PROVIDER_DISCOVERY_FAILED = re.compile(
+    r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
@@ -43,7 +47,13 @@ def sanitize_line(line: str) -> str | None:
             f"request_failed status={request_failed.group('status')} "
             f"code={request_failed.group('code')}"
         )
-    if stripped == "client_disconnected":
+    provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
+    if provider_discovery_failed is not None:
+        return (
+            f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
+            f"code={provider_discovery_failed.group('code')}"
+        )
+    if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
     for prefix, summary in _PREFIX_SUMMARIES:
         if stripped.startswith(prefix):

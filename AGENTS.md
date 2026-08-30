@@ -1,7 +1,7 @@
 # AGENTS.md — ContextualWisdomLab .github
 
 <!-- CWL-ENTRY -->
-> **Agents: read the master context FIRST.** Before any work, read [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission · naruon-as-platform + inter-component UML · cross-cutting disciplines · conventions · roadmap · current state), the live **GitHub Project #1** <https://github.com/orgs/ContextualWisdomLab/projects/1> (work/roadmap source of truth), the full spec **ContextualWisdomLab/naruon#974**, the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md) (not merge authorization; Figma File ID for this repo is N/A per [`docs/adr/0002-product-technical-gap-baseline.md`](docs/adr/0002-product-technical-gap-baseline.md)), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md). The repo/Project — not any private agent memory — is the source of truth.
+> **Agents: read the master context FIRST.** Before any work, read [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission · naruon-as-platform + inter-component UML · cross-cutting disciplines · conventions · roadmap · current state), the live **GitHub Project #1** <https://github.com/orgs/ContextualWisdomLab/projects/1> (work/roadmap source of truth), the full spec **ContextualWisdomLab/naruon#974**, the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md) (not merge authorization; Figma File ID for this repo is N/A per [`docs/adr/0002-product-technical-gap-baseline.md`](docs/adr/0002-product-technical-gap-baseline.md)), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md). The repo/Project — not any private agent memory — is the source of truth. The standing autonomous operating directive for the continuous PR review→fix→merge→develop loop across the ecosystem is [`docs/product-goal-directive.md`](docs/product-goal-directive.md) — a `/goal` session's 4000-character pointer refers to it; read the full directive before running or configuring any such loop.
 
 Materialize accepts only exact SHA-256 pins, a bounded relative `-r` include
 (no `.`/`..`), or an organization-owned HTTPS Git source pinned to a full
@@ -21,11 +21,12 @@ sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
-OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`.
-Authoritative Strix analysis uses the correctness-first `orchestrator/auto`
-provider-diverse pool. Non-free Strix routes
-are admitted only with complete published prompt/completion price and currency
-evidence, and private targets still require ZDR-compliant routes under
+OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
+`orchestrator/free`. Strix uses the zero-cost `orchestrator/free` pool by
+explicit 2026-08-30 owner decision, superseding the prior `orchestrator/auto`
+(provider-diverse, non-free-admitting) default; private targets still require
+ZDR-compliant routes under
 [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
-See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md).
+See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
+and its 2026-08-30 amendment.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
