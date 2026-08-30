@@ -2499,17 +2499,29 @@ def active_draft_review_request(repo: str, pr: dict[str, Any]) -> bool:
     (:func:`gh_api_json_via_dispatch_token`), because the artifact always
     lives in that central repository regardless of which repository ``repo``
     names, and the target-repository read credential is not guaranteed to
-    have Actions permission there for a cross-repository dispatch.
+    have Actions permission there for a cross-repository dispatch. That
+    dispatch credential is itself only valid when this scheduler executes
+    inside the central repository; an ordinary required-workflow scan
+    executing directly in a sibling repository has no credential able to
+    read the central repository's artifacts at all. Rather than let that
+    ``gh`` failure -- or a malformed/tampered artifact-list response --
+    propagate and abort the whole multi-PR scan over one draft PR, any
+    failure to positively confirm a live artifact resolves to ``False``:
+    the same safe "no explicit request" outcome as a live check that
+    actually completes and finds nothing.
     """
     head_sha = pr.get("headRefOid")
     if not isinstance(head_sha, str) or not head_sha:
         return False
     dispatch_repo = repository_dispatch_target(validate_github_repository(repo))
     artifact_name = draft_review_request_artifact_name(repo, pr["number"], head_sha)
-    response = gh_api_json_via_dispatch_token(
-        f"repos/{dispatch_repo}/actions/artifacts?name={artifact_name}&per_page=100"
-    )
-    return bool(_draft_review_request_records(response, expected_name=artifact_name))
+    try:
+        response = gh_api_json_via_dispatch_token(
+            f"repos/{dispatch_repo}/actions/artifacts?name={artifact_name}&per_page=100"
+        )
+        return bool(_draft_review_request_records(response, expected_name=artifact_name))
+    except (RuntimeError, ValueError):
+        return False
 
 
 def dispatch_draft_review_only(

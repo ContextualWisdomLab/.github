@@ -3886,6 +3886,35 @@ def test_active_draft_review_request_false_without_a_head_sha():
     assert sched.active_draft_review_request("owner/repo", make_pr(headRefOid=None)) is False
 
 
+def test_active_draft_review_request_fails_closed_when_the_read_cannot_be_performed(monkeypatch):
+    """Regression: an ordinary required-workflow scan executing directly in a
+    sibling repository has no credential able to read the central .github
+    repository's Actions artifacts at all -- neither the target-repository
+    read credential nor the central dispatch credential is valid there. The
+    resulting gh failure must resolve to False (no confirmed active
+    request, same as a completed check that finds nothing), never propagate
+    and abort the whole multi-PR scan over one draft PR."""
+
+    def raise_runtime_error(path):
+        raise RuntimeError("Command failed (1): gh api ...\nHTTP 403: Resource not accessible")
+
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", raise_runtime_error)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
+def test_active_draft_review_request_fails_closed_on_a_malformed_artifact_response(monkeypatch):
+    """A malformed or internally inconsistent artifact-list response must
+    never be treated as a confirmed live request; it resolves to False
+    exactly like any other inability to positively confirm one."""
+
+    monkeypatch.setattr(
+        sched, "gh_api_json_via_dispatch_token", lambda path: {"total_count": 1, "artifacts": []}
+    )
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
 def test_active_draft_review_request_uses_dispatch_token_not_opencode_app_token(monkeypatch):
     """Regression: the OpenCode app installation has no Actions permission, so
     reading the draft-review-request artifact must use the same

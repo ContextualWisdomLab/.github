@@ -114,6 +114,21 @@ Semantic Versioning where the repository publishes a release.
       artifacts regardless of the PR's actual repository. Added a
       regression test proving the read uses the dispatch token, not
       whatever generic `GH_TOKEN` the OpenCode app credential resolves to.
+  - One more adversarial-review finding against that same dispatch-token
+    fix: the central-repository dispatch credential is itself only valid
+    when this scheduler executes inside `.github`. `scan-pr-queue` has no
+    such guard — the organization's required-workflow ruleset runs it
+    directly in each sibling repository's own context for that repository's
+    ordinary (non-mention) PR events, where `github.token` is scoped only
+    to that sibling repository and cannot read `.github`'s artifacts
+    either. `active_draft_review_request()` previously let that `gh`
+    failure -- or a malformed/tampered artifact-list response -- propagate
+    as an unhandled exception, replacing the intended `skip: draft PR`
+    outcome with an error that would abort the whole multi-PR scan over one
+    draft PR. It now resolves any such failure to `False` (no confirmed
+    active request) instead, the same safe outcome as a completed check
+    that finds nothing. Added regression tests for both the credential
+    failure and a malformed response.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
