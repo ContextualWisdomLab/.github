@@ -424,7 +424,17 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
 def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
     """A partial provider failure must reach the visible log even when the sidecar still starts."""
     text = _read(SIDECAR)
-    assert 'log "sidecar startup warnings (non-fatal): $(sed -n' in text
+    assert 'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"' in text
+    # Must wait for the launcher's own completion sentinel to pass through the
+    # async sanitizer -- a plain `[ -s "$sidecar_stderr" ]` check would race a
+    # slow sanitizer and silently show nothing even when warnings exist.
+    assert 'grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    assert 'grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr"' in text
+    # `grep -v` exits 1 when every line was filtered out (the common, healthy
+    # case with zero warnings); under `set -o pipefail` that would abort the
+    # whole script unless explicitly tolerated.
+    assert "sed -n '1,20p' || true)\"" in text
+    assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
     # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
     # after a successful healthz, so its sanitizer never sees EOF and doing
     # so would hang the workflow forever.

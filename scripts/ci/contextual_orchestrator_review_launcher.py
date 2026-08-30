@@ -66,6 +66,9 @@ def _has_text_output(model: object) -> bool:
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
+_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL = "discovery_diagnostics_complete"
+
+
 def _log_discovery_errors(errors: list[object]) -> None:
     """Print one bounded, secret-free diagnostic per provider discovery failure.
 
@@ -77,6 +80,14 @@ def _log_discovery_errors(errors: list[object]) -> None:
     ``error_code`` is a bounded classification (``http_status_NNN`` /
     ``timeout`` / ``transport_error`` / ``invalid_response``) that never
     carries raw provider response text, so this is safe to print to stderr.
+
+    Always emits a trailing sentinel line, even with zero errors: the sidecar
+    shell script's async stream sanitizer processes stderr lines strictly in
+    order, so once the sanitizer has passed the sentinel through, every
+    discovery-error line printed here is guaranteed to have already reached
+    the sanitized file too -- letting the shell script wait for a
+    deterministic marker instead of racing a fixed-size or fixed-timeout
+    guess at whether the sanitizer has caught up yet.
     """
     for error in errors:
         print(
@@ -85,6 +96,7 @@ def _log_discovery_errors(errors: list[object]) -> None:
             file=sys.stderr,
             flush=True,
         )
+    print(_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL, file=sys.stderr, flush=True)
 
 
 def _routable_discovered_models(discovered: list[object] | None) -> list[object]:

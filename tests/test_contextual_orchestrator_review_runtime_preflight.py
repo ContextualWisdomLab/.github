@@ -102,13 +102,14 @@ def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
     assert captured.err.splitlines() == [
         "provider_discovery_failed provider=bytez code=http_status_401",
         "provider_discovery_failed provider=openai code=timeout",
+        "discovery_diagnostics_complete",
     ]
 
 
-def test_log_discovery_errors_is_a_silent_no_op_on_a_clean_discovery(
+def test_log_discovery_errors_emits_only_the_sentinel_on_a_clean_discovery(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No providers failed -> no diagnostic lines, not even an empty summary."""
+    """No providers failed -> just the completion sentinel, no warning lines."""
     namespace = _load_launcher()
     log_discovery_errors = namespace.get("_log_discovery_errors")
     assert callable(log_discovery_errors)
@@ -117,7 +118,16 @@ def test_log_discovery_errors_is_a_silent_no_op_on_a_clean_discovery(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == ""
+    assert captured.err == "discovery_diagnostics_complete\n"
+
+
+def test_log_discovery_errors_sentinel_matches_the_sidecar_scripts_constant() -> None:
+    """The sidecar shell script's poll target must equal this exact literal."""
+    namespace = _load_launcher()
+    sentinel = namespace.get("_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL")
+    assert sentinel == "discovery_diagnostics_complete"
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+    assert f'SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="{sentinel}"' in sidecar_text
 
 
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
@@ -357,6 +367,7 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
         "request_failed status=500 code=internal_error upstream sk-secret"
     ) == "request_failed status=500 code=internal_error"
     assert sanitize_line("client_disconnected") == "client_disconnected"
+    assert sanitize_line("discovery_diagnostics_complete") == "discovery_diagnostics_complete"
     assert sanitize_line(
         "review sidecar preflight failed: upstream sk-secret"
     ) == "review sidecar preflight failed"

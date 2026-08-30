@@ -53,7 +53,7 @@ def sanitize_line(line: str) -> str | None:
             f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
             f"code={provider_discovery_failed.group('code')}"
         )
-    if stripped == "client_disconnected":
+    if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
     for prefix, summary in _PREFIX_SUMMARIES:
         if stripped.startswith(prefix):

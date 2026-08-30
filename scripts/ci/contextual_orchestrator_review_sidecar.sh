@@ -29,6 +29,12 @@ STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
+# Must equal contextual_orchestrator_review_launcher.py's
+# _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL exactly (pinned by a contract test
+# on both sides): the last line the launcher writes to stderr once discovery
+# finishes, letting the shell script wait for a deterministic marker instead
+# of guessing whether the async sanitizer has caught up.
+SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-4}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
@@ -342,16 +348,31 @@ if [ ! -s "$preflight_report" ]; then
 fi
 publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
-if [ -s "$sidecar_stderr" ]; then
-  # A successful startup never re-reads $sidecar_stderr otherwise: only the
-  # failure branches above embed it in their ::error:: message. A partial,
-  # non-fatal provider discovery failure (e.g. one bad credential) would
-  # otherwise be silently invisible to every workflow except Strix's
-  # artifact upload -- print it into the always-visible job log too. The
-  # sidecar keeps serving after this point, so its sanitizer subprocess is
-  # still draining; this is a best-effort snapshot of whatever it has
-  # flushed so far, not a guaranteed-complete read.
-  log "sidecar startup warnings (non-fatal): $(sed -n '1,20p' "$sidecar_stderr")"
+# A successful startup never re-reads $sidecar_stderr otherwise: only the
+# failure branches above embed it in their ::error:: message. A partial,
+# non-fatal provider discovery failure (e.g. one bad credential) would
+# otherwise be silently invisible to every workflow except Strix's artifact
+# upload -- print it into the always-visible job log too. The launcher
+# always emits a "discovery_diagnostics_complete" sentinel as the LAST line
+# it writes to stderr before this point in its own execution (discovery
+# finishes strictly before the server can start accepting the healthz
+# request that just succeeded above); waiting for the sanitizer to pass
+# that same sentinel through -- rather than guessing from file size or a
+# fixed sleep -- deterministically proves every earlier discovery-error
+# line has already reached $sidecar_stderr too, since the sanitizer
+# processes its input strictly in order.
+sentinel_wait=0
+until grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null; do
+  sentinel_wait=$((sentinel_wait + 1))
+  if [ "$sentinel_wait" -ge 25 ]; then
+    log "sidecar startup warnings: sanitizer did not confirm discovery diagnostics within 5s; showing partial evidence"
+    break
+  fi
+  sleep 0.2
+done
+sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' || true)"
+if [ -n "$sidecar_startup_warnings" ]; then
+  log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"
 fi
 
 # Exercise the exact OpenAI-compatible endpoint and model name Strix uses. A
