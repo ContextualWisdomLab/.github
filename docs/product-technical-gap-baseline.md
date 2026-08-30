@@ -2439,6 +2439,23 @@ gateway chat/completions preflight(1차 시도)는 정상 통과했지만, 실�
 현재 실시간으로 저하된 상태임을 시사한다. 진단 코멘트를 남기고 실패한 job을 1회 재실행
 (`rerun_failed_jobs`, run `33331290092`)했다 — 이 PR의 diff와도 무관.
 
+**같은 PR의 바로 다음 head(`8a843c40`, run `33335906496`)에서 세 번째 서로 다른 서브 증상 발견
+— 이번엔 flake가 아니라 결정론적 버그**: 워크플로 자체의 내부 bounded-retry 루프가 3회 시도했고
+(135초/65초/73초 — 모두 빠름, hang 아님), 세 번 전부 완전히 동일한 모델/agent에서 실패했다 —
+`agent_id: nvidia_nim_meta_llama_3_2_90b_vision_instruct`, `model:
+meta/llama-3.2-90b-vision-instruct`, 매번 동일한 `Error code: 400 - invalid_request_error`
+(`provider_status: 400, retryable: False`). 3/3 완전 동일 모델 실패는 flake를 배제하고
+결정론적 선택/호환성 버그를 가리킨다 — vision-only 모델이 Strix의 순수 텍스트 agentic
+chat-completion 워크로드에 대해 `orchestrator/free` pool에 선정되고, provider가 매번 정확하게
+비-멀티모달 요청을 거부하는 것으로 보인다. `family_cap`을 4→8로 넓힌 것이 vision variant를
+pool에 끌어들인 것과 연관됐을 가능성이 있고, 라우터가 `retryable: false` 400을 받고도 다음
+후보로 failover하지 않는 것으로 보인다. 이 발견은 5400초 hang 클래스와는 별개의, 더 구체적이고
+실행 가능한 root-cause 후보다 — 재실행하지 않았다(결정론적이라 재실행해도 같은 모델에 다시
+걸릴 가능성이 높아 CI 시간만 낭비). 이 PR의 diff와도 무관(family_cap/model-discovery 로직은
+`contextual-orchestrator`에 있음) — free-pool 모델 카탈로그 소유자에게 vision-only 모델을
+텍스트 전용 소비자의 pool에서 제외하거나, 라우터가 `retryable: false` 400을 받으면 다음 후보로
+넘어가도록 하는 수정을 제안한다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
