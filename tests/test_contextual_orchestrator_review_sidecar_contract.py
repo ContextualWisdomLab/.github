@@ -421,6 +421,32 @@ def test_sidecar_waits_for_sanitizer_drain_before_reading_failure_diagnostics() 
     assert drain_call < exited_branch
 
 
+def test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected() -> None:
+    """A total preflight rejection must print real route evidence, not just a generic message.
+
+    The launcher writes agent_id/provider/model/status/error_type/http_status
+    (schema-bounded, never raw provider content or secrets -- the same shape
+    Strix's own artifact already publishes) to ``--preflight-out`` before it
+    raises. Before this evidence line existed, every workflow except Strix's
+    separate artifact-upload step was blind to *why* every candidate route
+    was rejected -- the generic exception message never carries per-route
+    detail, only a fixed "no provider route passed..." string.
+    """
+    text = _read(SIDECAR)
+    assert 'if [ -s "$preflight_report" ]; then' in text
+    assert (
+        'log "sidecar preflight route evidence: $(sed -n \'1,80p\' "$preflight_report" | tr \'\\n\' \' \')"'
+        in text
+    )
+    # Must be printed before the fail() call in the same branch, using the
+    # already-drained (sanitizer-waited) state -- not a bare, possibly racy
+    # read of a still-draining stream.
+    exited_branch = text.index("sidecar exited before healthz")
+    evidence_line = text.rindex("sidecar preflight route evidence", 0, exited_branch)
+    drain_call = text.rindex("wait_for_sidecar_sanitizers", 0, exited_branch)
+    assert drain_call < evidence_line < exited_branch
+
+
 def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() -> None:
     """A partial provider failure must reach the visible log even when the sidecar still starts."""
     text = _read(SIDECAR)
