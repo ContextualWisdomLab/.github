@@ -765,8 +765,9 @@ recurrence" section below out of the file entirely; both are restored here.)
   per-provider `/v1/models` payload. That payload alone marks zero-dollar prices
   inconsistently, so most rows were treated as priced and dropped from the free
   pool.
-- `ContextualWisdomLab/contextual-orchestrator#919`
-  (`a67fb3dfff7f8fdae458a765e6bd922a09d699cd`) generalizes the Models.dev
+- `ContextualWisdomLab/contextual-orchestrator#919` was merged into protected
+  `main` as `30c6d71680e659f25a0a433d4726ad0d437f9757` (tree
+  `c4970f840e64689c2dd4a3849797d5e76b635521`). It generalizes the Models.dev
   free-cost join from `opencode_zen` to every provider that carries a
   `models_dev_provider_id`, fetches `https://models.dev/api.json` exactly once
   with a stable non-secret User-Agent, and passes the parsed metadata into
@@ -776,8 +777,8 @@ recurrence" section below out of the file entirely; both are restored here.)
 - Fix for `.github`: bump `ORCHESTRATOR_PIN_SHA` in
   `scripts/ci/contextual_orchestrator_review_sidecar.sh`, the contract constant
   in `tests/test_contextual_orchestrator_review_sidecar_contract.py`, and the
-  ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to
-  `a67fb3dfff7f8fdae458a765e6bd922a09d699cd`.
+  ADR `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` to the
+  protected merge commit `30c6d71680e659f25a0a433d4726ad0d437f9757`.
 - Catch-22: because `opencode-review`/`strix`/`noema-review` are required
   `pull_request_target` checks, a `.github` PR that updates the sidecar pin is
   tested with the *base* sidecar (old pin). That base sidecar still cannot boot,
