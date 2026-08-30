@@ -1890,8 +1890,21 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
   conflict였을 뿐, 이번 6건은 그 이후 새 Devin 라운드가 실제 코드에 대해 제기한 별개의 주장들이다 — 아직
   검증도 수정도 하지 않은 상태였다. 이번 pass에서 이 6건을 현재 코드 기준으로 직접 검증하고 실제 결함만
   최소 범위로 고치는 백그라운드 에이전트를 별도로 기동했다(worktree 격리, `fix/sandboxed-web-e2e-isolation-clean`
-  브랜치, 6개 thread 각각에 회신+resolve, 기존 SSRF/isolation 테스트 재실행 후 push). 결과는 다음 pass에서
-  커밋/thread 상태로 확인한다.
+  브랜치, 6개 thread 각각에 회신+resolve, 기존 SSRF/isolation 테스트 재실행 후 push).
+  **완료 및 검증 결과**: 6건 중 4건 실재(malformed port, capability probe 부재, `isolated_command`의
+  unresolved-executable 우회, **workspace symlink escape — 단 `--isolation required` 경로가 아니라
+  `sandboxed_verify.py`/`--isolation disabled` 경로에서 실재. bwrap 필수 경로에 대한 최초 "재현 불가"
+  판단은 정확했지만 그 경로 하나만 봤다는 게 놓친 부분이었다**), 2건은 확인 후 변경 불필요. 동시에 진행 중이던
+  다른 세션의 겹치는 수정(`c01c1aa2`)을 발견해 강제 push 없이 `git merge`로 재조정(`4088430a`). 그 직후
+  같은 파일에 대한 새 Devin 라운드가 3건을 추가로 남겼다(probe가 실제 `isolated_command`보다 적은 연산만
+  검증, 🟥 "sandbox가 로그·자격증명을 노출" — 후자는 로그/scrubbed home의 쓰기 가능 mount 자체는 의도된
+  설계이지만 repo checkout이 우연히 갖고 있을 수 있는 자격증명 파일이 그대로 복사되는 것은 실재 결함이었음).
+  이 3건도 검증 후 실제로 고쳤다(probe가 `--new-session`/`/tmp`/실제 mount point로의 bind+chdir까지 진짜
+  임시 디렉터리로 재현하도록 확장, `copy_workspace` 기본 제외 목록에 `.env*`/`.netrc`/`.npmrc`/`.ssh`/`.aws`
+  등 자격증명 경로 추가, 커밋 `bde444d4`). Push 직전 또 다른 동시 세션의 겹치는 수정(symlink 순환 탐지를
+  `resolve(strict=True)`로 강화)을 발견해 다시 `git merge`로 재조정(`cb25974c`). review thread 28/28
+  전부 코멘트+resolve 완료. 검증: 전체 스위트 1930 passed/1 skipped/21 subtests, coverage 100%
+  (`sandboxed_verify.py` 120/120, `sandboxed_web_e2e.py` 282/282), interrogate 100%, ruff clean.
 - **naruon G-15 첫 슬라이스를 실제로 배포했다** (`naruon#1486`의 같은 브랜치에 push, 커밋 `ee83effd`).
   정찰 에이전트가 확인한 사실(`Attachment`에 opaque id 부재, `_PARSER_MANIFEST`가 튜플 기반 정적
   디스크립터, 상한이 1MB/20MB/64MB 세 곳에 흩어져 있으나 각각 다른 게이트, quarantine 개념 전무,
