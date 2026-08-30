@@ -2651,6 +2651,20 @@ run_strix_once() {
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
+	# contextual-orchestrator's gateway deliberately rejects any request that
+	# combines stream_options.include_usage=true with tools (a correctness
+	# guarantee against silently-incomplete usage accounting; out of scope to
+	# change here). Strix's agent loop always streams and always sends tools,
+	# so every call through that gateway hits the rejection immediately.
+	# Strix itself ships an opt-in for exactly this: LLM_DISABLE_STREAMING=true
+	# makes each turn a single non-streaming get_response (stream:false on the
+	# wire, so stream_options is never sent) replayed as one terminal stream
+	# event; nothing else about the run loop changes. Scope it narrowly to the
+	# contextual-orchestrator loopback so other providers keep real streaming.
+	local strix_disable_streaming="false"
+	if is_contextual_orchestrator_api_base "$llm_api_base_value"; then
+		strix_disable_streaming="true"
+	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
@@ -2682,6 +2696,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
+	STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming" \
 python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
@@ -2736,6 +2751,12 @@ child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
     child_env["LLM_API_KEY"] = os.environ["STRIX_CHILD_LLM_API_KEY"]
 child_env["STRIX_REPORTS_DIR"] = os.environ["STRIX_CHILD_REPORTS_DIR"]
+if os.environ.get("STRIX_CHILD_DISABLE_STREAMING", "").strip().lower() == "true":
+    # See the comment above strix_disable_streaming's assignment in bash:
+    # this routes only the contextual-orchestrator gateway through Strix's
+    # own non-streaming fallback so stream_options is never sent alongside
+    # tools, without touching how Strix talks to any other provider.
+    child_env["LLM_DISABLE_STREAMING"] = "true"
 for key, value in os.environ.items():
     if key.startswith("FAKE_STRIX_") and value:
         child_env[key] = value
