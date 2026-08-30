@@ -496,6 +496,37 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     shutil.rmtree(payload["sandbox"], ignore_errors=True)
 
 
+def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):
+    """A symlink-escape rejection from ``copy_workspace`` must not surface as an
+    uncaught traceback.
+
+    ``main()`` previously called ``copy_workspace`` with no ``except`` around
+    it, so a rejected copy (see the ``test_copy_workspace_rejects_*`` tests
+    above) propagated as an uncaught ``ValueError`` -- a raw Python traceback
+    on stderr and Python's default uncaught-exception exit status, instead of
+    the clean ``sandboxed-verify: ...`` message and coded exit this module
+    uses for every other config-time rejection (e.g. the timeout path's 124).
+    """
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(repo), "--", "true"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert "Traceback" not in captured.err
+    assert "workspace copy rejected" in captured.err
+    assert "workspace symlink escapes the sandbox root" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
+
+
 def test_parse_args_rejects_invalid_inputs():
     """The CLI rejects invocations without a command or with invalid options."""
     with pytest.raises(SystemExit):

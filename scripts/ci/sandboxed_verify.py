@@ -378,7 +378,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     exit_code = 1
     copied_repo = sandbox / "repo"
     try:
-        copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        try:
+            copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        except ValueError as exc:
+            print(f"sandboxed-verify: workspace copy rejected: {exc}", file=sys.stderr)
+            exit_code = 125
+            return exit_code
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
         print(f"sandboxed-verify: command={' '.join(args.command)}")
