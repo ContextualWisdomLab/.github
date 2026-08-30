@@ -847,6 +847,43 @@ recurrence" section below out of the file entirely; both are restored here.)
     central-workflow-sourced same as every other consumer repo) and merges; this snapshot is
     implementation + local-evidence only, not merge authorization.
 
+## 2026-08-30 post-#1486/#1438 wake: pin `30c6d716…` confirmed live, still fails closed (new signature)
+
+- `ContextualWisdomLab/naruon#1486`'s `noema-review` run (`run 33305922007`, PR-target on trusted base
+  `dc2ed58f…`) confirms the vendored sidecar now provisions the current pin
+  (`30c6d71680e659f25a0a433d4726ad0d437f9757`, the #919 User-Agent/403 fix bumped in earlier this same
+  pass) — this is the first hosted confirmation that pin actually reaches a PR-target run, not just
+  static contract tests. It still fails closed, but with a **new** failure shape distinct from the
+  prior HTTP 403/413-on-Models.dev signature:
+  1. A ZDR-catalog prefetch got `request_failed status=413 code=request_too_large` and fell back to
+     "using live OpenRouter ZDR endpoint feed" — handled non-fatally, logged only, sidecar continued.
+  2. During sidecar startup, `bytez` model discovery returned `provider_discovery_failed
+     provider=bytez code=http_status_500` — this line was fully visible in the CI log (not folded
+     into `omitted_unstructured_lines`), confirming the `_log_discovery_errors()` visibility fix
+     recorded earlier this pass is working as intended. 4 other stderr lines were still folded into
+     `omitted_unstructured_lines=4` (not inspected further this pass — could be additional detail, not
+     assumed secret-bearing given the sanitizer's existing allowlist-based design).
+  3. `[contextual-orchestrator-sidecar] error: sidecar exited before healthz (status 1)` — the process
+     exits non-zero, matching the already-tracked "review sidecar discovered no eligible models;
+     orchestrator/free would fail closed" `SystemExit` path once `bytez` (a candidate free-pool
+     contributor per the five-secret design) also fails to enumerate.
+- This is consistent with, not contradictory to, the already-open "orchestrator/free pool exhausted"
+  gap above: OpenRouter's genuinely-free models remain intentionally `evidence_only` (correct ZDR
+  hardening, must not be reverted), and nvidia_nim/nvidia_nim_sub/openai were already found to
+  contribute ~0 routable free models even after the #919 Models.dev fix. `bytez` returning HTTP 500 in
+  this run removes what may have been the last remaining candidate source for that run, though whether
+  this specific 500 is a transient Bytez-side fault or a persistent one was not re-tested this pass
+  (would need a second hosted run to distinguish; not attempted given time budget). Either way, the
+  underlying decision this gap needs — accept real spend via `orchestrator/auto`, or wire a genuine
+  zero-cost source (`opencode_zen`, per the 2026-08-30 entry above) — remains open and still requires a
+  budget-owner call, not a unilaterally-applied code change.
+- Also confirmed this pass: `opencode-review`'s required-check gate (a separate mechanism from
+  `noema-review`) correctly fails closed on a fresh head with no `opencode-agent` review yet, on both
+  `naruon#1486` and `.github#1438` — this is the documented "asynchronous model dispatch... had not
+  completed for any of the refreshed PRs by the time this pass ended" pattern from the entry above, not
+  a new defect. Commented on both PRs distinguishing the two failure classes; no code change made in
+  either PR for either failure, since neither is caused by their own diffs.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
