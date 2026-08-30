@@ -137,11 +137,26 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     if len(workflow_rules) == 1 and workflow_parameters.get("do_not_enforce_on_create") is not True:
         errors.append("central required workflows block the branch create transition")
 
+    malformed_workflows = sum(
+        1
+        for workflow in workflows
+        if not isinstance(workflow, dict) or not isinstance(workflow.get("path"), str)
+    )
+    if malformed_workflows:
+        suffix = "entry" if malformed_workflows == 1 else "entries"
+        errors.append(
+            f"central required workflows contain {malformed_workflows} malformed {suffix}"
+        )
+
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}
     for workflow in workflows:
         if not isinstance(workflow, dict) or not isinstance(workflow.get("path"), str):
             continue
         workflows_by_path.setdefault(workflow["path"], []).append(workflow)
+
+    unexpected_workflows = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
+    if unexpected_workflows:
+        errors.append(f"unexpected central required workflows: {unexpected_workflows}")
 
     for path in REQUIRED_WORKFLOW_PATHS:
         matches = workflows_by_path.get(path, [])
@@ -176,8 +191,8 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("review-thread resolution protection is disabled")
         allowed_methods = set(parameters.get("allowed_merge_methods") or [])
-        if not {"merge", "squash"}.issubset(allowed_methods):
-            errors.append("merge and squash are not both allowed merge methods")
+        if allowed_methods != {"merge", "squash"}:
+            errors.append("only merge and squash may be allowed merge methods")
 
     if not _typed_rules(payload, "deletion"):
         errors.append("default-branch deletion protection is missing")
@@ -260,6 +275,8 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
         errors.append("repository ruleset target is not branch")
     if payload.get("enforcement") != "active":
         errors.append("repository ruleset enforcement is not active")
+    if payload.get("bypass_actors", []) != []:
+        errors.append("repository ruleset must not configure bypass actors")
 
     conditions = payload.get("conditions")
     conditions = conditions if isinstance(conditions, dict) else {}
@@ -283,8 +300,8 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("repository ruleset review-thread resolution protection is disabled")
         allowed_methods = set(parameters.get("allowed_merge_methods") or [])
-        if not {"merge", "squash"}.issubset(allowed_methods):
-            errors.append("repository ruleset does not allow both merge and squash")
+        if allowed_methods != {"merge", "squash"}:
+            errors.append("repository ruleset must allow only merge and squash")
 
     if not _typed_rules(payload, "deletion"):
         errors.append("repository default-branch deletion protection is missing")

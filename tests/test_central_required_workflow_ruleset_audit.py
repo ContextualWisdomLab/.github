@@ -149,6 +149,34 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     )
 
 
+def test_central_ruleset_rejects_unexpected_and_malformed_workflows() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"].extend(
+        [
+            {
+                "repository_id": 1274066402,
+                "path": ".github/workflows/unexpected.yml",
+                "ref": "refs/heads/main",
+            },
+            {"repository_id": 1274066402, "path": 42, "ref": "refs/heads/main"},
+        ]
+    )
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "unexpected central required workflows: ['.github/workflows/unexpected.yml']" in errors
+    assert "central required workflows contain 1 malformed entry" in errors
+
+
+def test_central_ruleset_rejects_rebase_merge_method() -> None:
+    payload = ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["allowed_merge_methods"].append("rebase")
+
+    assert "only merge and squash may be allowed merge methods" in audit.audit_ruleset(payload)
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
@@ -172,6 +200,31 @@ def test_repository_ruleset_rejects_live_weakened_review_controls() -> None:
     assert audit.audit_repository_ruleset(payload) == [
         "repository ruleset does not require exactly two approving reviews",
         "repository ruleset last-push approval protection is disabled",
+    ]
+
+
+def test_repository_ruleset_rejects_rebase_merge_method() -> None:
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["allowed_merge_methods"].append("rebase")
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must allow only merge and squash",
+    ]
+
+
+def test_repository_ruleset_rejects_bypass_actors() -> None:
+    payload = repository_ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": None,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must not configure bypass actors",
     ]
 
 
@@ -210,7 +263,7 @@ def test_repository_ruleset_rejects_malformed_review_parameters() -> None:
         "repository ruleset stale-review dismissal on push is disabled",
         "repository ruleset last-push approval protection is disabled",
         "repository ruleset review-thread resolution protection is disabled",
-        "repository ruleset does not allow both merge and squash",
+        "repository ruleset must allow only merge and squash",
     ]
 
 
@@ -496,7 +549,7 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     assert "stale-review dismissal on push is disabled" in errors
     assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
-    assert "merge and squash are not both allowed merge methods" in errors
+    assert "only merge and squash may be allowed merge methods" in errors
 
 
 def test_audit_handles_malformed_rule_parameter_shapes() -> None:
