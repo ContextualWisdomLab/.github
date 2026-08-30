@@ -685,10 +685,52 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
-            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
-              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
-              --base-sha "$PR_BASE_SHA" \
-              --output-dir "$coverage_build_dir/base-python-requirements"
+            python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
+            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
+              --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
+              >"$python_change_files"; then
+              echo "::error::Could not classify exact current-head changed files for Python coverage." \
+                >&2
+              exit 1
+            fi
+            python_coverage_required=0
+            while IFS= read -r -d '' changed_path; do
+              changed_basename="${changed_path##*/}"
+              case "$changed_basename" in
+                *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
+                setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
+                requirements.lock|requirements*.txt|requirements*.in|\
+                environment.yml|environment.yaml)
+                  python_coverage_required=1
+                  break
+                  ;;
+              esac
+              # Any text file below a requirements directory may be a bounded
+              # include target of a base lock, so retain materialization
+              # conservatively instead of relying on path depth alone.
+              case "/$changed_path/" in
+                */requirements/*)
+                  case "$changed_basename" in
+                    *.txt|*.in)
+                      python_coverage_required=1
+                      break
+                      ;;
+                  esac
+                  ;;
+              esac
+            done <"$python_change_files"
+            if [ "$python_coverage_required" -eq 1 ]; then
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --base-sha "$PR_BASE_SHA" \
+                --output-dir "$coverage_build_dir/base-python-requirements"
+            else
+              mkdir -p "$coverage_build_dir/base-python-requirements"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/manifest.json"
+              : >"$coverage_build_dir/base-python-requirements/manifest.txt"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/vcs-manifest.json"
+              echo "No Python source or dependency-manifest changes on the exact current head; skipped base Python lock materialization."
+            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
@@ -743,6 +785,9 @@ jobs:
               mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
+              has_exact_npm_package_manager() { \
+                jq -e '(.packageManager // null) as $spec | if $spec != null then if ($spec | type) == "string" then ($spec | test("^npm@[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else (.devEngines // {}) as $engines | (if ($engines | type) == "object" then ($engines.packageManager // null) else null end) as $dev | if ($dev | type) == "object" then if ($dev.name // null) == "npm" then ($dev.version // null) as $version | if ($version | type) == "string" then ($version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else false end else false end end' package.json >/dev/null 2>&1; \
+              }; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
@@ -750,11 +795,19 @@ jobs:
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
                     case "$package_manager" in \
                       npm) \
-                        npm ci \
-                          --ignore-scripts \
-                          --cache /opt/npm-cache \
-                          --no-audit \
-                          --no-fund; \
+                        if has_exact_npm_package_manager; then \
+                          corepack npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        else \
+                          npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        fi; \
                         rm -rf node_modules; \
                         ;; \
                       pnpm@*) \
@@ -769,7 +822,7 @@ jobs:
                         ;; \
                     esac; \
                   done; \
-              npm cache verify --cache /opt/npm-cache; \
+              corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
@@ -1332,6 +1385,9 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
+            if [ "$runner" = "npm" ] && command -v corepack >/dev/null 2>&1; then
+              return 0
+            fi
             if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
               return 0
             fi
@@ -1359,7 +1415,7 @@ jobs:
                 return
                 ;;
               npm)
-                command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+                ensure_corepack_runner npm "$declared_spec" && printf '%s\n' "npm"
                 return
                 ;;
             esac
@@ -1380,7 +1436,7 @@ jobs:
             local package_runner="$2"
             local script="$3"
             case "$package_runner" in
-              npm) run_and_capture "$label" npm run "$script" ;;
+              npm) run_and_capture "$label" corepack npm run "$script" ;;
               pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
               yarn) run_and_capture "$label" yarn run "$script" ;;
             esac
@@ -1626,7 +1682,7 @@ jobs:
                     return 0
                   fi
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
-                    npm ci \
+                    corepack npm ci \
                       --offline \
                       --ignore-scripts \
                       --cache "$writable_npm_cache_dir" \
@@ -1758,9 +1814,9 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack npm run build --workspace "$package_name"
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack npm run build' bash "$package_dir"
                 fi
                 ;;
               pnpm)
@@ -2170,13 +2226,13 @@ jobs:
                 if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
                   if javascript_test_script_collects_coverage; then
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                     esac
                   else
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                     esac
@@ -2184,7 +2240,7 @@ jobs:
                   javascript_coverage_ran=1
                 else
                   case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" npm test ;;
+                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack npm test ;;
                     pnpm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" yarn test ;;
                   esac
@@ -5609,12 +5665,12 @@ jobs:
             }
 
             emit_known_missing_string_finding \
-              "STRIX_MODEL: contextual-orchestrator/orchestrator/free" \
-              "Strix PR scans must use contextual-orchestrator/orchestrator/free" \
+              "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" \
+              "Strix PR scans must use contextual-orchestrator/orchestrator/auto" \
               ".github/workflows/strix.yml" \
               "scripts/ci/strix_required_workflow_smoke.sh"
             emit_known_missing_string_finding \
-              "Strix model overrides are limited to contextual-orchestrator/orchestrator/free." \
+              "Strix model overrides are limited to contextual-orchestrator/orchestrator/auto." \
               "Strix model overrides must remain gateway-only" \
               ".github/workflows/strix.yml" \
               "scripts/ci/strix_required_workflow_smoke.sh"
