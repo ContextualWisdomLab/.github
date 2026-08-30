@@ -765,6 +765,23 @@ def gh_api_json(path: str) -> Any:
     return json.loads(run_github_read(["gh", "api", path]))
 
 
+def gh_api_json_via_dispatch_token(path: str) -> Any:
+    """Run a GitHub REST API GET via the central-repository dispatch credential.
+
+    The OpenCode app installation has no Actions permission (see
+    :func:`scheduler_dispatch_env`), and the target-repository read
+    credential (:func:`gh_api_json`) is not guaranteed to have it either for
+    a cross-repository dispatch. A read against ``.github``'s own Actions
+    artifacts -- which always host the central draft-review-request marker
+    regardless of which repository the PR belongs to -- must use the same
+    central-repository dispatch credential already used for creating a
+    ``repository_dispatch`` there, not the target-repository read
+    credential.
+    """
+
+    return json.loads(run_github_dispatch(["gh", "api", path]))
+
+
 def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST review payload into the GraphQL shape used by the scheduler."""
 
@@ -1151,6 +1168,50 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
+def latest_check_run_attempts(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return each CheckRun's most recent attempt per (workflow, name) identity.
+
+    A rerun leaves every earlier attempt's CheckRun node in the rollup
+    alongside the latest one, so callers that walk ``context_nodes`` directly
+    can see a stale failed attempt outlive a later successful retry. This
+    resolves each CheckRun identity to only its most recently started
+    attempt (falling back to rollup order when ``startedAt`` is missing),
+    while passing every non-CheckRun (classic commit-status) node through
+    unchanged. The result preserves the original relative ordering.
+    """
+    latest: dict[tuple[str, str], tuple[datetime | None, int, dict[str, Any]]] = {}
+    ordered: list[tuple[int, dict[str, Any]]] = []
+    for index, node in enumerate(nodes):
+        if node.get("__typename") != "CheckRun":
+            ordered.append((index, node))
+            continue
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest.get(key)
+        if previous is None:
+            latest[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest[key] = (started_at, index, node)
+    for started_at, index, node in latest.values():
+        ordered.append((index, node))
+    ordered.sort(key=lambda item: item[0])
+    return [node for _, node in ordered]
+
+
 def strix_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, failed, or complete for current-head Strix evidence.
 
@@ -1158,11 +1219,13 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
     commit-status state of SUCCESS). Any other terminal outcome -- failure,
     error, cancelled, timed out, skipped, neutral, action_required, stale,
     startup_failure -- is reported as "failed" rather than "complete" so
-    callers fail closed instead of unlocking on non-passing evidence.
+    callers fail closed instead of unlocking on non-passing evidence. Only
+    the latest attempt per Strix CheckRun identity is evaluated, so a stale
+    failed attempt cannot outlive a later successful retry.
     """
     found = False
     saw_failure = False
-    for node in context_nodes(pr):
+    for node in latest_check_run_attempts(context_nodes(pr)):
         if not is_strix_context(node):
             continue
         found = True
@@ -1499,43 +1562,16 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
-    latest_check_runs: dict[
-        tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
-    ] = {}
-    status_contexts: list[dict[str, Any]] = []
-    for index, node in enumerate(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun":
-            status_contexts.append(node)
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest_check_runs.get(key)
-        if previous is None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest_check_runs[key] = (started_at, index, node)
-
+    nodes = latest_check_run_attempts(context_nodes(pr))
+    status_contexts = [node for node in nodes if node.get("__typename") != "CheckRun"]
     successful_status_contexts = {
         node.get("context")
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+    for node in nodes:
+        if node.get("__typename") != "CheckRun":
+            continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if is_strix_context(node) and "strix" in successful_status_contexts:
@@ -2458,14 +2494,19 @@ def active_draft_review_request(repo: str, pr: dict[str, Any]) -> bool:
     ``repository_dispatch`` ``client_payload`` of its own, most commonly the
     Strix-completion ``workflow_run`` that follows an initial
     ``security_dispatch`` -- checks the same durable signal here rather than
-    trusting anything the triggering event itself claims.
+    trusting anything the triggering event itself claims. The read always
+    uses the central-repository dispatch credential
+    (:func:`gh_api_json_via_dispatch_token`), because the artifact always
+    lives in that central repository regardless of which repository ``repo``
+    names, and the target-repository read credential is not guaranteed to
+    have Actions permission there for a cross-repository dispatch.
     """
     head_sha = pr.get("headRefOid")
     if not isinstance(head_sha, str) or not head_sha:
         return False
     dispatch_repo = repository_dispatch_target(validate_github_repository(repo))
     artifact_name = draft_review_request_artifact_name(repo, pr["number"], head_sha)
-    response = gh_api_json(
+    response = gh_api_json_via_dispatch_token(
         f"repos/{dispatch_repo}/actions/artifacts?name={artifact_name}&per_page=100"
     )
     return bool(_draft_review_request_records(response, expected_name=artifact_name))

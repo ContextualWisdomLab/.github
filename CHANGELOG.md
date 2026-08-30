@@ -81,6 +81,39 @@ Semantic Versioning where the repository publishes a release.
     exhaustive regression fixtures for every non-passing terminal
     conclusion/state plus authoritative success, for both CheckRun and
     classic commit-status shapes.
+  - Two more adversarial-review findings against that same fix, both fixed:
+    - `strix_evidence_state()` walked every Strix context node in the
+      rollup directly, so a rerun's stale failed CheckRun attempt (GitHub
+      keeps every prior attempt's CheckRun node alongside the latest one)
+      could permanently keep the gate `"failed"` even after a later retry
+      succeeded. Extracted the CheckRun-identity dedup `failed_status_checks()`
+      already used (latest attempt per `(workflow, name)`, by `startedAt`
+      then rollup order) into a shared `latest_check_run_attempts()` helper
+      and evaluate only the latest attempt per Strix CheckRun identity.
+      `failed_status_checks()` itself now calls the same helper instead of
+      duplicating the dedup logic, with no behavior change. Added
+      regression tests for an older failed attempt followed by a newer
+      success, the reverse ordering, and a running retry after a failure.
+    - `active_draft_review_request()`'s Actions-artifact read used the
+      generic target-repository read credential
+      (`gh_api_json`/`SCHEDULER_READ_TOKEN`), but the artifact always lives
+      in the central `.github` repository regardless of which repository
+      the PR belongs to, and — per `scheduler_dispatch_env()`'s own
+      pre-existing documented fact — "the OpenCode app installation has no
+      Actions permission." For a cross-repository dispatch with only the
+      OpenCode app credential configured (no `PR_REVIEW_MERGE_TOKEN`/
+      `OPENCODE_APPROVE_TOKEN` secret), the read credential resolved to
+      that same Actions-permission-less app token, so the artifact read
+      would fail and the initial mention-triggered request for a draft PR
+      outside `.github` could never get past its own authorization check.
+      New `gh_api_json_via_dispatch_token()` reads through
+      `run_github_dispatch()`/`SCHEDULER_DISPATCH_TOKEN` instead — the same
+      central-repository dispatch credential already used to create the
+      `repository_dispatch` there — which the workflow always sets to the
+      runner's own `github.token`, valid for `.github`'s own Actions
+      artifacts regardless of the PR's actual repository. Added a
+      regression test proving the read uses the dispatch token, not
+      whatever generic `GH_TOKEN` the OpenCode app credential resolves to.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

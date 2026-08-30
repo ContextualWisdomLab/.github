@@ -1058,6 +1058,31 @@ def test_context_review_and_check_helpers(monkeypatch):
     classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
     assert sched.strix_evidence_state(classic_success) == "complete"
 
+    # A stale failed attempt must not outlive a later successful retry, and a
+    # later failed attempt must override an earlier success -- only the
+    # latest attempt per Strix CheckRun identity counts (regression for a
+    # rerun leaving every earlier attempt's CheckRun node in the rollup).
+    older_failed_then_newer_success = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [strix_check(conclusion="FAILURE"), strix_check()]}
+        }
+    )
+    assert sched.strix_evidence_state(older_failed_then_newer_success) == "complete"
+    newer_failed_after_older_success = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [strix_check(), strix_check(conclusion="FAILURE")]}
+        }
+    )
+    assert sched.strix_evidence_state(newer_failed_after_older_success) == "failed"
+    running_retry_after_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [strix_check(conclusion="FAILURE"), strix_check(status="IN_PROGRESS", conclusion="")]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(running_retry_after_failure) == "running"
+
     threaded = make_pr(
         reviewThreads={
             "nodes": [
@@ -3821,7 +3846,7 @@ def test_active_draft_review_request_queries_the_central_dispatch_repository(mon
         return {"total_count": 0, "artifacts": []}
 
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
 
     pr = make_pr(headRefOid="b" * 40)
     assert sched.active_draft_review_request("owner/repo", pr) is False
@@ -3839,7 +3864,7 @@ def test_active_draft_review_request_true_when_a_live_artifact_matches(monkeypat
             "artifacts": [{"id": 7, "name": expected_name, "expired": False}],
         }
 
-    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
     pr = make_pr(headRefOid="b" * 40)
     assert sched.active_draft_review_request("owner/repo", pr) is True
 
@@ -3852,13 +3877,46 @@ def test_active_draft_review_request_false_when_the_artifact_expired(monkeypatch
             "artifacts": [{"id": 7, "name": expected_name, "expired": True}],
         }
 
-    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
     pr = make_pr(headRefOid="b" * 40)
     assert sched.active_draft_review_request("owner/repo", pr) is False
 
 
 def test_active_draft_review_request_false_without_a_head_sha():
     assert sched.active_draft_review_request("owner/repo", make_pr(headRefOid=None)) is False
+
+
+def test_active_draft_review_request_uses_dispatch_token_not_opencode_app_token(monkeypatch):
+    """Regression: the OpenCode app installation has no Actions permission, so
+    reading the draft-review-request artifact must use the same
+    central-repository dispatch credential as creating a repository
+    dispatch there, never the target-repository read credential -- which,
+    for a cross-repository dispatch with only the OpenCode app credential
+    configured, resolves to a token with no Actions permission."""
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_READ_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+
+    read_calls = []
+    dispatch_calls = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda args, stdin=None: read_calls.append(args) or "{}",
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_with_env",
+        lambda args, stdin=None, env=None: dispatch_calls.append((args, env["GH_TOKEN"]))
+        or '{"total_count": 0, "artifacts": []}',
+    )
+
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+    assert read_calls == []
+    assert len(dispatch_calls) == 1
+    assert dispatch_calls[0][1] == "runner-token"
 
 
 def test_draft_review_request_records_fail_closed_on_malformed_responses():
