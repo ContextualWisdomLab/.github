@@ -1664,6 +1664,162 @@ def test_opencode_rust_coverage_selects_changed_manifests(tmp_path):
     assert select("Cargo.lock\n") == ["Cargo.toml"]
 
 
+def _extract_measure_step(workflow_text: str) -> str:
+    """Return the source of the Measure test and docstring evidence step."""
+    measure_start = workflow_text.index(
+        "      - name: Measure test and docstring evidence\n"
+    )
+    measure_end = workflow_text.index("\n      - name:", measure_start + 1)
+    return workflow_text[measure_start:measure_end]
+
+
+def test_opencode_rust_coverage_inventory_includes_both_rename_endpoints(tmp_path):
+    """A detected rename must not make Rust coverage lose its origin side.
+
+    ``git diff --name-only`` collapses a rename to a single line naming only
+    the destination path. If the shared changed-file inventory used that
+    form, a ``.rs`` file renamed to a non-Rust extension would disappear
+    from the inventory entirely (bypassing Rust coverage), and a ``.rs``
+    file moved between two Cargo packages would only credit the destination
+    package's manifest, leaving the origin package's coverage unmeasured.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required for the extracted workflow function regression test")
+    try:
+        subprocess.run(
+            [bash, "--version"], capture_output=True, text=True, timeout=5, check=True
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"bash is not usable for this regression test: {exc}")
+
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    measure_step = _extract_measure_step(workflow)
+
+    inventory_start = measure_step.index("          trusted_git() {\n")
+    inventory_end = measure_step.index(
+        "\n\n          has_changed_tracked_files()", inventory_start
+    )
+    trigger_start = measure_step.index("          has_changed_rust_files() {\n")
+    trigger_end = measure_step.index(
+        "\n\n          tracked_python_projects_with_tests()", trigger_start
+    )
+    rust_start = measure_step.index("          rust_coverage_manifests() {\n")
+    rust_end = measure_step.index(
+        "\n\n          rust_coverage_fail_under_lines()", rust_start
+    )
+    shell = "\n".join(
+        (
+            "set -euo pipefail",
+            textwrap.dedent(measure_step[inventory_start:inventory_end]),
+            textwrap.dedent(measure_step[trigger_start:trigger_end]),
+            textwrap.dedent(measure_step[rust_start:rust_end]),
+            'if [ "$MODE" = rust_files ]; then',
+            "  has_changed_rust_files && echo RUST_FILES_CHANGED || echo RUST_FILES_UNCHANGED",
+            "else",
+            "  rust_coverage_manifests",
+            "fi",
+        )
+    )
+
+    def run_shell(repo: Path, base_sha: str, head_sha: str, mode: str) -> subprocess.CompletedProcess:
+        """Run the extracted inventory/detector against one commit range."""
+        env = {
+            **os.environ,
+            "PR_BASE_SHA": base_sha,
+            "PR_HEAD_SHA": head_sha,
+            "MODE": mode,
+        }
+        return subprocess.run(
+            [bash, "-c", shell],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def init_repo(tmp_subdir: str) -> Path:
+        """Create an isolated git repository for one rename scenario."""
+        repo = tmp_path / tmp_subdir
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Coverage Test"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "coverage@example.invalid"],
+            cwd=repo,
+            check=True,
+        )
+        return repo
+
+    def commit_all(repo: Path, message: str) -> str:
+        """Stage every change and commit, returning the new commit SHA."""
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", message], cwd=repo, check=True)
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+        ).strip()
+
+    # Scenario 1: a .rs file renamed to a non-Rust extension must still be
+    # detected as a Rust change (the file's removal from Rust source is
+    # itself a Rust-relevant change, and --name-only would otherwise report
+    # only the destination path, which does not match the .rs pattern).
+    rename_away_repo = init_repo("rename-away")
+    (rename_away_repo / "src").mkdir()
+    (rename_away_repo / "Cargo.toml").write_text('[package]\nname = "demo"\n', encoding="utf-8")
+    (rename_away_repo / "src" / "legacy.rs").write_text(
+        "pub fn legacy() {}\n" * 5, encoding="utf-8"
+    )
+    base_sha = commit_all(rename_away_repo, "base")
+    subprocess.run(
+        ["git", "mv", "src/legacy.rs", "src/legacy.rs.disabled"],
+        cwd=rename_away_repo,
+        check=True,
+    )
+    head_sha = commit_all(rename_away_repo, "rename rs away from Rust")
+
+    renamed_away = run_shell(rename_away_repo, base_sha, head_sha, "rust_files")
+    assert renamed_away.returncode == 0, renamed_away.stderr
+    assert renamed_away.stdout.strip() == "RUST_FILES_CHANGED", renamed_away.stdout
+
+    # Scenario 2: a .rs file moved between two Cargo packages in the same
+    # workspace must credit BOTH the origin and destination package
+    # manifests, not only the destination that --name-only would report.
+    cross_package_repo = init_repo("cross-package-move")
+    (cross_package_repo / "crates" / "alpha" / "src").mkdir(parents=True)
+    (cross_package_repo / "crates" / "beta" / "src").mkdir(parents=True)
+    (cross_package_repo / "Cargo.toml").write_text(
+        '[workspace]\nmembers = ["crates/alpha", "crates/beta"]\n', encoding="utf-8"
+    )
+    (cross_package_repo / "crates" / "alpha" / "Cargo.toml").write_text(
+        '[package]\nname = "alpha"\n', encoding="utf-8"
+    )
+    (cross_package_repo / "crates" / "beta" / "Cargo.toml").write_text(
+        '[package]\nname = "beta"\n', encoding="utf-8"
+    )
+    (cross_package_repo / "crates" / "alpha" / "src" / "shared.rs").write_text(
+        "pub fn shared() {}\n" * 5, encoding="utf-8"
+    )
+    (cross_package_repo / "crates" / "beta" / "src" / "lib.rs").write_text(
+        "pub fn beta_lib() {}\n", encoding="utf-8"
+    )
+    base_sha = commit_all(cross_package_repo, "base")
+    subprocess.run(
+        ["git", "mv", "crates/alpha/src/shared.rs", "crates/beta/src/shared.rs"],
+        cwd=cross_package_repo,
+        check=True,
+    )
+    head_sha = commit_all(cross_package_repo, "move crate module across packages")
+
+    moved = run_shell(cross_package_repo, base_sha, head_sha, "manifests")
+    assert moved.returncode == 0, moved.stderr
+    assert sorted(moved.stdout.splitlines()) == sorted(
+        ["crates/alpha/Cargo.toml", "crates/beta/Cargo.toml"]
+    ), moved.stdout
+
+
 def test_opencode_runtime_pin_supports_reasoning_options():
     """Keep OpenCode runtime new enough to apply model-level reasoning settings."""
     review_workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(

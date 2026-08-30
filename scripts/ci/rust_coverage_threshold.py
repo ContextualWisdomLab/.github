@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,46 @@ def _validate_minimum_lines(path: str, value: Any) -> float:
     return threshold
 
 
+def _relative_posix_path(path: Path, base: Path) -> str | None:
+    """Return ``path`` relative to ``base`` as a POSIX string, or None if unrelated."""
+    try:
+        return path.relative_to(base).as_posix()
+    except ValueError:
+        return None
+
+
+def _workspace_excludes_package(
+    workspace_dir: Path, package_dir: Path, workspace_document: dict[str, Any]
+) -> bool:
+    """Return whether a workspace's ``exclude`` patterns cover the package directory.
+
+    Cargo's own automatic workspace-root discovery walks upward from a
+    package's manifest and skips an ancestor workspace that excludes it,
+    continuing the search further out rather than treating the excluded
+    workspace as authoritative. Mirroring that here keeps an excluded (or
+    otherwise independent) package from inheriting a coverage baseline that
+    was never configured for it.
+    """
+    workspace_table = workspace_document.get("workspace")
+    if not isinstance(workspace_table, dict):
+        return False
+    excludes = workspace_table.get("exclude")
+    if not isinstance(excludes, list):
+        return False
+    relative = _relative_posix_path(package_dir, workspace_dir)
+    if relative is None:
+        return False
+    for pattern in excludes:
+        if not isinstance(pattern, str):
+            continue
+        normalized_pattern = pattern.rstrip("/")
+        if relative == normalized_pattern or fnmatch.fnmatch(relative, normalized_pattern):
+            return True
+        if relative.startswith(f"{normalized_pattern}/"):
+            return True
+    return False
+
+
 def read_minimum_lines(manifest: Path) -> float | None:
     """Read a package baseline, falling back to its nearest workspace baseline."""
     manifest = manifest.resolve()
@@ -57,6 +98,7 @@ def read_minimum_lines(manifest: Path) -> float | None:
     if threshold is not None:
         return threshold
 
+    package_dir = manifest.parent
     for parent in manifest.parents:
         workspace_manifest = parent / "Cargo.toml"
         if not workspace_manifest.is_file():
@@ -64,9 +106,23 @@ def read_minimum_lines(manifest: Path) -> float | None:
         workspace_document = tomllib.loads(workspace_manifest.read_text(encoding="utf-8"))
         if "workspace" not in workspace_document:
             continue
+        if _workspace_excludes_package(parent, package_dir, workspace_document):
+            # This ancestor's workspace explicitly excludes the package, so
+            # it is not this package's workspace root. Keep walking further
+            # out for an unrelated ancestor workspace that might still
+            # legitimately claim it, matching Cargo's own root-discovery
+            # rule for excluded members.
+            continue
+        # This is the package's actual (nearest, non-excluding) Cargo
+        # workspace root -- whether the sole enclosing workspace or a
+        # nested, independent one. Stop here even when it configures no
+        # baseline: crossing this boundary to search an even-more-outer,
+        # unrelated workspace would attribute a threshold that was never
+        # configured for this package's own workspace.
         workspace_value = _nested_value(workspace_document, METADATA_PATHS[1])
         if workspace_value is not None:
             return _validate_minimum_lines(METADATA_PATHS[1], workspace_value)
+        return None
     return None
 
 

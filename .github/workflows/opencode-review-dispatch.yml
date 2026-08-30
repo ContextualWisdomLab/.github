@@ -1173,7 +1173,18 @@ jobs:
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
               && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
               && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              # --name-status (not --name-only) so a detected rename/copy
+              # surfaces BOTH its old and new path. --name-only collapses a
+              # rename to a single line naming only the destination, so a
+              # Rust source file renamed away to a non-Rust extension (or
+              # moved into a different Cargo package) would otherwise vanish
+              # from every consumer's changed-file inventory on the origin
+              # side -- has_changed_rust_files would miss it entirely, and
+              # rust_coverage_manifests would credit only the destination
+              # package. R/C status lines carry a third tab-separated field
+              # (the new path); every other status carries exactly the path.
+              trusted_git diff --name-status --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA" |
+                awk -F'\t' 'NF >= 3 { print $2; print $3; next } { print $2 }'
             else
               trusted_git ls-files
             fi
