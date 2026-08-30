@@ -144,19 +144,30 @@ class NoRedirectHandler(HTTPRedirectHandler):
 github_opener = build_opener(NoRedirectHandler())
 
 
-def _is_documentation_or_source_fixture(path: str) -> bool:
-    """Return whether *path* is prose, license text, or scanner source fixture."""
+def _is_known_documentation_path(pure: PurePosixPath) -> bool:
+    """Return whether *pure* sits in a recognized documentation location."""
 
-    pure = PurePosixPath(path)
-    lower_name = pure.name.lower()
     stem = pure.stem.lower()
-    is_known_documentation_path = pure.parts and (
+    return bool(pure.parts) and (
         any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts)
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
+
+
+def _is_documentation_or_source_fixture(path: str) -> bool:
+    """Return whether *path* is prose, license text, or scanner source fixture.
+
+    Textual suffixes only: a ``.pdf`` is handled separately by
+    ``_is_binary_documentation_pdf`` and gated on GitHub reporting no diff
+    ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
+    (one GitHub *can* diff, meaning it could carry inspectable content) is
+    never exempted here.
+    """
+
+    pure = PurePosixPath(path)
+    lower_name = pure.name.lower()
     if lower_name in LICENSE_NAMES or (
-        is_known_documentation_path
-        and pure.suffix.lower() in DOCUMENT_SUFFIXES | BINARY_DOCUMENT_SUFFIXES
+        _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_SUFFIXES
     ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
@@ -166,6 +177,26 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     if is_tests_fixture and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES:
         return True
     return False
+
+
+def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
+    """Return whether *changed* is a genuinely binary documentation PDF.
+
+    GitHub's changed-files API never returns a diff ``patch`` for a true
+    binary file, so ``patch_available`` is the signal that distinguishes an
+    opaque PDF (cannot embed an interpretable, active Nginx runtime artifact)
+    from a textual file that merely has a ``.pdf`` suffix and *can* be
+    diffed -- and therefore could smuggle inspectable content the way any
+    other text file could. Only the former is exempt.
+    """
+
+    if changed.patch_available:
+        return False
+    pure = PurePosixPath(changed.path)
+    return (
+        pure.suffix.lower() in BINARY_DOCUMENT_SUFFIXES
+        and _is_known_documentation_path(pure)
+    )
 
 
 def _runtime_path_rule(path: str) -> str | None:
@@ -315,6 +346,8 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     """Return whether a changed final file can carry an active edge runtime."""
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
+        return False
+    if _is_binary_documentation_pdf(changed):
         return False
     if not changed.patch_available:
         return True

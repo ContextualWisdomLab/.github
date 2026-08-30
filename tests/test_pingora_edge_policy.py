@@ -103,6 +103,27 @@ def test_needs_content_scan_exempts_documentation_pdfs() -> None:
     )
 
 
+def test_needs_content_scan_still_inspects_a_textual_pdf_with_a_patch() -> None:
+    """A '.pdf'-suffixed file GitHub *can* diff is not the binary case exempted.
+
+    GitHub never returns a diff `patch` for a true binary file, so
+    `patch_available=True` here means this file is textual despite its
+    suffix -- exactly the case that could smuggle an active Nginx runtime
+    artifact under a docs/ path if the PDF exemption were suffix-only rather
+    than gated on patch availability.
+    """
+
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(
+        changed(
+            "docs/papers/not-really-a-pdf.pdf",
+            "added",
+            "+load_module modules/ngx_http_nginx_module.so;",
+            patch_available=True,
+        )
+    )
+
+
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
 def test_scan_content_does_not_treat_test_name_substrings_as_fixtures(
     directory: str,
