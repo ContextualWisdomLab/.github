@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-5f2753ace756ddd81049a5221d55e8977572a416}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-30c6d71680e659f25a0a433d4726ad0d437f9757}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -29,8 +29,53 @@ STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
+# Must equal contextual_orchestrator_review_launcher.py's
+# _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL exactly (pinned by a contract test
+# on both sides): the last line the launcher writes to stderr once discovery
+# finishes, letting the shell script wait for a deterministic marker instead
+# of guessing whether the async sanitizer has caught up.
+SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
-CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-4}"
+# 2026-08-30: raised from 4. contextual_orchestrator_review_policy.py's
+# family_cap groups nvidia_nim and nvidia_nim_sub as one outage-domain family
+# and, per an exact-head evidence trail, currently that single family is the
+# *only* one populating orchestrator/free (46 free rows, 100% nvidia_nim* --
+# 23 distinct model ids shared by both keys). Candidate selection sorts
+# eligible rows alphabetically by (provider, model) with no reliability
+# awareness, so a family_cap of 4 deterministically admitted the same four
+# alphabetically-first candidates on every run -- always including two
+# NVIDIA-retired model ids (google/gemma-3-12b-it, google/gemma-3-4b-it;
+# confirmed HTTP 404 on live preflight) plus two others that timed out in the
+# same recovered run -- while never giving the other ~19 healthy free
+# nvidia_nim* models in the same run's own discovery report a chance. This is
+# not throughput tuning: it is the confirmed, reproducible root cause of
+# orchestrator/free's "no provider route passed the Strix plain-chat
+# preflight" failures (see docs/product-technical-gap-baseline.md's
+# 2026-08-30 sidecar-preflight entries for the full evidence, including the
+# exact discovery/preflight artifact this comment is based on).
+# 8 is a deliberately moderate raise, not a wholesale removal of the cap. The
+# picking loop below also stops at CATALOG_LIMIT (12) total regardless of
+# family_cap, so the absolute worst case across any number of families was
+# already REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x 12 = 120s before this
+# change (reached once family_cap x distinct-families >= 12, i.e. >=3
+# families at the old cap of 4) and stays 120s after it -- this raise does
+# not move that pre-existing ceiling. What it does change is when that
+# ceiling is reached and the typical case today: with the single family
+# (nvidia_nim) that currently fills 100% of orchestrator/free, worst-case
+# preflight time rises from ~40s (4 candidates) to ~80s (8 candidates); with
+# exactly two distinct families it would now also reach the 120s ceiling
+# (previously ~80s at family_cap=4). Both figures stay within the sidecar's
+# existing 180s readiness-wait budget in the common case; this was reasoned
+# from, not verified against, live provider timing, since this session has
+# no access to the five provider credentials the sidecar's KV requires. If
+# real hosted
+# runs show this is still insufficient (all 8 still failing) or the added
+# latency itself becomes the bottleneck, the more complete fix is a live
+# provider /v1/models cross-check at discovery time to drop retired model ids
+# before they ever reach preflight (scripts/ci/select_nvidia_nim_model.py
+# already implements that exact pattern for a different, currently-unwired
+# caller) rather than raising this further.
+CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
 
@@ -271,6 +316,22 @@ log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
+# Stream stdout/stderr through the redacting sanitizer as two named, awaitable
+# processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
+# so a failure handler can wait for the sanitizer to finish flushing before it
+# reads the sanitized file — otherwise the read can race the still-draining
+# pipe and silently show an empty/truncated diagnostic (the exact class of bug
+# this sanitizer exists to avoid: see the 2026-08-30 sidecar-diagnostics gap
+# baseline entry).
+exec {orchestrator_stdout_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
+stdout_sanitizer_pid=$!
+exec {orchestrator_stderr_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
+stderr_sanitizer_pid=$!
+wait_for_sidecar_sanitizers() {
+  wait "$stdout_sanitizer_pid" 2>/dev/null || true
+  wait "$stderr_sanitizer_pid" 2>/dev/null || true
+}
+
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
   "$sidecar_python" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
@@ -283,9 +344,14 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
     "${pool_args[@]}" \
-> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \
-2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &
+  >&"$orchestrator_stdout_fd" 2>&"$orchestrator_stderr_fd" &
 sidecar_pid=$!
+# Close our own copies of the write ends now that the sidecar process holds
+# its own duplicated fds. If these stayed open in this shell, the sanitizer
+# process substitutions would never see EOF (and never exit) once the sidecar
+# itself closes its fds, since a process substitution's reader only finishes
+# after every writer has closed.
+exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-
 cleanup_sidecar_on_error() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -293,6 +359,7 @@ cleanup_sidecar_on_error() {
     log "stopping failed sidecar (pid $sidecar_pid)"
     kill "$sidecar_pid" 2>/dev/null || true
     wait "$sidecar_pid" 2>/dev/null || true
+    wait_for_sidecar_sanitizers
   fi
 }
 trap cleanup_sidecar_on_error EXIT
@@ -302,6 +369,24 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?
+    # The sidecar has fully exited (confirmed above), so its stderr pipe has
+    # already sent EOF; draining the sanitizer here cannot hang, and it
+    # guarantees $sidecar_stderr holds everything the sidecar wrote before we
+    # read it for the failure message below.
+    wait_for_sidecar_sanitizers
+    # $preflight_report is written by the launcher's own ReviewPreflightError
+    # handler before it exits (see contextual_orchestrator_review_launcher.py
+    # main()), so it can hold real per-route evidence (agent_id/provider/
+    # model/status/error_type/http_status -- schema-bounded, never raw
+    # provider content or secrets) even though the generic exception message
+    # above never does. Previously this file was only ever surfaced by
+    # Strix's separate artifact-upload step, leaving every other workflow
+    # (noema-review, opencode-review) blind to *why* every candidate route
+    # was rejected. Printing it here puts that evidence in the one place
+    # every workflow's job log already is.
+    if [ -s "$preflight_report" ]; then
+      log "sidecar preflight route evidence: $(sed -n '1,80p' "$preflight_report" | tr '\n' ' ')"
+    fi
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
@@ -315,16 +400,69 @@ if [ ! -s "$preflight_report" ]; then
 fi
 publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+# A successful startup never re-reads $sidecar_stderr otherwise: only the
+# failure branches above embed it in their ::error:: message. A partial,
+# non-fatal provider discovery failure (e.g. one bad credential) would
+# otherwise be silently invisible to every workflow except Strix's artifact
+# upload -- print it into the always-visible job log too. The launcher
+# always emits a "discovery_diagnostics_complete" sentinel as the LAST line
+# it writes to stderr before this point in its own execution (discovery
+# finishes strictly before the server can start accepting the healthz
+# request that just succeeded above); waiting for the sanitizer to pass
+# that same sentinel through -- rather than guessing from file size or a
+# fixed sleep -- deterministically proves every earlier discovery-error
+# line has already reached $sidecar_stderr too, since the sanitizer
+# processes its input strictly in order.
+sentinel_wait=0
+until grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null; do
+  sentinel_wait=$((sentinel_wait + 1))
+  if [ "$sentinel_wait" -ge 25 ]; then
+    log "sidecar startup warnings: sanitizer did not confirm discovery diagnostics within 5s; showing partial evidence"
+    break
+  fi
+  sleep 0.2
+done
+sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' || true)"
+if [ -n "$sidecar_startup_warnings" ]; then
+  log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"
+fi
 
 # Exercise the exact OpenAI-compatible endpoint and model name Strix uses. A
 # process can be healthy while the coordinator/model-group path still raises an
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
-printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
+# max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own per-agent
+# routing probe budget): observed behavior was an agent the routing probe
+# already proved "ready" at that budget failing this separate end-to-end check
+# with a spurious 502 invalid_structured_output at a much smaller budget, even
+# though the model itself is healthy. The exact field-level cause was never
+# captured (the sidecar's log sanitizer strips raw provider payloads by
+# design), so treat any specific mechanism as a hypothesis, not fact. See
+# "2026-08-30 sidecar preflight max_tokens desynchronized from the routing
+# probe" (and its 2026-08-30 correction) in
+# ContextualWisdomLab/contextual-orchestrator's own
+# docs/product-technical-gap-baseline.md for the evidence that is actually
+# captured (downloaded strix-reports artifact,
+# ContextualWisdomLab/contextual-orchestrator#912 run 33304076516).
+printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
+# 30s (this check's previous bound) is too tight for a real completion from a
+# reasoning-capable free-tier model: exact-evidence reproduction (Strix run
+# 33306775025 on ContextualWisdomLab/contextual-orchestrator#921, job
+# 99244624298) shows the routing probe marking a DeepSeek NIM route "ready"
+# in 18s, then this identical request against that same healthy route being
+# cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
+# request could not reach the local sidecar" is this curl failure, not an
+# actual connectivity problem. This required-workflow job already budgets
+# 120 minutes (see timeout-minutes in strix.yml/noema-review.yml), and the
+# org's own stated policy accepts multi-hour central review latency in
+# favor of accuracy over speed -- a 30s bound on one preflight self-check
+# contradicted that policy and rejected a route the routing probe had just
+# proven healthy. 120s keeps this a bounded, fail-closed check while giving
+# a real reasoning generation room to finish.
 if ! gateway_http_status="$(
-  curl -sS --max-time 30 \
+  curl -sS --max-time 120 \
     -o "$gateway_preflight_response" \
     -w '%{http_code}' \
     -X POST \
