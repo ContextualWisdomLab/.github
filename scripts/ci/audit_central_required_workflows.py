@@ -12,6 +12,8 @@ from typing import Any, TextIO
 
 RULESET_ID = 18156473
 RULESET_NAME = "CWL Central required workflows"
+STACKED_RULESET_ID = 21732164
+STACKED_RULESET_NAME = "CWL Stacked OpenCode required workflow"
 SOURCE_REPOSITORY_ID = 1274066402
 SOURCE_REF = "refs/heads/main"
 SOURCE_ORGANIZATION = "ContextualWisdomLab"
@@ -30,6 +32,7 @@ REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
 )
+STACKED_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
 
 
 def _typed_rules(payload: dict[str, Any], rule_type: str) -> list[dict[str, Any]]:
@@ -175,6 +178,65 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     return errors
 
 
+def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
+    """Return drift reasons for the workflow-only stacked-PR ruleset."""
+    errors: list[str] = []
+    if payload.get("id") != STACKED_RULESET_ID:
+        errors.append(f"expected stacked ruleset id {STACKED_RULESET_ID}")
+    if payload.get("name") != STACKED_RULESET_NAME:
+        errors.append(f"expected stacked ruleset name {STACKED_RULESET_NAME}")
+    if payload.get("target") != "branch":
+        errors.append("stacked ruleset target is not branch")
+    if payload.get("enforcement") != "evaluate":
+        errors.append("stacked ruleset enforcement is not evaluate")
+
+    conditions = payload.get("conditions")
+    conditions = conditions if isinstance(conditions, dict) else {}
+    ref_names = conditions.get("ref_name")
+    ref_names = ref_names if isinstance(ref_names, dict) else {}
+    if "~ALL" not in (ref_names.get("include") or []):
+        errors.append("stacked ruleset does not include all branches")
+    if set(ref_names.get("exclude") or []) != {"~DEFAULT_BRANCH"}:
+        errors.append("stacked ruleset does not exclude only default branches")
+
+    workflow_rules = _typed_rules(payload, "workflows")
+    if len(workflow_rules) != 1:
+        errors.append(f"expected one stacked workflows rule, found {len(workflow_rules)}")
+        workflows: list[Any] = []
+        parameters: dict[str, Any] = {}
+    else:
+        raw_parameters = workflow_rules[0].get("parameters")
+        parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
+        raw_workflows = parameters.get("workflows")
+        workflows = raw_workflows if isinstance(raw_workflows, list) else []
+    if parameters.get("do_not_enforce_on_create") is not True:
+        errors.append("stacked OpenCode workflow does not exempt branch creation")
+    expected_workflow = {
+        "repository_id": SOURCE_REPOSITORY_ID,
+        "path": STACKED_WORKFLOW_PATH,
+        "ref": SOURCE_REF,
+    }
+    if len(workflows) != 1 or not isinstance(workflows[0], dict) or not all(
+        workflows[0].get(key) == value for key, value in expected_workflow.items()
+    ):
+        errors.append("stacked ruleset must require only the central OpenCode workflow")
+
+    extra_rule_types = (
+        sorted(
+            {
+                str(rule.get("type") or "<missing>")
+                for rule in payload.get("rules", [])
+                if isinstance(rule, dict) and rule.get("type") != "workflows"
+            }
+        )
+        if isinstance(payload.get("rules"), list)
+        else []
+    )
+    if extra_rule_types:
+        errors.append(f"stacked ruleset has forbidden rule types: {extra_rule_types}")
+    return errors
+
+
 def load_payload(path: Path | None, stdin: TextIO) -> dict[str, Any]:
     """Load a ruleset object from ``path`` or standard input."""
     if path is None:
@@ -190,6 +252,7 @@ def load_payload(path: Path | None, stdin: TextIO) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the optional ruleset JSON path."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stacked", action="store_true")
     parser.add_argument("ruleset_json", nargs="?", type=Path)
     return parser.parse_args(argv)
 
@@ -203,20 +266,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: unable to load ruleset JSON: {exc}", file=sys.stderr)
         return 2
 
-    errors = audit_ruleset(payload)
+    auditor = audit_stacked_ruleset if args.stacked else audit_ruleset
+    ruleset_id = STACKED_RULESET_ID if args.stacked else RULESET_ID
+    workflow_count = 1 if args.stacked else len(REQUIRED_WORKFLOW_PATHS)
+    errors = auditor(payload)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         print(
-            f"FAIL: ruleset {RULESET_ID} has {len(errors)} governance drift reason(s)",
+            f"FAIL: ruleset {ruleset_id} has {len(errors)} governance drift reason(s)",
             file=sys.stderr,
         )
         return 1
 
-    print(
-        f"PASS: ruleset {RULESET_ID} enforces "
-        f"{len(REQUIRED_WORKFLOW_PATHS)} central required workflows"
-    )
+    if args.stacked:
+        print(
+            f"PASS: ruleset {ruleset_id} audits {workflow_count} "
+            "central required workflows in evaluate mode"
+        )
+    else:
+        print(
+            f"PASS: ruleset {ruleset_id} enforces "
+            f"{workflow_count} central required workflows"
+        )
     return 0
 
 
