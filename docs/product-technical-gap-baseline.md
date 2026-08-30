@@ -2444,17 +2444,22 @@ gateway chat/completions preflight(1차 시도)는 정상 통과했지만, 실�
 (135초/65초/73초 — 모두 빠름, hang 아님), 세 번 전부 완전히 동일한 모델/agent에서 실패했다 —
 `agent_id: nvidia_nim_meta_llama_3_2_90b_vision_instruct`, `model:
 meta/llama-3.2-90b-vision-instruct`, 매번 동일한 `Error code: 400 - invalid_request_error`
-(`provider_status: 400, retryable: False`). 3/3 완전 동일 모델 실패는 flake를 배제하고
-결정론적 선택/호환성 버그를 가리킨다 — vision-only 모델이 Strix의 순수 텍스트 agentic
-chat-completion 워크로드에 대해 `orchestrator/free` pool에 선정되고, provider가 매번 정확하게
-비-멀티모달 요청을 거부하는 것으로 보인다. `family_cap`을 4→8로 넓힌 것이 vision variant를
-pool에 끌어들인 것과 연관됐을 가능성이 있고, 라우터가 `retryable: false` 400을 받고도 다음
-후보로 failover하지 않는 것으로 보인다. 이 발견은 5400초 hang 클래스와는 별개의, 더 구체적이고
-실행 가능한 root-cause 후보다 — 재실행하지 않았다(결정론적이라 재실행해도 같은 모델에 다시
-걸릴 가능성이 높아 CI 시간만 낭비). 이 PR의 diff와도 무관(family_cap/model-discovery 로직은
-`contextual-orchestrator`에 있음) — free-pool 모델 카탈로그 소유자에게 vision-only 모델을
-텍스트 전용 소비자의 pool에서 제외하거나, 라우터가 `retryable: false` 400을 받으면 다음 후보로
-넘어가도록 하는 수정을 제안한다.
+(`provider_status: 400, retryable: False`). **확인된 사실**: 3/3 완전 동일 모델/동일 에러
+반복은 flake가 아니라 이 모델에 대한 결정론적 실패를 증명한다 — 그 이상은 아니다. Devin
+review가 정확히 지적했듯, 이 반복성 자체는 "왜" 400이 나는지(모달리티 불일치인지, 다른 요청
+파라미터 문제인지, 이 모델이 이 gateway 경로에서 아예 지원되지 않는지)를 증명하지 않으며,
+`family_cap` 4→8 확대가 원인이라는 연결도 검증되지 않았다(생성기가 리턴한 일반적 wrapper
+메시지("provider rejected the request with HTTP 400. Adjust the request parameters and
+retry.")만 확인했을 뿐, NVIDIA NIM 쪽의 실제 원본 에러 바디는 읽지 못했고, family_cap=4일 때
+이 모델이 선택되지 않았을 것이라는 점도 직접 확인하지 못했다). **미검증 가설(다음 조사가
+필요, 단정하지 말 것)**: `meta/llama-3.2-90b-vision-instruct`는 이름으로 보아 공개적으로
+알려진 비전-멀티모달 모델이므로, 순수 텍스트 요청과의 모달리티 불일치가 그럴듯한 후보이긴
+하지만 확정된 근거는 아니다. 이 발견은 5400초 hang 클래스와는 별개의, 재현 가능한 증상이다 —
+재실행하지 않았다(결정론적이라 재실행해도 같은 모델에 다시 걸릴 가능성이 높아 CI 시간만
+낭비). 이 PR의 diff와도 무관(family_cap/model-discovery 로직은 `contextual-orchestrator`에
+있음) — free-pool 모델 카탈로그 소유자가 이 모델의 실제 원본 provider 에러 바디를 확인해
+정확한 원인을 규명해야 하며, 그 전까지는 모달리티 불일치나 family_cap 연관을 확정된 root
+cause로 취급하지 않는다.
 
 ## 6. Compliance and data boundary
 
