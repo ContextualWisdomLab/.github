@@ -101,6 +101,29 @@ query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
 }
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
+OPEN_PR_PRIORITIES_QUERY = """\
+query($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: $pageSize, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        baseRefName
+        headRefOid
+        reviews(last: 100) {
+          nodes {
+            state
+            body
+            author { login }
+            commit { oid }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 PR_BY_NUMBER_QUERY = """\
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -837,17 +860,13 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs_rest(
-    repo: str,
-    max_prs: int | None,
-    base_branch: str | None = None,
-) -> list[dict[str, Any]]:
+def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL is unavailable."""
 
     prs: list[dict[str, Any]] = []
     page = 1
-    while max_prs is None or len(prs) < max_prs:
-        page_size = 100 if max_prs is None else min(100, max_prs - len(prs))
+    while len(prs) < max_prs:
+        page_size = min(100, max_prs - len(prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
             f"&per_page={page_size}&page={page}"
@@ -867,7 +886,7 @@ def fetch_open_prs_rest(
         if len(payload) < page_size:
             break
         page += 1
-    return prs if max_prs is None else prs[:max_prs]
+    return prs[:max_prs]
 
 
 def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
@@ -877,18 +896,14 @@ def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return [rest_pr_node(repo, pr)] if pr else []
 
 
-def fetch_open_prs(repo: str, max_prs: int | None) -> list[dict[str, Any]]:
-    """Fetch open pull requests from GitHub, optionally bounded by max_prs."""
+def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
+    """Fetch open pull requests from GitHub, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
     cursor: str | None = None
 
-    while max_prs is None or len(prs) < max_prs:
-        page_size = (
-            OPEN_PRS_PAGE_SIZE
-            if max_prs is None
-            else min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
-        )
+    while len(prs) < max_prs:
+        page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
         fields: dict[str, str | int] = {
             "owner": owner,
             "name": name,
@@ -909,6 +924,85 @@ def fetch_open_prs(repo: str, max_prs: int | None) -> list[dict[str, Any]]:
         cursor = pr_page["pageInfo"]["endCursor"]
 
     enrich_rest_mergeable_states(repo, prs)
+    return prs
+
+
+def fetch_open_pr_priorities_rest(repo: str) -> list[dict[str, Any]]:
+    """Fetch only queue-priority identity through the REST fallback."""
+    candidates: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        payload = gh_api_json(
+            f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
+            f"&per_page=100&page={page}"
+        )
+        candidates.extend(
+            {
+                "number": pr.get("number"),
+                "baseRefName": (pr.get("base") or {}).get("ref"),
+                "headRefOid": (pr.get("head") or {}).get("sha"),
+                # REST's list endpoint has no review collection. Treat an
+                # unknown verdict as highest dispatch priority, then hydrate
+                # only the bounded selected set below.
+                "reviews": {"nodes": []},
+            }
+            for pr in payload
+        )
+        if len(payload) < 100:
+            break
+        page += 1
+    return candidates
+
+
+def fetch_open_pr_priorities(repo: str) -> list[dict[str, Any]]:
+    """Fetch the complete open-PR inventory using priority-only fields."""
+    owner, name = split_repo(repo)
+    candidates: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        fields: dict[str, str | int] = {
+            "owner": owner,
+            "name": name,
+            "pageSize": OPEN_PRS_PAGE_SIZE,
+        }
+        if cursor:
+            fields["cursor"] = cursor
+        try:
+            payload = gh_graphql(OPEN_PR_PRIORITIES_QUERY, **fields)
+        except RuntimeError as exc:
+            if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
+                return fetch_open_pr_priorities_rest(repo)
+            raise
+        page = payload["data"]["repository"]["pullRequests"]
+        candidates.extend(page.get("nodes") or [])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        cursor = page["pageInfo"]["endCursor"]
+    return candidates
+
+
+def fetch_prioritized_open_prs(repo: str, max_prs: int, base_branch: str) -> list[dict[str, Any]]:
+    """Select globally by lightweight priority, then hydrate a bounded set."""
+    if max_prs <= 0:
+        return []
+    candidates = sorted(
+        fetch_open_pr_priorities(repo),
+        key=lambda pr: (
+            pr.get("baseRefName") == base_branch,
+            review_dispatch_priority(pr),
+        ),
+    )[:max_prs]
+    prs: list[dict[str, Any]] = []
+    for candidate in candidates:
+        rows = fetch_pr(repo, int(candidate["number"]))
+        if not rows:
+            continue
+        pr = rows[0]
+        if candidate.get("headRefOid") != pr.get("headRefOid"):
+            continue
+        if candidate.get("baseRefName") != pr.get("baseRefName"):
+            continue
+        prs.append(pr)
     return prs
 
 
@@ -4201,27 +4295,13 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--branch-update-limit must be -1 or greater")
     if args.pr_number:
         prs = fetch_pr(args.repo, args.pr_number)
-    elif args.max_prs <= 0:
-        prs = []
     else:
-        # The processing cap must not become a pre-prioritization fetch cap:
-        # doing so permanently hides newer stacked or never-reviewed PRs when
-        # older low-priority PRs fill the oldest-first GitHub connection.
-        prs = fetch_open_prs(args.repo, None)
-    if not args.pr_number:
         # Stacked PRs have no injected required workflow and depend exclusively
         # on this bounded sweep; default-base PRs also receive event-driven runs.
-        # Within each group, prioritize PRs with no current-head OpenCode
-        # verdict yet so the bounded dispatch budget reaches never-reviewed
-        # PRs before leftover re-review increments
-        # (ContextualWisdomLab/contextual-orchestrator#176).
-        prs = sorted(
-            prs,
-            key=lambda pr: (
-                pr.get("baseRefName") == args.base_branch,
-                review_dispatch_priority(pr),
-            ),
-        )[: args.max_prs]
+        # Rank the complete lightweight inventory first, then hydrate only the
+        # processing cap so discarded PRs do not consume checks/files/thread or
+        # REST mergeability API work.
+        prs = fetch_prioritized_open_prs(args.repo, args.max_prs, args.base_branch)
     decisions = []
     review_dispatches_used = 0
     stacked_review_dispatches_used = 0

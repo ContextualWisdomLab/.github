@@ -320,6 +320,168 @@ def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypa
     assert seen[0]["pageSize"] == sched.OPEN_PRS_PAGE_SIZE
 
 
+def test_fetch_open_pr_priorities_reads_all_pages_without_full_enrichment(monkeypatch):
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [{"number": 1, "baseRefName": "main"}],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "next"},
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [{"number": 2, "baseRefName": "feature-a"}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        },
+    ]
+    seen = []
+
+    def fake_graphql(query, **fields):
+        seen.append((query, fields))
+        return pages.pop(0)
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(
+        sched,
+        "enrich_rest_mergeable_states",
+        lambda *_args: pytest.fail("priority inventory must not enrich mergeability"),
+    )
+
+    assert sched.fetch_open_pr_priorities("owner/repo") == [
+        {"number": 1, "baseRefName": "main"},
+        {"number": 2, "baseRefName": "feature-a"},
+    ]
+    assert all(query == sched.OPEN_PR_PRIORITIES_QUERY for query, _fields in seen)
+    assert [fields.get("cursor") for _query, fields in seen] == [None, "next"]
+
+
+def test_fetch_open_pr_priorities_rest_is_inventory_only(monkeypatch):
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        return [
+            {
+                "number": 1,
+                "base": {"ref": "main"},
+                "head": {"sha": "a" * 40},
+            },
+            {
+                "number": 2,
+                "base": {"ref": "feature-a"},
+                "head": {"sha": "b" * 40},
+            },
+        ]
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(
+        sched,
+        "rest_pr_node",
+        lambda *_args: pytest.fail("discarded inventory rows must not be hydrated"),
+    )
+
+    assert sched.fetch_open_pr_priorities_rest("owner/repo") == [
+        {
+            "number": 1,
+            "baseRefName": "main",
+            "headRefOid": "a" * 40,
+            "reviews": {"nodes": []},
+        },
+        {
+            "number": 2,
+            "baseRefName": "feature-a",
+            "headRefOid": "b" * 40,
+            "reviews": {"nodes": []},
+        },
+    ]
+    assert calls == [
+        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=1"
+    ]
+
+
+def test_fetch_open_pr_priorities_rest_paginates_complete_inventory(monkeypatch):
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        if path.endswith("&page=1"):
+            return [
+                {
+                    "number": number,
+                    "base": {"ref": "main"},
+                    "head": {"sha": f"{number:040x}"},
+                }
+                for number in range(1, 101)
+            ]
+        return []
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    assert len(sched.fetch_open_pr_priorities_rest("owner/repo")) == 100
+    assert calls == [
+        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=1",
+        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2",
+    ]
+
+
+def test_fetch_prioritized_open_prs_bounds_full_hydration_after_global_sort(monkeypatch):
+    old_reviewed_default = make_pr(
+        number=1,
+        baseRefName="main",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    newer_actionable_stacked = make_pr(number=2, baseRefName="feature-a")
+    never_reviewed_default = make_pr(number=3, baseRefName="main")
+    inventory = [old_reviewed_default, newer_actionable_stacked, never_reviewed_default]
+    hydrated = []
+
+    monkeypatch.setattr(sched, "fetch_open_pr_priorities", lambda repo: inventory)
+
+    def fake_fetch_pr(repo, number):
+        hydrated.append(number)
+        return [next(pr for pr in inventory if pr["number"] == number)]
+
+    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
+
+    assert sched.fetch_prioritized_open_prs("owner/repo", 1, "main") == [
+        newer_actionable_stacked
+    ]
+    assert hydrated == [2]
+
+
+def test_fetch_prioritized_open_prs_drops_moved_or_missing_selected_rows(monkeypatch):
+    inventory = [
+        make_pr(number=1),
+        make_pr(number=2, headRefOid="a" * 40),
+        make_pr(number=3, baseRefName="feature-a"),
+    ]
+    hydrated = []
+
+    monkeypatch.setattr(sched, "fetch_open_pr_priorities", lambda repo: inventory)
+
+    def fake_fetch_pr(repo, number):
+        hydrated.append(number)
+        if number == 1:
+            return []
+        if number == 2:
+            return [make_pr(number=2, headRefOid="b" * 40)]
+        return [make_pr(number=3, baseRefName="feature-b")]
+
+    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
+
+    assert sched.fetch_prioritized_open_prs("owner/repo", 3, "main") == []
+    assert hydrated == [3, 1, 2]
+
+
 def test_fetch_pr_uses_exact_pull_request_number(monkeypatch):
     seen = []
 
@@ -704,9 +866,11 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
     monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_pr_priorities_rest", lambda repo: [{"repo": repo}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
+    assert sched.fetch_open_pr_priorities("owner/repo") == [{"repo": "owner/repo"}]
     assert sched.fetch_pr("owner/repo", 1) == [{"repo": "owner/repo", "number": 1}]
 
 
@@ -718,6 +882,8 @@ def test_graphql_read_errors_do_not_fall_back_for_schema_errors(monkeypatch):
 
     with pytest.raises(RuntimeError, match="unknown"):
         sched.fetch_open_prs("owner/repo", 1)
+    with pytest.raises(RuntimeError, match="unknown"):
+        sched.fetch_open_pr_priorities("owner/repo")
     with pytest.raises(RuntimeError, match="unknown"):
         sched.fetch_pr("owner/repo", 1)
 
@@ -5016,7 +5182,11 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
     dispatched = []
     updated = []
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: prs,
+    )
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
@@ -5137,7 +5307,11 @@ def test_main_prefers_never_reviewed_pr_when_dispatch_budget_is_one(monkeypatch,
     ]
     dispatched = []
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: [prs[1], prs[0]],
+    )
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
@@ -5184,9 +5358,9 @@ def test_main_prioritizes_full_open_pr_queue_before_max_prs_cap(monkeypatch):
 
     monkeypatch.setattr(
         sched,
-        "fetch_open_prs",
-        lambda repo, max_prs: fetch_limits.append(max_prs)
-        or [old_default_base, newer_actionable_stacked],
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: fetch_limits.append((max_prs, base_branch))
+        or [newer_actionable_stacked],
     )
     monkeypatch.setattr(
         sched,
@@ -5208,15 +5382,15 @@ def test_main_prioritizes_full_open_pr_queue_before_max_prs_cap(monkeypatch):
         ]
     ) == 0
 
-    assert fetch_limits == [None]
+    assert fetch_limits == [(1, "main")]
     assert seen == [2]
 
 
 def test_main_zero_max_prs_skips_open_pr_fetch(monkeypatch, capsys):
     monkeypatch.setattr(
         sched,
-        "fetch_open_prs",
-        lambda *_args: pytest.fail("zero processing capacity must not fetch the queue"),
+        "fetch_open_pr_priorities",
+        lambda *_args: pytest.fail("zero processing capacity must not fetch the inventory"),
     )
 
     assert sched.main(
@@ -5246,7 +5420,11 @@ def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch)
     ]
     seen = []
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched,
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: [prs[1], prs[3], prs[0], prs[2]],
+    )
     monkeypatch.setattr(
         sched,
         "inspect_pr",
@@ -5268,7 +5446,9 @@ def test_main_uses_stacked_dispatch_budget_when_default_budget_is_exhausted(monk
     ]
     dispatched = []
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched, "fetch_prioritized_open_prs", lambda repo, max_prs, base_branch: prs
+    )
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
@@ -5298,7 +5478,11 @@ def test_main_allows_unlimited_stacked_dispatch_budget(monkeypatch):
     stacked = make_pr(number=2, baseRefName="feature-a")
     dispatched = []
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [stacked])
+    monkeypatch.setattr(
+        sched,
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: [stacked],
+    )
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
@@ -5434,7 +5618,11 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         sched.main(["--repo", "owner/repo", "--base-branch", "main"])
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [make_pr(number=3)])
+    monkeypatch.setattr(
+        sched,
+        "fetch_prioritized_open_prs",
+        lambda repo, max_prs, base_branch: [make_pr(number=3)],
+    )
     monkeypatch.setattr(sched, "inspect_pr", lambda *args, **kwargs: sched.Decision(3, "skip", "done"))
     assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
 
@@ -5475,7 +5663,9 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
             )
         return sched.Decision(pr["number"], "wait", "next PR still inspected")
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched, "fetch_prioritized_open_prs", lambda repo, max_prs, base_branch: prs
+    )
     monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
 
     assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
@@ -5567,7 +5757,9 @@ def test_main_keeps_scanning_after_update_branch_403_and_422(monkeypatch, capsys
             )
         return sched.Decision(pr["number"], "wait", "next PR still inspected")
 
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(
+        sched, "fetch_prioritized_open_prs", lambda repo, max_prs, base_branch: prs
+    )
     monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
 
     assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
