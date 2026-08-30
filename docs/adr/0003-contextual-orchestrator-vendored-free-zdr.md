@@ -1,9 +1,11 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted
+- Status: accepted, amended 2026-08-30 (see "2026-08-30 amendment" below — Strix
+  now uses `orchestrator/free`, not the `orchestrator/auto` this header
+  originally recorded)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema retain the fail-closed zero-cost virtual model id `orchestrator/free`; authoritative Strix security analysis uses the provider-diverse `orchestrator/auto` pool. Strix is intentionally correctness-first rather than zero-cost. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -22,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`5f2753ace756ddd81049a5221d55e8977572a416` today) into `RUNNER_TEMP`. The
+   (`30c6d71680e659f25a0a433d4726ad0d437f9757` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -142,3 +144,35 @@ all five, and auto-optimize routing by cost.
   set `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true`; the catalog then excludes
   every non-ZDR route and fails closed when no attested ZDR route exists in the
   selected workflow pool.
+
+- **2026-08-30 amendment: Strix uses `orchestrator/free`, superseding this
+  ADR's original `orchestrator/auto` decision.** The org owner explicitly
+  directed Strix off the paid-inclusive `orchestrator/auto` pool and onto the
+  same zero-cost `orchestrator/free` pool OpenCode and Noema already use, so
+  no central review path executes a paid model. This is a deliberate,
+  informed override of the original decision above, not an oversight of it:
+  the trade-off the original decision recorded — "the 2026-08-29 exact-head
+  DiskSage scan proved that four discovered free routes all shared the
+  OpenRouter outage domain, which the gateway correctly collapsed to one
+  provider attempt... Strix has no external fallback" — was surfaced to the
+  owner explicitly, including a live 2026-08-30 reproduction of that same
+  single-family-collapse pattern (a `strix` run's `orchestrator/auto`
+  primary/free stage rejected 4/4 candidates — 2 timeouts, 2 HTTP 404s from
+  retired NVIDIA-hosted models — and only the `auto` pool's paid fallback
+  kept that run alive; see `docs/product-technical-gap-baseline.md`'s
+  2026-08-30 sidecar-preflight entries for the full evidence trail). The
+  owner's response, verbatim in substance: implement the free-only directive
+  as originally instructed. **Accepted consequence**: Strix has no external
+  fallback and can go fully dark (rather than degraded-but-running) during
+  the exact class of incident this ADR originally used `orchestrator/auto`
+  to survive, until the free-catalog's stale-model and provider-diversity
+  gaps documented alongside this amendment are separately closed. This is
+  the owner's accepted risk, not an unnoticed regression.
+  `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model` no
+  longer accepts `orchestrator/auto`; `strix.yml`'s `STRIX_MODEL`/
+  `CONTEXTUAL_ORCHESTRATOR_POOL` default to `orchestrator/free`; and
+  `scripts/ci/strix_required_workflow_smoke.sh`/`AGENTS.md` were updated to
+  match. The `orchestrator/auto` pool mode itself is unchanged and still
+  exists in `contextual_orchestrator_review_policy.py`/the sidecar for any
+  other caller that opts into it explicitly — this amendment only removes it
+  as Strix's default and as an accepted Strix override value.
