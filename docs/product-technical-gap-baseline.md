@@ -2397,6 +2397,24 @@ jittered-loop + PostgreSQL advisory-lock lease + starvation-free cursor 구조�
 ruff clean. 남은 G-15 후보: HWP/HWPX 지원, 단일 첨부파일 upload-accept 상한. G-06(thread/sender
 ontology 다리)이 다음 pass의 우선순위 후보로 남는다.
 
+**naruon#1486 `AttachmentReparseWorker` CodeRabbit/Devin review 라운드(같은 브랜치, 커밋
+`ef49fc96`/`da816566`)**: 두 실제 정합성 결함을 근본 수정했다 — (1) `_sweep_attachments`가 배치
+처리 *전에* 커서를 `rows[-1].id`로 미리 전진시켜, 처리 중 예외로 `reparse_pending` 상태 그대로
+남은 행이 커서 아래로 떨어져 전방 큐가 완전히 비워질 때까지(지속 트래픽 하에서는 무한정) 다시
+선택되지 못하던 starvation 버그 — 첫 실패 행 바로 앞까지만 커서를 전진시키도록 수정. (2)
+PostgreSQL advisory lease를 매 항목 `commit()`이 커넥션을 풀로 반환하는 동일한 `AsyncSession`으로
+획득·해제해, 해제가 lock을 잡았던 것과 다른 물리 커넥션에서 실행되어 lease가 영구히 묶일 수
+있던 문제 — 스윕 전체 동안 여는 전용 `AsyncConnection` 하나로만 획득·해제하도록 재설계. 이
+두 번째 결함과 완전히 동일한 acquire/release-through-the-per-item-session 구조가
+`services/newsdom_worker.py`에도 그대로 있어 같은 잠재 위험을 가진 것으로 추정되나, 이 PR이
+건드리지 않은 기존 코드라 수정 범위 밖으로 남겨둔다 — **후속 후보**: newsdom_worker도 동일한
+전용-커넥션 lease 패턴으로 맞추는 별도 PR. 추가로 Alembic `0019_attachment_uid`의 downgrade가
+`Base.metadata.create_all()`로 부트스트랩된 DB(제약 형태의 동일 이름 인덱스)에서 `DROP INDEX`가
+거부되는 경로를 고쳤고, `list_judgments` 정렬에 `calendar_conflict_judgment_id` 2차 키를
+추가해 동일 타임스탬프 경합을 제거했다. 검증: 전체 백엔드 스위트 1875 passed/33 skipped, ruff
+clean. ADR-0005 Revisions/Decision 두 문서 불일치와 `Email.workspace_id`(이미 추적된 gap의
+재발견) 스레드도 각각 문서 수정과 회신으로 정리했다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
