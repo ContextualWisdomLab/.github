@@ -326,7 +326,7 @@ log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pi
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
-printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
+printf '{"model":"%s","orchestration":"route","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
 set +e
 gateway_http_status="$(

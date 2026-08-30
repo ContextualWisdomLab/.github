@@ -124,6 +124,11 @@ all five, and auto-optimize routing by cost.
   Both phases keep zero retries and the same bounded request policy; the
   launcher test verifies the two constructed client configurations separately.
 
+- **Direct gateway smoke (2026-08-30):** the sidecar's startup request selects
+  explicit `route` orchestration so it validates the direct virtual-pool path
+  used by tool-bearing reviews without invoking auto-mode triage. Provider
+  response validation and fail-closed non-200 handling are unchanged.
+
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
   discovery under the zero-cost pool. Strix uses the separately governed auto

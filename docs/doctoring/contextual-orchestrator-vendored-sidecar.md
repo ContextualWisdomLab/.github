@@ -78,6 +78,17 @@ temperature policy. The launcher test constructs both client policies and
 asserts their distinct timeouts; it does not infer the contract from duplicate
 source text.
 
+## 2026-08-30 Gateway smoke route mode
+
+The exact-head PR #1415 preflight found usable routes, but its gateway smoke
+request then defaulted to `auto` orchestration and reached the pinned
+server's triage/conduct path. That path returned `invalid_structured_output`
+with HTTP 502 even though route admission had succeeded. The smoke request now
+sets `orchestration: route`, which exercises the direct virtual-pool path used
+by tool-bearing Strix requests and avoids an unrelated auto-mode triage call.
+This changes only the smoke request mode: provider response validation and the
+fail-closed treatment of every non-200 response remain unchanged.
+
 ## What changed
 
 `pr-review-autofix.yml` now provisions the sidecar

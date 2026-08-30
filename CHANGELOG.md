@@ -10,6 +10,9 @@ Semantic Versioning where the repository publishes a release.
   same zero-retry policy. Distinguish loopback transport timeouts from
   connection failures, and classify dependency-review API denial as
   unavailable evidence without treating it as vulnerability-free.
+- Make the sidecar gateway smoke request explicit `orchestration: route` so it
+  exercises the direct virtual-pool path used by tool-bearing reviews without
+  invoking auto-mode triage; provider response errors remain fail-closed.
 - Keep the sidecar's provider-family cap aligned with its 24-route total
   startup budget by default, so a single provider catalog is not truncated to
   four routes before bounded preflight; explicit `ORCHESTRATOR_CATALOG_FAMILY_CAP`

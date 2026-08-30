@@ -431,6 +431,7 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in sidecar
     assert 'gateway_virtual_model="orchestrator/${orchestrator_pool}"' in sidecar
     assert '"model":"%s"' in sidecar
+    assert '"orchestration":"route"' in sidecar
     assert '"$gateway_virtual_model" > "$gateway_preflight_request"' in sidecar
     assert '"model":"orchestrator/free"' not in sidecar
     assert "gateway preflight returned unusable chat content" in sidecar
