@@ -2415,6 +2415,23 @@ PostgreSQL advisory lease를 매 항목 `commit()`이 커넥션을 풀로 반환
 clean. ADR-0005 Revisions/Decision 두 문서 불일치와 `Email.workspace_id`(이미 추적된 gap의
 재발견) 스레드도 각각 문서 수정과 회신으로 정리했다.
 
+**위 "후속 후보"를 실제로 배포했다 — `services/newsdom_worker.py`도 동일한 두 결함을 그대로
+갖고 있어 근본 수정** (naruon#1486의 같은 브랜치에 push): `AttachmentReparseWorker`에 적용한
+것과 완전히 동일한 두 수정을 `NewsdomRecognitionWorker`의 첨부파일/문서 두 스윕 모두에
+적용했다 — (1) advisory lease를 스윕 전체 동안 여는 전용 `AsyncConnection` 하나로만
+획득·해제(`_engine_uses_postgresql()`/`_try_acquire_sweep_lease`/`_release_sweep_lease`가
+이제 세션이 아니라 커넥션을 받음), (2) 커서를 첫 실패 행 바로 앞까지만 전진. 문서 커서는
+`Document.document_id`가 문자열 기본키라 "실패 id - 1" 산술이 불가능해, 실패 이전에 실제로
+커밋된 마지막 행의 id를 추적하는 방식으로 일반화했다(연속 정수 키에서는 기존 방식과 동일한
+결과, 비연속/문자열 키에서도 올바름). 구현 중 재확인한 사실: `AsyncSessionLocal`이
+`expire_on_commit=False`로 구성돼 있어(`db/session.py`) 매 항목 `commit()`은 후속 행의
+속성 읽기를 깨지 않지만, `rollback()`은 여전히(설정과 무관하게) 세션에 이미 로드된 모든
+객체를 expire시킨다 — 이것이 실제로 재현되는지 aiosqlite 없는 이 환경에서 직접 실행
+검증하지는 못했지만(추측이 아니라 이미 `AttachmentReparseWorker`의 동일 코드베이스에서
+검증·적용된 전례를 따른 것), 두 스윕 모두 각 행을 처리 직전 id로 다시 가져오도록 맞춰
+일관성을 확보했다. 검증: 신규 테스트 6개, 전체 백엔드 스위트 1879 passed/33 skipped(기존
+1875), ruff clean. ADR-0005 Revisions에 기록.
+
 **naruon#1486 `strix` 재발 (head `da816566`, run `33326526050`)**: 같은 PR의 앞선 `dcc9fcd0`
 발생과 동일한 `STRIX_PROVIDER_UNAVAILABLE` 클래스가 새 head에서 다시 발생했으나 메커니즘은
 달랐다 — 이번에는 sidecar 기동과 preflight(healthz 25s, gateway chat/completions preflight
