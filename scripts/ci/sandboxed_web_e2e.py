@@ -124,8 +124,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ("--backend-ready-url", args.backend_ready_url),
         ("--frontend-ready-url", args.frontend_ready_url),
     ):
-        if url and not (url.startswith("http://") or url.startswith("https://")):
+        if url and not url.lower().startswith(("http://", "https://")):
             parser.error(f"{option} must start with http:// or https://")
+    for option, command in (
+        ("--backend-cmd", args.backend_cmd),
+        ("--frontend-cmd", args.frontend_cmd),
+        ("--e2e-cmd", args.e2e_cmd),
+    ):
+        if not shlex.split(command):
+            parser.error(f"{option} must not be empty")
     try:
         args.output_limit_bytes = bounded_subprocess.validate_output_limit(
             args.output_limit_bytes,

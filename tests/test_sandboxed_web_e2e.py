@@ -719,6 +719,54 @@ def test_parse_args_rejects_non_http_readiness_urls(option, capsys):
     assert "Traceback" not in captured.err
 
 
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-ready-url", "--frontend-ready-url"],
+)
+def test_parse_args_accepts_uppercase_readiness_url_schemes(option):
+    """An uppercase HTTP(S) scheme is a valid readiness URL, not a rejected one."""
+    args = sandboxed_web_e2e.parse_args(
+        [
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+            option,
+            "HTTP://127.0.0.1:8000/health",
+        ]
+    )
+    assert getattr(args, option.lstrip("-").replace("-", "_")) == "HTTP://127.0.0.1:8000/health"
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-cmd", "--frontend-cmd", "--e2e-cmd"],
+)
+def test_parse_args_rejects_empty_commands(option, capsys):
+    """An empty or whitespace-only command fails in argument parsing without a traceback."""
+    commands = {"--backend-cmd": "backend", "--frontend-cmd": "frontend", "--e2e-cmd": "e2e"}
+    commands[option] = "   "
+
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                commands["--backend-cmd"],
+                "--frontend-cmd",
+                commands["--frontend-cmd"],
+                "--e2e-cmd",
+                commands["--e2e-cmd"],
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} must not be empty" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_module_main_entrypoint_parse_error(monkeypatch):
     """The module entrypoint reaches main and propagates argument errors."""
     runpy.run_path(str(Path(sandboxed_web_e2e.__file__)), run_name="not_main")
