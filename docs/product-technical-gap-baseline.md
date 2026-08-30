@@ -396,6 +396,41 @@ flowchart LR
   or typed provider result. A green event handler that skips the LLM call is not
   acceptance evidence.
 
+## 2026-08-30 sidecar pin staleness recurrence
+
+- Same class of defect as the 2026-08-29 entry above recurred within one day:
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s
+  `ORCHESTRATOR_PIN_SHA` default (`b21645116b352967e50fc497b87eb745b9cc8c61`)
+  was already 103 commits behind `contextual-orchestrator` `main`. Observed
+  directly in hosted `noema-review` job logs (`.github` PR #1421,
+  `ContextualWisdomLab/contextual-orchestrator` PR #857 and others): the
+  vendored sidecar's own preflight against the stale pin fails closed with
+  `gateway preflight returned HTTP 502` (and, on a differently-shaped request,
+  `request_failed status=413 code=request_too_large`) before the model pool
+  can run, so `opencode-agent`/Noema never post a verdict and the required
+  `opencode-review`/`noema-review` checks fail on unrelated PRs across both
+  repos. Confirmed via `contextual-orchestrator` main history that
+  `5f2753ace756ddd81049a5221d55e8977572a416` is the current `main` HEAD and
+  passes its own Tests/Security/Fuzz gates.
+- This PR bumps the pin to `5f2753ace756ddd81049a5221d55e8977572a416` in the
+  three places the contract tests pin it: the sidecar script default,
+  `tests/test_contextual_orchestrator_review_sidecar_contract.py`'s
+  `ORCH_PIN_SHA`, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  "today" reference. `requirements.lock` needs no separate sync — the sidecar
+  installs it fresh from the freshly-checked-out pinned commit, not from a
+  copy embedded in this repo.
+- Acceptance remains open the same way the 2026-08-29 entry describes: this
+  fixes the reproduced local preflight failure and all static contract tests
+  pass, but only a fresh post-merge hosted `noema-review`/`opencode-review`
+  run against the new pin is proof the live gateway path actually completes
+  and posts a verdict. Given this is the second staleness incident in as many
+  days, the underlying gap is process, not just this one value: nothing
+  currently keeps this pin near `contextual-orchestrator` `main` on an
+  ongoing basis. A scheduled or CI-triggered pin-freshness check (e.g., fail
+  a nightly job once the pin falls more than N commits or M days behind a
+  green `contextual-orchestrator` main) would close that gap; not implemented
+  in this PR, left for a follow-up.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
