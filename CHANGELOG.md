@@ -57,8 +57,31 @@ Semantic Versioning where the repository publishes a release.
   `finish_reason == "length"` OR that reasoning-without-content signature,
   consistently through Decision §1 and §3 and the "every other outcome"
   fallback case; Layer 2's "no retry on Trigger B" applies to both halves
-  of the signature, not just the finish_reason one. No code change in this
-  PR; the sidecar migration is tracked separately.
+  of the signature, not just the finish_reason one. A sixth Devin Review
+  pass (two findings, verified against the vendored source directly) found
+  two more precision/scope gaps. First: `_response_content` checks
+  `isinstance(content, str)` before ever inspecting `reasoning`, so a
+  genuinely empty string `""` (not missing/`null`) is treated as a valid,
+  non-erroring return and never reaches the reasoning-without-content
+  check -- the already-implemented preflight predicate in `ContextualWisdomLab/.github#1452`
+  was independently verified to already handle this correctly (it treats
+  `content == ""` the same as missing content, deliberately broader than
+  `_response_content`'s own narrower technical condition), so this was a
+  documentation-precision gap, not a code bug; the ADR's Trigger B
+  definition and a new precision note now state explicitly that this
+  preflight's "no usable content" is broader than any one downstream
+  library call's exact return-value convention. Second: a
+  reasoning-without-content failure at Layer 2 can itself surface as a
+  generic `HTTP 502` (`server.py`'s blanket `except ProviderResponseError:`
+  handler collapses both `ProviderResponseError` causes into an identical
+  body with no distinguishing field), so it is misclassified as Trigger A
+  and retried up to 3 times instead of failing fast as Trigger B --
+  verified as requiring an out-of-scope `contextual-orchestrator` change to
+  fix properly (no in-repo workaround exists that avoids fragile
+  message-text matching), so documented as a known, accepted, tracked
+  Layer 2 limitation (`ContextualWisdomLab/contextual-orchestrator#932`,
+  following the `#926`/`#927` pattern) rather than worked around. No code
+  change in this PR; the sidecar migration is tracked separately.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

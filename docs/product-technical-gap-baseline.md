@@ -1400,6 +1400,44 @@ reasoning-without-content signal must be emitted, not only the former) — Layer
 B" now explicitly covers both signatures, not only the `finish_reason` one, since the same "already
 recorded as successful by the gateway's routing" reasoning applies equally to either.
 
+**A sixth Devin Review pass (two findings) narrowed the same Trigger B question two more notches —
+verified directly, and judged by this org's convergence rule to be the point of diminishing returns for
+textual precision.** First, verified against the vendored source line by line: `_response_content`
+checks `isinstance(content, str)` *before* ever inspecting `reasoning`, so a genuinely empty string
+`""` (as opposed to missing/`null`) is treated as a valid, non-erroring return and never reaches the
+reasoning-without-content branch at all — meaning the ADR's citation of `_response_content` as Trigger
+B's motivating signature was, read hyper-literally, imprecise about exactly when that function's own
+exception fires. Checked whether this was a real implementation bug, not just an ADR-wording issue: it
+is not — `ContextualWisdomLab/.github#1452`'s already-shipped `_response_has_reasoning_without_content`
+predicate independently treats `content == ""` the same as missing content (reusing
+`_chat_response_has_text`'s own "empty or missing" definition), which is deliberately *broader* than
+`_response_content`'s exact technical condition and correctly escalates this case already. Fixed as a
+documentation-precision matter only: the ADR's Trigger B definition now states explicitly that "no
+usable content" means missing, `null`, non-string, *or* a genuinely empty string, and a new precision
+note clarifies the citation is the motivating signature this preflight generalizes from, not a claim
+that the implementation must reproduce `_response_content`'s exact, narrower branching.
+
+Second, and requiring an actual scope decision rather than a wording fix: a reasoning-without-content
+failure can itself surface at Layer 2 as a generic `HTTP 502` rather than the `200`-with-empty-content
+case Trigger B was designed around — verified directly against `contextual_orchestrator/server.py`:
+its request handler's `except ProviderResponseError:` clause is one blanket handler that does not even
+bind the caught exception, collapsing both of `_response_content`'s distinct failure messages
+(reasoning-without-content vs. no-content-at-all) into an identical `502 invalid_structured_output`
+body with no machine-readable distinguishing field. Layer 2's sidecar script therefore cannot tell this
+case apart from any other non-2xx and, by elimination, classifies it as Trigger A — retried up to 3
+times against a candidate the gateway's own routing is likely to repeat, rather than failing fast the
+way a correctly-classified Trigger B would. Verified this genuinely requires a `contextual-orchestrator`
+code change to fix properly (no in-repo workaround exists that avoids fragile, contractually-unstable
+message-text matching, which this org's own no-heuristics convention already rejects elsewhere in this
+same ADR) — out of scope for this sidecar-only ADR and its stacked implementation PR. Documented as a
+known, accepted, tracked Layer 2 limitation in both Decision §1 (at the point of definition) and
+Consequences (matching the existing `escalated_probe_rejected`/route-diversity limitations' own
+pattern), filed as `ContextualWisdomLab/contextual-orchestrator#932` following the `#926`/`#927`
+tracking precedent, and added to Decision §4's upstream-tracking list. Does not change Layer 2's stated
+360s worst case (this failure still draws from the same shared Trigger-A attempt budget, not an
+additional one) — only means this specific failure typically consumes the whole retry budget rather
+than failing fast.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

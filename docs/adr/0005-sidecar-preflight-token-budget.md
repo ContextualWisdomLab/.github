@@ -5,7 +5,7 @@
 - Scope: `ContextualWisdomLab/.github` central review pipelines' vendored `contextual-orchestrator`
   sidecar — `scripts/ci/contextual_orchestrator_review_launcher.py`'s existing
   `_preflight_review_agents`/`_preflight_with_fallback`, and
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s separate gateway smoke request — plus two
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s separate gateway smoke request — plus three
   tracked upstream asks on `ContextualWisdomLab/contextual-orchestrator`.
 - Decision: Keep both existing preflight layers (per-candidate launcher probing, and the shell
   script's separate end-to-end request to the virtual `orchestrator/free` model) — neither is being
@@ -14,10 +14,10 @@
   response, it was empty because the budget was too small" (escalate budget), one for "got no response
   at all, or a transport-level failure" (retry for a possibly-different route) — each drawing from a
   small, explicit, shared attempt budget so worst-case latency is bounded and computed, not open-ended.
-  Track two upstream `contextual-orchestrator` asks (`ContextualWisdomLab/contextual-orchestrator#926`,
-  `#927`) as real, tracked, non-blocking follow-ups.
+  Track three upstream `contextual-orchestrator` asks (`ContextualWisdomLab/contextual-orchestrator#926`,
+  `#927`, `#932`) as real, tracked, non-blocking follow-ups.
 - Ownership: `.github` owns the sidecar/launcher script and this ADR; `ContextualWisdomLab/contextual-orchestrator`
-  owns the gateway internals cited as evidence and the two follow-up issues.
+  owns the gateway internals cited as evidence and the three follow-up issues.
 - Figma File ID: N/A (no customer UI).
 
 ## Context
@@ -165,25 +165,65 @@ correctly caught in an earlier revision of this text):**
     design's single unconditional attempt with no recovery path at all: worst case, the outcome is
     identical and the check still fails closed with the same accurate diagnosis; best case, a
     transient failure (a network blip, a momentarily overloaded connection) clears on retry.
+  - **Known, accepted Layer 2 limitation, verified against actual `contextual-orchestrator` source
+    (not assumed): a Trigger-B-shaped failure can itself surface at Layer 2 as a Trigger-A non-2xx,
+    misclassified.** `ModelClient._response_content` raises `ProviderResponseError` for the
+    reasoning-without-content case (Decision §1's Trigger B, second signature); `server.py`'s request
+    handler catches `ProviderResponseError` with one blanket handler that always returns `HTTP 502
+    invalid_structured_output` with a fixed, generic message — the two distinct `ProviderResponseError`
+    messages (reasoning-without-content vs. no-content-at-all) collapse to an identical response body,
+    and neither the caught exception's own message nor any other machine-readable field distinguishes
+    them (the `except ProviderResponseError:` handler does not even bind the exception). Layer 2's
+    sidecar script therefore cannot tell this case apart from any other non-2xx and, by elimination,
+    treats it as Trigger A: retried up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` times against a
+    candidate the gateway is, by the same reasoning as the Trigger-B/route-diversity note below, more
+    likely to repeat than diversify away from. **This does not change Layer 2's stated worst case**
+    (`REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS × 120s` — this failure still consumes attempts from the
+    same shared Trigger-A budget, not an additional one), but it does mean this specific failure
+    typically consumes the *entire* retry budget before failing closed, rather than failing fast the
+    way a correctly-classified Trigger B would (one attempt, ~120s). A correct fix requires a
+    `contextual-orchestrator` change (a machine-readable field distinguishing the two
+    `ProviderResponseError` cases through the `/v1/chat/completions` error boundary) — genuinely out of
+    scope for this sidecar-only ADR and its stacked implementation PR. Fragile string-matching on the
+    human-readable error message is explicitly rejected as a workaround (this codebase's own
+    convergence rule rejects heuristics without real, stable signal, and the message text is not
+    contractually stable). Tracked as `ContextualWisdomLab/contextual-orchestrator#932`; not blocking
+    this ADR or its implementation.
   - **Layer 1**: **no retry**. Layer 1 already probes up to 12 distinct candidates
     (`REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`); one candidate's timeout simply consumes its existing 10s
     slot and the loop moves to the next candidate, exactly as it does today. A same-candidate retry
     here would add latency without adding resilience Layer 1's own multi-candidate design does not
     already provide.
-- **Trigger B — a response was received, content is empty, and EITHER `choices[0].finish_reason ==
-  "length"` (the OpenAI-documented signature of "budget too small," cited above) OR the vendored
-  `ModelClient._response_content`'s own broader signature: a populated `message.reasoning` field with
-  no string `content`** (already anticipated in the codebase's own error message, quoted in the
-  Evidence trail: *"provider {agent.id} returned reasoning without content ... increase
-  max_output_tokens"*). **This second condition is not optional — it is the exact original failure
-  mode PR #1436 responded to** ("empty content at 16 tokens" moving to a materially larger budget), and
-  a `finish_reason`-only predicate would miss it entirely: a reasoning model can exhaust its budget
-  mid-reasoning under a `finish_reason` other than `"length"`, or with no `finish_reason` field present
-  at all — provider `finish_reason` semantics for this specific case are not verified as uniform across
-  a pool this heterogeneous (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`, `openrouter`, ...), so
-  relying on `finish_reason` alone would silently leave a genuinely healthy reasoning-capable candidate
-  misclassified as down — the same class of false-negative Decision §1's Trigger-A/B split already
-  exists to prevent, just for a different code path (a real response object this time, not a hang).
+- **Trigger B — a response was received, `message.content` is not usable text (missing, `null`,
+  non-string, OR a genuinely empty string `""` — this preflight's own "no content" definition is
+  deliberately broader than any one downstream library call's exact return-value convention; see the
+  precision note below), and EITHER `choices[0].finish_reason == "length"` (the OpenAI-documented
+  signature of "budget too small," cited above) OR the vendored `ModelClient._response_content`'s own
+  broader signature: a populated `message.reasoning` field with no string `content`** (already
+  anticipated in the codebase's own error message, quoted in the Evidence trail: *"provider {agent.id}
+  returned reasoning without content ... increase max_output_tokens"*). **This second condition is not
+  optional — it is the exact original failure mode PR #1436 responded to** ("empty content at 16
+  tokens" moving to a materially larger budget), and a `finish_reason`-only predicate would miss it
+  entirely: a reasoning model can exhaust its budget mid-reasoning under a `finish_reason` other than
+  `"length"`, or with no `finish_reason` field present at all — provider `finish_reason` semantics for
+  this specific case are not verified as uniform across a pool this heterogeneous (`nvidia_nim`,
+  `openai`, `opencode_zen`, `bytez`, `openrouter`, ...), so relying on `finish_reason` alone would
+  silently leave a genuinely healthy reasoning-capable candidate misclassified as down — the same class
+  of false-negative Decision §1's Trigger-A/B split already exists to prevent, just for a different code
+  path (a real response object this time, not a hang).
+  - **Precision note, verified directly against the vendored source (not assumed): `_response_content`
+    checks `isinstance(content, str)` *first* and returns immediately if true — including for a
+    genuinely empty string `""`, which it treats as a valid (if degenerate) successful return and never
+    reaches its own `reasoning` check for. `_response_content`'s reasoning-without-content *exception*
+    therefore fires only when `content` is missing/`null`/non-string, not for `content == ""`.** This
+    preflight's own predicate is intentionally **broader** than that one exact technical condition: it
+    treats `content == ""` the same as missing content (matching this same section's own "not usable
+    text" definition above, and `_chat_response_has_text`'s existing definition, both already used
+    elsewhere in Layer 1) — an empty visible answer is exactly as useless to a caller as no answer at
+    all for a *readiness* probe's purposes, regardless of whether `_response_content`'s own downstream
+    consumption code happens to accept `""` without raising. The citation to `_response_content` above
+    is the *motivating* signature this preflight generalizes from, not a claim that the implementation
+    must reproduce that function's exact, narrower branching.
   - **Layer 1**: retry that *same* candidate (`client.proxy_send_once(agent, ...)` pins the exact agent
     object, so this retry is genuinely attributable to that one candidate) once at a **materially
     larger** budget — `REVIEW_PREFLIGHT_ESCALATED_TOKENS` (`4096`, reusing `REVIEW_MAX_OUTPUT_TOKENS`),
@@ -304,6 +344,11 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   `max_output_tokens`/`context_window` fields, fail-closed when unknown) so `max_tokens` selection can
   eventually be derived from real per-model data, including resolving the `escalated_probe_rejected`
   case in §1 properly instead of just recording it. Not blocking for §1-3.
+- **Track `ContextualWisdomLab/contextual-orchestrator#932`** (a machine-readable field through the
+  `/v1/chat/completions` error boundary distinguishing `ProviderResponseError`'s reasoning-without-content
+  cause from its no-content-at-all cause) so Layer 2 can eventually classify a gateway-side
+  reasoning-without-content failure as Trigger B instead of by-elimination Trigger A (§1). Not blocking
+  for §1-3.
 - **Explicitly reject** further tuning of one global `max_tokens` constant, or of a single generic
   "retry," as a terminal fix for either layer. Every single-constant value tried so far (16, 4096) has
   failed for a different, evidenced reason tied to pool heterogeneity, and a single undifferentiated
@@ -338,6 +383,16 @@ outcome already observed in production.**
   `ContextualWisdomLab/contextual-orchestrator#927` lands. Layer 2's retry-diversity limitation
   (Decision §1) is accepted the same way, for the same reason: no verified mechanism exists today to
   do better.
+- A Layer 2 reasoning-without-content failure that surfaces through the gateway as a generic `HTTP 502`
+  (rather than a `200` with empty content, the case Layer 2's Trigger B was designed around) is
+  misclassified as Trigger A and retried, rather than failing fast the way a correctly-classified
+  Trigger B would — accepted the same way as the two limitations above, for the same reason: fixing it
+  requires a `contextual-orchestrator` change (a machine-readable field through the
+  `/v1/chat/completions` error boundary distinguishing this cause from any other non-2xx), out of scope
+  for this sidecar-only ADR, and no in-repo workaround exists that does not depend on fragile,
+  contractually-unstable message-text matching. Does not change Layer 2's stated worst case (this
+  failure still draws from the same shared Trigger-A attempt budget). Tracked as
+  `ContextualWisdomLab/contextual-orchestrator#932`.
 - Items in Decision §4 are real `contextual-orchestrator` feature work, now tracked as real issues, and
   would remain explicitly not closed by this ADR even once the sidecar-side implementation lands.
 - No production routing default changes are proposed; this is scoped to the sidecar's own liveness
