@@ -295,6 +295,25 @@ def test_changed_file_pagination_bound_is_fail_closed() -> None:
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 
 
+def test_changed_file_pagination_loop_bound_fails_closed() -> None:
+    """A claimed full page cannot bypass the hard pagination loop bound."""
+
+    class ClaimedFullPage(list[dict[str, object]]):
+        """Model a malformed adapter that reports a full page without entries."""
+
+        def __len__(self) -> int:
+            return 100
+
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files(
+            "api",
+            "a/b",
+            1,
+            "x",
+            lambda _url, _token: ClaimedFullPage(),
+        )
+
+
 def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     """Exactly 3,000 changed files are accepted only after an empty next page."""
 
