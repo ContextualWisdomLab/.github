@@ -2850,6 +2850,63 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+def revalidate_current_head_approval(repo: str, pr: dict[str, Any]) -> str | None:
+    """Re-check exact-head approval immediately before a merge-authorizing mutation.
+
+    ``inspect_pr`` computes ``current_head_approved``/``approval_reason`` once, early
+    in the function, from the GraphQL/REST snapshot this scheduler invocation fetched
+    at the start of its run. Much later in the same invocation it reaches a branch
+    that calls ``merge_pr``/``enable_auto_merge`` using that stale snapshot. If the
+    reviewer who approved the exact head SHA dismisses or revokes that review -- or
+    GitHub otherwise recomputes ``reviewDecision`` -- in the window between the
+    snapshot and the mutating call, the merge would proceed on authorization that no
+    longer holds. The ``--match-head-commit`` guard those mutations carry only
+    protects against the *commit* changing in that window; it does nothing to protect
+    against the *review state* changing on the identical commit.
+
+    Re-fetch the pull request right before the mutating call and recompute the exact
+    same independent exact-head approval decision (``has_current_head_approval`` and
+    ``merge_approval_block_reason``, the same helpers used for the original snapshot)
+    from the fresh data. Returns ``None`` when the fresh snapshot still authorizes the
+    merge, or a human-readable reason to block it otherwise. Any failure to re-fetch --
+    a transient API error, or the pull request no longer being open or accessible --
+    fails closed: it is treated exactly like a freshly observed missing approval so a
+    merge can never proceed on evidence this scheduler could not actually reconfirm.
+    """
+    number = pr["number"]
+    try:
+        refreshed = fetch_pr(repo, number)
+    except RuntimeError as exc:
+        return (
+            "re-checking current-head approval immediately before merge failed "
+            f"({exc}); treating the exact-head approval as unconfirmed"
+        )
+    if not refreshed:
+        return (
+            "re-checking current-head approval immediately before merge found PR "
+            f"#{number} no longer open or accessible; treating the exact-head "
+            "approval as unconfirmed"
+        )
+    fresh_pr = refreshed[0]
+    expected_head = pr.get("headRefOid")
+    fresh_head = fresh_pr.get("headRefOid")
+    if expected_head and fresh_head and fresh_head != expected_head:
+        return (
+            f"current head changed from {short_sha(expected_head)} to "
+            f"{short_sha(fresh_head)} immediately before merge; the exact-head "
+            "approval no longer applies to the current commit"
+        )
+    if not has_current_head_approval(fresh_pr):
+        return (
+            "current-head OpenCode approval was revoked immediately before merge; "
+            "the merge-authorizing snapshot is no longer current"
+        )
+    reason = merge_approval_block_reason(fresh_pr)
+    if reason:
+        return f"{reason} (re-confirmed immediately before merge)"
+    return None
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2959,6 +3016,26 @@ def inspect_pr(
     def decide(action: str, reason: str) -> Decision:
         """Create a decision after applying shared cleanup notes."""
         return finish(Decision(number, action, reason))
+
+    def revalidate_before_merge() -> Decision | None:
+        """Return a blocking decision if a fresh re-check just revoked approval.
+
+        Call this immediately before every ``merge_pr``/``enable_auto_merge``
+        invocation below, after every other authorization check has already passed
+        against the (possibly stale) snapshot fetched at the top of this scheduler
+        invocation -- closing the TOCTOU window between that snapshot and the
+        mutating call. Returns ``None`` when the fresh re-check still authorizes the
+        merge, so the caller proceeds unchanged. dry-run inspection never mutates
+        anything, so it skips the extra re-fetch entirely.
+        """
+        if dry_run:
+            return None
+        reason = revalidate_current_head_approval(repo, pr)
+        if not reason:
+            return None
+        if pr.get("autoMergeRequest"):
+            return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
+        return decide("wait", reason)
 
     def request_branch_update(freshness_reason: str, *, suffix: str = "") -> Decision:
         """Request update-branch and attach any same-head evidence follow-up."""
@@ -3231,6 +3308,9 @@ def inspect_pr(
                 return decide("wait", auto_merge_wait_reason(merge_state, pr))
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
+            revalidation = revalidate_before_merge()
+            if revalidation:
+                return revalidation
             try:
                 merge_pr(repo, pr, dry_run=dry_run)
             except RuntimeError as exc:
@@ -3261,6 +3341,9 @@ def inspect_pr(
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
         if pr.get("autoMergeRequest"):
             return decide("wait", auto_merge_wait_reason(merge_state, pr))
+        revalidation = revalidate_before_merge()
+        if revalidation:
+            return revalidation
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 
@@ -3436,6 +3519,9 @@ def inspect_pr(
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
             if merge_mode == "direct_or_auto":
+                revalidation = revalidate_before_merge()
+                if revalidation:
+                    return revalidation
                 try:
                     merge_pr(repo, pr, dry_run=dry_run)
                 except RuntimeError as exc:
@@ -3460,6 +3546,9 @@ def inspect_pr(
             )
         if merge_mode != "auto":
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
+        revalidation = revalidate_before_merge()
+        if revalidation:
+            return revalidation
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 

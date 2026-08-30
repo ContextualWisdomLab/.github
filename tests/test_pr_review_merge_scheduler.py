@@ -7250,3 +7250,370 @@ def test_run_masks_secrets_in_args():
     err_msg = str(exc_info.value)
     assert token not in err_msg
     assert "***" in err_msg
+
+
+# --- TOCTOU close: re-validate current-head approval immediately before merge ---
+#
+# `current_head_approved`/`approval_reason` are computed once, early in
+# `inspect_pr`, from the snapshot this scheduler invocation fetched at the
+# start of its run. `revalidate_current_head_approval` re-fetches the PR and
+# recomputes the same decision immediately before each merge_pr/enable_auto_merge
+# call site, so a same-head approval revoked in that window cannot still
+# authorize a merge. The `--match-head-commit` guard on those mutations only
+# protects against the commit changing, not the review state changing on the
+# identical commit.
+
+
+def test_revalidate_current_head_approval_confirms_still_valid_approval(monkeypatch):
+    """A fresh re-fetch that still shows exact-head approval returns no block."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [approved])
+
+    assert sched.revalidate_current_head_approval("owner/repo", approved) is None
+
+
+def test_revalidate_current_head_approval_catches_revoked_review_decision(monkeypatch):
+    """GitHub reviewDecision falling out of APPROVED between snapshot and merge blocks."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason is not None
+    assert "reviewDecision is REVIEW_REQUIRED" in reason
+    assert "re-confirmed immediately before merge" in reason
+
+
+def test_revalidate_current_head_approval_catches_dismissed_independent_review(monkeypatch):
+    """An independent approver's exact-head review moving to DISMISSED blocks, even
+    when GitHub's cached reviewDecision has not yet caught up."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(
+        reviewDecision="APPROVED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head"),
+                opencode_review("APPROVED", "head", login="independent-reviewer", submitted_at="2026-06-25T07:01:00Z"),
+                opencode_review("DISMISSED", "head", login="independent-reviewer", submitted_at="2026-06-25T07:02:00Z"),
+            ]
+        },
+    )
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason is not None
+    assert "no independent non-author exact-current-head formal APPROVED review exists" in reason
+    assert "re-confirmed immediately before merge" in reason
+
+
+def test_revalidate_current_head_approval_catches_revoked_opencode_approval(monkeypatch):
+    """OpenCode's own exact-head approval being superseded blocks before merge."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(
+        reviewDecision="APPROVED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head", submitted_at="2026-06-25T07:01:00Z"),
+                opencode_review("CHANGES_REQUESTED", "head", submitted_at="2026-06-25T07:02:00Z"),
+                opencode_review("APPROVED", "head", login="independent-reviewer"),
+            ]
+        },
+    )
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason == (
+        "current-head OpenCode approval was revoked immediately before merge; "
+        "the merge-authorizing snapshot is no longer current"
+    )
+
+
+def test_revalidate_current_head_approval_catches_head_moving_before_merge(monkeypatch):
+    """A head that moved between the snapshot and the re-check is never treated as
+    still-approved evidence, even before GitHub's own --match-head-commit guard runs."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    moved_fresh = make_pr(
+        headRefOid="new-head",
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(commit="new-head"),
+    )
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [moved_fresh])
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason is not None
+    assert "current head changed" in reason
+
+
+def test_revalidate_current_head_approval_fails_closed_on_refetch_error(monkeypatch):
+    """A re-fetch failure must never be treated as a still-valid approval."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+
+    def raise_refetch(repo, number):
+        raise RuntimeError("gh api graphql: 502 Bad Gateway")
+
+    monkeypatch.setattr(sched, "fetch_pr", raise_refetch)
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason is not None
+    assert "re-checking current-head approval immediately before merge failed" in reason
+    assert "502 Bad Gateway" in reason
+
+
+def test_revalidate_current_head_approval_fails_closed_when_pr_disappears(monkeypatch):
+    """A PR no longer returned by a re-fetch (closed/inaccessible) fails closed."""
+    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [])
+
+    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+
+    assert reason is not None
+    assert "no longer open or accessible" in reason
+
+
+def test_inspect_pr_direct_merge_blocked_when_approval_revoked_before_merge(monkeypatch):
+    """Reproduces the confirmed TOCTOU finding: a same-head approval revoked after
+    approval_reason is computed must not still authorize a direct merge."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+
+    decision = inspect(approved, merge_mode="direct", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == []
+    assert decision.action == "wait"
+    assert "reviewDecision is REVIEW_REQUIRED" in decision.reason
+    assert "re-confirmed immediately before merge" in decision.reason
+
+
+def test_inspect_pr_direct_or_auto_merge_blocked_when_approval_revoked_before_merge(monkeypatch):
+    """The direct_or_auto merge path re-validates before attempting merge_pr too."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(reviewDecision="CHANGES_REQUESTED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+
+    decision = inspect(approved, merge_mode="direct_or_auto", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == []
+    assert decision.action == "wait"
+    assert "reviewDecision is CHANGES_REQUESTED" in decision.reason
+
+
+def test_inspect_pr_auto_merge_blocked_when_approval_revoked_before_enable(monkeypatch):
+    """The plain auto merge-mode path re-validates before enable_auto_merge too."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    auto_merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched,
+        "enable_auto_merge",
+        lambda repo, pr, dry_run: auto_merge_calls.append((repo, pr["number"], dry_run)),
+    )
+
+    decision = inspect(approved, merge_mode="auto", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert auto_merge_calls == []
+    assert decision.action == "wait"
+    assert "reviewDecision is REVIEW_REQUIRED" in decision.reason
+
+
+def test_inspect_pr_disables_queued_auto_merge_when_approval_revoked_before_merge(monkeypatch):
+    """A queued auto-merge request must be disarmed, not left queued, when the fresh
+    re-check reveals the authorizing approval no longer holds."""
+    approved_with_auto_merge = make_pr(
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(),
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    revoked_fresh = make_pr(
+        reviewDecision="REVIEW_REQUIRED",
+        reviews=merge_approved_reviews(),
+        autoMergeRequest={"enabledAt": "now"},
+    )
+
+    fetch_calls = []
+    merge_calls = []
+    disabled = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+    monkeypatch.setattr(
+        sched,
+        "disable_auto_merge",
+        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
+    )
+
+    decision = inspect(approved_with_auto_merge, merge_mode="direct_or_auto", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == []
+    assert disabled == [("owner/repo", 1, False)]
+    assert decision.action == "disable_auto_merge"
+    assert "reviewDecision is REVIEW_REQUIRED" in decision.reason
+    assert "re-confirmed immediately before merge" in decision.reason
+
+
+def test_inspect_pr_blocked_direct_or_auto_merge_blocked_when_approval_revoked_before_merge(monkeypatch):
+    """The BLOCKED-mergeability direct_or_auto branch (reached when merge_state is not
+    CLEAN, so outside the merge_before_update gate) also re-validates before merge_pr."""
+    approved = make_pr(mergeStateStatus="BLOCKED", reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(mergeStateStatus="BLOCKED", reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+
+    decision = inspect(approved, merge_mode="direct_or_auto", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == []
+    assert decision.action == "wait"
+    assert "reviewDecision is REVIEW_REQUIRED" in decision.reason
+
+
+def test_inspect_pr_blocked_auto_merge_blocked_when_approval_revoked_before_enable(monkeypatch):
+    """The BLOCKED-mergeability plain auto branch (outside the merge_before_update
+    gate) also re-validates before enable_auto_merge."""
+    approved = make_pr(mergeStateStatus="BLOCKED", reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    revoked_fresh = make_pr(mergeStateStatus="BLOCKED", reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    auto_merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
+    )
+    monkeypatch.setattr(
+        sched,
+        "enable_auto_merge",
+        lambda repo, pr, dry_run: auto_merge_calls.append((repo, pr["number"], dry_run)),
+    )
+
+    decision = inspect(approved, merge_mode="auto", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert auto_merge_calls == []
+    assert decision.action == "wait"
+    assert "reviewDecision is REVIEW_REQUIRED" in decision.reason
+
+
+def test_inspect_pr_direct_merge_proceeds_when_revalidation_confirms_approval(monkeypatch):
+    """Approval still valid at the immediate re-check: the merge proceeds normally."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    still_approved_fresh = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    merge_calls = []
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [still_approved_fresh],
+    )
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+
+    decision = inspect(approved, merge_mode="direct", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == [("owner/repo", 1, False)]
+    assert decision.action == "merge"
+
+
+def test_inspect_pr_fails_closed_when_revalidation_refetch_errors(monkeypatch):
+    """A re-check API failure right before merge must never let the merge proceed."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+
+    fetch_calls = []
+    merge_calls = []
+
+    def raise_refetch(repo, number):
+        fetch_calls.append((repo, number))
+        raise RuntimeError("gh api graphql: 502 Bad Gateway")
+
+    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(sched, "fetch_pr", raise_refetch)
+    monkeypatch.setattr(
+        sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
+    )
+
+    decision = inspect(approved, merge_mode="direct", dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 1)]
+    assert merge_calls == []
+    assert decision.action == "wait"
+    assert "re-checking current-head approval immediately before merge failed" in decision.reason
+
+
+def test_inspect_pr_dry_run_skips_merge_revalidation_refetch(monkeypatch):
+    """Dry-run inspection never mutates anything, so it must not pay for the extra
+    re-fetch either -- and every existing dry-run merge/auto_merge assertion in this
+    file relies on that (no fetch_pr mock is installed for those)."""
+    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
+    fetch_calls = []
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda repo, number: fetch_calls.append((repo, number)) or [approved],
+    )
+
+    direct_decision = inspect(approved, merge_mode="direct")
+    auto_decision = inspect(approved, merge_mode="auto")
+
+    assert direct_decision.action == "merge"
+    assert auto_decision.action == "auto_merge"
+    assert fetch_calls == []
