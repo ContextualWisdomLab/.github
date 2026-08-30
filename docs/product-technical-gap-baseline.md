@@ -2311,6 +2311,26 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
   `alembic heads`가 `0019_attachment_uid` 단일 head로 수렴. 다음 슬라이스 후보: `reparse_pending`을
   실제로 소비하는 워커, HWP/HWPX 지원, 단일 첨부파일 upload-accept 상한(현재 부재).
 
+**추가**: 이후 `naruon#1486`에 Devin 6건 + CodeRabbit 2건이 더 도착해 실재 결함 3건을 고쳐 커밋
+`dcc9fcd0`로 push했다(전체 스위트 1845 passed/33 skipped, review thread 25/25 코멘트+resolve) — (1)
+DOCX/XLSX/PPTX 등 ZIP 기반 컨테이너 형식이 ZIP 매직 바이트와 일치한다는 이유만으로 quarantine되던
+오탐(ZIP 컨테이너 계열 MIME 부분 문자열 판정으로 제외), (2) 상한 초과로 바이트를 보존 못한 mismatch가
+여전히 reparse-intent가 수락하는 quarantine 상태를 받던 문제(다른 초과-크기 첨부와 동일하게
+`parse_size_limit_exceeded`로 전환), (3) `apply_correction`의 status_code/decision_code 검증이
+텍스트 전용 `ValueError`였던 것을 `error_code` 속성을 가진 타입(`CalendarConflictUnsupportedValueError`)
+으로 교체. CodeRabbit의 `CHANGES_REQUESTED`(이전 head `ee83effd` 대상)가 지적한 2건 중 후자는 이렇게
+고쳤고, 전자(quarantine된 첨부파일을 실제로 재처리하는 worker 부재)는 위 "다음 슬라이스 후보"에 이미
+있던 바로 그 gap — ADR-0005에 알려진 후속 작업으로 명시된 채로 유지, 임시방편 없이 그대로 둔다.
+CodeRabbit이 rate limit 이후 `dcc9fcd0`에 새 pass를 돌리면 review decision이 자동 갱신될 것으로 예상.
+네 PR 모두 이번 pass에서 `get_check_runs`/job 로그로 재확인: `mergeable_state`는 전부 `blocked`이고,
+원인은 전부 동일한 이미 문서화된 패턴(`opencode-review` job이 "No APPROVED or CHANGES_REQUESTED from
+opencode-agent on the current head"로 exit 1 — 그 head에 대한 authenticated dispatch verdict이 아직
+게시되지 않은 것뿐, merge conflict나 코드 결함이 아님). `.github#1438`에는 Devin이 새로 3건(테스트가
+텍스트만 검사한다는 지적 — 이 계약 테스트 파일 전체가 원래 텍스트 기반 검증이라 이 PR이 새로 도입한
+격차가 아님, 순수 정보성 확인 2건)을 남겨 전부 검증 후 코멘트+resolve했다. `.github#1347`에는 또 새
+Devin 라운드가 도착해 실제 코드 대조 검증을 전담 백그라운드 에이전트에 위임했다(진행 중, 다음 항목에서
+결과를 기록한다).
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
