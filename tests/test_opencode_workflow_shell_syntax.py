@@ -176,9 +176,15 @@ def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
 set -euo pipefail
 test "$1" = api
 case "$2" in
-  repos/ContextualWisdomLab/naruon/pulls/1179) printf '%s\\n' "$FAKE_PULL_JSON" ;;
-  repos/ContextualWisdomLab/naruon) printf '%s\\n' "$FAKE_REPOSITORY_JSON" ;;
-  *) exit 1 ;;
+  repos/ContextualWisdomLab/naruon/pulls/1179)
+    printf '%s\\n' "$FAKE_PULL_JSON"
+    ;;
+  repos/ContextualWisdomLab/naruon)
+    printf '%s\\n' 'main'
+    ;;
+  *)
+    exit 1
+    ;;
 esac
 """,
         encoding="utf-8",
@@ -201,7 +207,6 @@ esac
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
-        "FAKE_REPOSITORY_JSON": json.dumps({"default_branch": "main"}),
         "GITHUB_EVENT_NAME": "repository_dispatch",
         "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
         "GITHUB_OUTPUT": str(output),
@@ -226,8 +231,7 @@ esac
     assert accepted.returncode == 0, accepted.stderr
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
-        "base_branch=develop",
-        "default_branch=main",
+        "base_branch=main",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 
@@ -273,8 +277,7 @@ esac
     assert cross_repo.returncode == 0, cross_repo.stderr
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
-        "base_branch=develop",
-        "default_branch=main",
+        "base_branch=main",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 
@@ -301,7 +304,7 @@ esac
     )
 
     assert malformed_head.returncode == 1
-    assert "malformed, or base-repository-mismatched live PR metadata" in malformed_head.stdout
+    assert "rejected closed or malformed live PR metadata" in malformed_head.stdout
     assert not output.exists()
 
 
@@ -339,7 +342,11 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         "base": {
             "ref": "develop",
             "sha": "1" * 40,
-            "repo": {"full_name": "ContextualWisdomLab/naruon", "private": False},
+            "repo": {
+                "full_name": "ContextualWisdomLab/naruon",
+                "private": False,
+                "visibility": "public",
+            },
         },
         "head": {
             "ref": "feature/fork-review",

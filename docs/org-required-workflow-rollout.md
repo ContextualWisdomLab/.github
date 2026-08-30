@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-24 KST
+Updated: 2026-08-28 KST
 
 ## Decision
 
@@ -30,6 +30,24 @@ reports another ref, treat that as operations drift and restore ruleset
 `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+
+The central `security-scan.yml` and `sast-semgrep.yml` pull-request triggers are
+base-ref agnostic. They therefore also run for stacked pull requests targeting a
+feature branch; the organization ruleset's protected-ref scope remains an
+independent administrative control and is not weakened by this trigger
+coverage.
+
+Stacked pull requests are audited by organization ruleset
+`CWL Stacked OpenCode required workflow` (`21732164`) in `evaluate` mode. It
+targets every non-default branch and references only
+`.github/workflows/opencode-review.yml` from `.github@refs/heads/main`.
+Its observed scope is `ref_name.include=["~ALL"]` with
+`ref_name.exclude=["~DEFAULT_BRANCH"]`.
+Active enforcement over every non-default ref is prohibited: GitHub evaluates
+the ref update before a `pull_request_target.synchronize` run can exist for the
+new commit, so it rejects both initial branch creation and later review fixes.
+Exact-head OpenCode evidence remains a merge requirement enforced by the
+normal PR procedure while a target-ref-scoped enforcement design is developed.
 
 ## OpenCode required workflow posture
 
@@ -142,7 +160,7 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
-- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so a PR that becomes mergeable AFTER its last event (approval published after the scheduler pass, merge-preview checks landing late, a temporary base-branch policy blocker clearing) has no later trigger and sits approved-but-unmerged. The `org-queue-sweep` job in the central scheduler workflow closes this gap: it runs every 15 minutes (`*/15 * * * *`) only in `ContextualWisdomLab/.github`, re-runs the same trusted scheduler script against every non-archived organization repository, and merges/updates through the identical guarded contract. It never uses the `.github` repository `github.token` for sibling mutations — it requires `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the exchanged OpenCode app token, and fails with a visible `::error` reason when no cross-repository mutation credential is available instead of silently no-opping. Every swept repository prints its per-PR decision log, so an unmerged PR always has a concrete logged reason at most 15 minutes old.
+- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so a PR that becomes mergeable AFTER its last event (approval published after the scheduler pass, merge-preview checks landing late, a temporary base-branch policy blocker clearing) has no later trigger and sits approved-but-unmerged. The `org-queue-sweep` job in the central scheduler workflow closes this gap: it runs every 15 minutes (`*/15 * * * *`) only in `ContextualWisdomLab/.github`, re-runs the same trusted scheduler script against every non-archived organization repository, and merges/updates through the identical guarded contract. Stacked PRs, which do not receive injected required workflows, use a separate bounded OpenCode dispatch budget so ordinary default-branch traffic cannot leave them at `OpenCode review absent`. It never uses the `.github` repository `github.token` for sibling mutations — it requires `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the exchanged OpenCode app token, and fails with a visible `::error` reason when no cross-repository mutation credential is available instead of silently no-opping. Every swept repository prints its per-PR decision log, so an unmerged PR always has a concrete logged reason at most 15 minutes old.
 - Queue hygiene posture: during the sweep, workflow runs still `queued` after `ORG_SWEEP_STALE_QUEUE_HOURS` (default 24h) are cancelled with their run id, workflow name, head branch, and age logged. A run queued that long belongs to a head that PR events will never revisit (closed PR, force-pushed branch, or a previous runner outage), and leaving it keeps the Actions queue holding non-current-head work.
 - Inaccessible-repository posture: a sibling repository the sweep credential structurally cannot read — the OpenCode app is not installed there, or `PR_REVIEW_MERGE_TOKEN` does not cover it — returns HTTP 403 `Resource not accessible by integration` on every read. That is an access-grant fact the automation can never resolve, so the sweep classifies it as a skipped, non-fatal **unavailable** repository (a `::warning` naming the repository and the remediation) instead of a hard failure. Without this, a handful of un-enrolled repositories keeps the scheduled sweep heartbeat (the org sweep's `*/15 * * * *` cron) permanently red and masks a genuinely new repository that starts failing. Fail-closed is preserved on both sides: any non-403 scheduler failure still fails the sweep with its per-PR reason, and if more than `ORG_SWEEP_MAX_UNAVAILABLE` (default 5) repositories become unreachable in one pass — a credential-scope regression rather than a few un-enrolled repos — the job fails loudly. Remediation for a listed repository is to install the OpenCode app on it or grant `PR_REVIEW_MERGE_TOKEN` access.
 
@@ -223,6 +241,8 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 9. Same-repository approved PRs should merge immediately when GitHub reports `CLEAN`; fork or external-head PRs are excluded from scheduler merge and auto-merge.
 
 ## Evidence from this rollout
+
+- On 2026-08-28 21:43 KST, ruleset `21732164` was created with active enforcement for every non-default branch. Reproduction on an existing LineageWeave PR head and a new branch returned GH013 before either ref could emit the required workflow event. The ruleset was returned to `evaluate` mode at 21:49 KST; the audit now fails if this impossible all-ref contract is reactivated.
 
 - On 2026-06-30 08:33 KST, organization ruleset `18156473` was changed from an explicit repository-name list to `repository_name.include=["~ALL"]` while keeping `ref_name.include=["~DEFAULT_BRANCH"]` and the same three central required workflow paths from `.github@refs/heads/main`.
 - On 2026-07-01 02:52 KST, ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.

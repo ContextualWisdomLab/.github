@@ -41,6 +41,7 @@ class RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> None:
+        """Fail closed on any redirect instead of following it."""
         del req, fp, code, msg, headers, newurl
         raise RuntimeError("VCS dependency license metadata redirect is forbidden")
 

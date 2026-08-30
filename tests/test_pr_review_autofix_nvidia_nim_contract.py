@@ -19,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "978845efeddee88404ce6be5a53fcdd0d80436ed"
+REVIEW_DISPATCH_BLOB_SHA = "d3bb2fae1ab5bdbb428377224828565157e26dbb"
 
 
 def _workflow_text(path: Path) -> str:
@@ -35,34 +35,39 @@ def test_review_fix_caller_runs_once_each_hour() -> None:
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
-def test_scheduled_autofix_uses_only_nvidia_nim() -> None:
-    """Require the write-capable OpenCode autofix agent to use NVIDIA NIM only."""
+def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:
+    """Require the write-capable OpenCode autofix agent to use the gateway."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     required_fragments = (
-        '"model": "nvidia-nim/mistralai/mistral-small-4-119b-2603"',
-        '"small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b"',
-        '"enabled_providers": ["nvidia-nim"]',
-        '"nvidia-nim": {',
-        '"mistralai/mistral-small-4-119b-2603": {',
+        '"model": "contextual-orchestrator/orchestrator/free"',
+        '"small_model": "contextual-orchestrator/orchestrator/free"',
+        '"enabled_providers": ["contextual-orchestrator"]',
+        '"contextual-orchestrator": {',
+        '"orchestrator/free": {',
         '"reasoningEffort": "high"',
         '"npm": "@ai-sdk/openai-compatible"',
-        '"baseURL": "https://integrate.api.nvidia.com/v1"',
-        '"apiKey": "{env:NVIDIA_API_KEY}"',
-        'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}',
-        'MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603',
+        '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"',
+        '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
+        "contextual_orchestrator_review_sidecar.sh",
+        "BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}",
+        "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}",
+        "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
+        "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}",
+        "MODEL: contextual-orchestrator/orchestrator/free",
     )
     for fragment in required_fragments:
         assert fragment in workflow, fragment
     forbidden_fragments = (
-        'mistralai/mistral-nemotron',
-        'STRIX_GITHUB_MODELS_TOKEN:',
-        'MODEL: github-models/',
-        'USE_GITHUB_TOKEN:',
-        '"enabled_providers": ["github-models"]',
+        "https://integrate.api.nvidia.com/v1",
+        '"enabled_providers": ["nvidia-nim"]',
+        "mistralai/mistral-nemotron",
+        "STRIX_GITHUB_MODELS_TOKEN:",
+        "MODEL: github-models/",
+        "USE_GITHUB_TOKEN:",
         '"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"',
         '"baseURL": "https://models.github.ai/inference"',
-        'COPILOT_GITHUB_TOKEN',
-        'CLOUDFLARE_API_TOKEN',
+        "COPILOT_GITHUB_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
@@ -99,20 +104,24 @@ def test_opencode_agent_denies_non_file_interactions() -> None:
         assert workflow.count(f'"{permission_name}": "deny"') == 2
 
 
-def test_nvidia_nim_secret_is_scoped_to_agent_execution_steps() -> None:
-    """Prevent the NVIDIA credential from leaking beyond the two OpenCode runs."""
+def test_orchestrator_secrets_are_scoped_to_sidecar_and_model_steps() -> None:
+    """Prevent the five provider secrets from leaking beyond the sidecar step."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    binding = 'NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}'
-    ordinary_start = workflow.index("      - name: Run OpenCode review autofix")
-    ordinary_end = workflow.index("      - name: Validate changed files", ordinary_start)
-    conflict_start = workflow.index(
-        "      - name: Merge base branch and resolve conflicts with OpenCode"
+    sidecar_start = workflow.index(
+        "      - name: Provision contextual-orchestrator review sidecar"
     )
-    assert workflow.count(binding) == 2
-    assert binding in workflow[ordinary_start:ordinary_end]
-    assert binding in workflow[conflict_start:]
-    assert binding not in workflow[:ordinary_start]
-    assert binding not in workflow[ordinary_end:conflict_start]
+    sidecar_end = workflow.index(
+        "      - name: Prepare isolated OpenCode autofix workspace", sidecar_start
+    )
+    sidecar = workflow[sidecar_start:sidecar_end]
+    assert workflow.count("BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}") == 1
+    assert workflow.count("OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}") == 1
+    assert workflow.count("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}") == 1
+    assert workflow.count("NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}") == 1
+    assert workflow.count("NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}") == 1
+    for name in ("BYTEZ_API_KEY", "NVIDIA_NIM_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+        assert f"secrets.{name}" in sidecar
+        assert f"secrets.{name}" not in workflow[sidecar_end:]
 
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:
@@ -136,13 +145,22 @@ def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> Non
     assert workflow.count(sanitized_invocation) == 2
 
 
-def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None:
-    """Reject an empty model credential instead of falling back to another provider."""
+def test_missing_gateway_env_fails_closed_before_model_execution() -> None:
+    """Reject a missing sidecar gateway instead of falling back to another provider."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
-    guard = (
-        'if [ -z "${NVIDIA_API_KEY:-}" ]; then\n'
-        '            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled '
-        'OpenCode autofix."\n'
+    ordinary_guard = (
+        'if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] '
+        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then\n'
+        '            echo "::error::contextual-orchestrator review sidecar must be '
+        'provisioned before scheduled OpenCode autofix."\n'
+        "            exit 1\n"
+        "          fi"
+    )
+    conflict_guard = (
+        'if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] '
+        '|| [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then\n'
+        '            echo "::error::contextual-orchestrator review sidecar must be '
+        'provisioned before scheduled OpenCode conflict resolution."\n'
         "            exit 1\n"
         "          fi"
     )
@@ -151,9 +169,9 @@ def test_missing_nvidia_nim_secret_fails_closed_before_model_execution() -> None
     conflict_start = workflow.index(
         "      - name: Merge base branch and resolve conflicts with OpenCode"
     )
-    assert workflow.count(guard) == 2
-    assert guard in workflow[ordinary_start:ordinary_end]
-    assert guard in workflow[conflict_start:]
+    assert workflow.count('if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ]') == 2
+    assert ordinary_guard in workflow[ordinary_start:ordinary_end]
+    assert conflict_guard in workflow[conflict_start:]
 
 
 def test_independent_review_agent_key_system_is_unchanged() -> None:
@@ -175,13 +193,11 @@ def test_independent_review_agent_key_system_is_unchanged() -> None:
         "      - name: Publish OpenCode review outcome", model_step_start
     )
     model_step = workflow[model_step_start:model_step_end]
-    for provider_key in (
-        "STRIX_GITHUB_MODELS_TOKEN",
-        "NVIDIA_API_KEY",
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-    ):
-        assert provider_key in model_step
+    # The model pool step no longer declares direct provider credentials
+    # in-line (ContextualWisdomLab/contextual-orchestrator gateway migration,
+    # docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md): it sources
+    # scripts/ci/load_contextual_orchestrator_token.sh instead.
+    assert "load_contextual_orchestrator_token.sh" in model_step
     assert "PR_REVIEW_MERGE_TOKEN" not in model_step
     assert "OPENCODE_APPROVE_TOKEN" not in model_step
 

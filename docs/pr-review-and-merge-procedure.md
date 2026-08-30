@@ -82,6 +82,14 @@ changes. OpenCode review evidence must be internally same-head as well as
 GitHub-attached same-head. If the review body includes `Gate evidence` with
 `Head SHA: <sha>`, that SHA must match the PR current `headRefOid`.
 
+A current-head OpenCode `CHANGES_REQUESTED` review normally blocks the PR. The
+only retry exception is the exact automation review stating that approval was
+withheld because GitHub Checks failed and listing those failed checks. After
+the live rollup is empty, the scheduler may dispatch a fresh same-head
+OpenCode review when review dispatch is enabled and no native auto-merge
+request is active. It never treats the recovered checks as approval, dismisses
+the existing review, or merges until a new exact-head OpenCode approval exists.
+
 ## Do-not-merge and DIRTY / CONFLICTING repair
 
 The `update_branch` path is deliberately not used for `DIRTY` or

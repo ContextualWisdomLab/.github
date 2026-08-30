@@ -278,22 +278,21 @@ jobs:
           fi
 
           pull_json="$(gh api "repos/${TARGET_REPOSITORY_INPUT}/pulls/${TARGET_PR_NUMBER}")"
-          repository_json="$(gh api "repos/${TARGET_REPOSITORY_INPUT}")"
           live_number="$(jq -r '.number // 0' <<<"$pull_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_json")"
           live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_json")"
           live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_json")"
           live_base_branch="$(jq -r '.base.ref // empty' <<<"$pull_json")"
-          live_default_branch="$(jq -r '.default_branch // empty' <<<"$repository_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_json")"
+          target_default_branch="$(gh api "repos/${TARGET_REPOSITORY_INPUT}" --jq '.default_branch // empty')"
           if [ "$live_number" != "$TARGET_PR_NUMBER" ] ||
             [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY_INPUT" ] ||
             ! [[ "$live_head_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
             [ -z "$live_base_branch" ] ||
-            [ -z "$live_default_branch" ] ||
-            ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            printf '::error::Targeted scheduler dispatch rejected closed, malformed, or base-repository-mismatched live PR metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s default_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${live_default_branch:-<missing>}" "${live_head_sha:-<missing>}"
+            ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$target_default_branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            printf '::error::Targeted scheduler dispatch rejected closed or malformed live PR metadata. target=%s pr=%s state=%s base_repository=%s head_repository=%s base_branch=%s head_sha=%s\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_branch:-<missing>}" "${live_head_sha:-<missing>}"
             exit 1
           fi
           printf 'Validated exact-PR targeted scheduler dispatch for %s#%s (head=%s).\n' \
@@ -306,11 +305,15 @@ jobs:
 
           {
             printf 'repository=%s\n' "$TARGET_REPOSITORY_INPUT"
-            printf 'base_branch=%s\n' "$live_base_branch"
-            printf 'default_branch=%s\n' "$live_default_branch"
+            # The PR base is validated above but must not be used as the
+            # scheduler's base branch: a stacked PR would otherwise compare
+            # equal to its own base and bypass the stacked-review dispatch
+            # path. The target repository default branch is the classification
+            # boundary for merge automation and project-flow selection.
+            printf 'base_branch=%s\n' "$target_default_branch"
             printf 'head_sha=%s\n' "$live_head_sha"
           } >>"$GITHUB_OUTPUT"
-          printf 'Validated exact targeted scheduler dispatch for %s#%s at %s on base %s; repository default is %s.\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "$live_head_sha" "$live_base_branch" "$live_default_branch"
+          printf 'Validated exact targeted scheduler dispatch for %s#%s at %s (PR base %s; scheduler default branch %s).\n' "$TARGET_REPOSITORY_INPUT" "$TARGET_PR_NUMBER" "$live_head_sha" "$live_base_branch" "$target_default_branch"
 
       - name: Resolve trusted scheduler source ref
         id: trusted_source
@@ -581,7 +584,9 @@ jobs:
     # every organization repository on an hourly heartbeat so each such PR is
     # merged, branch-updated, or leaves a concrete per-PR blocker reason in this
     # log. It never bypasses policy: all mutations go through the same guarded
-    # scheduler contract as the per-repository runs.
+    # scheduler contract as the per-repository runs. Stacked PRs have no
+    # injected required workflow, so they receive a separate bounded OpenCode
+    # dispatch budget and cannot be starved by the ordinary queue.
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
@@ -612,17 +617,18 @@ jobs:
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
       ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
       ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
       ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
-      # The review-dispatch and branch-update budgets above are organization-wide
+      # The review-dispatch, stacked-review, and branch-update budgets above are organization-wide
       # per sweep tick (sized to bound LLM review-provider cost/rate exposure, not
       # per-repository). Without rotation, `sweep_targets` is walked in a fixed
       # order every tick (the org repos API response order), so the same early
-      # repositories always exhaust the shared budget and every later repository
+      # repositories always exhaust a queue's budget and every later repository
       # starves indefinitely even with zero-open-thread, all-green PRs
       # (ContextualWisdomLab/.github#1219). Left unset here so the sweep step
       # below derives it from a persistent per-execution counter (or, as a
@@ -835,6 +841,10 @@ jobs:
             echo "::error::ORG_SWEEP_REVIEW_DISPATCH_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_REVIEW_DISPATCH_LIMIT}'. Fix the ORG_SWEEP_REVIEW_DISPATCH_LIMIT repository variable."
             exit 1
           fi
+          if ! [[ "$ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
+            echo "::error::ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT}'. Fix the ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT repository variable."
+            exit 1
+          fi
           if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
             echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
             exit 1
@@ -948,10 +958,10 @@ jobs:
           # Rotate the fixed walk order by ORG_SWEEP_ROTATION_INDEX (see
           # above: a persistent per-execution counter, falling back to a
           # wall-clock tick) so the same organization-wide review-dispatch
-          # /branch-update budget lands on a different starting repository
-          # each execution instead of always exhausting on the same early
-          # repositories (#1219). Total dispatches per execution are
-          # unchanged; only which repositories receive them rotates over time.
+          # /branch-update budgets land on a different starting repository each
+          # execution instead of always exhausting on the same early
+          # repositories (#1219). The ordinary and stacked review budgets are
+          # tracked independently so the latter cannot be starved by the former.
           rotation_offset=0
           if [ "$sweep_target_count" -gt 0 ]; then
             rotation_offset=$(( ORG_SWEEP_ROTATION_INDEX % sweep_target_count ))
@@ -971,6 +981,7 @@ jobs:
           # the repository loop, not reset for every target repository; resetting
           # them here can enqueue hundreds of long-running review jobs per sweep.
           org_review_dispatches_used=0
+          org_stacked_review_dispatches_used=0
           org_branch_updates_used=0
           for target in "${sweep_targets[@]}"; do
             repo_full_name="${target%%$'\t'*}"
@@ -1007,6 +1018,14 @@ jobs:
                 review_dispatch_limit=0
               fi
             fi
+            if [ "$ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT" = "-1" ]; then
+              stacked_review_dispatch_limit=-1
+            else
+              stacked_review_dispatch_limit=$((ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT - org_stacked_review_dispatches_used))
+              if (( stacked_review_dispatch_limit < 0 )); then
+                stacked_review_dispatch_limit=0
+              fi
+            fi
             if [ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" = "-1" ]; then
               branch_update_limit=-1
             else
@@ -1023,6 +1042,7 @@ jobs:
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$review_dispatch_limit"
+              --stacked-review-dispatch-limit "$stacked_review_dispatch_limit"
               --branch-update-limit "$branch_update_limit"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
               --merge-mode "$ORG_SWEEP_MERGE_MODE"
@@ -1044,11 +1064,14 @@ jobs:
             sweep_rc=$?
             set -e
             printf '%s\n' "$sweep_output"
-            repo_review_dispatches="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: (review_dispatch|security_dispatch):' || true)"
+            repo_stacked_review_dispatches="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: review_dispatch: stacked PR onto' || true)"
+            repo_review_dispatches_total="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: (review_dispatch|security_dispatch):' || true)"
+            repo_review_dispatches=$((repo_review_dispatches_total - repo_stacked_review_dispatches))
             repo_branch_updates="$(printf '%s\n' "$sweep_output" | grep -Ec '^PR #[0-9]+: (update_branch|restamp_head):' || true)"
             org_review_dispatches_used=$((org_review_dispatches_used + repo_review_dispatches))
+            org_stacked_review_dispatches_used=$((org_stacked_review_dispatches_used + repo_stacked_review_dispatches))
             org_branch_updates_used=$((org_branch_updates_used + repo_branch_updates))
-            echo "Org sweep budget consumed: review dispatches=${org_review_dispatches_used}/${ORG_SWEEP_REVIEW_DISPATCH_LIMIT}, branch updates=${org_branch_updates_used}/${ORG_SWEEP_BRANCH_UPDATE_LIMIT}."
+            echo "Org sweep budget consumed: review dispatches=${org_review_dispatches_used}/${ORG_SWEEP_REVIEW_DISPATCH_LIMIT}, stacked review dispatches=${org_stacked_review_dispatches_used}/${ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT}, branch updates=${org_branch_updates_used}/${ORG_SWEEP_BRANCH_UPDATE_LIMIT}."
             if [ "$sweep_rc" -ne 0 ]; then
               # A structural access denial ("Resource not accessible by
               # integration") means the sweep credential cannot read this
