@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
 import shutil
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -115,12 +118,61 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     return Service(label=label, command=command, process=process, log_path=log_path)
 
 
+def _require_loopback_ip_text(ip_text: str, hostname: str) -> None:
+    """Reject a literal or resolved address that is not loopback."""
+    try:
+        address = ipaddress.ip_address(ip_text)
+    except ValueError as exc:
+        raise ValueError(f"URL cannot target external hostname: {hostname}") from exc
+    if address.version == 6 and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if not address.is_loopback:
+        raise ValueError(f"URL cannot target external hostname: {hostname}")
+
+
+def _require_resolved_loopback_hostname(hostname: str) -> None:
+    """Resolve a literal localhost name and require every answer to be loopback."""
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except OSError as exc:
+        raise ValueError(f"URL cannot target unresolved hostname: {hostname}") from exc
+    if not results:
+        raise ValueError(f"URL cannot target unresolved hostname: {hostname}")
+    for result in results:
+        _require_loopback_ip_text(result[4][0], hostname)
+
+
+def require_loopback_readiness_url(url: str) -> None:
+    """Reject a readiness URL that is not a local loopback HTTP(S) target.
+
+    Operators should point ``--backend-ready-url`` and ``--frontend-ready-url``
+    at the sandboxed service itself. Public hosts, cloud metadata addresses,
+    unspecified bind addresses, DNS names other than literal ``localhost``,
+    and userinfo-confused URLs are rejected before any request is opened.
+    Literal ``localhost`` is resolved and every answer must be loopback, so a
+    poisoned hosts file cannot smuggle a public A/AAAA record through the
+    name allowlist. IPv4-mapped IPv6 addresses are unwrapped and re-checked
+    so ``::ffff:8.8.8.8`` cannot bypass the loopback rule.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError(f"URL must start with http:// or https://, got: {url}")
+    if parsed.username or parsed.password:
+        raise ValueError("URL cannot include userinfo")
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        raise ValueError("URL must include a loopback hostname")
+    if hostname == "localhost":
+        _require_resolved_loopback_hostname(hostname)
+        return
+    _require_loopback_ip_text(hostname, hostname)
+
+
 def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     """Poll a readiness URL until it responds or the service exits."""
     if not url:
         return True
-    if not (url.startswith("http://") or url.startswith("https://")):
-        raise ValueError(f"URL must start with http:// or https://, got: {url}")
+    require_loopback_readiness_url(url)
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler())
     while time.monotonic() < deadline:

@@ -6,8 +6,8 @@ on:
     # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
     # psychometrics-commons (9), naruon (11), pg-erd-cloud (13),
     # orchestrator (17), noema (19), Clearfolio (23), Keyverse (29),
-    # Scopeweave (31), DiskSage (37), Appguardrail (41), newsdom-api (43),
-    # Inkspan (47), fast-mlsirm (49), BandScope (53), and
+    # Scopeweave (31), contextual-orchestrator (34), DiskSage (37), Appguardrail (41), newsdom-api (43),
+    # fast-mlsirm (49), BandScope (53), Inkspan (56), and
     # semantic-data-portal (59).
     - cron: "10 * * * *"
 
