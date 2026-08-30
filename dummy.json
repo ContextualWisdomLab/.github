@@ -1,0 +1,10 @@
+[
+  {
+    "user": {
+      "login": "opencode-agent[bot]"
+    },
+    "commit_id": "d37fb6cc791f254dfeff2f27cb2e6942895932ef",
+    "state": "APPROVED",
+    "body": "This is a deterministic fallback approval review."
+  }
+]
