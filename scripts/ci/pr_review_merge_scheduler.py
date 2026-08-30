@@ -75,6 +75,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           startedAt
           detailsUrl
           checkSuite {
+            createdAt
             workflowRun {
               workflow { name }
             }
@@ -903,9 +904,20 @@ def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return reviews
 
 
-def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
-    """Convert a REST check-run payload into the GraphQL status rollup shape."""
+def rest_check_node(
+    check: dict[str, Any], suite_created_at_by_id: dict[int, str] | None = None
+) -> dict[str, Any]:
+    """Convert a REST check-run payload into the GraphQL status rollup shape.
 
+    ``suite_created_at_by_id`` maps each check suite's REST ``id`` to its
+    ``created_at`` timestamp -- the REST check-run payload itself only
+    carries the check suite's bare ``id`` (see ``rest_pr_node``), so that
+    lookup is how this function attaches the same ``checkSuite.createdAt``
+    signal the GraphQL fragment fetches directly, keeping
+    ``check_run_recency_key`` behaviorally consistent across both paths.
+    """
+    suite_id = (check.get("check_suite") or {}).get("id")
+    suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
     return {
         "__typename": "CheckRun",
         "name": check.get("name"),
@@ -913,7 +925,7 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"workflowRun": {"workflow": {}}},
+        "checkSuite": {"createdAt": suite_created_at, "workflowRun": {"workflow": {}}},
     }
 
 
@@ -926,6 +938,12 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head_repo = head.get("repo") or {}
     reviews = fetch_all_pr_reviews_rest(repo, number)
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
+    suite_created_at_by_id = {
+        suite["id"]: suite.get("created_at")
+        for suite in (check_suites.get("check_suites") or [])
+        if suite.get("id") is not None
+    }
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
@@ -953,7 +971,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check)
+                    rest_check_node(check, suite_created_at_by_id)
                     for check in (checks.get("check_runs") or [])
                 ]
             }
@@ -1250,22 +1268,49 @@ def check_run_recency_key(
     valid total order, so ``max()``/``sorted()`` over these keys give a
     result that does not depend on candidate order.
 
+    A ``startedAt``-only signal has a gap: GitHub reports a check run as
+    ``completed``/``cancelled`` with ``startedAt: null`` when a queued rerun
+    is cancelled before it ever starts, so that row carries no timestamp and
+    is not pending either -- nothing (short of hardcoding the ``cancelled``
+    conclusion, which would only patch this one case) distinguishes it from
+    a run that legitimately never mattered. ``checkSuite.createdAt`` closes
+    that gap generally instead of special-casing it: GitHub creates the
+    check suite unconditionally the moment the triggering push, rerun, or
+    dispatch happens, strictly before any check run inside it can be queued,
+    start, or be cancelled before starting, and ``CheckSuite.createdAt`` is
+    non-nullable in GitHub's schema. So it is a recency signal that is
+    always available, for every check run regardless of how it resolved --
+    unlike ``startedAt``, which is genuinely absent for a run that never
+    started.
+
     Three tiers, low to high:
 
-    * ``0`` -- no recency signal at all: no ``startedAt`` and not currently
-      pending (e.g. cancelled before it ever started).
-    * ``1`` -- a real ``startedAt``: ranked by that timestamp.
-    * ``2`` -- no ``startedAt`` yet, but actively pending (queued/in
-      progress/etc, via ``running_check_state``): GitHub only ever creates
-      such a row after any run it might supersede, so it is presumed newer
-      than every already-resolved run, regardless of that run's timestamp.
+    * ``0`` -- no recency signal at all: neither the check run's own check
+      suite ``createdAt`` nor its ``startedAt`` is available, and it is not
+      currently pending either. Real GitHub responses always carry
+      ``checkSuite.createdAt``, so this tier is only reachable for
+      payloads that omit it (e.g. hand-built fixtures).
+    * ``1`` -- a real timestamp: the check run's own check suite
+      ``createdAt`` when present, else its ``startedAt``. Preferring the
+      check-suite timestamp means two runs are ranked by when each was
+      actually triggered, not by whether either one got far enough to
+      start -- a rerun cancelled before starting still ranks correctly
+      relative to an older, already-completed run.
+    * ``2`` -- no timestamp of any kind, but actively pending (queued/in
+      progress/etc, via ``running_check_state``): kept only as the
+      fallback for payloads without ``checkSuite.createdAt``, where GitHub
+      only ever creates such a row after any run it might supersede, so it
+      is presumed newer than every already-resolved run in that same
+      payload shape, regardless of that run's timestamp.
 
     Ties within a tier fall back to the later index, matching the order
     ``context_nodes`` returns them in.
     """
     epoch = datetime.min.replace(tzinfo=timezone.utc)
-    if started_at is not None:
-        return (1, started_at, index)
+    suite_created_at = parse_github_datetime((node.get("checkSuite") or {}).get("createdAt"))
+    recency_timestamp = suite_created_at or started_at
+    if recency_timestamp is not None:
+        return (1, recency_timestamp, index)
     if running_check_state(node) == "running":
         return (2, epoch, index)
     return (0, epoch, index)

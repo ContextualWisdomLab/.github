@@ -999,7 +999,13 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                     "conclusion": "success",
                     "started_at": "2026-06-30T00:00:00Z",
                     "details_url": "https://github.com/owner/repo/actions/runs/1/job/2",
+                    "check_suite": {"id": 555},
                 }
+            ]
+        },
+        "repos/owner/repo/commits/abc123/check-suites?per_page=100": {
+            "check_suites": [
+                {"id": 555, "created_at": "2026-06-30T00:00:00Z"},
             ]
         },
         "repos/owner/repo/pulls/42/files?per_page=20": [
@@ -1034,6 +1040,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert calls == [
         "repos/owner/repo/pulls/42/reviews?per_page=100&page=1",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
+        "repos/owner/repo/commits/abc123/check-suites?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]
     assert node["number"] == 42
@@ -1046,6 +1053,10 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
+    assert (
+        node["statusCheckRollup"]["contexts"]["nodes"][0]["checkSuite"]["createdAt"]
+        == "2026-06-30T00:00:00Z"
+    )
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
@@ -3100,6 +3111,65 @@ def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
     assert sched.failed_status_checks(missing_then_timestamped) == []
 
 
+def test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative():
+    """A newer rerun cancelled before starting outranks an older stale success.
+
+    Regression test for the BUG a GitHub bot reviewer ("Devin") found on this
+    PR: ``check_run_recency_key`` gave a completed-with-no-``startedAt`` row
+    (GitHub's shape for "cancelled before it ever started") the lowest tier,
+    unconditionally below any row with a real ``startedAt`` -- so an older,
+    already-successful run could outrank a newer rerun that got cancelled
+    before starting, purely because the older run happened to have a
+    timestamp and the newer one did not, regardless of which one actually
+    happened more recently. This must fail against the pre-fix code and pass
+    once ``check_run_recency_key`` prefers ``checkSuite.createdAt`` -- set
+    unconditionally the moment the triggering push/rerun/dispatch creates the
+    check suite, strictly before any of its check runs can start -- over a
+    bare ``startedAt``. Both runs here carry a ``checkSuite.createdAt``, as
+    real GitHub responses always do; the newer one must win even though it
+    never started.
+    """
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-08-24T01:00:00Z",
+                        "checkSuite": {
+                            "createdAt": "2026-08-24T00:59:00Z",
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            },
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": None,
+                        "checkSuite": {
+                            "createdAt": "2026-08-24T02:00:00Z",
+                            "workflowRun": {
+                                "workflow": {"name": "Required PR Review Merge Scheduler"}
+                            },
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    check_runs = sched.latest_check_runs(pr)
+    assert len(check_runs) == 1
+    assert check_runs[0]["conclusion"] == "CANCELLED"
+    assert sched.failed_status_checks(pr) == ["scan-pr-queue"]
+
+
 def test_coverage_evidence_state_prefers_newest_rerun():
     """An older failed rerun cannot hide newer successful coverage evidence."""
 
@@ -3252,7 +3322,13 @@ def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run_a
     assert sched.coverage_evidence_state(pr) == "running"
 
 
-def _coverage_check(workflow: str, status: str, conclusion: str | None, started_at: str | None) -> dict:
+def _coverage_check(
+    workflow: str,
+    status: str,
+    conclusion: str | None,
+    started_at: str | None,
+    suite_created_at: str | None = None,
+) -> dict:
     """Build a minimal coverage-evidence CheckRun node for fold-order tests."""
     return {
         "__typename": "CheckRun",
@@ -3260,7 +3336,10 @@ def _coverage_check(workflow: str, status: str, conclusion: str | None, started_
         "status": status,
         "conclusion": conclusion,
         "startedAt": started_at,
-        "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
+        "checkSuite": {
+            "createdAt": suite_created_at,
+            "workflowRun": {"workflow": {"name": workflow}},
+        },
     }
 
 
@@ -3316,6 +3395,69 @@ def test_latest_coverage_evidence_index_prefers_queued_when_it_appears_first():
     latest_index = sched.latest_coverage_evidence_index(check_runs)
 
     assert check_runs[latest_index]["status"] == "QUEUED"
+
+
+def test_latest_coverage_evidence_index_ranks_cancelled_before_start_rerun_above_stale_success():
+    """Cross-workflow sibling of the same-name cancelled-before-start regression.
+
+    Same BUG as ``test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative``,
+    exercised through ``latest_coverage_evidence_index``'s cross-workflow-name
+    comparison instead of ``latest_check_runs``' same-(workflow, name) one. An
+    older "Required OpenCode Review" success must not beat a newer "OpenCode
+    Review Dispatch" rerun that was cancelled before it ever started, once
+    both carry a ``checkSuite.createdAt``.
+    """
+    check_runs = [
+        _coverage_check(
+            "Required OpenCode Review",
+            "COMPLETED",
+            "SUCCESS",
+            "2026-08-24T01:00:00Z",
+            suite_created_at="2026-08-24T00:59:00Z",
+        ),
+        _coverage_check(
+            "OpenCode Review Dispatch",
+            "COMPLETED",
+            "CANCELLED",
+            None,
+            suite_created_at="2026-08-24T02:00:00Z",
+        ),
+    ]
+
+    latest_index = sched.latest_coverage_evidence_index(check_runs)
+
+    assert check_runs[latest_index]["conclusion"] == "CANCELLED"
+
+
+def test_latest_coverage_evidence_index_prefers_newer_completed_run_over_older_queued_run():
+    """A genuinely newer completed rerun still outranks an older queued run.
+
+    Devin's fix framing's second scenario: with ``checkSuite.createdAt``
+    available for both candidates (as real GitHub responses always provide),
+    the fold must rank by that real creation time rather than blindly
+    presuming "queued always means newest" -- otherwise an older queued run
+    could wrongly out-rank a newer, already-completed result.
+    """
+    check_runs = [
+        _coverage_check(
+            "OpenCode Review Dispatch",
+            "QUEUED",
+            None,
+            None,
+            suite_created_at="2026-08-24T01:00:00Z",
+        ),
+        _coverage_check(
+            "Required OpenCode Review",
+            "COMPLETED",
+            "SUCCESS",
+            "2026-08-24T02:05:00Z",
+            suite_created_at="2026-08-24T02:00:00Z",
+        ),
+    ]
+
+    latest_index = sched.latest_coverage_evidence_index(check_runs)
+
+    assert check_runs[latest_index]["conclusion"] == "SUCCESS"
 
 
 def test_central_coverage_placeholder_cannot_mask_dispatch_failure(monkeypatch):
