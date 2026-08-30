@@ -60,7 +60,7 @@ fragment SchedulerPullRequestFields on PullRequest {
       state
       body
       submittedAt
-      author { login }
+      author { login __typename }
       commit { oid }
     }
   }
@@ -129,7 +129,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
           state
           body
           submittedAt
-          author { login }
+          author { login __typename }
           commit { oid }
         }
       }
@@ -1417,6 +1417,23 @@ def review_author_login(review: dict[str, Any]) -> str:
     return ((review.get("author") or {}).get("login") or "").lower()
 
 
+def is_bot_review_author(review: dict[str, Any]) -> bool:
+    """Return whether a review's author is a GitHub bot actor.
+
+    GitHub's REST API appends the ``[bot]`` suffix to a bot actor's
+    ``login`` (e.g. ``dependabot[bot]``), but GitHub's GraphQL API can
+    return the bare account name for that same actor (e.g. ``dependabot``)
+    while exposing ``__typename: "Bot"`` on the ``author`` field instead of
+    the suffix. Checking both keeps bot exclusion correct regardless of
+    which API surface -- and which suffix convention -- produced the
+    review node; ``rest_review_node`` never sets ``__typename``, so REST
+    reviews continue to rely solely on the login suffix.
+    """
+    if review_author_login(review).endswith("[bot]"):
+        return True
+    return ((review.get("author") or {}).get("__typename")) == "Bot"
+
+
 def is_opencode_review(review: dict[str, Any]) -> bool:
     """Return whether a review was authored by the OpenCode agent."""
     return review_author_login(review) in {"opencode-agent", "opencode-agent[bot]"}
@@ -1487,7 +1504,7 @@ def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
             or reviewer == author
             or is_automated_opencode_review(review)
             or reviewer == "github-actions"
-            or reviewer.endswith("[bot]")
+            or is_bot_review_author(review)
             or not review_matches_current_head(review, pr)
             or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
             or reviewer in seen_reviewers

@@ -86,10 +86,14 @@ def opencode_review(
     commit="head",
     login="opencode-agent",
     submitted_at="2026-06-25T07:01:00Z",
+    author_typename=None,
 ):
+    author = {"login": login}
+    if author_typename is not None:
+        author["__typename"] = author_typename
     return {
         "state": state,
-        "author": {"login": login},
+        "author": author,
         "submittedAt": submitted_at,
         "commit": {"oid": commit},
     }
@@ -2482,6 +2486,18 @@ def test_scheduler_query_requests_pull_request_author():
     assert "\n  author { login }\n" in sched.PULL_REQUEST_FIELDS_FRAGMENT
 
 
+def test_scheduler_review_queries_request_bot_typename():
+    """Request `__typename` on review authors so GraphQL bot actors are detectable.
+
+    GitHub's GraphQL API can omit the `[bot]` suffix from a bot actor's
+    `login` (unlike REST, which reliably appends it), but exposes
+    `__typename: "Bot"` instead. Both review-fetching queries must select
+    it so `is_bot_review_author` can fall back to it.
+    """
+    assert "author { login __typename }" in sched.PULL_REQUEST_FIELDS_FRAGMENT
+    assert "author { login __typename }" in sched.PR_REVIEWS_PAGE_QUERY
+
+
 @pytest.mark.parametrize(
     ("author", "reviewer", "state", "commit"),
     (
@@ -2515,6 +2531,47 @@ def test_independent_approval_fails_closed_for_invalid_evidence(
 
     assert not sched.has_independent_current_head_approval(pr)
     assert "independent" in sched.merge_approval_block_reason(pr).lower()
+
+
+def test_independent_approval_excludes_graphql_bot_actor_missing_suffix():
+    """Exclude a GraphQL bot actor even when its `login` lacks the `[bot]` suffix.
+
+    GitHub's GraphQL API can return a bot actor's raw account name (e.g.
+    `noema-review` instead of REST's `noema-review[bot]`) while still
+    identifying it as a bot via `__typename: "Bot"`. A login-suffix-only
+    check would let this slip through as an "independent" human approval --
+    an authorization bypass in the exact separation-of-duties gate this
+    scheduler enforces.
+    """
+    pr = make_pr(
+        reviewDecision="APPROVED",
+        reviews={
+            "nodes": [
+                opencode_review("APPROVED", "head"),
+                opencode_review(
+                    "APPROVED",
+                    "head",
+                    login="noema-review",
+                    author_typename="Bot",
+                ),
+            ]
+        },
+    )
+
+    assert sched.is_bot_review_author(pr["reviews"]["nodes"][1])
+    assert not sched.has_independent_current_head_approval(pr)
+    assert "independent" in sched.merge_approval_block_reason(pr).lower()
+
+
+def test_is_bot_review_author_covers_suffix_and_typename_and_neither():
+    """Detect a bot via either the REST `[bot]` login suffix or GraphQL `__typename`."""
+    assert sched.is_bot_review_author(opencode_review(login="dependabot[bot]"))
+    assert sched.is_bot_review_author(
+        opencode_review(login="dependabot", author_typename="Bot")
+    )
+    assert not sched.is_bot_review_author(
+        opencode_review(login="independent-reviewer", author_typename="User")
+    )
 
 
 def test_independent_exact_head_approval_allows_direct_merge():
