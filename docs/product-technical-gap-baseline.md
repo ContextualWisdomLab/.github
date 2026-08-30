@@ -1574,13 +1574,20 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
     `execution_repo == dispatch_repo`가 항상 참(둘 다 `.github`)이므로
     `repository_dispatch_wait_reason()`의 두 번째 escape hatch를 만족해 `contextual-orchestrator`
     자체의 secret 유무와 무관하게 dispatch를 시도할 수 있다. 즉 이벤트 기반 경로는 확실히
-    막혀 있지만, 15분 주기 org-wide sweep은 별도의, 아마도 정상 동작하는 경로다 —
-    `contextual-orchestrator#923`이 "영원히" 막힌 것이 아니라 event-driven 경로만 막히고
-    scheduled fallback의 다음 tick을 기다리는 상태일 가능성이 높다. 그럼에도
-    `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` secret 확인 자체는 여전히 유효한
-    후속 조치다 — 사람이 organization 또는 `contextual-orchestrator` repository 설정에서
-    확인해야 한다. (PR #939는 제목만 비슷할 뿐 실제로는 Strix/Inkspan scanner 오탐·uv
-    materialization에 관한 무관한 작업이므로, 겹치는 범위가 아님을 확인했다.)
+    막혀 있지만, 15분 주기 org-wide sweep은 별도 경로다. **추가 정정(Devin review 재지적)**:
+    "아마도 정상 동작"이라는 표현도 과도했다 — `pr-review-merge-scheduler.yml:820-825`를 직접
+    읽으면 `org-queue-sweep` 자신도 `SCHEDULER_MUTATION_TOKEN_SOURCE == "github-token"`(즉
+    `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` secret도, OpenCode app 토큰 교환도 전혀
+    없을 때)이면 `exit 1`로 즉시 전체 실패한다 — "credential availability와 무관한 독립 경로"가
+    아니라, **같은 종류의 secret을 `contextual-orchestrator` 저장소가 아니라 `.github`
+    저장소(또는 조직) 레벨에서 요구하는 것으로 요구 위치만 옮겨진 것**이다. 따라서
+    `contextual-orchestrator#923`이 이 fallback으로 실제 구제되는지는 `.github`/조직 레벨에
+    `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN`(또는 유효한 OpenCode app 토큰 교환)이
+    설정되어 있는지에 전적으로 달려 있다 — 이 세션은 secret 값을 읽을 권한이 없어 이를 검증할
+    수 없다. "likely-working"이 아니라 "미검증, 조건부"로 정정한다. 사람이 organization 또는
+    `.github`/`contextual-orchestrator` repository 설정에서 확인해야 한다. (PR #939는 제목만
+    비슷할 뿐 실제로는 Strix/Inkspan scanner 오탐·uv materialization에 관한 무관한 작업이므로,
+    겹치는 범위가 아님을 확인했다.)
   - `ContextualWisdomLab/.github#1438`: dispatch는 실제로 실행되었다(run `33310753001`,
     12:09:57Z 트리거). 하지만 이 저장소 자신의 `coverage-evidence` job이
     `scripts/ci/pingora_edge_policy.py`의 `_load_changed_files` 함수 끝의 방어적 post-loop
@@ -1617,13 +1624,17 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   `repository_dispatch`로 수동 재트리거, (3) contextual-orchestrator#923의 cross-repo
   dispatch 자격 증명 배선을 직접 확인, (4) org-wide 15분 주기 cron이 07:03Z 이후 ~5시간
   공백이 있었다는 조사 결과(별도의 신뢰성 회귀)도 다음 pass에서 조사한다.
-- **순환 의존 주의**: `.github#1438` 자신도 이 pingora_edge_policy.py 수정 없이는 (다른 모든 PR과
-  마찬가지로) OpenCode approval을 받을 수 없다 — 그런데 그 수정 자체가 아직 `#1438`의 **병합되지
-  않은 PR 브랜치**에만 있고 `main`에는 없으므로, `#1438`을 리뷰하는 `coverage-evidence` job도
-  여전히 `main` 기준 코드로 실행되어 같은 이유로 실패한다(즉 이 수정은 자기 자신을 아직
-  구제하지 못한다 — `main`에 병합된 뒤에야 조직 전체에 효과가 발생한다). `org-queue-sweep`이
-  `.github` 자신의 컨텍스트에서 도는 것과는 별개로, 이 특정 순환은 사람의 개입(관리자 병합 또는
-  동등한 경로)이 필요할 수 있다 — 코드만으로는 스스로를 풀 수 없는 경우다.
+- **정정 (Devin review 지적, 순환 의존 주장은 틀렸음)**: 처음에는 "이 수정이 `main`에 병합되기
+  전까지는 `#1438` 자신도 구제받지 못하는 순환 의존"이라고 썼으나, 틀렸다.
+  `opencode-review-dispatch.yml:303-355`("Materialize pull request merge tree for coverage
+  measurement")를 직접 읽으면 `coverage-evidence`는 `PR_BASE_SHA`(=`main`)를 checkout한 뒤
+  **PR의 현재 `PR_HEAD_SHA`를 그 위에 merge**해서 커버리지를 측정한다 — `PR_HEAD_SHA`는
+  dispatch 시점의 PR 실제 head이므로, 이 pragma 수정이 이미 `#1438`의 head에 포함되어 있는 한
+  다음 dispatch부터 `#1438` 자신의 `coverage-evidence`는 (아직 `main`에 병합되기 전이라도)
+  회복되어야 한다. 순환 의존은 없다 — `main`에 병합해야만 효과가 생기는 것은 **다른** PR들
+  (naruon#1486, contextual-orchestrator#923 등, 이들 자신의 diff는 pingora_edge_policy.py를
+  건드리지 않으므로)의 coverage-evidence뿐이다. 사람의 개입(관리자 병합)이 필요하다는 주장도
+  철회한다 — `#1438`은 다음 dispatch에서 스스로 통과할 가능성이 높다.
 - **추가 발견 (사용자 직접 지적)**: `contextual-orchestrator`의 Strix 실행에서도 별도의, 진짜
   내부 로직 버그를 발견해 수정했다 — `ContextualWisdomLab/contextual-orchestrator`의
   `server.py`가 `/v1/chat/completions`에서 `tools`가 있을 때 `stream_options.include_usage=true`
