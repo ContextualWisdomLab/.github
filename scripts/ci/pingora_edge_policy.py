@@ -303,9 +303,7 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
-    # The loop-exhaustion edge is unreachable: a full 31st page crosses the
-    # 3,000-file guard below, while a short 31st page returns immediately.
-    for page in range(1, 32):  # pragma: no branch
+    for page in range(1, 32):
         url = f"{api_url}/repos/{repository}/pulls/{pull_request}/files?per_page=100&page={page}"
         payload = opener(url, token)
         if not isinstance(payload, list):
@@ -336,6 +334,20 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
+    # Unreachable by construction, not a live fallback: every one of the 31
+    # `range(1, 32)` iterations that reaches this point already returned a
+    # page whose length is >= 100 (a page under 100 items hits the `return`
+    # two lines up first), so 31 such pages accumulate at least 3,100 files
+    # -- strictly more than the 3,000 cap above, which is checked after
+    # every single appended item, not just at page boundaries. That in-loop
+    # check therefore always raises no later than partway through the 31st
+    # page, before the `for` loop can ever exhaust its range. Kept as a
+    # structural fail-closed guard (so a future change to PAGE_COUNT,
+    # per_page, or the 3,000 cap that breaks this invariant fails loudly
+    # instead of silently truncating evidence) rather than deleted; see
+    # test_changed_file_pagination_bound_is_provably_unreachable, which
+    # pins the arithmetic relationship itself.
+    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
 
 
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
