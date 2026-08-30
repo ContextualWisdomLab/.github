@@ -25,7 +25,9 @@ import argparse
 import json
 import os
 import re
+import socket
 import sys
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,24 @@ REVIEW_TEMPERATURE = 1.0
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# A transient blip (rate limit, momentary connection reset) during preflight
+# should not permanently disqualify an otherwise-healthy route: this
+# repository's own probe loop previously gave each candidate exactly one
+# attempt with no retry of its own (the vendored ModelClient it uses is
+# separately configured with max_retries=0 and proxy_send_once is a
+# single-shot transport by design -- see 2026-08-30's contextual-orchestrator
+# request-time-failover investigation, which found a second, independent gap
+# here: with zero retry budget, one flaky attempt across every discovered
+# candidate in the same run could take the whole sidecar down before it ever
+# reaches healthz, regardless of how good the gateway's own routing failover
+# is). One bounded retry per candidate, gated on the same
+# retryable-vs-not distinction, keeps that single-flaky-attempt case from
+# being fatal without turning a genuinely broken route into an unbounded
+# retry loop: at most REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE - 1 extra attempts
+# per candidate, bounded exactly like this file's other transient-retry
+# constants (STRIX_TRANSIENT_RETRY_PER_MODEL in strix.yml).
+REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE = 2
+_RETRYABLE_PREFLIGHT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class ReviewPreflightError(RuntimeError):
@@ -198,10 +218,40 @@ def _safe_http_status(exc: Exception) -> int | None:
     return None
 
 
+def _is_retryable_preflight_error(exc: BaseException) -> bool:
+    """Return whether one preflight transport failure earns a bounded retry.
+
+    Judged from the exception's own type and, for an HTTP failure, its
+    status code alone -- never from a response body or message, matching
+    this module's other sanitize-at-the-boundary classifiers
+    (``_safe_http_status``, ``_log_preflight_rejections``). A retryable
+    ``urllib.error.HTTPError`` is one of the conventional transient upstream
+    statuses (408/429/500/502/503/504); a connection-level failure with no
+    HTTP status at all (timeout, DNS/connection reset) is also retryable.
+    Anything else -- including a non-transient HTTP status such as
+    401/403/404, or any exception type not recognized here -- is rejected on
+    its first attempt, unchanged from before this retry existed.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        status = _safe_http_status(exc)
+        return status is not None and status in _RETRYABLE_PREFLIGHT_HTTP_STATUSES
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout))
+
+
 def _preflight_review_agents(
     agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
+
+    Each candidate gets up to ``REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE`` attempts:
+    a transient transport failure (see ``_is_retryable_preflight_error``)
+    earns one bounded retry of the same candidate before it is marked
+    rejected, so a single flaky attempt cannot permanently disqualify an
+    otherwise-healthy route -- or, in the worst case where every discovered
+    candidate hits the same transient blip in one run, take the whole
+    sidecar down before it ever reaches healthz. A non-retryable failure
+    (e.g. an authentication or not-found error) is rejected on its first
+    attempt, exactly as before this retry was added.
 
     The report deliberately records only stable route identity, a bounded
     exception class name, and an optional numeric HTTP status. Provider response
@@ -236,15 +286,25 @@ def _preflight_review_agents(
             "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
             "stream": False,
         }
-        try:
-            response = client.proxy_send_once(agent, "chat/completions", payload)
-        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+        response: dict[str, object] | None = None
+        last_exc: Exception | None = None
+        for attempt in range(REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE):
+            try:
+                response = client.proxy_send_once(agent, "chat/completions", payload)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+                last_exc = exc
+                attempts_remaining = REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE - attempt - 1
+                if attempts_remaining <= 0 or not _is_retryable_preflight_error(exc):
+                    break
+        if last_exc is not None:
             row["status"] = "rejected"
-            error_type = type(exc).__name__
+            error_type = type(last_exc).__name__
             row["error_type"] = (
                 error_type if error_type.isidentifier() and len(error_type) <= 64 else "ProviderError"
             )
-            http_status = _safe_http_status(exc)
+            http_status = _safe_http_status(last_exc)
             if http_status is not None:
                 row["http_status"] = http_status
             routes.append(row)

@@ -6,9 +6,11 @@ from contextlib import redirect_stdout
 import io
 import json
 import runpy
+import socket
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import urllib.error
 
 import pytest
 
@@ -19,18 +21,31 @@ _SANITIZER = _REPO_ROOT / "scripts/ci/sanitize_contextual_orchestrator_sidecar_s
 
 
 class _ProbeClient:
-    """Return deterministic per-agent outcomes for runtime preflight tests."""
+    """Return deterministic per-agent outcomes for runtime preflight tests.
+
+    An outcome may be a single value (returned or raised on every call for
+    that agent, the original behavior) or a ``list`` of values consumed one
+    per call in order -- the last entry repeats once the list is exhausted --
+    so a test can exercise the preflight retry path by giving one agent a
+    transient failure followed by success.
+    """
 
     def __init__(self, outcomes: dict[str, object]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[object, str, dict[str, object]]] = []
+        self._call_counts: dict[str, int] = {}
 
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
         """Capture one request and return or raise the configured outcome."""
         self.calls.append((agent, endpoint, payload))
-        outcome = self.outcomes[str(getattr(agent, "id"))]
+        agent_id = str(getattr(agent, "id"))
+        outcome = self.outcomes[agent_id]
+        if isinstance(outcome, list):
+            call_index = self._call_counts.get(agent_id, 0)
+            self._call_counts[agent_id] = call_index + 1
+            outcome = outcome[min(call_index, len(outcome) - 1)]
         if isinstance(outcome, BaseException):
             raise outcome
         assert isinstance(outcome, dict)
@@ -182,6 +197,116 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         assert "tools" not in payload
 
 
+def test_preflight_retries_once_after_a_transient_failure() -> None:
+    """A single flaky attempt must not permanently disqualify a healthy route.
+
+    Regression coverage for the second, .github-local half of the 2026-08-30
+    request-time-failover investigation: contextual-orchestrator's own
+    routing fix (classify_provider_transport_failure) cannot help here, since
+    this loop calls proxy_send_once directly and never reaches
+    TaskOrchestrator's routing at all. Before this retry existed, one
+    transient blip (a 503, a timeout) during preflight rejected the route
+    outright; if every discovered candidate hit the same blip in one run, the
+    whole sidecar would exit before healthz regardless of how good the
+    gateway's own failover is.
+    """
+    namespace = _load_launcher()
+    preflight = namespace.get("_preflight_review_agents")
+    assert callable(preflight)
+
+    flaky = SimpleNamespace(id="flaky_then_ready", provider_name="openai", model="flaky/free")
+    client = _ProbeClient(
+        {
+            flaky.id: [
+                urllib.error.HTTPError("https://example.invalid", 503, "Service Unavailable", {}, None),
+                _openai_text("OK"),
+            ],
+        }
+    )
+
+    viable, report = preflight([flaky], client=client)
+
+    assert viable == [flaky]
+    assert report["routes"] == [{"agent_id": "flaky_then_ready", "provider": "openai", "model": "flaky/free", "status": "ready"}]
+    # Exactly one retry: two calls total, not an unbounded loop.
+    assert len(client.calls) == 2
+
+
+def test_preflight_does_not_retry_a_non_retryable_failure() -> None:
+    """An auth/not-found style failure is rejected on its first attempt, unchanged."""
+    namespace = _load_launcher()
+    preflight = namespace.get("_preflight_review_agents")
+    error_type = namespace.get("ReviewPreflightError")
+    assert callable(preflight)
+
+    not_found = SimpleNamespace(id="nim_retired_model", provider_name="nvidia_nim", model="retired/free")
+    client = _ProbeClient(
+        {
+            not_found.id: [
+                urllib.error.HTTPError("https://example.invalid", 404, "Not Found", {}, None),
+                _openai_text("OK"),
+            ],
+        }
+    )
+
+    with pytest.raises(error_type) as excinfo:
+        preflight([not_found], client=client)
+
+    report = excinfo.value.report
+    assert report["routes"][0]["status"] == "rejected"
+    assert report["routes"][0]["http_status"] == 404
+    # No retry spent on a non-transient failure, even though the queued
+    # second outcome would have succeeded -- proves the retry is gated on
+    # retryability, not just "there was a second attempt available."
+    assert len(client.calls) == 1
+
+
+def test_preflight_bounds_retries_when_every_attempt_is_transient() -> None:
+    """A persistently flaky route is still rejected after its one bounded retry."""
+    namespace = _load_launcher()
+    preflight = namespace.get("_preflight_review_agents")
+    error_type = namespace.get("ReviewPreflightError")
+    assert callable(preflight)
+
+    always_flaky = SimpleNamespace(
+        id="always_flaky", provider_name="openrouter", model="flaky/free"
+    )
+    client = _ProbeClient({always_flaky.id: socket.timeout("timed out")})
+
+    with pytest.raises(error_type) as excinfo:
+        preflight([always_flaky], client=client)
+
+    report = excinfo.value.report
+    assert report["routes"][0]["status"] == "rejected"
+    # socket.timeout is an alias for TimeoutError as of Python 3.10.
+    assert report["routes"][0]["error_type"] == "TimeoutError"
+    # REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE == 2: one initial attempt plus
+    # exactly one retry, never an unbounded loop.
+    assert len(client.calls) == 2
+
+
+def test_is_retryable_preflight_error_classifies_by_type_and_status_only() -> None:
+    """The retry gate never inspects a message body, only type/status."""
+    namespace = _load_launcher()
+    is_retryable = namespace.get("_is_retryable_preflight_error")
+    assert callable(is_retryable)
+
+    for status in (408, 429, 500, 502, 503, 504):
+        assert is_retryable(
+            urllib.error.HTTPError("https://example.invalid", status, "x", {}, None)
+        )
+    for status in (400, 401, 403, 404, 422):
+        assert not is_retryable(
+            urllib.error.HTTPError("https://example.invalid", status, "x", {}, None)
+        )
+    assert is_retryable(urllib.error.URLError("connection refused"))
+    assert is_retryable(TimeoutError("timed out"))
+    assert is_retryable(ConnectionError("reset"))
+    assert is_retryable(socket.timeout("timed out"))
+    assert not is_retryable(RuntimeError("some other failure"))
+    assert not is_retryable(ValueError("bad payload"))
+
+
 def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -329,7 +454,9 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert fallback_used is True
     assert report["fallback_reason"] == "primary_routes_unavailable"
     assert report["primary_attempt"]["ready_count"] == 0
-    assert [call[0] for call in client.calls] == [primary, fallback]
+    # TimeoutError is retryable, so the primary route gets its one bounded
+    # retry (both attempts still fail) before fallback is tried.
+    assert [call[0] for call in client.calls] == [primary, primary, fallback]
 
     ready_client = _ProbeClient(
         {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
