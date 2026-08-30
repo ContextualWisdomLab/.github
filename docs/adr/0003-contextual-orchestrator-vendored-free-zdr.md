@@ -118,6 +118,12 @@ all five, and auto-optimize routing by cost.
   413 diagnostic locally so it cannot be mistaken for provider discovery
   failure. Exhausting every bounded batch still fails closed before healthz.
 
+- **Separate startup and serving budgets (2026-08-30):** route admission keeps
+  the ten-second timeout so unavailable providers cannot delay healthz, while
+  the serving `ModelClient` uses the Noema gate's 120-second transport budget.
+  Both phases keep zero retries and the same bounded request policy; the
+  launcher test verifies the two constructed client configurations separately.
+
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
   discovery under the zero-cost pool. Strix uses the separately governed auto

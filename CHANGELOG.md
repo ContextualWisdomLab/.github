@@ -5,9 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Keep serving-time model calls on the same bounded timeout and zero-retry
-  policy proven during sidecar startup, distinguish loopback transport timeouts
-  from connection failures, and classify dependency-review API denial as
+- Keep startup route probes on a ten-second timeout while giving serving-time
+  model calls the Noema gate's 120-second transport budget; both retain the
+  same zero-retry policy. Distinguish loopback transport timeouts from
+  connection failures, and classify dependency-review API denial as
   unavailable evidence without treating it as vulnerability-free.
 - Keep the sidecar's provider-family cap aligned with its 24-route total
   startup budget by default, so a single provider catalog is not truncated to

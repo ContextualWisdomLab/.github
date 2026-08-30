@@ -356,15 +356,29 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
 
 
 def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
-    """Sequential route probes must fit inside the sidecar startup budget."""
-    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    """Startup probes stay short while serving gets the Noema review budget."""
+    namespace = _load_launcher()
 
-    assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
-    assert "REVIEW_TEMPERATURE = 1.0" in launcher
-    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10" in launcher
-    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
-    assert "max_retries=0" in launcher
-    assert "temperature=REVIEW_TEMPERATURE" in launcher
+    class CaptureClient:
+        instances: list[dict[str, object]] = []
+
+        def __init__(self, **kwargs: object) -> None:
+            self.__class__.instances.append(kwargs)
+
+    build_client = namespace["_build_model_client"]
+    build_client(
+        CaptureClient, timeout=namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
+    )
+    build_client(CaptureClient, timeout=namespace["REVIEW_SERVING_TIMEOUT_SECONDS"])
+
+    preflight, serving = CaptureClient.instances
+
+    assert preflight["timeout"] == 10
+    assert serving["timeout"] == 120
+    assert preflight["timeout"] != serving["timeout"]
+    assert preflight["max_output_tokens"] == serving["max_output_tokens"] == 4096
+    assert preflight["max_retries"] == serving["max_retries"] == 0
+    assert preflight["temperature"] == serving["temperature"] == 1.0
 
 
 def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
@@ -378,8 +392,10 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '"complete": True' in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
-    assert launcher.count("timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS") == 2
-    assert launcher.count("max_retries=0") == 2
+    assert "REVIEW_SERVING_TIMEOUT_SECONDS = 120" in launcher
+    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
+    assert "timeout=REVIEW_SERVING_TIMEOUT_SECONDS" in launcher
+    assert launcher.count("max_retries=0") == 1
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 
     assert (

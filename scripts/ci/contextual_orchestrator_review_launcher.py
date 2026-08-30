@@ -44,6 +44,9 @@ REVIEW_TEMPERATURE = 1.0
 # still finite catalog while keeping the worst-case provider wait below the
 # sidecar's three-minute readiness deadline.
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
+# The serving call has the same 120-second transport budget as the Noema review
+# gate; startup admission stays short so an unavailable route cannot delay healthz.
+REVIEW_SERVING_TIMEOUT_SECONDS = 120
 REVIEW_PREFLIGHT_BATCH_SIZE = 4
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
@@ -56,6 +59,16 @@ class ReviewPreflightError(RuntimeError):
         """Store the sanitized route report alongside the bounded error message."""
         super().__init__(message)
         self.report = report
+
+
+def _build_model_client(client_type: Any, *, timeout: int) -> Any:
+    """Build a no-retry client with the transport policy for its lifecycle phase."""
+    return client_type(
+        timeout=timeout,
+        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        max_retries=0,
+        temperature=REVIEW_TEMPERATURE,
+    )
 
 
 def _has_text_output(model: object) -> bool:
@@ -636,11 +649,8 @@ def main(argv: list[str] | None = None) -> int:
                 fallback_result["agents"],
                 loader=load_agents,
             )
-    client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
-        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
-        max_retries=0,
-        temperature=REVIEW_TEMPERATURE,
+    client = _build_model_client(
+        ModelClient, timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS
     )
     try:
         agents, preflight_report, fallback_used = _preflight_with_fallback(
@@ -660,11 +670,8 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(args.report_out, result["report"])
     _write_json(args.preflight_out, preflight_report)
 
-    client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
-        max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
-        max_retries=0,
-        temperature=REVIEW_TEMPERATURE,
+    client = _build_model_client(
+        ModelClient, timeout=REVIEW_SERVING_TIMEOUT_SECONDS
     )
     orchestrator = TaskOrchestrator(agents, client=client)
     serve(
