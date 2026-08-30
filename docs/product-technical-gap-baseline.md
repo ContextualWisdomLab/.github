@@ -993,10 +993,19 @@ then a 502 on the actual gateway request).
     remove the two permanently-dead `gemma-3` candidates from the pool —
     they will still be tried and still fail, just alongside more real
     chances rather than crowding out all of them. The trade-off made
-    explicitly, not silently: up to ~80s worst-case sequential preflight time
-    total (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS=10` × up to 8 candidates now,
-    vs. up to ~40s total with 4 before — i.e. ~40s more, not ~80s more),
-    reasoned to stay within the sidecar's existing 180s readiness-wait
+    explicitly, not silently. The picking loop also stops at the overall
+    `CATALOG_LIMIT` (12) regardless of `family_cap`, so the absolute
+    worst case across any number of distinct families was already
+    `REVIEW_PREFLIGHT_TIMEOUT_SECONDS=10` × 12 = 120s before this change
+    (reached once `family_cap` × distinct families ≥ 12, i.e. ≥3 families
+    at the old cap of 4) and stays 120s after it — this raise does not move
+    that pre-existing ceiling. What changes is *when* that ceiling is
+    reached and the typical case today: with the single family
+    (`nvidia_nim`) currently filling 100% of `orchestrator/free`,
+    worst-case preflight time rises from ~40s (4 candidates) to ~80s (8
+    candidates); with exactly two distinct families it would now also
+    reach the 120s ceiling (previously ~80s at `family_cap=4`). Both
+    figures stay within the sidecar's existing 180s readiness-wait
     ceiling in the common case but not verified against real provider
     latency, since this session cannot exercise that path live.
   - **Not implemented, and the more complete fix if 8 turns out

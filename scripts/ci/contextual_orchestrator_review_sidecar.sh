@@ -53,14 +53,22 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 # preflight" failures (see docs/product-technical-gap-baseline.md's
 # 2026-08-30 sidecar-preflight entries for the full evidence, including the
 # exact discovery/preflight artifact this comment is based on).
-# 8 is a deliberately moderate raise, not a wholesale removal of the cap:
-# REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x up to 8 sequential candidates is
-# up to ~80s worst-case preflight time total -- ~40s more than the previous
-# 4-candidate ceiling's own ~40s worst case -- bounded by (not exceeding on
-# its own) the sidecar's existing 180s readiness-wait budget in the common
-# case; this was reasoned from, not verified against, live provider timing,
-# since this session has no access to
-# the five provider credentials the sidecar's KV requires. If real hosted
+# 8 is a deliberately moderate raise, not a wholesale removal of the cap. The
+# picking loop below also stops at CATALOG_LIMIT (12) total regardless of
+# family_cap, so the absolute worst case across any number of families was
+# already REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x 12 = 120s before this
+# change (reached once family_cap x distinct-families >= 12, i.e. >=3
+# families at the old cap of 4) and stays 120s after it -- this raise does
+# not move that pre-existing ceiling. What it does change is when that
+# ceiling is reached and the typical case today: with the single family
+# (nvidia_nim) that currently fills 100% of orchestrator/free, worst-case
+# preflight time rises from ~40s (4 candidates) to ~80s (8 candidates); with
+# exactly two distinct families it would now also reach the 120s ceiling
+# (previously ~80s at family_cap=4). Both figures stay within the sidecar's
+# existing 180s readiness-wait budget in the common case; this was reasoned
+# from, not verified against, live provider timing, since this session has
+# no access to the five provider credentials the sidecar's KV requires. If
+# real hosted
 # runs show this is still insufficient (all 8 still failing) or the added
 # latency itself becomes the bottleneck, the more complete fix is a live
 # provider /v1/models cross-check at discovery time to drop retired model ids
