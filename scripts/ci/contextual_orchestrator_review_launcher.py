@@ -66,6 +66,19 @@ def _has_text_output(model: object) -> bool:
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
+def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
+    """Drop evidence-only discovery rows before any live-serving selection.
+
+    Evidence-only rows (e.g. the OpenRouter catalog) exist solely to supply
+    ZDR evidence for other providers' models; contextual_orchestrator's own
+    ``agent_from_discovered()`` refuses to turn one into a serving agent.
+    Filtering here keeps that same invariant in this sidecar's selection path,
+    which builds its catalog independently rather than calling
+    ``agent_from_discovered()`` directly.
+    """
+    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
+
+
 def _route_identity(model: object) -> tuple[str, str]:
     """Return the provider/model identity used to bind price evidence."""
 
@@ -400,10 +413,11 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    free_models = list(free_discovered_models(discovered)) if discovered else []
+    routable_discovered = _routable_discovered_models(discovered)
+    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
-    for model in discovered or []:
+    for model in routable_discovered:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
             continue

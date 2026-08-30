@@ -52,6 +52,36 @@ def _openai_text(content: str) -> dict[str, object]:
     return {"choices": [{"message": {"content": content}}]}
 
 
+def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
+    """Evidence-only rows (e.g. OpenRouter) must never enter live selection."""
+    namespace = _load_launcher()
+    routable = namespace.get("_routable_discovered_models")
+    assert callable(routable), "launcher must expose an evidence-only discovery filter"
+
+    evidence_only_model = SimpleNamespace(
+        id="openrouter_evidence_only",
+        provider_name="openrouter",
+        model_id="some/model",
+        evidence_only=True,
+    )
+    live_model = SimpleNamespace(
+        id="nvidia_ready",
+        provider_name="nvidia_nim",
+        model_id="ready/free",
+        evidence_only=False,
+    )
+    no_flag_model = SimpleNamespace(
+        id="bytez_untagged", provider_name="bytez", model_id="untagged/free"
+    )
+
+    assert routable([evidence_only_model, live_model, no_flag_model]) == [
+        live_model,
+        no_flag_model,
+    ]
+    assert routable(None) == []
+    assert routable([]) == []
+
+
 def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() -> None:
     """Reject provider errors/malformed replies before the sidecar becomes ready."""
     namespace = _load_launcher()
