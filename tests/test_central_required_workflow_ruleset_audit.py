@@ -24,6 +24,7 @@ def ruleset_payload() -> dict:
         "name": "CWL Central required workflows",
         "target": "branch",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
@@ -119,6 +120,7 @@ def repository_ruleset_payload() -> dict:
         "source_type": "Repository",
         "source": "ContextualWisdomLab/.github",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
         },
@@ -192,6 +194,15 @@ def test_central_ruleset_rejects_bypass_actors() -> None:
     ]
 
 
+def test_central_ruleset_rejects_missing_bypass_evidence() -> None:
+    payload = ruleset_payload()
+    del payload["bypass_actors"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset must not configure bypass actors",
+    ]
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
 
@@ -243,6 +254,15 @@ def test_repository_ruleset_rejects_bypass_actors() -> None:
     ]
 
 
+def test_repository_ruleset_rejects_missing_bypass_evidence() -> None:
+    payload = repository_ruleset_payload()
+    del payload["bypass_actors"]
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must not configure bypass actors",
+    ]
+
+
 def test_repository_ruleset_reports_structural_and_protection_drift() -> None:
     payload = {
         "id": 0,
@@ -261,6 +281,7 @@ def test_repository_ruleset_reports_structural_and_protection_drift() -> None:
         "repository ruleset source is not ContextualWisdomLab/.github",
         "repository ruleset target is not branch",
         "repository ruleset enforcement is not active",
+        "repository ruleset must not configure bypass actors",
         "repository ruleset ref scope must be exactly the default branch",
         "expected one repository pull_request rule, found 0",
         "repository default-branch deletion protection is missing",
@@ -524,6 +545,7 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "expected ruleset name CWL Central required workflows",
         "central ruleset target is not branch",
         "central ruleset enforcement is not active",
+        "central ruleset must not configure bypass actors",
         "central ruleset does not include all repositories",
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset ref scope must be exactly the default branch",
