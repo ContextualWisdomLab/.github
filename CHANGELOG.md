@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Confirm on a live hosted run (`ContextualWisdomLab/contextual-orchestrator#921`)
+  that the org-wide `noema-review`/`opencode-review`/`strix` sidecar-preflight
+  outage is resolved by the family_cap raise and #1436's `max_tokens` fix:
+  `noema-review` and `strix` both succeeded on a fresh head, with the job
+  log confirming a real, complete sidecar cycle (not a vacuous pass). See
+  the 2026-08-30 gap-baseline entry for the full evidence and the remaining
+  caveat (the two permanently-retired `gemma-3` model ids are still admitted
+  and will still fail individually; the live-catalog-freshness fix remains
+  the more complete answer if 8 candidates ever proves insufficient again).
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

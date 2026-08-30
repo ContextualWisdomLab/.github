@@ -1288,9 +1288,62 @@ conflicting** PRs address pieces of this:
   header/`%%EOF`-trailer check, short of full parsing) rather than merging
   #1427's blanket suffix-trust list, and that the two PRs coordinate so the
   org does not land two divergent implementations of the same policy
-  surface. Not resolved in code this pass — both PRs are themselves
-  currently blocked by the sidecar-preflight outage above, so neither could
-  be re-reviewed to a genuine pass yet regardless of which approach wins.
+  surface. Not resolved in code this pass. At the time this was written
+  both PRs were also blocked by the sidecar-preflight outage below — see
+  the entry immediately below for confirmation that outage has since
+  cleared, so a genuine re-review of whichever approach the org picks is
+  now possible.
+
+## 2026-08-30 sidecar-preflight outage: confirmed resolved on a live hosted run
+
+#1434 merged (squash `e36a1f71`) with all three fixes from the entries
+above: the Strix `orchestrator/auto`→`orchestrator/free` switch, the
+`ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent #1436
+merged into `main` mid-pass) the gateway preflight `max_tokens` fix. This
+entry is the requested end-to-end verification that the org-wide outage
+those three fixes targeted is actually closed, not just structurally
+excused.
+
+- **Verified on `ContextualWisdomLab/contextual-orchestrator#921`** (a PR
+  unrelated to this investigation, picked specifically because it does not
+  itself touch review-pipeline files, so it can't hit the same
+  `pull_request_target` self-test trust boundary PR #1434 and #1441 do), on
+  a fresh head (`55832c01...`) pushed well after `main` had all three
+  fixes: `noema-review` — **success**; `strix` — **success**.
+- `noema-review`'s job log confirms this was a real, complete sidecar
+  cycle, not a vacuous pass: `CONTEXTUAL_ORCHESTRATOR_BASE_URL:
+  http://127.0.0.1:18080` was exported to the step environment, which only
+  happens after the sidecar's own preflight found a viable route and the
+  server actually became healthy — the exact stage that failed 100% of the
+  time (three independent reproductions) before these fixes landed.
+  `noema_review_gate.py` then exited via its own separate, expected,
+  unrelated gate ("Current head does not have a primary OpenCode approval;
+  Noema review skipped") — a normal short-circuit, not a masked failure.
+- `opencode-review` still showed `failure` on the same head, but for a
+  different, already-understood, benign reason unrelated to the sidecar:
+  its job log shows the same `"No APPROVED or CHANGES_REQUESTED from
+  opencode-agent on the current head"` gate this investigation has seen
+  before — this check ran (11:08:08) before the separate, async
+  `opencode-review-dispatch` flow had time to complete and post a verdict
+  for this exact head (confirmed: no `opencode-agent` review exists on the
+  PR at all yet at the time of this check). This is a timing/sequencing
+  gap this org's own scheduler design already re-dispatches for, not a
+  sidecar regression.
+- **Conclusion**: the root cause diagnosed and fixed in this investigation
+  (family-cap-driven deterministic admission of retired/slow candidates,
+  and separately the desynchronized `max_tokens` on the post-`healthz`
+  smoke request) is confirmed closed by a real hosted run, not merely
+  structurally argued. This does not mean the free catalog is now perfect
+  — the two permanently-retired `google/gemma-3-*-it` model ids are still
+  in the pool and will still individually fail when the alphabetical sort
+  reaches them (see the family-cap entry above for the still-open,
+  more-complete live-catalog-freshness fix) — only that with 8 candidates
+  instead of 4, enough of the other ~19 free `nvidia_nim`/`nvidia_nim_sub`
+  models are now reached to find a working route. If a future hosted run
+  shows `noema-review`/`opencode-review`/`strix` failing again with the
+  `"no provider route passed"` signature, that is the signal the
+  live-catalog-freshness fix is now the priority, not a further family_cap
+  increase.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
