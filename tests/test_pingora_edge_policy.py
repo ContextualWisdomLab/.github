@@ -37,6 +37,22 @@ def encoded_file(content: str, *, size: int | None = None, kind: str = "file", e
     }
 
 
+def encoded_binary_file(raw: bytes) -> dict[str, object]:
+    """Build one GitHub Contents API response for binary evidence."""
+
+    return {
+        "type": "file",
+        "encoding": "base64",
+        "size": len(raw),
+        "content": base64.b64encode(raw).decode(),
+    }
+
+
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
 def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> None:
     """Runtime filenames and all supported active Nginx forms fail closed."""
 
@@ -78,8 +94,8 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
-def test_documentation_image_assets_are_not_runtime_candidates() -> None:
-    """Binary screenshots under documentation cannot execute an edge runtime."""
+def test_documentation_image_assets_require_final_binary_evidence() -> None:
+    """Image suffixes alone cannot exempt documentation files from inspection."""
 
     changed = policy.ChangedFile(
         "docs/screenshots/acceptance.png",
@@ -88,10 +104,92 @@ def test_documentation_image_assets_are_not_runtime_candidates() -> None:
         patch_available=False,
     )
 
-    assert not policy._needs_content_scan(changed)
+    assert policy._needs_content_scan(changed)
     assert policy._needs_content_scan(
         policy.ChangedFile("public/acceptance.png", "added", "", patch_available=False)
     )
+
+
+def test_documentation_image_suffix_cannot_hide_runtime_content() -> None:
+    """A text or script renamed to an image fails closed at final-content inspection."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/17/files" in url:
+            return [{"filename": "docs/screenshots/acceptance.png", "status": "added"}]
+        return encoded_file("#!/bin/sh\nsystemctl restart nginx\n")
+
+    with pytest.raises(policy.PolicyError, match="recognized image"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=17,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "raw", "recognized"),
+    [
+        ("docs/acceptance.png", PNG_BYTES, True),
+        ("docs/acceptance.gif", b"GIF89a" + b"\x01\x00\x01\x00\x00\x00\x00" + b"\x3b", True),
+        ("docs/acceptance.jpg", b"\xff\xd8\xff\x00\xff\xd9", True),
+        ("docs/acceptance.jpeg", b"\xff\xd8\xff\x00\xff\xd9", True),
+        ("docs/acceptance.webp", b"RIFF" + (12).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00\x00\x00\x00", True),
+        ("docs/acceptance.png", PNG_BYTES[:-12], False),
+        ("docs/acceptance.png", b"#!/bin/sh\nnginx\n", False),
+        ("docs/acceptance.svg", b"<svg />", False),
+    ],
+)
+def test_documentation_image_recognition_is_format_and_path_bound(
+    path: str, raw: bytes, recognized: bool
+) -> None:
+    """Raster evidence requires the matching bounded format envelope."""
+
+    assert policy._is_recognized_documentation_image(path, raw) is recognized
+
+
+def test_documentation_png_validation_rejects_truncated_corrupt_and_invalid_chunks() -> None:
+    """PNG evidence fails closed for truncated, corrupt, reordered, or empty images."""
+
+    truncated = bytearray(PNG_BYTES)
+    truncated[33:37] = (999).to_bytes(4, "big")
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(truncated))
+
+    corrupt_crc = bytearray(PNG_BYTES)
+    corrupt_crc[29] ^= 1
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(corrupt_crc))
+
+    invalid_first_chunk = bytearray(PNG_BYTES)
+    invalid_first_chunk[12:16] = b"IDAT"
+    invalid_first_chunk[29:33] = policy.zlib.crc32(invalid_first_chunk[12:29]).to_bytes(4, "big")
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(invalid_first_chunk))
+
+    zero_dimension = bytearray(PNG_BYTES)
+    zero_dimension[16:20] = b"\x00\x00\x00\x00"
+    zero_dimension[29:33] = policy.zlib.crc32(zero_dimension[12:29]).to_bytes(4, "big")
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(zero_dimension))
+
+
+def test_evaluate_pull_request_accepts_recognized_documentation_image() -> None:
+    """A complete raster asset is accepted after final head bytes are verified."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/18/files" in url:
+            return [{"filename": "docs/screenshots/acceptance.png", "status": "added"}]
+        return encoded_binary_file(PNG_BYTES)
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=18,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
@@ -327,6 +425,20 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     files = policy._load_changed_files("api", "a/b", 1, "x", opener)
     assert len(files) == 3_000
     assert calls[-1].endswith("page=31")
+
+
+def test_changed_file_pagination_loop_bound_fails_closed() -> None:
+    """A full-looking final page cannot make bounded pagination loop forever."""
+
+    class ClaimedFullPage(list[dict[str, object]]):
+        """Model an adapter that reports a full page while yielding no entries."""
+
+        def __len__(self) -> int:
+            return 100
+
+    page = ClaimedFullPage()
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
 
 
 @pytest.mark.parametrize(

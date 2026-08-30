@@ -27,9 +27,10 @@ so a governed shared implementation is required.
    contracts. Environment deployment remains in `linux-cluster-ops`.
 4. The organization required workflow rejects active Nginx runtime artifacts in
    changed final files without executing pull-request code.
-5. Only dedicated source fixtures and the policy scanner may contain denied Nginx
+5. Only dedicated source fixtures, recognized raster image evidence beneath
+   documentation directories, and the policy scanner may contain denied Nginx
    samples; executable integration and end-to-end test helpers remain candidates
-   for enforcement.
+   for enforcement. Image extensions alone do not establish the exception.
 6. Initial migration does not use Pingora's experimental cache integration.
 7. PHP workloads move to an HTTP application server or reviewed FastCGI adapter
    behind Pingora before the public listener changes.
@@ -66,5 +67,6 @@ so a governed shared implementation is required.
 
 The policy scanner has 100% production statement and branch coverage, bounded
 GitHub API evidence, path/control escaping, pagination limits, exact-head content
-inspection, and fail-closed malformed-evidence tests. Product migrations require
-site/proxy behavior tests and deployment-specific smoke tests before cutover.
+inspection, raster-format validation, and fail-closed malformed-evidence tests.
+Product migrations require site/proxy behavior tests and deployment-specific
+smoke tests before cutover.

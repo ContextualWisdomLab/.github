@@ -20,8 +20,10 @@ dependencies. The initial CWL implementation avoids experimental cache APIs.
 - The shared artifact is Apache-2.0 compatible with CWL permissive-license policy.
 - Required-workflow code is bound to its immutable central SHA and never executes
   pull-request content.
-- Runtime evidence is bounded to one-megabyte UTF-8 regular files and a maximum of
-  3,000 changed files; missing or malformed evidence fails closed.
+- Runtime evidence is bounded to one-megabyte regular-file bytes, with UTF-8
+  decoding for runtime candidates and supported raster-format validation for
+  documentation images; the maximum is 3,000 changed files and missing or
+  malformed evidence fails closed.
 - Exact-head product tests cover host/path routing, SPA fallback, security headers,
   WebSocket/streaming, body limits, health, metrics, TLS, and graceful shutdown as
   applicable.

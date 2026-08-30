@@ -2,9 +2,9 @@
 """Enforce the CWL Pingora-only edge runtime policy on pull-request changes.
 
 The checker never executes pull-request content. It reads changed-file metadata and
-bounded UTF-8 file content through the GitHub REST API, then rejects active Nginx
-runtime artifacts while allowing documentation, license text, and source-level
-negative test fixtures.
+bounded final file content through the GitHub REST API, then rejects active Nginx
+runtime artifacts while allowing documentation, license text, recognized image
+evidence, and source-level negative test fixtures.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Callable, Mapping, Sequence
@@ -147,7 +148,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     )
     if lower_name in LICENSE_NAMES or (
         is_known_documentation_path
-        and pure.suffix.lower() in DOCUMENT_SUFFIXES | DOCUMENT_ASSET_SUFFIXES
+        and pure.suffix.lower() in DOCUMENT_SUFFIXES
     ):
         return True
     if pure.as_posix() == "scripts/ci/pingora_edge_policy.py":
@@ -156,6 +157,60 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     is_tests_fixture = len(lower_parts) >= 2 and lower_parts[:2] == ("tests", "fixtures")
     if is_tests_fixture and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES:
         return True
+    return False
+
+
+def _is_documentation_image_path(path: str) -> bool:
+    """Return whether *path* claims to be raster evidence below documentation."""
+
+    pure = PurePosixPath(path)
+    return bool(
+        pure.parts
+        and any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts)
+        and pure.suffix.lower() in DOCUMENT_ASSET_SUFFIXES
+    )
+
+
+def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
+    """Accept only bounded bytes with the expected raster format envelope."""
+
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix in {".jpeg", ".jpg"}:
+        return len(raw) >= 4 and raw.startswith(b"\xff\xd8\xff") and raw.endswith(b"\xff\xd9")
+    if suffix == ".gif":
+        return len(raw) >= 14 and raw[:6] in {b"GIF87a", b"GIF89a"} and raw[-1:] == b"\x3b"
+    if suffix == ".webp":
+        return (
+            len(raw) >= 20
+            and raw[:4] == b"RIFF"
+            and raw[8:12] == b"WEBP"
+            and int.from_bytes(raw[4:8], "little") == len(raw) - 8
+        )
+    if suffix != ".png" or len(raw) < 33 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    offset = 8
+    saw_idat = False
+    while offset + 12 <= len(raw):
+        length = int.from_bytes(raw[offset : offset + 4], "big")
+        end = offset + 12 + length
+        if end > len(raw):
+            return False
+        chunk_type = raw[offset + 4 : offset + 8]
+        chunk_data = raw[offset + 8 : offset + 8 + length]
+        declared_crc = int.from_bytes(raw[offset + 8 + length : end], "big")
+        if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != declared_crc:
+            return False
+        if offset == 8 and (chunk_type != b"IHDR" or length != 13):
+            return False
+        if chunk_type == b"IHDR" and (
+            int.from_bytes(chunk_data[:4], "big") == 0
+            or int.from_bytes(chunk_data[4:8], "big") == 0
+        ):
+            return False
+        saw_idat |= chunk_type == b"IDAT"
+        if chunk_type == b"IEND":
+            return length == 0 and saw_idat and end == len(raw)
+        offset = end
     return False
 
 
@@ -276,8 +331,8 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
-    """Load one final head file as bounded UTF-8 text from the Contents API."""
+def _load_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
+    """Load one final head file as bounded bytes from the Contents API."""
 
     encoded_path = quote(path, safe="/")
     url = f"{api_url}/repos/{repository}/contents/{encoded_path}?ref={head_sha}"
@@ -296,8 +351,14 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"GitHub content evidence for {path} is invalid base64") from exc
     if len(raw) != declared_size:
         raise PolicyError(f"GitHub content evidence for {path} has a size mismatch")
+    return raw
+
+
+def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+    """Load one final head file as bounded UTF-8 text from the Contents API."""
+
     try:
-        return raw.decode("utf-8")
+        return _load_file_bytes(api_url, repository, path, head_sha, token, opener).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
 
@@ -305,7 +366,11 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
 def _needs_content_scan(changed: ChangedFile) -> bool:
     """Return whether a changed final file can carry an active edge runtime."""
 
-    if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
+    if changed.status == "removed":
+        return False
+    if _is_documentation_image_path(changed.path):
+        return True
+    if _is_documentation_or_source_fixture(changed.path):
         return False
     if not changed.patch_available:
         return True
@@ -345,6 +410,11 @@ def evaluate_pull_request(
     violations: list[Violation] = []
     for changed in changed_files:
         if not _needs_content_scan(changed):
+            continue
+        if _is_documentation_image_path(changed.path):
+            raw = _load_file_bytes(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
+            if not _is_recognized_documentation_image(changed.path, raw):
+                raise PolicyError(f"Documentation image evidence for {changed.path} is not a recognized image")
             continue
         content = _load_file_content(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
         violations.extend(scan_content(changed.path, content))

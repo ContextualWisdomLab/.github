@@ -6,13 +6,15 @@ ContextualWisdomLab production and test edge runtimes use **Cloudflare Pingora**
 Active Nginx containers, packages, commands, configuration files, Kubernetes
 Nginx ingress annotations/classes, and host-service units are prohibited.
 
-This is a runtime boundary, not a vocabulary ban. Documentation, non-executable
-image evidence beneath a documentation directory, license notices, dedicated
-source fixtures under `tests/fixtures/`, the scanner source itself, and migration
-histories may name Nginx. Executable integration and end-to-end test helpers remain
-runtime candidates. Pull requests that modify a runtime candidate are evaluated
-against the final exact head file, so deleting a legacy artifact is allowed while
-preserving it or introducing a new one fails closed.
+This is a runtime boundary, not a vocabulary ban. Documentation, recognized
+non-executable image evidence beneath a documentation directory, license notices,
+dedicated source fixtures under `tests/fixtures/`, the scanner source itself, and
+migration histories may name Nginx. An image suffix alone is not an exception:
+final bounded bytes must match the supported raster format. Executable integration
+and end-to-end test helpers remain runtime candidates. Pull requests that modify a
+runtime candidate are evaluated against the final exact head file, so deleting a
+legacy artifact is allowed while preserving it or introducing a new one fails
+closed.
 
 ## Why this is not a search-and-replace
 
@@ -52,10 +54,11 @@ route/site contracts. Product repositories do not fork proxy internals.
 
 The organization-required `required-workflow-bootstrap` job runs trusted
 base-branch scanner code at the immutable required-workflow SHA. It reads bounded
-changed-file metadata and final UTF-8 content through GitHub's REST API. It does
-not check out or execute pull-request content and receives only read permissions.
-Malformed, truncated, binary, symlink, oversized, or unavailable evidence fails
-closed.
+changed-file metadata and final file bytes through GitHub's REST API; runtime
+candidates must decode as UTF-8, while documentation raster evidence must match
+its supported format. It does not check out or execute pull-request content and
+receives only read permissions. Malformed, truncated, unrecognized binary,
+symlink, oversized, or unavailable evidence fails closed.
 
 ## Exception process
 
