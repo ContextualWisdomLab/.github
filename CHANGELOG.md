@@ -6,14 +6,21 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - Confirm on a live hosted run (`ContextualWisdomLab/contextual-orchestrator#921`)
-  that the org-wide `noema-review`/`opencode-review`/`strix` sidecar-preflight
-  outage is resolved by the family_cap raise and #1436's `max_tokens` fix:
+  that the family_cap raise and #1436's `max_tokens` fix work end-to-end:
   `noema-review` and `strix` both succeeded on a fresh head, with the job
-  log confirming a real, complete sidecar cycle (not a vacuous pass). See
-  the 2026-08-30 gap-baseline entry for the full evidence and the remaining
-  caveat (the two permanently-retired `gemma-3` model ids are still admitted
-  and will still fail individually; the live-catalog-freshness fix remains
-  the more complete answer if 8 candidates ever proves insufficient again).
+  log confirming a real, complete sidecar cycle (not a vacuous pass). This
+  is not the same as the outage being fully closed: a second, separately
+  found and independently verified run
+  (`.github`'s own `main`, job `99247611184`) failed with a genuinely
+  different, still-open defect (Strix's OpenAI Agents SDK client sending
+  `stream_options.include_usage=true` with `tools`/`response_format`,
+  rejected by at least one `orchestrator/free` candidate with `HTTP 400
+  invalid_stream_options`, exhausting the pool). See the 2026-08-30
+  gap-baseline entry for the full evidence and remaining caveats (that
+  `stream_options` gap, the two permanently-retired `gemma-3` model ids
+  still admitted into the pool, and the live-catalog-freshness fix that
+  remains the more complete answer if 8 candidates ever proves
+  insufficient again).
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
