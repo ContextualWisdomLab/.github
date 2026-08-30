@@ -198,11 +198,16 @@ def _reject_escaping_symlink_chain(candidate: Path, root: Path) -> None:
     that revisits a path it has already followed (an unresolvable cycle)
     raises. The hop count is bounded so a chain that never repeats (due to
     purely lexical, not real-path, normalization) still fails closed instead
-    of walking forever.
+    of walking forever. The walk allows one more iteration than the hop
+    limit: each iteration checks one position and then, if it is a symlink,
+    advances to the next, so a chain of exactly ``MAXIMUM_SYMLINK_HOPS``
+    real, resolvable symlinks needs a final iteration to confirm the landing
+    position is not itself a further symlink -- without it, such a chain
+    would be rejected even though the OS itself can resolve it.
     """
     visited: set[Path] = set()
     current = candidate
-    for _ in range(MAXIMUM_SYMLINK_HOPS):
+    for _ in range(MAXIMUM_SYMLINK_HOPS + 1):
         if current in visited:
             raise ValueError(f"workspace symlink could not be resolved: {candidate}")
         visited.add(current)

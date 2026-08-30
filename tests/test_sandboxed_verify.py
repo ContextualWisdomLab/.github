@@ -231,6 +231,29 @@ def test_copy_workspace_rejects_symlink_chain_past_the_hop_limit(tmp_path):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
+def test_copy_workspace_accepts_a_chain_of_exactly_the_hop_limit(tmp_path):
+    """A chain of exactly MAXIMUM_SYMLINK_HOPS real symlinks is still accepted.
+
+    The walk checks one position per iteration and only advances past it if
+    it is itself a further symlink, so resolving a chain of N real symlinks
+    needs N+1 checks: one per hop, plus one to confirm the final landing
+    position is a real, non-symlink target. A chain of exactly the hop limit
+    is something the OS can resolve without issue and must not be rejected.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    chain_length = sandboxed_verify.MAXIMUM_SYMLINK_HOPS
+    for index in range(chain_length - 1):
+        (repo / f"hop-{index}").symlink_to(f"hop-{index + 1}")
+    (repo / f"hop-{chain_length - 1}").symlink_to("real.txt")
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "hop-0").is_symlink()
+    assert (copied / "real.txt").read_text(encoding="utf-8") == "payload"
+
+
 def test_copy_workspace_keeps_symlink_whose_target_was_excluded_from_the_copy(tmp_path):
     """A symlink into a directory excluded by DEFAULT_IGNORE is accepted, not an escape.
 
