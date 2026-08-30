@@ -1565,12 +1565,22 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
     저장소(또는 조직) 레벨에 설정되어 있지 않으면** 이 플래그는 항상 `false`가 되고
     `repository_dispatch_wait_reason()`(`pr_review_merge_scheduler.py:680-701`)은
     `execution_repo == dispatch_repo`(스케줄러가 `.github` 자신의 컨텍스트에서 실행될 때만
-    참)도 만족하지 못하므로 항상 wait를 반환한다 — 즉 이 두 secret 중 하나가
-    `contextual-orchestrator`에 없는 한 이 저장소의 어떤 PR도 영원히 이 gate를 통과하지 못한다.
-    이것은 코드로 고칠 수 없다 — **사람이 organization 또는 `contextual-orchestrator` repository
-    설정에서 `PR_REVIEW_MERGE_TOKEN` 또는 `OPENCODE_APPROVE_TOKEN` secret이 실제로 존재하고
-    유효한지 확인해야 한다.** (PR #939는 제목만 비슷할 뿐 실제로는 Strix/Inkspan scanner
-    오탐·uv materialization에 관한 무관한 작업이므로, 겹치는 범위가 아님을 확인했다.)
+    참)도 만족하지 못하므로, **이벤트 기반 `scan-pr-queue`(대상 저장소 컨텍스트에서 실행)만 놓고
+    보면** 이 두 secret 중 하나가 `contextual-orchestrator`에 없는 한 항상 wait를 반환한다.
+    **정정(Devin review 지적)**: "어떤 PR도 영원히 통과하지 못한다"는 표현은 과장이었다 —
+    같은 파일의 `org-queue-sweep` job(574행)은 `if: github.repository ==
+    'ContextualWisdomLab/.github'`로 게이트되어 15분 주기 cron으로 **`.github` 자신의
+    컨텍스트에서** 조직 전체 저장소를 훑는 fallback이다. 이 경로에서는
+    `execution_repo == dispatch_repo`가 항상 참(둘 다 `.github`)이므로
+    `repository_dispatch_wait_reason()`의 두 번째 escape hatch를 만족해 `contextual-orchestrator`
+    자체의 secret 유무와 무관하게 dispatch를 시도할 수 있다. 즉 이벤트 기반 경로는 확실히
+    막혀 있지만, 15분 주기 org-wide sweep은 별도의, 아마도 정상 동작하는 경로다 —
+    `contextual-orchestrator#923`이 "영원히" 막힌 것이 아니라 event-driven 경로만 막히고
+    scheduled fallback의 다음 tick을 기다리는 상태일 가능성이 높다. 그럼에도
+    `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` secret 확인 자체는 여전히 유효한
+    후속 조치다 — 사람이 organization 또는 `contextual-orchestrator` repository 설정에서
+    확인해야 한다. (PR #939는 제목만 비슷할 뿐 실제로는 Strix/Inkspan scanner 오탐·uv
+    materialization에 관한 무관한 작업이므로, 겹치는 범위가 아님을 확인했다.)
   - `ContextualWisdomLab/.github#1438`: dispatch는 실제로 실행되었다(run `33310753001`,
     12:09:57Z 트리거). 하지만 이 저장소 자신의 `coverage-evidence` job이
     `scripts/ci/pingora_edge_policy.py`의 `_load_changed_files` 함수 끝의 방어적 post-loop
@@ -1607,6 +1617,24 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   `repository_dispatch`로 수동 재트리거, (3) contextual-orchestrator#923의 cross-repo
   dispatch 자격 증명 배선을 직접 확인, (4) org-wide 15분 주기 cron이 07:03Z 이후 ~5시간
   공백이 있었다는 조사 결과(별도의 신뢰성 회귀)도 다음 pass에서 조사한다.
+- **순환 의존 주의**: `.github#1438` 자신도 이 pingora_edge_policy.py 수정 없이는 (다른 모든 PR과
+  마찬가지로) OpenCode approval을 받을 수 없다 — 그런데 그 수정 자체가 아직 `#1438`의 **병합되지
+  않은 PR 브랜치**에만 있고 `main`에는 없으므로, `#1438`을 리뷰하는 `coverage-evidence` job도
+  여전히 `main` 기준 코드로 실행되어 같은 이유로 실패한다(즉 이 수정은 자기 자신을 아직
+  구제하지 못한다 — `main`에 병합된 뒤에야 조직 전체에 효과가 발생한다). `org-queue-sweep`이
+  `.github` 자신의 컨텍스트에서 도는 것과는 별개로, 이 특정 순환은 사람의 개입(관리자 병합 또는
+  동등한 경로)이 필요할 수 있다 — 코드만으로는 스스로를 풀 수 없는 경우다.
+- **추가 발견 (사용자 직접 지적)**: `contextual-orchestrator`의 Strix 실행에서도 별도의, 진짜
+  내부 로직 버그를 발견해 수정했다 — `ContextualWisdomLab/contextual-orchestrator`의
+  `server.py`가 `/v1/chat/completions`에서 `tools`가 있을 때 `stream_options.include_usage=true`
+  조합을 무조건 400으로 거부하고 있었는데, 실제로는 하위의 `_chat_response_sse_chunks`가 이미
+  tool_calls delta와 정직하게 라벨링된(reported/estimated) usage chunk를 완전히 지원하는
+  코드였다 — 즉 존재하지 않는 제약을 이유로 이미 동작하는 조합을 막고 있던, 순수한 자체
+  버그였다. Strix의 `openai-agents` SDK가 tools와 함께 이 조합을 항상 보내므로, 이 저장소를
+  경유하는 모든 Strix 실행이 (sidecar preflight 통과 여부와 무관하게) 이 지점에서 결정론적으로
+  실패하고 있었다. `response_format`만 있는 multi-agent "conduct" 경로는 (aggregate usage
+  추적이 아직 구현되지 않아) 여전히 fail-closed 상태로 남겨두었다. 수정·테스트 갱신·전체 스위트
+  검증 후 `contextual-orchestrator#923`에 병합했다.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
