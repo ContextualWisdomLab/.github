@@ -5172,6 +5172,71 @@ def test_main_prefers_never_reviewed_pr_when_dispatch_budget_is_one(monkeypatch,
     )
 
 
+def test_main_prioritizes_full_open_pr_queue_before_max_prs_cap(monkeypatch):
+    old_default_base = make_pr(
+        number=1,
+        baseRefName="main",
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    newer_actionable_stacked = make_pr(number=2, baseRefName="feature-a")
+    fetch_limits = []
+    seen = []
+
+    monkeypatch.setattr(
+        sched,
+        "fetch_open_prs",
+        lambda repo, max_prs: fetch_limits.append(max_prs)
+        or [old_default_base, newer_actionable_stacked],
+    )
+    monkeypatch.setattr(
+        sched,
+        "inspect_pr",
+        lambda repo, pr, **kwargs: seen.append(pr["number"])
+        or sched.Decision(pr["number"], "skip", "observed"),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--max-prs",
+            "1",
+        ]
+    ) == 0
+
+    assert fetch_limits == [None]
+    assert seen == [2]
+
+
+def test_main_zero_max_prs_skips_open_pr_fetch(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sched,
+        "fetch_open_prs",
+        lambda *_args: pytest.fail("zero processing capacity must not fetch the queue"),
+    )
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--max-prs",
+            "0",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["inspected"] == 0
+    assert payload["decisions"] == []
+
+
 def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch):
     prs = [
         make_pr(number=1, baseRefName="main"),

@@ -837,13 +837,17 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None) -> list[dict[str, Any]]:
+def fetch_open_prs_rest(
+    repo: str,
+    max_prs: int | None,
+    base_branch: str | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL is unavailable."""
 
     prs: list[dict[str, Any]] = []
     page = 1
-    while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+    while max_prs is None or len(prs) < max_prs:
+        page_size = 100 if max_prs is None else min(100, max_prs - len(prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
             f"&per_page={page_size}&page={page}"
@@ -863,7 +867,7 @@ def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None)
         if len(payload) < page_size:
             break
         page += 1
-    return prs[:max_prs]
+    return prs if max_prs is None else prs[:max_prs]
 
 
 def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
@@ -873,14 +877,18 @@ def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return [rest_pr_node(repo, pr)] if pr else []
 
 
-def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
-    """Fetch open pull requests from GitHub, paginating up to max_prs."""
+def fetch_open_prs(repo: str, max_prs: int | None) -> list[dict[str, Any]]:
+    """Fetch open pull requests from GitHub, optionally bounded by max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
     cursor: str | None = None
 
-    while len(prs) < max_prs:
-        page_size = min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
+    while max_prs is None or len(prs) < max_prs:
+        page_size = (
+            OPEN_PRS_PAGE_SIZE
+            if max_prs is None
+            else min(OPEN_PRS_PAGE_SIZE, max_prs - len(prs))
+        )
         fields: dict[str, str | int] = {
             "owner": owner,
             "name": name,
@@ -4191,7 +4199,15 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
-    prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    if args.pr_number:
+        prs = fetch_pr(args.repo, args.pr_number)
+    elif args.max_prs <= 0:
+        prs = []
+    else:
+        # The processing cap must not become a pre-prioritization fetch cap:
+        # doing so permanently hides newer stacked or never-reviewed PRs when
+        # older low-priority PRs fill the oldest-first GitHub connection.
+        prs = fetch_open_prs(args.repo, None)
     if not args.pr_number:
         # Stacked PRs have no injected required workflow and depend exclusively
         # on this bounded sweep; default-base PRs also receive event-driven runs.
@@ -4205,7 +4221,7 @@ def main(argv: list[str]) -> int:
                 pr.get("baseRefName") == args.base_branch,
                 review_dispatch_priority(pr),
             ),
-        )
+        )[: args.max_prs]
     decisions = []
     review_dispatches_used = 0
     stacked_review_dispatches_used = 0
