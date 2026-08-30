@@ -286,7 +286,9 @@ def test_stop_service_handles_finished_lookup_race_timeout_and_capture(
         lambda process: forced.append(process),
     )
     sandboxed_web_e2e.stop_service(timed)
-    assert forced == [timeout_process]
+    # Once for the force kill after TimeoutExpired, once more for the final
+    # unconditional same-group cleanup that now always runs before join.
+    assert forced == [timeout_process, timeout_process]
 
 
 def test_tail_text_rejects_nonpositive_line_count(tmp_path: Path) -> None:

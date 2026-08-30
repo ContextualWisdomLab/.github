@@ -17,7 +17,15 @@ def test_read_limit_and_timeout_validation_reject_all_unsafe_types() -> None:
     for value in [False, "2", 0, bounded.MAXIMUM_OUTPUT_LIMIT_BYTES + 1]:
         with pytest.raises(ValueError, match="maximum_bytes"):
             bounded._validate_read_limit(value)
-    for value in [False, "1", 0, -1]:
+    for value in [
+        False,
+        "1",
+        0,
+        -1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ]:
         with pytest.raises(ValueError, match="timeout"):
             bounded._validated_timeout(value)
 

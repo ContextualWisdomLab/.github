@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import signal
 import subprocess
@@ -309,12 +310,18 @@ def _normalized_command(arguments: Sequence[object]) -> tuple[str, ...]:
 
 
 def _validated_timeout(timeout: object) -> int | float:
-    """Return one positive numeric subprocess timeout."""
+    """Return one positive finite numeric subprocess timeout.
+
+    Rejects ``bool``, non-numeric values, non-positive numbers, ``NaN``, and
+    either signed infinity: none of those can ever reach the timeout/cleanup
+    path, so a command given one of them would otherwise run unbounded.
+    """
 
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
         or timeout <= 0
+        or not math.isfinite(timeout)
     ):
         raise ValueError("timeout must be a positive number")
     return timeout

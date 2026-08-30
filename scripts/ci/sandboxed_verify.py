@@ -60,6 +60,7 @@ SAFE_ENV_ALLOWLIST = (
     "TZ",
     "PYTHONPATH",
 )
+MAXIMUM_SYMLINK_HOPS = 40
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 PATH_BOUNDARY_EXIT_CODE = 122
 COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
@@ -167,13 +168,58 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
+def _validate_contained_symlink_cycle(candidate: Path, source_root: Path) -> None:
+    """Accept a repository-internal symlink cycle, rejecting only an escape.
+
+    ``Path.resolve(strict=False)`` raises an uncaught ``RuntimeError`` for a
+    symlink loop -- even one fully self-contained inside the copied
+    repository -- before ``validate_repository_symlinks`` can classify it.
+    This walks the same chain by hand, one ``os.readlink`` hop at a time,
+    tracking visited paths itself instead of asking the filesystem to
+    resolve indefinitely. A hop whose target is absolute, or whose lexically
+    normalized target steps outside ``source_root``, still raises
+    ``RepositoryPathBoundaryError`` exactly like a non-cyclic escape. A chain
+    that revisits a path it already followed -- without ever leaving
+    ``source_root`` -- is treated as contained and returns normally. The hop
+    count is bounded so a chain that (due to purely lexical, not real-path,
+    normalization) never repeats still fails closed instead of hanging.
+    """
+    visited: set[Path] = set()
+    current = Path(os.path.normpath(candidate))
+    for _ in range(MAXIMUM_SYMLINK_HOPS):
+        if current in visited:
+            return
+        visited.add(current)
+        if not current.is_symlink():
+            return
+        target = Path(os.readlink(current))
+        if target.is_absolute():
+            raise RepositoryPathBoundaryError(
+                f"symlink escapes repository verification sandbox via absolute target: "
+                f"{current} -> {target}"
+            )
+        current = Path(os.path.normpath(current.parent / target))
+        try:
+            current.relative_to(source_root)
+        except ValueError as exc:
+            raise RepositoryPathBoundaryError(
+                f"symlink escapes repository verification sandbox: {candidate} -> {target}"
+            ) from exc
+    raise RepositoryPathBoundaryError(
+        f"symlink chain exceeds the supported hop limit: {candidate}"
+    )
+
+
 def validate_repository_symlinks(source: Path) -> None:
     """Reject symlinks that could escape the copied repository sandbox.
 
     Relative links are retained only when their resolved target stays beneath
     ``source``. Absolute links are rejected even when they currently name a
     path beneath ``source`` because preserving them would point the sandboxed
-    command back at the original checkout instead of the isolated copy.
+    command back at the original checkout instead of the isolated copy. A
+    symlink cycle fully contained beneath ``source`` (see
+    ``_validate_contained_symlink_cycle``) is accepted rather than aborting
+    verification with an uncaught ``RuntimeError``.
     """
     source_root = source.resolve(strict=True)
     for current_root, directory_names, file_names in os.walk(source_root, followlinks=False):
@@ -188,7 +234,11 @@ def validate_repository_symlinks(source: Path) -> None:
                     f"symlink escapes repository verification sandbox via absolute target: "
                     f"{candidate} -> {target}"
                 )
-            resolved_target = (candidate.parent / target).resolve(strict=False)
+            try:
+                resolved_target = (candidate.parent / target).resolve(strict=False)
+            except RuntimeError:
+                _validate_contained_symlink_cycle(candidate, source_root)
+                continue
             try:
                 resolved_target.relative_to(source_root)
             except ValueError as exc:

@@ -2,9 +2,11 @@ import json
 import io
 import os
 import runpy
+import shlex
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -107,7 +109,7 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
 
 def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     """Small helper branches handle empty URLs, loopback readiness, and hard cleanup."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
@@ -150,13 +152,61 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", fake_killpg, raising=False)
     monkeypatch.setattr(sandboxed_web_e2e.signal, "SIGKILL", sandboxed_web_e2e.signal.SIGTERM, raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
-    assert len(killed) == 2
+    # SIGTERM, the force kill after TimeoutExpired, and the final unconditional
+    # same-group cleanup that now always runs before the capture is joined.
+    assert len(killed) == 3
 
     killed.clear()
     slow_service = sandboxed_web_e2e.Service("slow", "sleep", SlowProcess(), tmp_path / "slow.log")
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
-    assert len(killed) == 2
+    assert len(killed) == 3
+
+
+def test_stop_service_reaps_descendant_after_leader_already_exited(tmp_path: Path) -> None:
+    """A same-group descendant that inherits the log pipe cannot outlive a
+    leader that has already exited and been reaped by the time cleanup runs.
+
+    Before the fix, ``stop_service`` skipped ``os.killpg`` entirely whenever
+    ``service.process.poll()`` was no longer ``None``, so an already-exited
+    leader's same-group descendant (holding the inherited log pipe open)
+    kept running and delayed the bounded capture join until its own timeout.
+    """
+    sentinel = tmp_path / "escaped-descendant-ran"
+    descendant_source = (
+        "import pathlib, time; time.sleep(2); "
+        f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+    )
+    leader_source = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {descendant_source!r}]); "
+        "print('leader exited')"
+    )
+    command = shlex.join([sys.executable, "-c", leader_source])
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    service = sandboxed_web_e2e.start_service(
+        "leader",
+        command,
+        tmp_path,
+        {"PATH": os.environ.get("PATH", "")},
+        logs_dir,
+    )
+
+    # Let the direct leader exit and be reaped before cleanup ever runs, so
+    # stop_service observes an already-finished process (poll() is not None).
+    service.process.wait(timeout=10)
+    assert service.process.poll() is not None
+
+    started = time.monotonic()
+    sandboxed_web_e2e.stop_service(service)
+    assert time.monotonic() - started < 5
+
+    # The descendant must have been killed with the rest of the group before
+    # it could complete its sleep and write the sentinel.
+    time.sleep(2.5)
+    assert not sentinel.exists()
+    assert "leader exited" in service.log_path.read_text(encoding="utf-8")
 
 
 def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path):
@@ -248,7 +298,7 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
 
 def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
     """Readiness polling must fail closed on public, metadata, and userinfo targets."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
@@ -275,7 +325,7 @@ def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path)
 
 def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
     """Literal localhost is allowed only when every resolved address is loopback."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 

@@ -3,6 +3,8 @@
 import json
 
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,117 @@ def test_copy_workspace_preserves_repository_internal_symlink(tmp_path: Path) ->
 
     assert (copied / "alias.txt").is_symlink()
     assert (copied / "alias.txt").read_text(encoding="utf-8") == "review me"
+
+
+def test_copy_workspace_accepts_repository_internal_symlink_cycle(tmp_path: Path) -> None:
+    """A two-link symlink cycle fully inside the repository is contained, not fatal.
+
+    ``Path.resolve(strict=False)`` raises an uncaught ``RuntimeError`` for a
+    symlink loop. Before the fix, that ``RuntimeError`` escaped
+    ``validate_repository_symlinks`` and aborted an otherwise-valid copy;
+    a cycle that never leaves the copied repository must instead be
+    accepted so verification proceeds normally.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cycle-a").symlink_to("cycle-b")
+    (repo / "cycle-b").symlink_to("cycle-a")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", ())
+
+    assert (copied / "cycle-a").is_symlink()
+    assert (copied / "cycle-b").is_symlink()
+
+
+def test_main_accepts_repository_internal_symlink_cycle_and_runs_command(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI runs normally when the repository holds a self-contained cycle.
+
+    Before the fix, ``main`` would have surfaced the ``RuntimeError`` raised
+    by ``Path.resolve`` deep inside ``copy_workspace`` -- never reaching the
+    command execution path at all, let alone this repository's normal,
+    non-path-boundary result payload.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cycle-a").symlink_to("cycle-b")
+    (repo / "cycle-b").symlink_to("cycle-a")
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(repo), "--", sys.executable, "-c", "print('verified')"]
+    )
+    captured = capsys.readouterr()
+    lines = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith(sandboxed_verify.RESULT_MARKER)
+    ]
+    payload = json.loads(lines[0].removeprefix(sandboxed_verify.RESULT_MARKER))
+
+    assert exit_code == 0
+    assert payload["exit_code"] == 0
+    assert payload["path_boundary_rejected"] is False
+    assert "verified" in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_validate_contained_symlink_cycle_returns_at_non_symlink_target() -> None:
+    """The manual hop-walk stops as soon as a chain reaches a real file."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_root = Path(tmp_dir)
+        real_file = source_root / "real.txt"
+        real_file.write_text("data", encoding="utf-8")
+
+        assert (
+            sandboxed_verify._validate_contained_symlink_cycle(real_file, source_root)
+            is None
+        )
+
+
+def test_validate_contained_symlink_cycle_rejects_absolute_hop_mid_chain() -> None:
+    """An absolute target anywhere in the chain is rejected, not just at hop one."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_root = Path(tmp_dir)
+        (source_root / "cycle-a").symlink_to("cycle-b")
+        (source_root / "cycle-b").symlink_to(source_root / "cycle-a")
+
+        with pytest.raises(ValueError, match="absolute target"):
+            sandboxed_verify._validate_contained_symlink_cycle(
+                source_root / "cycle-a", source_root
+            )
+
+
+def test_validate_contained_symlink_cycle_rejects_lexical_escape_mid_chain() -> None:
+    """A relative hop that lexically steps outside source_root is rejected."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_root = Path(tmp_dir) / "repo"
+        source_root.mkdir()
+        (source_root / "cycle-a").symlink_to("cycle-b")
+        (source_root / "cycle-b").symlink_to("../outside")
+
+        with pytest.raises(ValueError, match="symlink escapes repository"):
+            sandboxed_verify._validate_contained_symlink_cycle(
+                source_root / "cycle-a", source_root
+            )
+
+
+def test_validate_contained_symlink_cycle_fails_closed_past_hop_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chain that never repeats within the hop budget is rejected, not hung."""
+    monkeypatch.setattr(sandboxed_verify, "MAXIMUM_SYMLINK_HOPS", 2)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_root = Path(tmp_dir)
+        (source_root / "cycle-a").symlink_to("cycle-b")
+        (source_root / "cycle-b").symlink_to("cycle-c")
+        (source_root / "cycle-c").symlink_to("cycle-a")
+
+        with pytest.raises(ValueError, match="exceeds the supported hop limit"):
+            sandboxed_verify._validate_contained_symlink_cycle(
+                source_root / "cycle-a", source_root
+            )
 
 
 def test_copy_workspace_does_not_validate_ignored_symlinks(tmp_path: Path) -> None:

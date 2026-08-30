@@ -312,7 +312,17 @@ def run_shell(
 
 
 def stop_service(service: Service) -> None:
-    """Terminate a service process group and finalize its bounded log evidence."""
+    """Terminate a service process group and finalize its bounded log evidence.
+
+    Graceful ``SIGTERM`` is attempted only while the direct leader is still
+    alive. Regardless of whether the leader was already reaped before this
+    call, exited on its own, or had to be force-killed, a final same-group
+    cleanup runs before the bounded capture is joined -- analogous to
+    ``bounded_subprocess.run_bounded_command``'s unconditional final
+    ``kill_process_group`` call. Without it, a same-group descendant that
+    outlives an already-exited leader would keep the inherited log pipe open
+    and never let the capture reach EOF.
+    """
     if service.process.poll() is None:
         try:
             os.killpg(service.process.pid, signal.SIGTERM)
@@ -322,6 +332,7 @@ def stop_service(service: Service) -> None:
         except subprocess.TimeoutExpired:
             bounded_subprocess.kill_process_group(service.process)
             service.process.wait(timeout=10)
+    bounded_subprocess.kill_process_group(service.process)
     if service.capture is not None:
         service.capture.join(timeout=10)
 
