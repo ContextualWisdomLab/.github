@@ -2377,6 +2377,100 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+def dispatch_draft_review_only(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    review_dispatch_allowed: bool,
+    workflow: str,
+    security_workflow: str,
+    stale_opencode_minutes: int,
+) -> Decision:
+    """Dispatch review evidence for one draft PR, never touching merge/branch state.
+
+    An explicit review-only request (a mention invocation, never the ordinary
+    queue sweep) may reach this for a draft PR. It runs exactly the same
+    Strix-then-OpenCode dispatch gate the ready-PR pipeline uses below, so a
+    draft gets the same evidence chain -- but it returns before any of
+    ``inspect_pr``'s unresolved-thread, changes-requested, branch-update, or
+    auto-merge logic, so a draft can never be merged, auto-merged, or have its
+    branch updated by reaching this function.
+    """
+    number = pr["number"]
+    opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+    if opencode_state == "running":
+        return Decision(number, "wait", "draft PR review-only dispatch; OpenCode review already running")
+    if opencode_state == "complete":
+        return Decision(
+            number,
+            "skip",
+            "draft PR review-only dispatch; current-head OpenCode verdict already exists",
+        )
+    strix_state = strix_evidence_state(pr)
+    if strix_state == "missing":
+        if not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                "draft PR review-only dispatch; current head has no completed Strix evidence; "
+                "review dispatch limit reached",
+            )
+        wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return Decision(
+                number,
+                "wait",
+                f"draft PR review-only dispatch; current head has no completed Strix evidence; {wait_reason}",
+            )
+        dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return Decision(
+                number, "wait", "draft PR review-only dispatch; same-head Strix evidence is still running"
+            )
+        if dispatch_result == "repository_busy":
+            return Decision(
+                number,
+                "wait",
+                "draft PR review-only dispatch; current head has no completed Strix evidence; "
+                "target repository already has active Strix evidence",
+            )
+        return Decision(
+            number,
+            "security_dispatch",
+            "draft PR review-only dispatch; current head has no completed Strix evidence; same-head Strix dispatched",
+        )
+    if strix_state == "running":
+        return Decision(number, "wait", "draft PR review-only dispatch; same-head Strix evidence is still running")
+    if not review_dispatch_allowed:
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head has completed Strix evidence; "
+            "review dispatch limit reached",
+        )
+    wait_reason = repository_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return Decision(
+            number,
+            "wait",
+            f"draft PR review-only dispatch; current head has completed Strix evidence; {wait_reason}",
+        )
+    dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+    if dispatch_result == "already_running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head has completed Strix evidence; "
+            "same-head OpenCode workflow run is already active",
+        )
+    return Decision(
+        number,
+        "review_dispatch",
+        "draft PR review-only dispatch; current head has completed Strix evidence; same-head OpenCode dispatched",
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2393,12 +2487,23 @@ def inspect_pr(
     base_branch: str,
     merge_mode: str = "direct_or_auto",
     stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
+    allow_draft_review_dispatch: bool = False,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
+        if allow_draft_review_dispatch and trigger_reviews:
+            return dispatch_draft_review_only(
+                repo,
+                pr,
+                dry_run=dry_run,
+                review_dispatch_allowed=review_dispatch_allowed,
+                workflow=workflow,
+                security_workflow=security_workflow,
+                stale_opencode_minutes=stale_opencode_minutes,
+            )
         return Decision(number, "skip", "draft PR")
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
@@ -3936,6 +4041,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument("--pr-number", type=int, default=0)
+    parser.add_argument(
+        "--allow-draft-review-dispatch",
+        action="store_true",
+        help=(
+            "Allow a --pr-number draft PR to receive Strix/OpenCode review "
+            "dispatch. Structurally review-only: never merges, enables "
+            "auto-merge, or updates the branch. Set only for an explicit "
+            "single-PR review request (a mention invocation); never for the "
+            "ordinary multi-PR queue sweep, which must keep skipping drafts."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -3994,6 +4110,11 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
+    if args.allow_draft_review_dispatch and not args.pr_number:
+        raise SystemExit(
+            "--allow-draft-review-dispatch requires --pr-number; it is a single-PR "
+            "review-only exception, never a default for the multi-PR queue sweep"
+        )
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
     if not args.pr_number:
         # Stacked PRs have no injected required workflow and depend exclusively
@@ -4031,6 +4152,7 @@ def main(argv: list[str]) -> int:
                 security_workflow=args.security_workflow,
                 base_branch=args.base_branch,
                 stale_opencode_minutes=args.stale_opencode_minutes,
+                allow_draft_review_dispatch=args.allow_draft_review_dispatch,
             )
         except RuntimeError as exc:
             decision = Decision(

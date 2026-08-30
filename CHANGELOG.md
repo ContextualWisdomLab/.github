@@ -5,6 +5,27 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Let an explicit mention-triggered review request (`@opencode-agent review`)
+  actually dispatch a current-head OpenCode review for a **draft** PR.
+  `pr_review_merge_scheduler.py`'s `inspect_pr()` unconditionally returned
+  `skip: draft PR` before reaching any review-dispatch logic, so
+  `agent-mention-opencode-dispatch.yml`'s already-structurally-review-only
+  forward to the scheduler (`trigger_reviews=true`, `enable_auto_merge=false`,
+  `update_branches=false`, `merge_mode=disabled`) was silently discarded for
+  drafts: the mention router resolved and forwarded the request correctly,
+  but the scheduler never posted a review. New opt-in `--allow-draft-review-dispatch`
+  CLI flag (requires `--pr-number`; rejected otherwise) and `inspect_pr()`
+  parameter route a draft PR through a new `dispatch_draft_review_only()`
+  helper that runs the same Strix-then-OpenCode dispatch gate the ready-PR
+  pipeline uses, then returns immediately — before any of `inspect_pr`'s
+  unresolved-thread, changes-requested, branch-update, or auto-merge logic,
+  so a draft still cannot be merged, auto-merged, or have its branch updated
+  through this path. `pr-review-merge-scheduler.yml`'s `scan-pr-queue` job
+  sets the new `ALLOW_DRAFT_REVIEW_DISPATCH` flag from
+  `github.event.client_payload.agent_invocation_key` — a field only the
+  mention-dispatch workflow ever sets — so the ordinary multi-PR queue sweep
+  (schedule/push/pull_request_target/pull_request_review/workflow_run) keeps
+  skipping drafts exactly as before.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

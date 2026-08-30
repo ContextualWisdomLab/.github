@@ -3732,6 +3732,178 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert called == [("owner/repo", 1, True)]
 
 
+def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews():
+    """The ordinary multi-PR queue sweep never sets allow_draft_review_dispatch,
+    so a draft PR keeps being skipped exactly as before this feature existed."""
+    assert inspect(make_pr(isDraft=True)).action == "skip"
+    assert inspect(make_pr(isDraft=True)).reason == "draft PR"
+    allowed_without_trigger = inspect(
+        make_pr(isDraft=True), allow_draft_review_dispatch=True, trigger_reviews=False
+    )
+    assert allowed_without_trigger.action == "skip"
+    assert allowed_without_trigger.reason == "draft PR"
+
+
+def test_draft_pr_review_only_dispatch_never_reaches_merge_or_branch_logic(monkeypatch):
+    """An explicit review-only draft request must never merge, auto-merge, or
+    update the branch, no matter how merge-ready-looking the fixture is."""
+    mutating_calls = []
+    for name in ("update_branch", "enable_auto_merge", "merge_pr", "disable_auto_merge_decision"):
+        if hasattr(sched, name):
+            monkeypatch.setattr(
+                sched, name, lambda *args, _name=name, **kwargs: mutating_calls.append(_name)
+            )
+
+    draft_pr = make_pr(
+        isDraft=True,
+        mergeStateStatus="CLEAN",
+        restMergeableState="CLEAN",
+        reviewDecision="APPROVED",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    decision = inspect(draft_pr, allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+    assert mutating_calls == []
+
+
+def test_draft_pr_review_only_dispatch_strix_missing_then_opencode_chain():
+    fresh_draft = make_pr(isDraft=True)
+    security_dispatch = inspect(fresh_draft, allow_draft_review_dispatch=True)
+    assert security_dispatch.action == "security_dispatch"
+    assert security_dispatch.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "same-head Strix dispatched"
+    )
+
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    review_dispatch = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert review_dispatch.action == "review_dispatch"
+    assert review_dispatch.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; same-head OpenCode dispatched"
+    )
+
+
+def test_draft_pr_review_only_dispatch_strix_running_waits():
+    running_strix_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS")]}},
+    )
+    decision = inspect(running_strix_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
+
+
+def test_draft_pr_review_only_dispatch_strix_missing_dispatch_budget_exhausted():
+    decision = inspect(
+        make_pr(isDraft=True), allow_draft_review_dispatch=True, review_dispatch_allowed=False
+    )
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "review dispatch limit reached"
+    )
+
+
+def test_draft_pr_review_only_dispatch_opencode_dispatch_budget_exhausted():
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(
+        strix_complete_draft, allow_draft_review_dispatch=True, review_dispatch_allowed=False
+    )
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; "
+        "review dispatch limit reached"
+    )
+
+
+def test_draft_pr_review_only_dispatch_waits_for_central_required_workflow(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
+
+    missing_strix = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert missing_strix.action == "wait"
+    assert "current head has no completed Strix evidence" in missing_strix.reason
+    assert "no cross-repository repository-dispatch credential" in missing_strix.reason
+
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    strix_complete = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert strix_complete.action == "wait"
+    assert "current head has completed Strix evidence" in strix_complete.reason
+    assert "OpenCode Review dispatch waits" in strix_complete.reason
+
+
+def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
+
+
+def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "target repository already has active Strix evidence"
+    )
+
+
+def test_draft_pr_review_only_dispatch_waits_when_opencode_already_running(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; "
+        "same-head OpenCode workflow run is already active"
+    )
+
+
+def test_draft_pr_review_only_dispatch_opencode_already_running_skips():
+    running_opencode_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}},
+    )
+    decision = inspect(running_opencode_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; OpenCode review already running"
+
+
+def test_draft_pr_review_only_dispatch_skips_when_verdict_already_exists():
+    complete_opencode_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
+    )
+    decision = inspect(complete_opencode_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "skip"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
     runs = [
         {"name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
@@ -4868,6 +5040,21 @@ def test_main_rejects_invalid_branch_update_limit():
                 "github-flow",
                 "--branch-update-limit",
                 "-2",
+            ]
+        )
+
+
+def test_main_rejects_allow_draft_review_dispatch_without_pr_number():
+    with pytest.raises(SystemExit, match="--allow-draft-review-dispatch requires --pr-number"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--allow-draft-review-dispatch",
             ]
         )
 
