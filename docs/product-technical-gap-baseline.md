@@ -1474,6 +1474,34 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
   complementary to, not overlapping with, the consolidated-evidence fix's own new log line).
 - §5.1 below is updated to reflect this.
 
+## 2026-08-30 wakeup: reconciled with concurrent owner fixes; three PRs merged-current and marked ready
+
+- Confirmed all three open PRs from the previous pass (`contextual-orchestrator#923`, `.github#1438`,
+  `naruon#1486`) had fallen behind their base branches while this session was investigating the
+  bytez/preflight incident — `.github`'s `main` in particular had advanced by 6 commits (owner
+  bypass-merges) covering the exact same incident with much deeper, hosted-run-artifact-backed
+  evidence than this session's own investigation had. Rather than merge blind, read every one of
+  those commits' diffs and the doc's own new "sidecar-preflight outage: consolidated evidence" entry
+  before touching anything — see that entry and the "correction" entry directly below it for the full
+  reconciliation. Net effect: this session's own `_log_preflight_rejections` visibility fix was
+  dropped as redundant with what had already shipped; this session's discovery-retry fix
+  (`contextual-orchestrator#923`) and the doc corrections were kept as independently valid.
+- Merged current `main`/`develop` into all three branches as ordinary merge commits (never rebase);
+  `contextual-orchestrator#923` needed no merge (its `main` had not moved). Full suites re-verified
+  clean after each merge: `.github` 1897 passed/1 skipped/21 subtests (100% coverage on touched files,
+  100% interrogate), `naruon` 1812 passed/32 skipped, `contextual-orchestrator` 2765 passed/1 skipped
+  (unchanged, no merge needed).
+- All three marked ready for review (undrafted) — implementation and local validation are complete;
+  keeping them in draft only paused the central review pipeline (CodeRabbit skips drafts entirely;
+  merge automation is explicitly gated off for drafts) with nothing left to gain from staying in that
+  state.
+- `.github#1347` (SSRF/isolation for `sandboxed_web_e2e.py`) deliberately **not** touched this pass:
+  it is 8+ days stale against a `main` that has independently grown substantial SSRF hardening in the
+  exact same file (already flagged in an earlier entry above as a same-file, overlapping-logic case
+  that needs actual semantic reconciliation, not a mechanical merge) — attempting that at the tail end
+  of an already long pass risked a rushed, wrong resolution more than it risked leaving it one more
+  cycle. Left for a dedicated next pass.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
@@ -1492,25 +1520,29 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/contextual-orchestrator#923 — discovery-side transient-retry 수정(진짜 root
-   cause였던 family_cap/gateway-timeout 문제와는 별개의, 독립적인 resilience 개선)의 required
-   Checks·독립 승인을 재확인하고, 조건 충족 시 merge한다. 병합 후 `.github`의 `ORCHESTRATOR_PIN_SHA`를
-   해당 커밋으로 갱신하는 후속 PR이 필요하다(#1422/#1426이 이미 확립한 패턴과 동일).
-2. ContextualWisdomLab/.github#1438 — stderr tail 확장(`SIDECAR_STDERR_TAIL_LINES`) + gap-baseline
-   correction(Bytez/413 오귀속 정정, family_cap 수정이 진짜 root cause임을 반영)의 required Checks·독립
-   승인을 재확인하고, 조건 충족 시 merge한다. (애초 이 PR에 포함했던 preflight-rejection 가시성 fix는
-   `main`에 이미 동등한 기능(`log "sidecar preflight route evidence: ..."`)이 병렬로 병합되어 중복이므로
-   되돌렸다.)
-3. ContextualWisdomLab/.github#1347 — web-E2E isolation/SSRF 수정을 current `main`으로 merge-conflict
-   해소(ordinary merge commit, no rebase) 후 terminal Checks·독립 승인을 재확인한다. (#1297은 이미
-   병합됨; #1345/#1326은 closed·unmerged로 확인되어 더 이상 후보가 아니다 — 위 2026-08-30 항목 참고.)
-4. ContextualWisdomLab/naruon#1486 — 새로 추가된 Noema `check_calendar_conflict` 도구의 naruon 자체
-   required Checks(OpenCode/Strix/merge-scheduler)를 current head에서 재확인하고, 조건 충족 시
-   merge한다.
+1. ContextualWisdomLab/contextual-orchestrator#923 — main과 이미 동기화됨, ready-for-review로 전환
+   완료. discovery-side transient-retry 수정(진짜 root cause였던 family_cap/gateway-timeout 문제와는
+   별개의, 독립적인 resilience 개선)의 required Checks·독립 승인을 재확인하고, 조건 충족 시 merge한다.
+   병합 후 `.github`의 `ORCHESTRATOR_PIN_SHA`를 해당 커밋으로 갱신하는 후속 PR이 필요하다(#1422/#1426이
+   이미 확립한 패턴과 동일).
+2. ContextualWisdomLab/.github#1438 — main과 이미 동기화됨(6개 owner bypass-merge 반영), ready-for-review로
+   전환 완료. stderr tail 확장(`SIDECAR_STDERR_TAIL_LINES`) + gap-baseline correction(Bytez/413 오귀속
+   정정, family_cap 수정이 진짜 root cause임을 반영)의 required Checks·독립 승인을 재확인하고, 조건 충족
+   시 merge한다.
+3. ContextualWisdomLab/naruon#1486 — develop과 이미 동기화됨, ready-for-review로 전환 완료. 새로 추가된
+   Noema `check_calendar_conflict` 도구의 naruon 자체 required Checks(OpenCode/Strix/merge-scheduler)를
+   current head에서 재확인하고, 조건 충족 시 merge한다.
+4. ContextualWisdomLab/.github#1347 — **아직 손대지 않음, 다음 pass 전용 작업.** web-E2E isolation/SSRF
+   수정이 8일 이상 stale한 상태이고, 그 사이 `main`이 정확히 같은 파일(`sandboxed_web_e2e.py`)에 독립적인
+   SSRF 강화를 상당량 추가했다 — 기계적 merge가 아니라 실제 로직을 읽고 대조하는 작업이 필요하다(위
+   2026-08-30 항목에서도 "same-file, overlapping-logic" 사례로 이미 플래그됨). ordinary merge commit(no
+   rebase)으로 conflict를 해소하되, 서두르지 말고 전용 pass에서 진행한다.
 5. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon
    ecosystem 소비 증거(부분적으로 #1486이 G-06/PRD-02에 기여), G-15는 대용량·미지원 첨부파일 parser
-   registry의 소유 저장소 PR로 연결한다. 완료된 discovery-side retry 이후에도 preflight warm-up probe
-   재시도 여부는 실제 transience 증거(이번 pass의 가시성 개선으로 확보 가능)가 나오기 전까지 보류한다.
+   registry의 소유 저장소 PR로 연결한다. completion warm-up probe(`proxy_send_once`) 자체의 재시도
+   여부는 이미 merge된 family_cap/gateway-timeout 수정의 실제 hosted-run 결과와, `main`에 이미 병합된
+   `log "sidecar preflight route evidence: ..."` 가시성 라인이 향후 축적할 실제 transience 증거가
+   나오기 전까지 보류한다 — 지금 다시 시도하는 것은 추측에 기반한 재작업일 뿐이다.
 
 ## 6. Compliance and data boundary
 
