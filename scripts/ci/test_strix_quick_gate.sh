@@ -3743,7 +3743,7 @@ REPORT
 			;;
 		esac
 		;;
-	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success|internal-server-error-unrelated-output-nonretryable)
+	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success|internal-server-error-unrelated-output-nonretryable|internal-server-error-many-blocks-retry-same-model-success)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-api-connection-primary|vertex_ai/retry-api-connection-primary|openai/openai/retry-api-connection-primary)
 			attempt="0"
@@ -3760,6 +3760,24 @@ REPORT
 							echo "target application diagnostic $filler"
 						done
 						echo "Internal Server Error"
+						exit 1
+					fi
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-many-blocks-retry-same-model-success" ]; then
+						# Regression for the SIGPIPE race (Devin finding on
+						# PR #1394): emit enough matching
+						# litellm.InternalServerError blocks that the bounded
+						# awk scan's piped output exceeds a single pipe
+						# buffer, so a `grep -q` that stops reading at the
+						# first match cannot SIGPIPE the still-writing awk
+						# producer into a false non-match under
+						# `set -o pipefail`.
+						for _ in $(seq 1 2000); do
+							echo "line filler some unrelated target application output padding padding padding"
+							echo "Error: litellm.InternalServerError: upstream request failed"
+							echo "Internal Server Error"
+							echo "more filler after context one"
+							echo "more filler after context two"
+						done
 						exit 1
 					fi
 					echo "LLM CONNECTION FAILED"
@@ -6634,6 +6652,20 @@ run_filtered_gate_case_if_requested() {
 			"https://models.github.ai/inference" \
 			"" \
 			"0"
+		;;
+	internal-server-error-many-blocks-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"0" \
+			"scan ok after same-model api connection retry" \
+			"2" \
+			"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"1"
 		;;
 	endpoint-in-excluded-dir)
 		run_gate_case "endpoint-in-excluded-dir" \
@@ -10151,6 +10183,23 @@ run_gate_case_allow_provider_signal "internal-server-error-unrelated-output-nonr
 	"https://models.github.ai/inference" \
 	"" \
 	"0"
+
+# Bug: large provider logs (many matching litellm.InternalServerError
+# blocks) must not suppress a legitimate same-model retry via SIGPIPE on the
+# bounded awk scan under `set -o pipefail`. See PR #1394 Devin finding
+# "Large provider logs suppress retries".
+run_gate_case_allow_provider_signal "internal-server-error-many-blocks-retry-same-model-success" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"0" \
+	"scan ok after same-model api connection retry" \
+	"2" \
+	"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"1"
 
 run_gate_case "openrouter-502-fallback-retry-same-model-success" \
 	"vertex_ai/missing-primary" \
