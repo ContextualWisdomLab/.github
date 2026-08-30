@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-5f2753ace756ddd81049a5221d55e8977572a416}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-30c6d71680e659f25a0a433d4726ad0d437f9757}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -29,6 +29,12 @@ STRIX_EVIDENCE_DIR="${GITHUB_WORKSPACE:-$ORCHESTRATOR_WORK}/strix_runs"
 ORCHESTRATOR_LAUNCHER="${ORCHESTRATOR_LAUNCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/contextual_orchestrator_review_launcher.py}"
 ORG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrator_sidecar_stream.py"
+# Must equal contextual_orchestrator_review_launcher.py's
+# _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL exactly (pinned by a contract test
+# on both sides): the last line the launcher writes to stderr once discovery
+# finishes, letting the shell script wait for a deterministic marker instead
+# of guessing whether the async sanitizer has caught up.
+SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-4}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
@@ -271,6 +277,22 @@ log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
 export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
+# Stream stdout/stderr through the redacting sanitizer as two named, awaitable
+# processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
+# so a failure handler can wait for the sanitizer to finish flushing before it
+# reads the sanitized file — otherwise the read can race the still-draining
+# pipe and silently show an empty/truncated diagnostic (the exact class of bug
+# this sanitizer exists to avoid: see the 2026-08-30 sidecar-diagnostics gap
+# baseline entry).
+exec {orchestrator_stdout_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout")
+stdout_sanitizer_pid=$!
+exec {orchestrator_stderr_fd}> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr")
+stderr_sanitizer_pid=$!
+wait_for_sidecar_sanitizers() {
+  wait "$stdout_sanitizer_pid" 2>/dev/null || true
+  wait "$stderr_sanitizer_pid" 2>/dev/null || true
+}
+
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
   CONTEXTUAL_ORCHESTRATOR_TOKEN="$ORCHESTRATOR_TOKEN" \
   "$sidecar_python" "$ORCHESTRATOR_WORK/launch_sidecar.py" \
@@ -283,9 +305,14 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
     "${pool_args[@]}" \
-> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stdout") \
-2> >("$sidecar_python" -u "$SIDECAR_LOG_SANITIZER" > "$sidecar_stderr") &
+  >&"$orchestrator_stdout_fd" 2>&"$orchestrator_stderr_fd" &
 sidecar_pid=$!
+# Close our own copies of the write ends now that the sidecar process holds
+# its own duplicated fds. If these stayed open in this shell, the sanitizer
+# process substitutions would never see EOF (and never exit) once the sidecar
+# itself closes its fds, since a process substitution's reader only finishes
+# after every writer has closed.
+exec {orchestrator_stdout_fd}>&- {orchestrator_stderr_fd}>&-
 cleanup_sidecar_on_error() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -293,6 +320,7 @@ cleanup_sidecar_on_error() {
     log "stopping failed sidecar (pid $sidecar_pid)"
     kill "$sidecar_pid" 2>/dev/null || true
     wait "$sidecar_pid" 2>/dev/null || true
+    wait_for_sidecar_sanitizers
   fi
 }
 trap cleanup_sidecar_on_error EXIT
@@ -302,6 +330,11 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?
+    # The sidecar has fully exited (confirmed above), so its stderr pipe has
+    # already sent EOF; draining the sanitizer here cannot hang, and it
+    # guarantees $sidecar_stderr holds everything the sidecar wrote before we
+    # read it for the failure message below.
+    wait_for_sidecar_sanitizers
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
@@ -315,6 +348,32 @@ if [ ! -s "$preflight_report" ]; then
 fi
 publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+# A successful startup never re-reads $sidecar_stderr otherwise: only the
+# failure branches above embed it in their ::error:: message. A partial,
+# non-fatal provider discovery failure (e.g. one bad credential) would
+# otherwise be silently invisible to every workflow except Strix's artifact
+# upload -- print it into the always-visible job log too. The launcher
+# always emits a "discovery_diagnostics_complete" sentinel as the LAST line
+# it writes to stderr before this point in its own execution (discovery
+# finishes strictly before the server can start accepting the healthz
+# request that just succeeded above); waiting for the sanitizer to pass
+# that same sentinel through -- rather than guessing from file size or a
+# fixed sleep -- deterministically proves every earlier discovery-error
+# line has already reached $sidecar_stderr too, since the sanitizer
+# processes its input strictly in order.
+sentinel_wait=0
+until grep -qx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null; do
+  sentinel_wait=$((sentinel_wait + 1))
+  if [ "$sentinel_wait" -ge 25 ]; then
+    log "sidecar startup warnings: sanitizer did not confirm discovery diagnostics within 5s; showing partial evidence"
+    break
+  fi
+  sleep 0.2
+done
+sidecar_startup_warnings="$(grep -vx "$SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL" "$sidecar_stderr" 2>/dev/null | sed -n '1,20p' || true)"
+if [ -n "$sidecar_startup_warnings" ]; then
+  log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"
+fi
 
 # Exercise the exact OpenAI-compatible endpoint and model name Strix uses. A
 # process can be healthy while the coordinator/model-group path still raises an
