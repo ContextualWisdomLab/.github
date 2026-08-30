@@ -1504,23 +1504,25 @@ entry's fix operates one layer earlier, on *which* candidates are ever offered t
 
 ## 2026-08-30 CodeRabbit이 조용히 자동 리뷰를 하지 않는 근본 원인: repo star 임계값
 
-- `naruon#1486`에서 `github-actions[bot]`의 `pr-governance:metadata-gate` 코멘트가 새 head
+- `ContextualWisdomLab/naruon#1486`에서 `github-actions[bot]`의 `pr-governance:metadata-gate` 코멘트가 새 head
   (`6a5365ee`)에서 "Current-head CodeRabbit issue comment has blocking warning/failure evidence"로
   다시 막혔다. 처음엔 CodeRabbit이 실제 finding을 낸 것으로 의심했으나, 코멘트 원문을 다시 읽으니
   CodeRabbit 자신의 "Approval pending — has not reviewed the latest commit yet, check the box to
   trigger review" 상태였다 — `docs/development/merge-gate-policy.md`(naruon) 정책상 "current-head
   CodeRabbit issue comment has blocking warning/failure evidence"는 정확히 이 미해결 상태(clean
   approval도 아니고 rebuttal도 없음)를 fail-closed로 잡아낸 것이었다. 즉 gate는 올바르게 동작했다.
-- `contextual-orchestrator#923`의 동일 유형 코멘트(재발행 이벤트로 이 세션에 도착)가 근본 원인을
-  명시했다: "This repository does not receive automatic reviews because it has fewer than 10 stars."
-  CodeRabbit의 OSS 무료 자동 리뷰 기능은 public repo의 GitHub star 수가 10 미만이면 자동으로
-  트리거되지 않고, PR 코멘트의 체크박스(`🔍 Trigger review`) 또는 `@coderabbitai review` 커맨드로
-  수동 트리거해야만 그 커밋에 대한 리뷰가 실행된다. ContextualWisdomLab 산하 4개 저장소 모두 이
-  임계값 아래이므로, 이 조직의 모든 PR에서 새 커밋마다 동일하게 재발한다 — 특정 PR의 결함이 아니라
-  구조적 gap이다.
-- 즉시 조치: `naruon#1486`과 `contextual-orchestrator#923` 양쪽에 `@coderabbitai review` 코멘트를
-  게시해 현재 head의 리뷰를 명시적으로 트리거했다. `.github#1438`은 이 세션에서 아직 CodeRabbit
-  코멘트 자체가 관측되지 않아 우선 지켜본다.
+- `ContextualWisdomLab/contextual-orchestrator#923`의 동일 유형 코멘트(재발행 이벤트로 이 세션에
+  도착)가 근본 원인을 명시했다: "This repository does not receive automatic reviews because it has
+  fewer than 10 stars." CodeRabbit의 OSS 무료 자동 리뷰 기능은 public repo의 GitHub star 수가 10
+  미만이면 자동으로 트리거되지 않고, PR 코멘트의 체크박스(`🔍 Trigger review`) 또는
+  `@coderabbitai review` 커맨드로 수동 트리거해야만 그 커밋에 대한 리뷰가 실행된다. 이 세션이 직접
+  확인한 4개 저장소(`ContextualWisdomLab/.github`, `naruon`, `contextual-orchestrator`, `noema`)
+  모두 이 임계값 아래다 — 다른 org 저장소까지 전수 확인한 것은 아니므로, 결론은 이 4개 저장소로
+  한정한다. 확인된 4개 저장소 안에서는 새 커밋마다 동일하게 재발하는, 특정 PR의 결함이 아닌 구조적
+  gap이다.
+- 즉시 조치: `ContextualWisdomLab/naruon#1486`과 `ContextualWisdomLab/contextual-orchestrator#923`
+  양쪽에 `@coderabbitai review` 코멘트를 게시해 현재 head의 리뷰를 명시적으로 트리거했다.
+  `ContextualWisdomLab/.github#1438`도 이어서 같은 코멘트로 트리거했다.
 - 근본 해결책 후보(아직 미착수, 다음 pass에서 검토): `.github`의 central 필수 workflow에 PR
   `opened`/`synchronize`/`ready_for_review` 이벤트마다 `@coderabbitai review` 코멘트를 자동
   게시하는 얇은 단계를 추가하면 이 수동 트리거가 사라진다. 다만 이는 org-wide required-workflow
