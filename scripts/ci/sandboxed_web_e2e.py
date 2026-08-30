@@ -507,7 +507,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     exit_code = 1
     start = time.monotonic()
     try:
-        copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        try:
+            copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        except ValueError as exc:
+            print(f"sandboxed-web-e2e: workspace copy rejected: {exc}", file=sys.stderr)
+            exit_code = 125
+            return exit_code
         env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
         try:
             backend = isolation_backend(args.isolation)

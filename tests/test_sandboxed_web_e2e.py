@@ -347,6 +347,51 @@ def test_require_loopback_readiness_url_rejects_malformed_ports():
             sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:-1/ready")
 
 
+def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(monkeypatch, tmp_path, capsys):
+    """A symlink-escape rejection from the shared ``copy_workspace`` helper
+    must not surface as an uncaught traceback here either.
+
+    This script calls ``sandboxed_verify.copy_workspace`` directly with no
+    ``except`` around it -- the same gap ``sandboxed_verify.py``'s own
+    ``main()`` had (a rejected copy propagated as a raw Python traceback and
+    Python's default uncaught-exception status instead of this module's own
+    clean ``sandboxed-web-e2e: ...`` message and coded exit, e.g. the 125
+    already used for an invalid readiness URL below).
+    """
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+    started = []
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert not started
+    assert "Traceback" not in captured.err
+    assert "workspace copy rejected" in captured.err
+    assert "workspace symlink escapes the sandbox root" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
+
+
 def test_main_reports_malformed_backend_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A malformed backend readiness port fails closed with exit 125, not a crash."""
     repo = tmp_path / "repo"
