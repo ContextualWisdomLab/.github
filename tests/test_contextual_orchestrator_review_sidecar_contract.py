@@ -281,7 +281,9 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     text = _read(LAUNCHER)
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
-    assert "free_discovered_models(discovered)" in text
+    assert "routable_discovered = _routable_discovered_models(discovered)" in text
+    assert "free_discovered_models(routable_discovered)" in text
+    assert 'getattr(model, "evidence_only", False)' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
